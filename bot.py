@@ -8,6 +8,7 @@ Telegram Bot with Kommo CRM Integration + AI + Full Automation
 - Conversation context memory
 - Multi-variant phone search
 - Azerbaijani interface
+- Kommo webhook endpoint for stage change notifications
 """
 
 import os
@@ -19,6 +20,7 @@ import subprocess
 import glob
 import traceback
 import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
@@ -30,11 +32,12 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from aiohttp import web
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-TELEGRAM_TOKEN = "8770145286:AAHB60HD8L1bvMaWVys2OPduPrp_ppkxTXA"
-KOMMO_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8770145286:AAHB60HD8L1bvMaWVys2OPduPrp_ppkxTXA")
+KOMMO_TOKEN = os.environ.get("KOMMO_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 
@@ -43,6 +46,9 @@ BAKU_TZ = timezone(timedelta(hours=4))
 
 # LLM Model
 LLM_MODEL = "gpt-5"
+
+# HTTP Port for webhook
+WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 
@@ -133,6 +139,10 @@ llm_client = OpenAI(
 # ─── Conversation Context Storage ────────────────────────────────────────────
 
 user_context: dict[int, dict] = {}
+
+# State for overdue task result collection
+# Maps chat_id -> {"task_id": ..., "task_text": ..., "entity_id": ..., "entity_type": ...}
+_pending_task_result: dict[int, dict] = {}
 
 def get_ctx(chat_id: int) -> dict:
     if chat_id not in user_context:
@@ -650,7 +660,7 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
             t_text = task.get("text", "Təsvirsiz")
             till = task.get("complete_till", 0)
             dt = datetime.fromtimestamp(till, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-            msg += f"  • [{dt}] {t_text}\n"
+            msg += f"  • ⏰ {dt} — {t_text}\n"
     if notes:
         msg += "\n📝 *Son qeydlər:*\n"
         for note in (notes or [])[:5]:
@@ -1234,6 +1244,47 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.message.chat_id
     ctx = get_ctx(chat_id)
 
+    # Check if user is providing task result text (overdue task flow)
+    if chat_id in _pending_task_result:
+        pending = _pending_task_result.pop(chat_id)
+        task_id = pending["task_id"]
+        task_text = pending["task_text"]
+        entity_id = pending.get("entity_id")
+        entity_type = pending.get("entity_type", "leads")
+        # Close task in Kommo with result as comment
+        result_text = user_text.strip()
+        update_task_kommo(task_id, {"is_completed": True, "result": {"text": result_text}})
+        # Add note with the result
+        if entity_id:
+            add_note(entity_id, f"Tapşırıq bağlandı: {task_text}\nNəticə: {result_text}", entity_type)
+        # Build link
+        link = ""
+        if entity_type == "leads" and entity_id:
+            link = f"\n\n🔗 {KOMMO_BASE_URL}/leads/detail/{entity_id}"
+        elif entity_type == "contacts" and entity_id:
+            link = f"\n\n🔗 {KOMMO_BASE_URL}/contacts/detail/{entity_id}"
+        await update.message.reply_text(
+            f"✅ Tapşırıq bağlandı!\n\n📝 {task_text}\n💬 Nəticə: {result_text}{link}",
+            disable_web_page_preview=True
+        )
+        # Notify Admin if not admin
+        sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
+        if sender_kommo_id and sender_kommo_id != 10932455:
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+            if admin_chat:
+                try:
+                    await context.bot.send_message(
+                        admin_chat,
+                        f"📢 *{sender_name}* tapşırığı bağladı:\n\n"
+                        f"📝 {task_text}\n💬 Nəticə: {result_text}{link}",
+                        parse_mode="Markdown",
+                        disable_web_page_preview=True
+                    )
+                except:
+                    pass
+        return
+
     # Handle pending actions first
     if ctx["pending_action"] and ctx["pending_missing"]:
         missing = ctx["pending_missing"]
@@ -1500,7 +1551,6 @@ async def role_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, trigger: str, sender_chat_id: int, sender_kommo_id: int):
     """Send automation transition to Admin for confirmation."""
-    import uuid
     conf_key = str(uuid.uuid4())[:8]
     context.bot_data[f"confirm_{conf_key}"] = {
         "phone": phone, "trigger": trigger,
@@ -1596,17 +1646,14 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
     
     if decision == "yes":
         # Execute the transition
-        # We need a fake update for execute_automation_transition
         contacts = search_contact_by_phone(phone)
         contact_name = contacts[0].get("name", "Adsız") if contacts else phone
         
-        # Execute directly via API calls (simplified)
         full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
         leads = (full_contact or {}).get("_embedded", {}).get("leads", []) if full_contact else []
         
         if leads:
             lead_id = leads[0]["id"]
-            from datetime import timedelta as td
             now = datetime.now(tz=BAKU_TZ)
             result_msg = f"✅ Təsdiqləndi: {trigger}\n👤 Müştəri: {contact_name}"
             
@@ -1689,11 +1736,7 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
 async def ask_task_assignee(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, date_str: str, time_str: str, task_text: str, urgency: str = "normal"):
     """Ask Admin who to assign the task to."""
     urgency_mark = "🔴 TƏCİLİ! " if urgency == "high" else ""
-    # Store pending task data in context.bot_data
-    import uuid
     task_key = str(uuid.uuid4())[:8]
-    if not hasattr(context.bot_data, '__contains__'):
-        context.bot_data = {}
     context.bot_data[f"pending_task_{task_key}"] = {
         "phone": phone, "date": date_str, "time": time_str,
         "text": task_text, "urgency": urgency, "chat_id": update.message.chat_id
@@ -1913,6 +1956,252 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except:
             pass
 
+# ─── Overdue Task Callback ───────────────────────────────────────────────────
+
+async def overdue_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle overdue task buttons: İcra olundu / İmtina."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # overdue_{task_id}_{action}
+    parts = data.split("_", 2)
+    task_id = int(parts[1])
+    # action is "done" or "reject"
+    
+    chat_id = query.message.chat_id
+    
+    # Get task info from bot_data
+    task_info = context.bot_data.get(f"overdue_task_{task_id}", {})
+    task_text = task_info.get("text", "Tapşırıq")
+    entity_id = task_info.get("entity_id")
+    entity_type = task_info.get("entity_type", "leads")
+    
+    # Ask user for result text
+    _pending_task_result[chat_id] = {
+        "task_id": task_id,
+        "task_text": task_text,
+        "entity_id": entity_id,
+        "entity_type": entity_type,
+    }
+    
+    # Edit message to show that user needs to provide result
+    try:
+        await query.edit_message_text(
+            f"{query.message.text}\n\n✏️ Tapşırığın nəticəsini yazın:",
+            disable_web_page_preview=True
+        )
+    except:
+        try:
+            await context.bot.send_message(
+                chat_id,
+                "✏️ Tapşırığın nəticəsini yazın:"
+            )
+        except:
+            pass
+
+# ─── Kommo Webhook Callback for Stage Changes ───────────────────────────────
+
+async def webhook_stage_notification_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle webhook notification buttons: Göndərildi / Təqdimat olundu / Əlaqə saxlanıldı."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # whstage_{lead_id}_{action}
+    parts = data.split("_", 2)
+    lead_id = int(parts[1])
+    action_type = parts[2]  # "sent", "presented", "contacted"
+    
+    now = datetime.now(tz=BAKU_TZ)
+    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+    
+    if action_type == "sent":
+        # "Göndərildi" — move to "Cavab gözlənilir" + reminder 2 days
+        update_lead_kommo(lead_id, {"status_id": STAGES["cavab_gozlenilir"], "pipeline_id": PIPELINE_ID})
+        reminder_time = (now + timedelta(days=2)).replace(hour=10, minute=0, second=0)
+        create_task(lead_id, "Müştəri ilə yenidən əlaqə saxla", int(reminder_time.timestamp()), responsible_user_id=10932455, entity_type="leads")
+        add_note(lead_id, "Qiymət təklifi göndərildi. Admin tərəfindən 'Cavab gözlənilir' mərhələsinə keçirildi.", "leads")
+        result_text = "✅ Qiymət göndərildi! Sövdələşmə 'Cavab gözlənilir' mərhələsinə keçirildi.\n2 gün sonra xatırlatma yaradıldı."
+    elif action_type == "presented":
+        # "Təqdimat olundu" — move to "Təqdimat olundu" + reminder 1 day
+        update_lead_kommo(lead_id, {"status_id": STAGES["teqdimat_olundu"], "pipeline_id": PIPELINE_ID})
+        reminder_time = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0)
+        create_task(lead_id, "Müştəri ilə yenidən əlaqə saxla", int(reminder_time.timestamp()), responsible_user_id=10932455, entity_type="leads")
+        add_note(lead_id, "Təqdimat olundu. Admin tərəfindən 'Təqdimat olundu' mərhələsinə keçirildi.", "leads")
+        result_text = "✅ Təqdimat qeydə alındı! Sövdələşmə 'Təqdimat olundu' mərhələsinə keçirildi.\n1 gün sonra xatırlatma yaradıldı."
+    elif action_type == "contacted":
+        # "Əlaqə saxlanıldı" — move to "Cavab gözlənilir" + reminder 2 days
+        update_lead_kommo(lead_id, {"status_id": STAGES["cavab_gozlenilir"], "pipeline_id": PIPELINE_ID})
+        reminder_time = (now + timedelta(days=2)).replace(hour=10, minute=0, second=0)
+        create_task(lead_id, "Müştəri ilə yenidən əlaqə saxla", int(reminder_time.timestamp()), responsible_user_id=10932455, entity_type="leads")
+        add_note(lead_id, "Əlaqə saxlanıldı. Admin tərəfindən 'Cavab gözlənilir' mərhələsinə keçirildi.", "leads")
+        result_text = "✅ Əlaqə qeydə alındı! Sövdələşmə 'Cavab gözlənilir' mərhələsinə keçirildi.\n2 gün sonra xatırlatma yaradıldı."
+    else:
+        result_text = "⚠️ Naməlum əməliyyat."
+    
+    try:
+        await query.edit_message_text(
+            f"{result_text}\n\n🔗 {link}",
+            disable_web_page_preview=True
+        )
+    except:
+        try:
+            await context.bot.send_message(
+                query.message.chat_id,
+                f"{result_text}\n\n🔗 {link}",
+                disable_web_page_preview=True
+            )
+        except:
+            pass
+
+# ─── Kommo Webhook Handler ───────────────────────────────────────────────────
+
+# Global reference to the Telegram bot application (set in main)
+_bot_app: Application = None
+
+async def handle_kommo_webhook(request: web.Request) -> web.Response:
+    """Handle incoming Kommo CRM webhook for lead status changes."""
+    try:
+        # Kommo sends form-encoded data
+        data = await request.post()
+        logger.info(f"Kommo webhook received: {dict(data)}")
+        
+        # Extract lead status change fields
+        # Kommo sends: leads[status][0][id], leads[status][0][status_id], etc.
+        lead_id_raw = data.get("leads[status][0][id]")
+        new_status_id_raw = data.get("leads[status][0][status_id]")
+        old_status_id_raw = data.get("leads[status][0][old_status_id]")
+        pipeline_id_raw = data.get("leads[status][0][pipeline_id]")
+        
+        if not lead_id_raw or not new_status_id_raw:
+            return web.Response(status=200, text="OK")
+        
+        lead_id = int(lead_id_raw)
+        new_status_id = int(new_status_id_raw)
+        old_status_id = int(old_status_id_raw) if old_status_id_raw else None
+        pipeline_id = int(pipeline_id_raw) if pipeline_id_raw else None
+        
+        logger.info(f"Lead {lead_id}: {old_status_id} -> {new_status_id} (pipeline {pipeline_id})")
+        
+        # Only process our pipeline
+        if pipeline_id and pipeline_id != PIPELINE_ID:
+            return web.Response(status=200, text="OK")
+        
+        # Only process transitions FROM Nerazobrannoye
+        if old_status_id != STAGES["nerazobrannoye"]:
+            return web.Response(status=200, text="OK")
+        
+        # Check if it's one of the target stages
+        if new_status_id not in (STAGES["qiymet_teklifi"], STAGES["teqdimat"], STAGES["yeni_sifaris"]):
+            return web.Response(status=200, text="OK")
+        
+        # Get lead details
+        lead_details = get_lead_details(lead_id)
+        if not lead_details:
+            logger.warning(f"Could not get lead details for {lead_id}")
+            return web.Response(status=200, text="OK")
+        
+        lead_name = lead_details.get("name", "Adsız sövdələşmə")
+        link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+        
+        # Get contact info
+        contact_name = "Adsız müştəri"
+        contact_phone = ""
+        contacts_embedded = lead_details.get("_embedded", {}).get("contacts", [])
+        if contacts_embedded:
+            contact_id = contacts_embedded[0]["id"]
+            full_contact = get_contact_details(contact_id)
+            if full_contact:
+                contact_name = full_contact.get("name", "Adsız müştəri")
+                for cf in (full_contact.get("custom_fields_values") or []):
+                    if cf.get("field_code") == "PHONE":
+                        vals = cf.get("values", [])
+                        if vals:
+                            contact_phone = vals[0].get("value", "")
+                        break
+        
+        stage_name = STAGE_NAMES.get(new_status_id, f"ID:{new_status_id}")
+        
+        # Find Admin chat_id
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        if not admin_chat or not _bot_app:
+            logger.warning("Admin chat not found or bot app not initialized")
+            return web.Response(status=200, text="OK")
+        
+        # Build notification message
+        msg = (
+            f"🔔 *Nerazobrannoye-dan yeni keçid!*\n\n"
+            f"👤 Müştəri: {contact_name}\n"
+            f"📞 Telefon: {contact_phone}\n"
+            f"📋 Sövdələşmə: {lead_name}\n"
+            f"➡️ Mərhələ: *{stage_name}*\n\n"
+            f"🔗 {link}"
+        )
+        
+        # Determine button based on target stage
+        if new_status_id == STAGES["qiymet_teklifi"]:
+            # A) Qiymət təklifi → button "Göndərildi"
+            keyboard = [[InlineKeyboardButton("✅ Göndərildi", callback_data=f"whstage_{lead_id}_sent")]]
+        elif new_status_id == STAGES["teqdimat"]:
+            # B) Təqdimat → button "Təqdimat olundu"
+            keyboard = [[InlineKeyboardButton("✅ Təqdimat olundu", callback_data=f"whstage_{lead_id}_presented")]]
+        elif new_status_id == STAGES["yeni_sifaris"]:
+            # C) Yeni sifariş → button "Əlaqə saxlanıldı"
+            keyboard = [[InlineKeyboardButton("✅ Əlaqə saxlanıldı", callback_data=f"whstage_{lead_id}_contacted")]]
+        else:
+            keyboard = []
+        
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        
+        # Store task info for potential use in callback
+        _bot_app.bot_data[f"overdue_task_{lead_id}"] = {
+            "text": f"Sövdələşmə: {lead_name}",
+            "entity_id": lead_id,
+            "entity_type": "leads",
+        }
+        
+        # Send notification to Admin
+        try:
+            await _bot_app.bot.send_message(
+                admin_chat,
+                msg,
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True
+            )
+            logger.info(f"Webhook notification sent to admin for lead {lead_id} -> stage {new_status_id}")
+        except Exception as e:
+            logger.error(f"Failed to send webhook notification: {e}")
+        
+        return web.Response(status=200, text="OK")
+    
+    except Exception as e:
+        logger.error(f"Webhook handler error: {e}\n{traceback.format_exc()}")
+        return web.Response(status=200, text="OK")
+
+async def health_check(request: web.Request) -> web.Response:
+    """Simple health check endpoint."""
+    return web.Response(status=200, text="Bot is running")
+
+async def start_webhook_server():
+    """Start the aiohttp webhook server."""
+    app_web = web.Application()
+    app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    app_web.router.add_get("/", health_check)
+    app_web.router.add_get("/health", health_check)
+    
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
+    await site.start()
+    logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+    logger.info(f"Kommo webhook endpoint: POST /webhook/kommo")
+
+# ─── Free Text and Voice Handlers ────────────────────────────────────────────
+
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -1993,36 +2282,40 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Background Jobs ─────────────────────────────────────────────────────────
 
 async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
-    """Check tasks due in 15 minutes and notify responsible users."""
+    """Check tasks due in 15 minutes and notify responsible users.
+    Also check overdue tasks and send notifications with action buttons."""
     now = datetime.now(tz=BAKU_TZ)
     window_start = now
     window_end = now + timedelta(minutes=15)
     tasks = get_all_incomplete_tasks()
+    
     for task in tasks:
         till = task.get("complete_till", 0)
         task_dt = datetime.fromtimestamp(till, tz=BAKU_TZ)
+        responsible_id = task.get("responsible_user_id")
+        chat_id = get_chat_id_for_kommo_user(responsible_id)
+        text = task.get("text", "Təsvirsiz")
+        time_str = task_dt.strftime("%H:%M %d.%m.%Y")
+        entity_id = task.get("entity_id")
+        entity_type = task.get("entity_type", "")
+        task_id = task.get("id")
+        
+        if entity_type == "leads" and entity_id:
+            task_link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}"
+        elif entity_type == "contacts" and entity_id:
+            task_link = f"{KOMMO_BASE_URL}/contacts/detail/{entity_id}"
+        else:
+            task_link = ""
+        link_line = f"\n\n🔗 {task_link}" if task_link else ""
+        
+        # ── Upcoming (within 15 min): simple reminder ──
         if window_start <= task_dt <= window_end:
-            responsible_id = task.get("responsible_user_id")
-            chat_id = get_chat_id_for_kommo_user(responsible_id)
             if chat_id:
-                text = task.get("text", "Təsvirsiz")
-                time_str = task_dt.strftime("%H:%M")
-                responsible_name = KOMMO_USERS.get(responsible_id, "")
-                # Get link from entity
-                entity_id = task.get("entity_id")
-                entity_type = task.get("entity_type", "")
-                if entity_type == "leads" and entity_id:
-                    task_link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}"
-                elif entity_type == "contacts" and entity_id:
-                    task_link = f"{KOMMO_BASE_URL}/contacts/detail/{entity_id}"
-                else:
-                    task_link = ""
-                link_line = f"\n\n🔗 {task_link}" if task_link else ""
                 try:
                     await context.bot.send_message(
                         chat_id,
-                        f"\u23f0 *Xatırlatma!* Tapşırığın vaxtı yaxınlaşır:\n\n"
-                        f"\ud83d\udcdd {text}\n\u23f0 {time_str}{link_line}",
+                        f"⏰ *Xatırlatma!* Tapşırığın vaxtı yaxınlaşır:\n\n"
+                        f"📝 {text}\n⏰ {time_str}{link_line}",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
@@ -2031,12 +2324,56 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 # Notify Admin about reminders sent to other users
                 if responsible_id != 10932455:
                     admin_chat = get_chat_id_for_kommo_user(10932455)
+                    responsible_name = KOMMO_USERS.get(responsible_id, "")
                     if admin_chat:
                         try:
                             await context.bot.send_message(
                                 admin_chat,
-                                f"\ud83d\udd14 *{responsible_name}* üçün xatırlatma göndərildi:\n\n"
-                                f"\ud83d\udcdd {text}\n\u23f0 {time_str}{link_line}",
+                                f"🔔 *{responsible_name}* üçün xatırlatma göndərildi:\n\n"
+                                f"📝 {text}\n⏰ {time_str}{link_line}",
+                                parse_mode="Markdown",
+                                disable_web_page_preview=True
+                            )
+                        except:
+                            pass
+        
+        # ── Overdue: send to responsible with İcra olundu / İmtina buttons ──
+        elif task_dt < window_start and task_id:
+            if chat_id:
+                # Store task info for callback
+                context.bot_data[f"overdue_task_{task_id}"] = {
+                    "text": text,
+                    "entity_id": entity_id,
+                    "entity_type": entity_type,
+                }
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ İcra olundu", callback_data=f"overdue_{task_id}_done"),
+                        InlineKeyboardButton("❌ İmtina", callback_data=f"overdue_{task_id}_reject"),
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                try:
+                    await context.bot.send_message(
+                        chat_id,
+                        f"⚠️ *Gecikmiş tapşırıq!*\n\n"
+                        f"📝 {text}\n⏰ Son tarix: {time_str}{link_line}",
+                        parse_mode="Markdown",
+                        reply_markup=reply_markup,
+                        disable_web_page_preview=True
+                    )
+                except Exception as e:
+                    logger.error(f"Overdue notification error: {e}")
+                # Notify Admin if responsible is not Admin
+                if responsible_id != 10932455:
+                    admin_chat = get_chat_id_for_kommo_user(10932455)
+                    responsible_name = KOMMO_USERS.get(responsible_id, "")
+                    if admin_chat:
+                        try:
+                            await context.bot.send_message(
+                                admin_chat,
+                                f"⚠️ *{responsible_name}* üçün gecikmiş tapşırıq bildirişi göndərildi:\n\n"
+                                f"📝 {text}\n⏰ Son tarix: {time_str}{link_line}",
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
@@ -2123,126 +2460,13 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
-# ─── Kommo CRM Polling (detect changes from external agents) ─────────────────
-
-# Store last known stage for each lead
-_lead_stage_cache: dict[int, int] = {}
-_known_task_ids: set = set()
-_polling_initialized = False
-
-async def kommo_polling(context: ContextTypes.DEFAULT_TYPE):
-    """Poll Kommo every 2-3 minutes to detect stage changes and new tasks."""
-    global _lead_stage_cache, _known_task_ids, _polling_initialized
-    try:
-        # --- 1. Check lead stage changes ---
-        url = f"{KOMMO_BASE_URL}/api/v4/leads"
-        params = {
-            "filter[pipeline_id]": PIPELINE_ID,
-            "limit": 100,
-        }
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=20)
-        if resp.status_code == 200:
-            leads = resp.json().get("_embedded", {}).get("leads", [])
-            for lead in leads:
-                lead_id = lead.get("id")
-                status_id = lead.get("status_id")
-                lead_name = lead.get("name", "Adsız")
-                if not lead_id or not status_id:
-                    continue
-                old_status = _lead_stage_cache.get(lead_id)
-                _lead_stage_cache[lead_id] = status_id
-                # Skip first run (initialization)
-                if not _polling_initialized:
-                    continue
-                # If stage changed
-                if old_status and old_status != status_id:
-                    stage_name = STAGE_NAMES.get(status_id, f"ID:{status_id}")
-                    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-                    # Determine who to notify
-                    if status_id == STAGES["qiymet_teklifi"]:
-                        admin_chat = get_chat_id_for_kommo_user(10932455)
-                        if admin_chat:
-                            await context.bot.send_message(
-                                admin_chat,
-                                f"⚡ Sövdələşmə *'{lead_name}'* — *'Qiymət təklifi'* mərhələsinə keçdi.\n"
-                                f"Müştəriyə qiymət göndərmək lazımdır.\n🔗 {link}",
-                                parse_mode="Markdown", disable_web_page_preview=True
-                            )
-                    elif status_id == STAGES["yeni_sifaris"]:
-                        sales_chat = get_chat_id_for_kommo_user(15532668)
-                        target_chat = sales_chat or get_chat_id_for_kommo_user(10932455)
-                        if target_chat:
-                            await context.bot.send_message(
-                                target_chat,
-                                f"📋 *Yeni sifariş:* '{lead_name}'\nMüştəri ilə əlaqə saxla.\n🔗 {link}",
-                                parse_mode="Markdown", disable_web_page_preview=True
-                            )
-                    elif status_id == STAGES["teqdimat"]:
-                        admin_chat = get_chat_id_for_kommo_user(10932455)
-                        if admin_chat:
-                            keyboard = [
-                                [InlineKeyboardButton("Şamil Əliyev", callback_data=f"pres_{lead_id}_15532668")],
-                                [InlineKeyboardButton("Soltan Abbasov", callback_data=f"pres_{lead_id}_15531960")],
-                            ]
-                            reply_markup = InlineKeyboardMarkup(keyboard)
-                            await context.bot.send_message(
-                                admin_chat,
-                                f"📊 *'{lead_name}'* — təqdimat lazımdır.\nKim təqdimat edəcək?",
-                                parse_mode="Markdown", reply_markup=reply_markup,
-                                disable_web_page_preview=True
-                            )
-                    elif status_id == STAGES["qurashdirma"]:
-                        tech_chat = get_chat_id_for_kommo_user(15531960)
-                        target_chat = tech_chat or get_chat_id_for_kommo_user(10932455)
-                        if target_chat:
-                            await context.bot.send_message(
-                                target_chat,
-                                f"🔧 *Quraşdırma tapşırığı:* '{lead_name}'\n🔗 {link}",
-                                parse_mode="Markdown", disable_web_page_preview=True
-                            )
-                    else:
-                        admin_chat = get_chat_id_for_kommo_user(10932455)
-                        if admin_chat:
-                            await context.bot.send_message(
-                                admin_chat,
-                                f"ℹ️ Sövdələşmə *'{lead_name}'* — *'{stage_name}'* mərhələsinə keçdi.\n🔗 {link}",
-                                parse_mode="Markdown", disable_web_page_preview=True
-                            )
-        # --- 2. Check new tasks ---
-        tasks_url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-        tasks_params = {"filter[is_completed]": 0, "limit": 50}
-        tresp = requests.get(tasks_url, headers=HEADERS, params=tasks_params, timeout=20)
-        if tresp.status_code == 200:
-            tasks = tresp.json().get("_embedded", {}).get("tasks", [])
-            for task in tasks:
-                task_id = task.get("id")
-                if not task_id:
-                    continue
-                if task_id in _known_task_ids:
-                    continue
-                _known_task_ids.add(task_id)
-                # Skip first run
-                if not _polling_initialized:
-                    continue
-                responsible = task.get("responsible_user_id")
-                task_text = task.get("text", "Tapşırıq")
-                complete_till = task.get("complete_till", 0)
-                dt_str = datetime.fromtimestamp(complete_till, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if complete_till else ""
-                target_chat = get_chat_id_for_kommo_user(responsible) if responsible else None
-                if target_chat:
-                    await context.bot.send_message(
-                        target_chat,
-                        f"📌 *Yeni tapşırıq:* {task_text}\n⏰ Son tarix: {dt_str}",
-                        parse_mode="Markdown"
-                    )
-        _polling_initialized = True
-    except Exception as e:
-        logger.error(f"Kommo polling error: {e}")
-
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    global _bot_app
+    
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
+    _bot_app = app
 
     # Command handlers
     app.add_handler(CommandHandler("start", start_command))
@@ -2254,11 +2478,13 @@ def main():
     app.add_handler(CommandHandler("tomorrow", lambda u, c: execute_show_tasks(u, "tomorrow")))
     app.add_handler(CommandHandler("lead", lambda u, c: execute_show_lead(u, c.args[0], chat_id=u.message.chat_id) if c.args else u.message.reply_text("⚠️ Telefon nömrəsini göstərin.")))
 
-    # Callback handler for role selection
+    # Callback handlers
     app.add_handler(CallbackQueryHandler(role_callback, pattern="^role_"))
     app.add_handler(CallbackQueryHandler(presentation_callback, pattern="^pres_"))
     app.add_handler(CallbackQueryHandler(task_assign_callback, pattern="^taskasgn_"))
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
+    app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
+    app.add_handler(CallbackQueryHandler(webhook_stage_notification_callback, pattern="^whstage_"))
 
     # Message handlers
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
@@ -2272,11 +2498,14 @@ def main():
     job_queue.run_daily(morning_digest, time=datetime.strptime("05:00", "%H:%M").time())
     # Check stuck deals every 30 minutes
     job_queue.run_repeating(check_stuck_deals, interval=1800, first=120)
-    # Kommo CRM polling every 150 seconds (2.5 min)
-    job_queue.run_repeating(kommo_polling, interval=150, first=30)
 
-    logger.info("Bot started with full automation + Kommo polling...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Start webhook server and bot polling concurrently
+    async def run_all():
+        await start_webhook_server()
+        logger.info(f"Bot started. Webhook on port {WEBHOOK_PORT}, Telegram polling active.")
+        await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+    asyncio.run(run_all())
 
 if __name__ == "__main__":
     main()
