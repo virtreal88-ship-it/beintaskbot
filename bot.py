@@ -86,11 +86,16 @@ KOMMO_USERS = {
 
 # ─── User Registration Storage ───────────────────────────────────────────────
 
-USER_DB_FILE = "/home/ubuntu/kommo_bot/users.json"
+USER_DB_FILE = os.environ.get("USER_DB_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json"))
 
 def load_users() -> dict:
     if os.path.exists(USER_DB_FILE):
         with open(USER_DB_FILE, "r") as f:
+            return json.load(f)
+    # Try to load from bundled default users.json next to the script
+    default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+    if default_path != USER_DB_FILE and os.path.exists(default_path):
+        with open(default_path, "r") as f:
             return json.load(f)
     return {}
 
@@ -120,7 +125,10 @@ logger = logging.getLogger(__name__)
 
 # ─── OpenAI Client ───────────────────────────────────────────────────────────
 
-llm_client = OpenAI()
+llm_client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY", "sk-C7kqpsGHciC9Mf9oA63xvy"),
+    base_url=os.environ.get("OPENAI_API_BASE", "https://api.manus.im/api/llm-proxy/v1"),
+)
 
 # ─── Conversation Context Storage ────────────────────────────────────────────
 

@@ -14,7 +14,7 @@ venv/
 ENV/
 *.log
 *.sqlite
-users.json
 *.json
 !railway.toml
+!users.json
 .DS_Store
