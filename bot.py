@@ -2464,8 +2464,13 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     global _bot_app
-    
-    app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
+
+    # Start webhook server inside PTB's event loop via post_init
+    async def post_init(application: Application) -> None:
+        await start_webhook_server()
+        logger.info(f"Bot started. Webhook on port {WEBHOOK_PORT}, Telegram polling active.")
+
+    app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app
 
     # Command handlers
@@ -2499,13 +2504,7 @@ def main():
     # Check stuck deals every 30 minutes
     job_queue.run_repeating(check_stuck_deals, interval=1800, first=120)
 
-    # Start webhook server and bot polling concurrently
-    async def run_all():
-        await start_webhook_server()
-        logger.info(f"Bot started. Webhook on port {WEBHOOK_PORT}, Telegram polling active.")
-        await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-    asyncio.run(run_all())
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
