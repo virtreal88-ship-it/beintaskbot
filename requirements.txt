@@ -1,0 +1,4 @@
+python-telegram-bot[job-queue]==21.10
+openai>=1.0.0
+requests>=2.31.0
+apscheduler>=3.10.0
