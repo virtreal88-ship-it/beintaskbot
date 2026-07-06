@@ -144,6 +144,12 @@ user_context: dict[int, dict] = {}
 # Maps chat_id -> {"task_id": ..., "task_text": ..., "entity_id": ..., "entity_type": ...}
 _pending_task_result: dict[int, dict] = {}
 
+# ─── Flood Control State ─────────────────────────────────────────────────────
+
+import time as _time_module
+_BOT_START_TIME = _time_module.time()  # epoch seconds when module loaded
+_sent_deadline_notifications: set[int] = set()  # task IDs already notified
+
 def get_ctx(chat_id: int) -> dict:
     if chat_id not in user_context:
         user_context[chat_id] = {
@@ -2283,13 +2289,32 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
     """Check tasks due in 15 minutes and notify responsible users.
-    Also check overdue tasks and send notifications with action buttons."""
+    Also check overdue tasks and send notifications with action buttons.
+    
+    Flood-control measures:
+    - Skip first 2 minutes after bot startup to avoid mass-sending on restart
+    - Deduplicate: each task_id is notified only once per process lifetime
+    - Max 5 notifications per cycle (rest deferred to next cycle)
+    - 1-second sleep between messages to respect Telegram rate limits
+    """
+    # ── Flood guard: skip first 2 minutes after startup ──
+    if _time_module.time() - _BOT_START_TIME < 120:
+        logger.info("check_task_deadlines: skipping (startup grace period)")
+        return
+
     now = datetime.now(tz=BAKU_TZ)
     window_start = now
     window_end = now + timedelta(minutes=15)
     tasks = get_all_incomplete_tasks()
     
+    notifications_sent = 0
+    MAX_NOTIFICATIONS_PER_CYCLE = 5
+
     for task in tasks:
+        if notifications_sent >= MAX_NOTIFICATIONS_PER_CYCLE:
+            logger.info("check_task_deadlines: hit max notifications per cycle (5), deferring rest")
+            break
+
         till = task.get("complete_till", 0)
         task_dt = datetime.fromtimestamp(till, tz=BAKU_TZ)
         responsible_id = task.get("responsible_user_id")
@@ -2300,6 +2325,10 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         entity_type = task.get("entity_type", "")
         task_id = task.get("id")
         
+        # ── Deduplication: skip if already notified ──
+        if task_id and task_id in _sent_deadline_notifications:
+            continue
+
         if entity_type == "leads" and entity_id:
             task_link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}"
         elif entity_type == "contacts" and entity_id:
@@ -2319,6 +2348,10 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    notifications_sent += 1
+                    if task_id:
+                        _sent_deadline_notifications.add(task_id)
+                    await asyncio.sleep(1)
                 except Exception as e:
                     logger.error(f"Notification error: {e}")
                 # Notify Admin about reminders sent to other users
@@ -2334,6 +2367,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
+                            await asyncio.sleep(1)
                         except:
                             pass
         
@@ -2362,6 +2396,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=reply_markup,
                         disable_web_page_preview=True
                     )
+                    notifications_sent += 1
+                    _sent_deadline_notifications.add(task_id)
+                    await asyncio.sleep(1)
                 except Exception as e:
                     logger.error(f"Overdue notification error: {e}")
                 # Notify Admin if responsible is not Admin
@@ -2377,6 +2414,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
+                            await asyncio.sleep(1)
                         except:
                             pass
 
