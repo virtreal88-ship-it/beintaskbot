@@ -209,6 +209,72 @@ def set_last_task(chat_id: int, task_id: int, date_str: str, time_str: str):
     ctx["last_task_date"] = date_str
     ctx["last_task_time"] = time_str
 
+# ─── Message → Task mapping (for reply-based rescheduling) ─────────────────
+_message_task_map: dict[str, dict] = {}  # "chat_id:message_id" -> {"task_id": int, "task_text": str}
+
+def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: str = ""):
+    """Store mapping from a bot message to a task for reply-based actions."""
+    key = f"{chat_id}:{message_id}"
+    _message_task_map[key] = {"task_id": task_id, "task_text": task_text}
+
+def get_task_from_reply(chat_id: int, message_id: int) -> dict | None:
+    """Get task info from a replied-to message."""
+    key = f"{chat_id}:{message_id}"
+    return _message_task_map.get(key)
+
+# ─── Smart Deadline Defaults ──────────────────────────────────────────────────
+
+def compute_smart_deadline(date_str: str = None, time_str: str = None) -> tuple[str, str]:
+    """Compute smart default deadline based on work hours.
+    If user explicitly provided date/time, use those.
+    Otherwise: during work hours (09-18) → now + 10 min; outside → next workday 09:10.
+    Returns (date_str, time_str)."""
+    now = datetime.now(tz=BAKU_TZ)
+    
+    # If user explicitly provided both date and time, use them
+    if date_str and time_str and time_str != "10:00":
+        return date_str, time_str
+    
+    # If user provided date but no explicit time
+    if date_str and (not time_str or time_str == "10:00"):
+        # Check if the provided date is today
+        today_str = now.strftime("%d.%m.%Y")
+        if date_str == today_str:
+            # Today: if within work hours, use now + 10 min
+            if 9 <= now.hour < 18:
+                deadline = now + timedelta(minutes=10)
+                return date_str, deadline.strftime("%H:%M")
+            elif now.hour >= 18:
+                # After work hours today → next workday 09:10
+                next_day = now + timedelta(days=1)
+                while next_day.weekday() >= 5:  # skip weekends
+                    next_day += timedelta(days=1)
+                return next_day.strftime("%d.%m.%Y"), "09:10"
+            else:
+                # Before 9 AM → same day 09:10
+                return date_str, "09:10"
+        else:
+            # Future date without explicit time → 09:10
+            return date_str, "09:10"
+    
+    # No date provided at all → compute from current time
+    if 9 <= now.hour < 18:
+        # Work hours: now + 10 minutes
+        deadline = now + timedelta(minutes=10)
+        return deadline.strftime("%d.%m.%Y"), deadline.strftime("%H:%M")
+    else:
+        # Outside work hours → next workday 09:10
+        if now.hour >= 18:
+            next_day = now + timedelta(days=1)
+        else:
+            next_day = now  # before 9 AM same day
+        while next_day.weekday() >= 5:  # skip weekends
+            next_day += timedelta(days=1)
+        # If before 9 AM on a workday, use same day
+        if next_day.date() == now.date() and now.hour < 9:
+            return now.strftime("%d.%m.%Y"), "09:10"
+        return next_day.strftime("%d.%m.%Y"), "09:10"
+
 def set_pending(chat_id: int, action: str, params: dict, missing: str = None):
     ctx = get_ctx(chat_id)
     ctx["pending_action"] = action
@@ -1034,12 +1100,13 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
             set_last_contact(chat_id, phone, contact["id"], contact_name, lead_id=c_lead_id)
         # Notify assigned user if different from sender
         sender_kommo_id = get_kommo_user_id_for_chat(chat_id) if chat_id else None
+        task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
         if responsible_id != sender_kommo_id:
             assigned_chat = get_chat_id_for_kommo_user(responsible_id)
             sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş") if sender_kommo_id else "Bot"
             if assigned_chat:
                 try:
-                    await update.get_bot().send_message(
+                    sent_msg = await update.get_bot().send_message(
                         assigned_chat,
                         f"📢 {urgency_mark}*{sender_name}* sizin üçün tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
@@ -1049,6 +1116,9 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    # Store message→task mapping for reply-based rescheduling
+                    if task_id and sent_msg:
+                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text)
                 except:
                     pass
         # Notify Admin if sender is not admin
@@ -1421,7 +1491,8 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
                         set_pending(chat_id, "create_task", params, "date")
                         await update.message.reply_text("📅 Tarixi göstərin (məs: sabah, 10.07.2026):")
                         return
-                    await execute_create_task(update, params["phone"], params.get("date"), params.get("time", "10:00"), params["text"], chat_id)
+                    _d, _t = compute_smart_deadline(params.get("date"), params.get("time"))
+                    await execute_create_task(update, params["phone"], _d, _t, params["text"], chat_id)
                 elif action == "add_note":
                     if not params.get("text"):
                         set_pending(chat_id, "add_note", params, "text")
@@ -1444,7 +1515,8 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
                     set_pending(chat_id, "create_task", params, "date")
                     await update.message.reply_text("📅 Tarixi göstərin (məs: sabah, 10.07.2026):")
                     return
-                await execute_create_task(update, params["phone"], params["date"], params.get("time", "10:00"), params["text"], chat_id)
+                _d, _t = compute_smart_deadline(params.get("date"), params.get("time"))
+                await execute_create_task(update, params["phone"], _d, _t, params["text"], chat_id)
             elif action == "add_note":
                 await execute_add_note(update, params["phone"], params["text"], chat_id)
             return
@@ -1459,7 +1531,8 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
                 action = ctx["pending_action"]
                 clear_pending(chat_id)
                 if action == "create_task":
-                    await execute_create_task(update, params["phone"], params["date"], params.get("time", "10:00"), params["text"], chat_id)
+                    _d, _t = compute_smart_deadline(params.get("date"), params.get("time"))
+                    await execute_create_task(update, params["phone"], _d, _t, params["text"], chat_id)
                 return
             else:
                 await update.message.reply_text("⚠️ Tarixi anlamadım. Yenidən göstərin (məs: sabah, 10.07.2026):")
@@ -1493,15 +1566,15 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
 
     elif action == "create_task":
         date_str = intent.get("date")
-        time_str = intent.get("time") or "10:00"
+        time_str = intent.get("time") or None
         task_text = intent.get("text")
         if not phone:
             await update.message.reply_text(f"⚠️ Tapşırıq üçün müştəri nömrəsi lazımdır: _{task_text}_", parse_mode="Markdown")
         elif not task_text:
             await update.message.reply_text("⚠️ Tapşırığın mətni boşdur.")
         else:
-            if not date_str:
-                date_str = datetime.now(tz=BAKU_TZ).strftime("%d.%m.%Y")
+            # Apply smart deadline defaults
+            date_str, time_str = compute_smart_deadline(date_str, time_str)
             # If sender is Admin → always ask who to assign
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
             if sender_kommo_id == 10932455:
@@ -2054,11 +2127,12 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             except:
                 pass
         # Notify assigned user if not Admin
+        task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
         if user_id != 10932455:
             assigned_chat = get_chat_id_for_kommo_user(user_id)
             if assigned_chat:
                 try:
-                    await context.bot.send_message(
+                    sent_msg = await context.bot.send_message(
                         assigned_chat,
                         f"📢 {urgency_mark}Admin sizin üçün tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
@@ -2067,12 +2141,14 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                         f"📝 {task_text}\n\n🔗 {c_link}",
                         disable_web_page_preview=True
                     )
+                    # Store message→task mapping for reply-based rescheduling
+                    if task_id and sent_msg:
+                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text)
                     # Set context for assigned user so they can reply about this client
                     set_last_contact(assigned_chat, phone, contact["id"], contact_name, lead_id=c_lead_id)
                 except:
                     pass
         # Store context
-        task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
         if task_id:
             set_last_task(chat_id, task_id, date_str, time_str)
         set_last_contact(chat_id, phone, contact["id"], contact_name, lead_id=c_lead_id)
@@ -2108,7 +2184,8 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Create task
     now = datetime.now(tz=BAKU_TZ)
     task_time = (now + timedelta(hours=1)).replace(minute=0, second=0)
-    create_task(lead_id, "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et", int(task_time.timestamp()), responsible_user_id=user_id, entity_type="leads")
+    pres_task_result = create_task(lead_id, "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et", int(task_time.timestamp()), responsible_user_id=user_id, entity_type="leads")
+    pres_task_id = (pres_task_result or {}).get("_embedded", {}).get("tasks", [{}])[0].get("id")
     
     # Add note
     add_note(lead_id, f"Sövdələşmə 'Təqdimat' mərhələsinə keçirildi. Məsul: {user_name}. Tapşırıq yaradıldı.", "leads")
@@ -2176,7 +2253,7 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             logger.warning(f"Could not set context for assigned user chat={assigned_chat}: contact_id={pres_contact_id}, phone={pres_contact_phone}, lead_details={pres_lead_details is not None}")
         try:
-            await context.bot.send_message(
+            sent_pres_msg = await context.bot.send_message(
                 assigned_chat,
                 f"📊 *Yeni təqdimat tapşırığı!*\n\n"
                 f"👤 Müştəri: {pres_contact_name}{pres_phone_line}\n"
@@ -2184,6 +2261,9 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
+            # Store message→task mapping for reply-based rescheduling
+            if pres_task_id and sent_pres_msg:
+                store_message_task(assigned_chat, sent_pres_msg.message_id, pres_task_id, "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et")
         except:
             pass
 
@@ -2706,6 +2786,134 @@ async def partner_create_callback(update: Update, context: ContextTypes.DEFAULT_
         )
 
 
+
+# ─── Reply-based Task Rescheduling ──────────────────────────────────────────
+
+def parse_reschedule_text(text: str) -> dict | None:
+    """Parse user reply text for rescheduling or completion.
+    Returns {"action": "reschedule", "new_deadline": datetime} or {"action": "complete"} or None."""
+    text_lower = text.lower().strip()
+    now = datetime.now(tz=BAKU_TZ)
+    
+    # Completion keywords
+    completion_words = ["icra olundu", "hazırdır", "hazır", "tamamlandı", "bitdi", "görüldü", "edildi", "ok", "done"]
+    if any(w in text_lower for w in completion_words):
+        return {"action": "complete"}
+    
+    # Relative time: "X saat", "X dəqiqə", "X gün"
+    m = re.search(r"(\d+)\s*(saat|sa|hour|h)", text_lower)
+    if m:
+        hours = int(m.group(1))
+        new_dt = now + timedelta(hours=hours)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    m = re.search(r"(\d+)\s*(dəqiqə|dəq|min|minute|m)", text_lower)
+    if m:
+        minutes = int(m.group(1))
+        new_dt = now + timedelta(minutes=minutes)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    m = re.search(r"(\d+)\s*(gün|gun|day)", text_lower)
+    if m:
+        days = int(m.group(1))
+        new_dt = (now + timedelta(days=days)).replace(hour=9, minute=10, second=0, microsecond=0)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    # "sabah" / "tomorrow"
+    if any(w in text_lower for w in ["sabah", "tomorrow"]):
+        new_dt = (now + timedelta(days=1)).replace(hour=9, minute=10, second=0, microsecond=0)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    # "1 saatdan sonra" / "bir saatdan sonra"
+    if "saatdan sonra" in text_lower or "saatdan" in text_lower:
+        m2 = re.search(r"(\d+|bir|iki|üç|dörd|beş)\s*saatdan", text_lower)
+        if m2:
+            num_map = {"bir": 1, "iki": 2, "üç": 3, "dörd": 4, "beş": 5}
+            val = m2.group(1)
+            hours = num_map.get(val, None) or int(val)
+            new_dt = now + timedelta(hours=hours)
+            return {"action": "reschedule", "new_deadline": new_dt}
+    
+    # Explicit time: "saat 15:00" or just "15:00"
+    m = re.search(r"(\d{1,2}):(\d{2})", text)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        new_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if new_dt <= now:
+            new_dt += timedelta(days=1)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    return None
+
+async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str, task_info: dict) -> bool:
+    """Handle a reply to a task notification message. Returns True if handled."""
+    chat_id = update.message.chat_id
+    task_id = task_info["task_id"]
+    task_text = task_info.get("task_text", "Tapşırıq")
+    
+    parsed = parse_reschedule_text(user_text)
+    if not parsed:
+        return False  # Not a recognized reschedule/completion command
+    
+    if parsed["action"] == "complete":
+        # Mark task as completed
+        res = update_task_kommo(task_id, {"is_completed": True, "result": {"text": user_text}})
+        if res:
+            await update.message.reply_text(
+                f"✅ Tapşırıq tamamlandı!\n\n📝 {task_text}"
+            )
+            # Notify Admin
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş") if sender_kommo_id else "Bilinməyən"
+            if admin_chat and admin_chat != chat_id:
+                try:
+                    await context.bot.send_message(
+                        admin_chat,
+                        f"✅ *{sender_name}* tapşırığı tamamladı:\n\n"
+                        f"📝 {task_text}",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        else:
+            await update.message.reply_text("❌ Xəta baş verdi. Yenidən cəhd edin.")
+        return True
+    
+    elif parsed["action"] == "reschedule":
+        new_dt = parsed["new_deadline"]
+        new_ts = int(new_dt.timestamp())
+        res = update_task_kommo(task_id, {"complete_till": new_ts})
+        if res:
+            new_time_str = new_dt.strftime("%d.%m.%Y %H:%M")
+            await update.message.reply_text(
+                f"✅ Dəyişdirildi. Yeni vaxt: *{new_time_str}*\n\n"
+                f"📝 {task_text}",
+                parse_mode="Markdown"
+            )
+            # Notify Admin about reschedule
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş") if sender_kommo_id else "Bilinməyən"
+            if admin_chat and admin_chat != chat_id:
+                try:
+                    await context.bot.send_message(
+                        admin_chat,
+                        f"⏰ *{sender_name}* tapşırığın vaxtını dəyişdi:\n\n"
+                        f"📝 {task_text}\n"
+                        f"🕐 Yeni vaxt: *{new_time_str}*",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        else:
+            await update.message.reply_text("❌ Xəta baş verdi. Yenidən cəhd edin.")
+        return True
+    
+    return False
+
+
 # ─── Free Text and Voice Handlers ────────────────────────────────────────────
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2721,6 +2929,15 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     chat_id = update.message.chat_id
+    
+    # ── Reply-based task rescheduling/completion ──
+    if update.message.reply_to_message:
+        replied_msg_id = update.message.reply_to_message.message_id
+        task_info = get_task_from_reply(chat_id, replied_msg_id)
+        if task_info:
+            handled = await handle_task_reply(update, context, user_text, task_info)
+            if handled:
+                return
     
     # ── Employee registration flow (waiting for name) ──
     if chat_id in _pending_employee_registration and _pending_employee_registration[chat_id] == "__ask_name__":
