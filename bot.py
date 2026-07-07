@@ -155,19 +155,29 @@ _sent_deadline_notifications: set[int] = set()  # task IDs already notified
 PARTNER_FIELD_ID = 2989615  # Custom field "Partnyor" (select)
 PARTNER_DATE_FIELD_ID = 2989617  # Custom field "Qeydiyyat tarixi" (date)
 
-# Enum values for Partner field (fetched from Kommo API)
-PARTNER_ENUMS = {
-    "Smartteam": 9257849,
-    "Unisetpos": 9257851,
-    "Compline": 9257853,
-    "Oneline": 9257855,
-    "BeinSystems": 9257857,
-    "Elvin Abdullayev": 9257859,
-}
+def fetch_partner_enums() -> dict:
+    """Fetch current partner enum values from Kommo API in real-time.
+    Returns dict {name: enum_id}."""
+    _headers = {
+        "Authorization": f"Bearer {KOMMO_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    url = f"{KOMMO_BASE_URL}/api/v4/contacts/custom_fields/{PARTNER_FIELD_ID}"
+    try:
+        resp = requests.get(url, headers=_headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            enums = data.get("enums", [])
+            return {e["value"]: e["id"] for e in enums}
+    except Exception as e:
+        logger.error(f"Failed to fetch partner enums: {e}")
+    # Fallback to empty dict if API fails
+    return {}
 
 # State for partner registration flow
 _pending_partner_registration: dict[int, bool] = {}  # chat_id -> waiting for name
 _pending_partner_create: dict[int, dict] = {}  # chat_id -> {"phone": str, "step": str}
+_pending_employee_registration: dict[int, str] = {}  # chat_id -> employee name (waiting for Admin approval)
 
 def get_ctx(chat_id: int) -> dict:
     if chat_id not in user_context:
@@ -1586,10 +1596,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     users = load_users()
     
-    # Check for deep link parameter
-    args = context.args  # e.g. ["partner"] from t.me/beintaskbot?start=partner
-    is_partner_link = args and args[0].lower() == "partner"
-    
+    # A) Already registered user — show welcome by role
     if str(chat_id) in users:
         role = users[str(chat_id)].get("role", "")
         if role == "Partnyor":
@@ -1602,9 +1609,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         else:
+            name = users[str(chat_id)].get("name", "")
             welcome = (
                 f"🤖 *Kommo CRM Bot + AI*\n\n"
-                f"Salam! Rolunuz: *{role}*\n\n"
+                f"Salam, *{name}*! Rolunuz: *{role}*\n\n"
                 f"💬 Mənə mətn yazın, səsli mesaj göndərin və ya əmrlərdən istifadə edin.\n\n"
                 f"📋 *Əmrlər:*\n"
                 f"/find — Müştəri axtar\n"
@@ -1612,71 +1620,143 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"/note — Qeyd əlavə et\n"
                 f"/tasks — Bugünkü tapşırıqlar\n"
                 f"/tomorrow — Sabahkı tapşırıqlar\n"
-                f"/lead — Sövdələşməyə link\n"
-                f"/role — Rolu dəyiş"
+                f"/lead — Sövdələşməyə link"
             )
             await update.message.reply_text(welcome, parse_mode="Markdown")
-    elif is_partner_link:
-        # Partner registration flow
-        _pending_partner_registration[chat_id] = True
-        await update.message.reply_text(
-            "🤝 *Partnyor qeydiyyatı*\n\n"
-            "Xoş gəlmisiniz! Zəhmət olmasa şirkət/partnyor adınızı yazın:\n\n"
-            "_Məsələn: Smartteam, Unisetpos, Compline, Oneline, BeinSystems, Elvin Abdullayev_",
-            parse_mode="Markdown"
-        )
-    else:
-        # Unregistered user without partner link
-        keyboard = [
-            [InlineKeyboardButton("👑 Admin (Texniki Destek)", callback_data="role_admin")],
-            [InlineKeyboardButton("💼 Satış meneceri (Şamil Əliyev)", callback_data="role_sales")],
-            [InlineKeyboardButton("🔧 Texnik (Soltan Abbasov)", callback_data="role_tech")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "🤖 *Kommo CRM Bot + AI*\n\n"
-            "Salam! Zəhmət olmasa rolunuzu seçin:",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-
-async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        return
+    
+    # B) Not registered — show two buttons: Partnyor / Əməkdaş
     keyboard = [
-        [InlineKeyboardButton("👑 Admin (Texniki Destek)", callback_data="role_admin")],
-        [InlineKeyboardButton("💼 Satış meneceri (Şamil Əliyev)", callback_data="role_sales")],
-        [InlineKeyboardButton("🔧 Texnik (Soltan Abbasov)", callback_data="role_tech")],
+        [InlineKeyboardButton("🤝 Partnyor", callback_data="reg_partnyor")],
+        [InlineKeyboardButton("👤 Əməkdaş", callback_data="reg_emekdash")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Yeni rolunuzu seçin:", reply_markup=reply_markup)
-
-async def role_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    chat_id = query.message.chat_id
-    data = query.data
-
-    users = load_users()
-    if data == "role_admin":
-        users[str(chat_id)] = {"kommo_user_id": 10932455, "role": "Admin (Texniki Destek)", "name": "Texniki Destek"}
-    elif data == "role_sales":
-        users[str(chat_id)] = {"kommo_user_id": 15532668, "role": "Satış meneceri", "name": "Şamil Əliyev"}
-    elif data == "role_tech":
-        users[str(chat_id)] = {"kommo_user_id": 15531960, "role": "Texnik", "name": "Soltan Abbasov"}
-    save_users(users)
-
-    role = users[str(chat_id)]["role"]
-    await query.edit_message_text(
-        f"✅ Rolunuz qeydə alındı: *{role}*\n\n"
-        f"💬 İndi mənə mətn yazın, səsli mesaj göndərin və ya əmrlərdən istifadə edin.\n\n"
-        f"📋 *Əmrlər:*\n"
-        f"/find — Müştəri axtar\n"
-        f"/task — Tapşırıq yarat\n"
-        f"/note — Qeyd əlavə et\n"
-        f"/tasks — Bugünkü tapşırıqlar\n"
-        f"/tomorrow — Sabahkı tapşırıqlar\n"
-        f"/lead — Sövdələşməyə link",
+    await update.message.reply_text(
+        "🤖 *Xoş gəlmisiniz!*\n\n"
+        "Qeydiyyat üçün seçim edin:",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show registration options (same as /start for unregistered)."""
+    keyboard = [
+        [InlineKeyboardButton("🤝 Partnyor", callback_data="reg_partnyor")],
+        [InlineKeyboardButton("👤 Əməkdaş", callback_data="reg_emekdash")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Qeydiyyat üçün seçim edin:", reply_markup=reply_markup)
+
+async def registration_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Partnyor / Əməkdaş button selection during registration."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    chat_id = query.message.chat_id
+    data = query.data
+    
+    if data == "reg_partnyor":
+        # Start partner registration flow
+        _pending_partner_registration[chat_id] = True
+        try:
+            await query.edit_message_text(
+                "🤝 *Partnyor qeydiyyatı*\n\n"
+                "Adınızı daxil edin (Kommo siyahısında qeyd olunduğu kimi):",
+                parse_mode="Markdown"
+            )
+        except:
+            await context.bot.send_message(
+                chat_id,
+                "🤝 *Partnyor qeydiyyatı*\n\n"
+                "Adınızı daxil edin (Kommo siyahısında qeyd olunduğu kimi):",
+                parse_mode="Markdown"
+            )
+    
+    elif data == "reg_emekdash":
+        # Start employee registration flow
+        _pending_employee_registration[chat_id] = "__ask_name__"
+        try:
+            await query.edit_message_text(
+                "👤 *Əməkdaş qeydiyyatı*\n\n"
+                "Adınızı yazın:",
+                parse_mode="Markdown"
+            )
+        except:
+            await context.bot.send_message(
+                chat_id,
+                "👤 *Əməkdaş qeydiyyatı*\n\nAdınızı yazın:",
+                parse_mode="Markdown"
+            )
+
+async def employee_approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Admin approval/rejection of new employee registration."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # empreg_{chat_id}_yes / empreg_{chat_id}_no
+    parts = data.split("_")
+    applicant_chat_id = int(parts[1])
+    decision = parts[2]  # yes or no
+    
+    emp_name = _pending_employee_registration.pop(applicant_chat_id, None)
+    if not emp_name or emp_name == "__ask_name__":
+        try:
+            await query.edit_message_text("⚠️ Məlumat tapılmadı (vaxt keçib).")
+        except:
+            pass
+        return
+    
+    if decision == "yes":
+        # Register employee with basic role
+        users = load_users()
+        users[str(applicant_chat_id)] = {
+            "role": "Əməkdaş",
+            "name": emp_name,
+        }
+        save_users(users)
+        try:
+            await query.edit_message_text(
+                f"✅ *Təsdiq edildi*\n\n"
+                f"👤 {emp_name} əməkdaş kimi qeydiyyatdan keçdi.",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+        # Notify applicant
+        try:
+            await context.bot.send_message(
+                applicant_chat_id,
+                "✅ Qeydiyyat təsdiqləndi!\n\n"
+                "💬 Mənə mətn yazın, səsli mesaj göndərin və ya əmrlərdən istifadə edin.\n\n"
+                "📋 *Əmrlər:*\n"
+                "/find — Müştəri axtar\n"
+                "/tasks — Bugünkü tapşırıqlar\n"
+                "/lead — Sövdələşməyə link",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+    else:
+        try:
+            await query.edit_message_text(
+                f"❌ *Rədd edildi*\n\n"
+                f"👤 {emp_name} qeydiyyatı rədd edildi.",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+        # Notify applicant
+        try:
+            await context.bot.send_message(
+                applicant_chat_id,
+                "❌ Qeydiyyat rədd edildi. Admin ilə əlaqə saxlayın."
+            )
+        except:
+            pass
 
 async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, trigger: str, sender_chat_id: int, sender_kommo_id: int):
     """Send automation transition to Admin for confirmation."""
@@ -2358,10 +2438,16 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
     chat_id = update.message.chat_id
     name_input = user_text.strip()
     
-    # Case-insensitive match against PARTNER_ENUMS
+    # Fetch current partner enums from Kommo API (dynamic)
+    partner_enums = fetch_partner_enums()
+    if not partner_enums:
+        await update.message.reply_text("⚠️ Sistem xətası. Zəhmət olmasa bir az sonra yenidən cəhd edin.")
+        return True
+    
+    # Case-insensitive match
     matched_name = None
     matched_enum_id = None
-    for enum_name, enum_id in PARTNER_ENUMS.items():
+    for enum_name, enum_id in partner_enums.items():
         if enum_name.lower() == name_input.lower():
             matched_name = enum_name
             matched_enum_id = enum_id
@@ -2400,7 +2486,7 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
     else:
         await update.message.reply_text(
             "❌ Bu ad siyahıda tapılmadı. Zəhmət olmasa düzgün adınızı yazın.\n\n"
-            "_Mövcud adlar: Smartteam, Unisetpos, Compline, Oneline, BeinSystems, Elvin Abdullayev_",
+            "_Adınızı Kommo siyahısında qeyd olunduğu kimi daxil edin._",
             parse_mode="Markdown"
         )
         return True
@@ -2635,6 +2721,40 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     chat_id = update.message.chat_id
+    
+    # ── Employee registration flow (waiting for name) ──
+    if chat_id in _pending_employee_registration and _pending_employee_registration[chat_id] == "__ask_name__":
+        emp_name = user_text.strip()
+        _pending_employee_registration[chat_id] = emp_name
+        await update.message.reply_text(
+            f"📤 Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir...\n\n"
+            f"👤 Ad: {emp_name}"
+        )
+        # Send approval request to Admin
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        if admin_chat:
+            keyboard = [
+                [InlineKeyboardButton("✅ Təsdiq et", callback_data=f"empreg_{chat_id}_yes")],
+                [InlineKeyboardButton("❌ Rədd et", callback_data=f"empreg_{chat_id}_no")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                await context.bot.send_message(
+                    admin_chat,
+                    f"🔔 Yeni əməkdaş qeydiyyatdan keçmək istəyir:\n\n"
+                    f"👤 Ad: {emp_name}\n"
+                    f"🆔 Telegram: {chat_id}\n\n"
+                    f"Təsdiq edirsiniz?",
+                    reply_markup=reply_markup
+                )
+            except:
+                pass
+        return
+    
+    # ── Employee waiting for approval (don't process their messages through AI) ──
+    if chat_id in _pending_employee_registration:
+        await update.message.reply_text("⏳ Qeydiyyatınız hələ təsdiq gözləyir. Zəhmət olmasa gözləyin.")
+        return
     
     # ── Partner registration flow ──
     if chat_id in _pending_partner_registration:
@@ -2993,7 +3113,8 @@ def main():
     app.add_handler(CommandHandler("lead", lambda u, c: execute_show_lead(u, c.args[0], chat_id=u.message.chat_id) if c.args else u.message.reply_text("⚠️ Telefon nömrəsini göstərin.")))
 
     # Callback handlers
-    app.add_handler(CallbackQueryHandler(role_callback, pattern="^role_"))
+    app.add_handler(CallbackQueryHandler(registration_type_callback, pattern="^reg_"))
+    app.add_handler(CallbackQueryHandler(employee_approval_callback, pattern="^empreg_"))
     app.add_handler(CallbackQueryHandler(presentation_callback, pattern="^pres_"))
     app.add_handler(CallbackQueryHandler(task_assign_callback, pattern="^taskasgn_"))
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
