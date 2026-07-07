@@ -898,9 +898,17 @@ async def execute_show_tasks(update: Update, day: str = "today"):
     for i, task in enumerate(tasks, 1):
         t_text = task.get("text", "Təsvirsiz")
         dt = datetime.fromtimestamp(task.get("complete_till", 0), tz=BAKU_TZ)
-        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}\n"
+        t_entity_id = task.get("entity_id")
+        t_entity_type = task.get("entity_type", "leads")
+        if t_entity_id and t_entity_type == "leads":
+            t_link = f"\n🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+        elif t_entity_id and t_entity_type == "contacts":
+            t_link = f"\n🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+        else:
+            t_link = ""
+        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}{t_link}\n"
     msg += f"\n📊 Cəmi: {len(tasks)}"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def execute_create_task_with_assign(update: Update, phone: str, date_str: str, time_str: str, task_text: str, chat_id: int, assign_to: int = None, urgency: str = "normal"):
     """Create task with explicit assignment and urgency."""
