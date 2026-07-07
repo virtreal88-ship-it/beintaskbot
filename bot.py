@@ -150,6 +150,25 @@ import time as _time_module
 _BOT_START_TIME = _time_module.time()  # epoch seconds when module loaded
 _sent_deadline_notifications: set[int] = set()  # task IDs already notified
 
+# ─── Partner Configuration ───────────────────────────────────────────────────
+
+PARTNER_FIELD_ID = 2989615  # Custom field "Partnyor" (select)
+PARTNER_DATE_FIELD_ID = 2989617  # Custom field "Qeydiyyat tarixi" (date)
+
+# Enum values for Partner field (fetched from Kommo API)
+PARTNER_ENUMS = {
+    "Smartteam": 9257849,
+    "Unisetpos": 9257851,
+    "Compline": 9257853,
+    "Oneline": 9257855,
+    "BeinSystems": 9257857,
+    "Elvin Abdullayev": 9257859,
+}
+
+# State for partner registration flow
+_pending_partner_registration: dict[int, bool] = {}  # chat_id -> waiting for name
+_pending_partner_create: dict[int, dict] = {}  # chat_id -> {"phone": str, "step": str}
+
 def get_ctx(chat_id: int) -> dict:
     if chat_id not in user_context:
         user_context[chat_id] = {
@@ -595,6 +614,24 @@ def update_contact_kommo(contact_id: int, data: dict) -> dict | None:
             return resp.json()
     except Exception as e:
         logger.error(f"Update contact error: {e}")
+    return None
+
+def create_contact_kommo(name: str, phone: str, custom_fields: list = None, responsible_user_id: int = 10932455) -> dict | None:
+    """Create a new contact in Kommo."""
+    url = f"{KOMMO_BASE_URL}/api/v4/contacts"
+    payload = [{
+        "name": name,
+        "responsible_user_id": responsible_user_id,
+        "custom_fields_values": [
+            {"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}
+        ] + (custom_fields or [])
+    }]
+    try:
+        resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+        if resp.status_code in (200, 201):
+            return resp.json()
+    except Exception as e:
+        logger.error(f"Create contact error: {e}")
     return None
 
 def get_lead_custom_fields() -> list:
@@ -1548,24 +1585,48 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     users = load_users()
+    
+    # Check for deep link parameter
+    args = context.args  # e.g. ["partner"] from t.me/beintaskbot?start=partner
+    is_partner_link = args and args[0].lower() == "partner"
+    
     if str(chat_id) in users:
         role = users[str(chat_id)].get("role", "")
-        welcome = (
-            f"🤖 *Kommo CRM Bot + AI*\n\n"
-            f"Salam! Rolunuz: *{role}*\n\n"
-            f"💬 Mənə mətn yazın, səsli mesaj göndərin və ya əmrlərdən istifadə edin.\n\n"
-            f"📋 *Əmrlər:*\n"
-            f"/find — Müştəri axtar\n"
-            f"/task — Tapşırıq yarat\n"
-            f"/note — Qeyd əlavə et\n"
-            f"/tasks — Bugünkü tapşırıqlar\n"
-            f"/tomorrow — Sabahkı tapşırıqlar\n"
-            f"/lead — Sövdələşməyə link\n"
-            f"/role — Rolu dəyiş"
+        if role == "Partnyor":
+            partner_name = users[str(chat_id)].get("name", "")
+            await update.message.reply_text(
+                f"🤝 *Salam, {partner_name}!*\n\n"
+                f"Siz partnyor olaraq qeydiyyatdan keçmisiniz.\n\n"
+                f"📞 Müştəri yoxlamaq üçün telefon nömrəsi göndərin\n"
+                f"👤 Yeni müştəri yaratmaq üçün 'Yeni müştəri' yazın",
+                parse_mode="Markdown"
+            )
+        else:
+            welcome = (
+                f"🤖 *Kommo CRM Bot + AI*\n\n"
+                f"Salam! Rolunuz: *{role}*\n\n"
+                f"💬 Mənə mətn yazın, səsli mesaj göndərin və ya əmrlərdən istifadə edin.\n\n"
+                f"📋 *Əmrlər:*\n"
+                f"/find — Müştəri axtar\n"
+                f"/task — Tapşırıq yarat\n"
+                f"/note — Qeyd əlavə et\n"
+                f"/tasks — Bugünkü tapşırıqlar\n"
+                f"/tomorrow — Sabahkı tapşırıqlar\n"
+                f"/lead — Sövdələşməyə link\n"
+                f"/role — Rolu dəyiş"
+            )
+            await update.message.reply_text(welcome, parse_mode="Markdown")
+    elif is_partner_link:
+        # Partner registration flow
+        _pending_partner_registration[chat_id] = True
+        await update.message.reply_text(
+            "🤝 *Partnyor qeydiyyatı*\n\n"
+            "Xoş gəlmisiniz! Zəhmət olmasa şirkət/partnyor adınızı yazın:\n\n"
+            "_Məsələn: Smartteam, Unisetpos, Compline, Oneline, BeinSystems, Elvin Abdullayev_",
+            parse_mode="Markdown"
         )
-        await update.message.reply_text(welcome, parse_mode="Markdown")
     else:
-        # Registration
+        # Unregistered user without partner link
         keyboard = [
             [InlineKeyboardButton("👑 Admin (Texniki Destek)", callback_data="role_admin")],
             [InlineKeyboardButton("💼 Satış meneceri (Şamil Əliyev)", callback_data="role_sales")],
@@ -2290,6 +2351,275 @@ async def start_webhook_server():
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
     logger.info(f"Kommo webhook endpoint: POST /webhook/kommo")
 
+# ─── Partner Handlers ───────────────────────────────────────────────────────
+
+async def handle_partner_registration(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str) -> bool:
+    """Handle partner name input during registration. Returns True if handled."""
+    chat_id = update.message.chat_id
+    name_input = user_text.strip()
+    
+    # Case-insensitive match against PARTNER_ENUMS
+    matched_name = None
+    matched_enum_id = None
+    for enum_name, enum_id in PARTNER_ENUMS.items():
+        if enum_name.lower() == name_input.lower():
+            matched_name = enum_name
+            matched_enum_id = enum_id
+            break
+    
+    if matched_name:
+        # Register partner
+        users = load_users()
+        users[str(chat_id)] = {
+            "role": "Partnyor",
+            "name": matched_name,
+            "partner_enum_id": matched_enum_id,
+        }
+        save_users(users)
+        del _pending_partner_registration[chat_id]
+        await update.message.reply_text(
+            f"✅ *Qeydiyyat uğurla tamamlandı!*\n\n"
+            f"🤝 Partnyor: *{matched_name}*\n\n"
+            f"📞 Müştəri yoxlamaq üçün telefon nömrəsi göndərin\n"
+            f"👤 Yeni müştəri yaratmaq üçün 'Yeni müştəri' yazın",
+            parse_mode="Markdown"
+        )
+        # Notify Admin
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        if admin_chat:
+            try:
+                await context.bot.send_message(
+                    admin_chat,
+                    f"📢 Yeni partnyor qeydiyyatdan keçdi:\n\n"
+                    f"🤝 {matched_name}\n"
+                    f"🆔 Chat ID: {chat_id}",
+                )
+            except:
+                pass
+        return True
+    else:
+        await update.message.reply_text(
+            "❌ Bu ad siyahıda tapılmadı. Zəhmət olmasa düzgün adınızı yazın.\n\n"
+            "_Mövcud adlar: Smartteam, Unisetpos, Compline, Oneline, BeinSystems, Elvin Abdullayev_",
+            parse_mode="Markdown"
+        )
+        return True
+
+
+async def handle_partner_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
+    """Handle messages from registered partners. Only phone lookup or 'yeni müştəri'."""
+    chat_id = update.message.chat_id
+    text_lower = user_text.lower().strip()
+    
+    # Check if it looks like a phone number (7+ digits)
+    digits = re.sub(r"\D", "", user_text)
+    if len(digits) >= 7:
+        await partner_check_phone(update, context, digits)
+        return
+    
+    # Check if user wants to create a new client
+    if any(kw in text_lower for kw in ["yeni müştəri", "yeni muşteri", "yeni musteri", "yarat", "create"]):
+        _pending_partner_create[chat_id] = {"step": "ask_name"}
+        await update.message.reply_text(
+            "👤 *Yeni müştəri yaratmaq*\n\n"
+            "Müştərinin adını yazın:",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Unknown command for partner
+    await update.message.reply_text(
+        "Siz yalnız müştəri yoxlaya və ya yeni müştəri yarada bilərsiniz.\n\n"
+        "📞 Telefon nömrəsi göndərin — müştəri yoxlamaq üçün\n"
+        "👤 'Yeni müştəri' yazın — yaratmaq üçün"
+    )
+
+
+async def partner_check_phone(update: Update, context: ContextTypes.DEFAULT_TYPE, phone_digits: str):
+    """Partner checks if a phone number exists in Kommo."""
+    chat_id = update.message.chat_id
+    contacts = search_contact_by_phone(phone_digits)
+    
+    if contacts:
+        contact = contacts[0]
+        contact_name = contact.get("name", "Adsız")
+        full_c = get_contact_details(contact["id"])
+        
+        # Extract partner field and date field
+        partner_value = ""
+        reg_date = ""
+        if full_c:
+            for cf in (full_c.get("custom_fields_values") or []):
+                if cf.get("field_id") == PARTNER_FIELD_ID:
+                    vals = cf.get("values", [])
+                    if vals:
+                        partner_value = vals[0].get("value", "")
+                elif cf.get("field_id") == PARTNER_DATE_FIELD_ID:
+                    vals = cf.get("values", [])
+                    if vals:
+                        raw_date = vals[0].get("value", "")
+                        # Kommo date fields come as unix timestamp or ISO
+                        try:
+                            ts = int(raw_date)
+                            reg_date = datetime.fromtimestamp(ts, tz=BAKU_TZ).strftime("%d.%m.%Y")
+                        except (ValueError, TypeError):
+                            reg_date = str(raw_date)[:10] if raw_date else ""
+        
+        msg = f"✅ Bu müştəri artıq qeydiyyatdan keçib.\n\n👤 Ad: {contact_name}"
+        if reg_date:
+            msg += f"\n📅 Qeydiyyat tarixi: {reg_date}"
+        if partner_value:
+            msg += f"\n🤝 Partnyor: {partner_value}"
+        
+        await update.message.reply_text(msg)
+    else:
+        # Not found — offer to create
+        _pending_partner_create[chat_id] = {"step": "confirm_create", "phone": phone_digits}
+        keyboard = [[InlineKeyboardButton("Bəli, yarat", callback_data=f"partner_create_{phone_digits}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"❌ Bu nömrə ilə müştəri tapılmadı.\n\nYeni müştəri yaratmaq istəyirsiniz?",
+            reply_markup=reply_markup
+        )
+
+
+async def handle_partner_create_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str) -> bool:
+    """Handle multi-step partner contact creation. Returns True if handled."""
+    chat_id = update.message.chat_id
+    state = _pending_partner_create.get(chat_id)
+    if not state:
+        return False
+    
+    step = state.get("step", "")
+    
+    if step == "ask_name":
+        state["client_name"] = user_text.strip()
+        state["step"] = "ask_phone"
+        await update.message.reply_text(
+            f"👤 Ad: *{user_text.strip()}*\n\n"
+            f"📞 İndi müştərinin telefon nömrəsini yazın:",
+            parse_mode="Markdown"
+        )
+        return True
+    
+    elif step == "ask_phone":
+        digits = re.sub(r"\D", "", user_text)
+        if len(digits) < 7:
+            await update.message.reply_text("⚠️ Düzgün telefon nömrəsi daxil edin (minimum 7 rəqəm).")
+            return True
+        # Format phone with +994 if needed
+        if len(digits) == 9:
+            phone_formatted = f"+994{digits}"
+        elif len(digits) == 10 and digits.startswith("0"):
+            phone_formatted = f"+994{digits[1:]}"
+        elif len(digits) >= 12 and digits.startswith("994"):
+            phone_formatted = f"+{digits}"
+        else:
+            phone_formatted = f"+994{digits[-9:]}" if len(digits) >= 9 else digits
+        
+        client_name = state.get("client_name", "Müştəri")
+        await _do_partner_create_contact(update, context, chat_id, client_name, phone_formatted)
+        return True
+    
+    elif step == "ask_name_for_phone":
+        # User provided name after clicking "Bəli, yarat" button
+        phone = state.get("phone", "")
+        if len(phone) == 9:
+            phone_formatted = f"+994{phone}"
+        elif len(phone) == 10 and phone.startswith("0"):
+            phone_formatted = f"+994{phone[1:]}"
+        elif len(phone) >= 12 and phone.startswith("994"):
+            phone_formatted = f"+{phone}"
+        else:
+            phone_formatted = f"+994{phone[-9:]}" if len(phone) >= 9 else phone
+        
+        await _do_partner_create_contact(update, context, chat_id, user_text.strip(), phone_formatted)
+        return True
+    
+    return False
+
+
+async def _do_partner_create_contact(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, client_name: str, phone: str):
+    """Actually create the contact in Kommo with partner fields."""
+    users = load_users()
+    user_info = users.get(str(chat_id), {})
+    partner_name = user_info.get("name", "")
+    partner_enum_id = user_info.get("partner_enum_id")
+    
+    today_str = datetime.now(tz=BAKU_TZ).strftime("%d.%m.%Y")
+    # Kommo date field expects unix timestamp (start of day)
+    today_ts = int(datetime.now(tz=BAKU_TZ).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    
+    custom_fields = []
+    if partner_enum_id:
+        custom_fields.append({
+            "field_id": PARTNER_FIELD_ID,
+            "values": [{"enum_id": partner_enum_id}]
+        })
+    custom_fields.append({
+        "field_id": PARTNER_DATE_FIELD_ID,
+        "values": [{"value": today_ts}]
+    })
+    
+    result = create_contact_kommo(client_name, phone, custom_fields=custom_fields)
+    
+    if result:
+        # Clean up state
+        _pending_partner_create.pop(chat_id, None)
+        await update.message.reply_text(
+            f"✅ Müştəri uğurla yaradıldı və sizin adınıza bağlandı.\n\n"
+            f"👤 Ad: {client_name}\n"
+            f"📞 Tel: {phone}\n"
+            f"🤝 Partnyor: {partner_name}\n"
+            f"📅 Tarix: {today_str}"
+        )
+        # Notify Admin
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        if admin_chat:
+            try:
+                await context.bot.send_message(
+                    admin_chat,
+                    f"📢 Partnyor *{partner_name}* yeni müştəri yaratdı:\n\n"
+                    f"👤 Ad: {client_name}\n"
+                    f"📞 Tel: {phone}\n"
+                    f"📅 Tarix: {today_str}",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+    else:
+        _pending_partner_create.pop(chat_id, None)
+        await update.message.reply_text("❌ Müştəri yaradılarkən xəta baş verdi. Yenidən cəhd edin.")
+
+
+async def partner_create_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle 'Bəli, yarat' button click from partner."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    
+    chat_id = query.message.chat_id
+    data = query.data  # partner_create_{phone_digits}
+    phone_digits = data.replace("partner_create_", "")
+    
+    # Ask for client name
+    _pending_partner_create[chat_id] = {"step": "ask_name_for_phone", "phone": phone_digits}
+    try:
+        await query.edit_message_text(
+            f"👤 *Yeni müştəri yaratmaq*\n\n"
+            f"📞 Nömrə: +994{phone_digits[-9:]}\n\n"
+            f"Müştərinin adını yazın:",
+            parse_mode="Markdown"
+        )
+    except:
+        await context.bot.send_message(
+            chat_id,
+            f"👤 Yeni müştəri yaratmaq üçün adı yazın:\n\n📞 Nömrə: +994{phone_digits[-9:]}"
+        )
+
+
 # ─── Free Text and Voice Handlers ────────────────────────────────────────────
 
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2303,6 +2633,28 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = user_text.replace(f"@{bot_username}", "").strip()
     if not user_text:
         return
+    
+    chat_id = update.message.chat_id
+    
+    # ── Partner registration flow ──
+    if chat_id in _pending_partner_registration:
+        handled = await handle_partner_registration(update, context, user_text)
+        if handled:
+            return
+    
+    # ── Partner create contact flow ──
+    if chat_id in _pending_partner_create:
+        handled = await handle_partner_create_flow(update, context, user_text)
+        if handled:
+            return
+    
+    # ── Partner role: restrict to phone lookup or "yeni müştəri" ──
+    users = load_users()
+    user_info = users.get(str(chat_id))
+    if user_info and user_info.get("role") == "Partnyor":
+        await handle_partner_message(update, context, user_text)
+        return
+    
     await process_text_intent(update, context, user_text)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2647,6 +2999,7 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
     app.add_handler(CallbackQueryHandler(webhook_stage_notification_callback, pattern="^whstage_"))
+    app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
 
     # Message handlers
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
