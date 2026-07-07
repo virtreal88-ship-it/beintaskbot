@@ -584,6 +584,25 @@ def get_phone_from_entity(entity_id: int, entity_type: str) -> str:
         pass
     return ""
 
+def get_contact_name_from_entity(entity_id: int, entity_type: str) -> str:
+    """Resolve client name from a task's entity_id/entity_type."""
+    try:
+        if entity_type == "leads":
+            lead = get_lead_details(entity_id)
+            if lead:
+                contacts_emb = lead.get("_embedded", {}).get("contacts", [])
+                if contacts_emb:
+                    full_c = get_contact_details(contacts_emb[0]["id"])
+                    if full_c:
+                        return full_c.get("name", "")
+        elif entity_type == "contacts":
+            full_c = get_contact_details(entity_id)
+            if full_c:
+                return full_c.get("name", "")
+    except Exception:
+        pass
+    return ""
+
 def get_contact_notes(contact_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
     try:
@@ -1042,14 +1061,16 @@ async def execute_show_tasks(update: Update, day: str = "today"):
         t_entity_id = task.get("entity_id")
         t_entity_type = task.get("entity_type", "leads")
         t_phone = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+        t_name = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
         t_phone_line = f"\n📞 {t_phone}" if t_phone else ""
+        t_name_line = f"\n👤 {t_name}" if t_name else ""
         if t_entity_id and t_entity_type == "leads":
             t_link = f"\n🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
         elif t_entity_id and t_entity_type == "contacts":
             t_link = f"\n🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
         else:
             t_link = ""
-        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}{t_phone_line}{t_link}\n"
+        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}{t_name_line}{t_phone_line}{t_link}\n"
     msg += f"\n📊 Cəmi: {len(tasks)}"
     await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -3109,9 +3130,11 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         else:
             task_link = ""
         link_line = f"\n\n🔗 {task_link}" if task_link else ""
-        # Resolve client phone
+        # Resolve client phone and name
         t_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+        t_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
         phone_line = f"\n📞 {t_phone}" if t_phone else ""
+        name_line = f"\n👤 Müştəri: {t_name}" if t_name else ""
         
         # ── Upcoming (within 15 min): simple reminder ──
         if window_start <= task_dt <= window_end:
@@ -3120,7 +3143,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id,
                         f"⏰ *Xatırlatma!* Tapşırığın vaxtı yaxınlaşır:\n\n"
-                        f"📝 {text}{phone_line}\n⏰ {time_str}{link_line}",
+                        f"📝 {text}{name_line}{phone_line}\n⏰ {time_str}{link_line}",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
@@ -3139,7 +3162,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(
                                 admin_chat,
                                 f"🔔 *{responsible_name}* üçün xatırlatma göndərildi:\n\n"
-                                f"📝 {text}{phone_line}\n⏰ {time_str}{link_line}",
+                                f"📝 {text}{name_line}{phone_line}\n⏰ {time_str}{link_line}",
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
@@ -3164,9 +3187,11 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 try:
+                    overdue_name_part = f"{name_line}\n" if name_line else ""
                     await context.bot.send_message(
                         chat_id,
                         f"⚠️ *Gecikmiş tapşırıq!*\n\n"
+                        f"{overdue_name_part}"
                         f"📝 {text}{phone_line}\n⏰ Son tarix: {time_str}{link_line}",
                         parse_mode="Markdown",
                         reply_markup=reply_markup,
@@ -3186,6 +3211,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(
                                 admin_chat,
                                 f"⚠️ *{responsible_name}* üçün gecikmiş tapşırıq bildirişi göndərildi:\n\n"
+                                f"{overdue_name_part}"
                                 f"📝 {text}{phone_line}\n⏰ Son tarix: {time_str}{link_line}",
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
@@ -3231,8 +3257,10 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     else:
                         t_link = ""
                     t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                    t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                     t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
-                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
+                    t_nm_line = f"\n     👤 {t_nm}" if t_nm else ""
+                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
             # Today tasks with links and phone
             today_tasks = get_tasks(today_start, today_end)
             msg += f"\n📅 *Bugünkü tapşırıqlar:* {len(today_tasks)}\n"
@@ -3247,8 +3275,10 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     t_link = ""
                 t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                 t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
-                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
+                t_nm_line = f"\n     👤 {t_nm}" if t_nm else ""
+                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
             try:
                 await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
             except:
@@ -3269,8 +3299,10 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     else:
                         t_link = ""
                     t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                    t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                     t_ph_line = f"\n   📞 {t_ph}" if t_ph else ""
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
+                    t_nm_line = f"\n   👤 {t_nm}" if t_nm else ""
+                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
                 msg += f"\n📊 Cəmi: {len(tasks)}"
             else:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
