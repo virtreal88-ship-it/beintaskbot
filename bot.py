@@ -1562,12 +1562,12 @@ async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_
         "phone": phone, "trigger": trigger,
         "sender_chat_id": sender_chat_id, "sender_kommo_id": sender_kommo_id
     }
-    sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+    sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
     
     TRIGGER_NAMES = {
         "new_order": "Yeni sifariş (müştəri almaq istəyir)",
         "meeting_set": "Görüş təyin olundu",
-        "sold": "Satıldı → Quraşdırma",
+        "sold": "Satıldı → Quraşdirma",
         "thinking": "Düşünür (follow-up 3 gün)",
         "no_answer": "Cavab vermir",
         "refused": "İmtina etdi",
@@ -1575,20 +1575,32 @@ async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_
         "presentation_done": "Təqdimat olundu",
         "internal_discussion": "Daxili müzakirə",
         "discussion_done": "Müzakirə bitdi",
-        "installation_done": "Quraşdırma bitdi",
+        "installation_done": "Quraşdirma bitdi",
         "send_price": "Qiymət təklifi göndər",
     }
     trigger_desc = TRIGGER_NAMES.get(trigger, trigger)
     
-    # Find contact name
+    # Find contact name and lead link
     contacts = search_contact_by_phone(phone)
     contact_name = contacts[0].get("name", "Adsız") if contacts else phone
+    conf_link = ""
+    if contacts:
+        full_c = get_contact_details(contacts[0]["id"])
+        c_leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+        c_lead_id = c_leads[0]["id"] if c_leads else None
+        if c_lead_id:
+            conf_link = f"\n\n🔗 {KOMMO_BASE_URL}/leads/detail/{c_lead_id}"
+        else:
+            conf_link = f"\n\n🔗 {KOMMO_BASE_URL}/contacts/detail/{contacts[0]['id']}"
+        # Store link in pending data for use after confirmation
+        context.bot_data[f"confirm_{conf_key}"]["lead_link"] = conf_link
     
     # Notify sender that it's sent for approval
     await update.message.reply_text(
         f"📤 Sorğunuz Admin-ə təsdiq üçün göndərildi:\n"
         f"👤 Müştəri: {contact_name}\n"
-        f"🔄 Əməliyyat: {trigger_desc}"
+        f"🔄 Əməliyyat: {trigger_desc}{conf_link}",
+        disable_web_page_preview=True
     )
     
     # Send to Admin with buttons
@@ -1605,9 +1617,10 @@ async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_
                 f"🔔 *{sender_name}* keçid etmək istəyir:\n\n"
                 f"👤 Müştəri: {contact_name}\n"
                 f"🔄 Əməliyyat: *{trigger_desc}*\n\n"
-                f"Təsdiq edirsiniz?",
+                f"Təsdiq edirsiniz?{conf_link}",
                 reply_markup=reply_markup,
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
         except Exception:
             try:
@@ -1616,8 +1629,9 @@ async def send_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_
                     f"🔔 {sender_name} keçid etmək istəyir:\n\n"
                     f"👤 Müştəri: {contact_name}\n"
                     f"🔄 Əməliyyat: {trigger_desc}\n\n"
-                    f"Təsdiq edirsiniz?",
-                    reply_markup=reply_markup
+                    f"Təsdiq edirsiniz?{conf_link}",
+                    reply_markup=reply_markup,
+                    disable_web_page_preview=True
                 )
             except:
                 pass
@@ -1726,15 +1740,18 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
                 pass
     else:
         # Rejected
+        # Retrieve stored link if available
+        rej_link = pending.get("lead_link", "")
         try:
-            await query.edit_message_text(f"❌ Rədd edildi: {trigger}")
+            await query.edit_message_text(f"❌ Rədd edildi: {trigger}{rej_link}", disable_web_page_preview=True)
         except:
             pass
         # Notify sender
         try:
             await context.bot.send_message(
                 sender_chat_id,
-                f"❌ Admin sorğunuzu rədd etdi.\n🔄 Əməliyyat: {trigger}"
+                f"❌ Admin sorğunuzu rədd etdi.\n🔄 Əməliyyat: {trigger}{rej_link}",
+                disable_web_page_preview=True
             )
         except:
             pass
@@ -2439,37 +2456,61 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     continue
                 leads = get_leads_by_status(stage_id)
                 if leads:
-                    msg += f"  • {stage_name}: {len(leads)} sövdələşmə\n"
-            # Overdue tasks
+                    msg += f"  \u2022 {stage_name}: {len(leads)} sövdələşmə\n"
+            # Overdue tasks with links
             all_tasks = get_all_incomplete_tasks()
             overdue = [t for t in all_tasks if t.get("complete_till", 0) < int(now.timestamp())]
             if overdue:
                 msg += f"\n⚠️ *Gecikmiş tapşırıqlar:* {len(overdue)}\n"
                 for t in overdue[:5]:
-                    msg += f"  • {t.get('text', 'Təsvirsiz')}\n"
-            # Today tasks
+                    t_entity_id = t.get("entity_id")
+                    t_entity_type = t.get("entity_type", "leads")
+                    if t_entity_id and t_entity_type == "leads":
+                        t_link = f" 🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+                    elif t_entity_id and t_entity_type == "contacts":
+                        t_link = f" 🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+                    else:
+                        t_link = ""
+                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_link}\n"
+            # Today tasks with links
             today_tasks = get_tasks(today_start, today_end)
             msg += f"\n📅 *Bugünkü tapşırıqlar:* {len(today_tasks)}\n"
             for t in today_tasks[:10]:
                 dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-                msg += f"  • ⏰ {dt.strftime('%H:%M')} — {t.get('text', 'Təsvirsiz')}\n"
+                t_entity_id = t.get("entity_id")
+                t_entity_type = t.get("entity_type", "leads")
+                if t_entity_id and t_entity_type == "leads":
+                    t_link = f" 🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+                elif t_entity_id and t_entity_type == "contacts":
+                    t_link = f" 🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+                else:
+                    t_link = ""
+                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_link}\n"
             try:
-                await context.bot.send_message(chat_id, msg, parse_mode="Markdown")
+                await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
             except:
                 pass
         else:
-            # Regular user: their tasks today
+            # Regular user: their tasks today with links
             tasks = get_tasks(today_start, today_end, responsible_id=kommo_uid)
             if tasks:
-                msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})* — bugünkü tapşırıqlar:\n\n"
+                msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})* \u2014 bugünkü tapşırıqlar:\n\n"
                 for i, t in enumerate(tasks, 1):
                     dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t.get('text', 'Təsvirsiz')}\n"
+                    t_entity_id = t.get("entity_id")
+                    t_entity_type = t.get("entity_type", "leads")
+                    if t_entity_id and t_entity_type == "leads":
+                        t_link = f"\n   🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+                    elif t_entity_id and t_entity_type == "contacts":
+                        t_link = f"\n   🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+                    else:
+                        t_link = ""
+                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_link}\n"
                 msg += f"\n📊 Cəmi: {len(tasks)}"
             else:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
             try:
-                await context.bot.send_message(chat_id, msg, parse_mode="Markdown")
+                await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
             except:
                 pass
 
