@@ -462,6 +462,33 @@ def get_lead_details(lead_id: int) -> dict | None:
         logger.error(f"Lead details error: {e}")
     return None
 
+def get_phone_from_entity(entity_id: int, entity_type: str) -> str:
+    """Resolve client phone from a task's entity_id/entity_type."""
+    try:
+        if entity_type == "leads":
+            lead = get_lead_details(entity_id)
+            if lead:
+                contacts_emb = lead.get("_embedded", {}).get("contacts", [])
+                if contacts_emb:
+                    full_c = get_contact_details(contacts_emb[0]["id"])
+                    if full_c:
+                        for cf in (full_c.get("custom_fields_values") or []):
+                            if cf.get("field_code") == "PHONE":
+                                vals = cf.get("values", [])
+                                if vals:
+                                    return vals[0].get("value", "")
+        elif entity_type == "contacts":
+            full_c = get_contact_details(entity_id)
+            if full_c:
+                for cf in (full_c.get("custom_fields_values") or []):
+                    if cf.get("field_code") == "PHONE":
+                        vals = cf.get("values", [])
+                        if vals:
+                            return vals[0].get("value", "")
+    except Exception:
+        pass
+    return ""
+
 def get_contact_notes(contact_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
     try:
@@ -831,7 +858,7 @@ async def execute_create_task(update: Update, phone: str, date_str: str, time_st
     result = create_task(contact["id"], task_text, complete_till, responsible_user_id=creator_kommo_id)
     if result:
         await update.message.reply_text(
-            f"✅ Tapşırıq yaradıldı!\n\n👤 Müştəri: {contact_name}\n📅 Tarix: {date_str} {time_str}\n📝 Mətn: {task_text}\n\n🔗 {c_link}",
+            f"✅ Tapşırıq yaradıldı!\n\n👤 Müştəri: {contact_name}\n📞 {phone}\n📅 Tarix: {date_str} {time_str}\n📝 Mətn: {task_text}\n\n🔗 {c_link}",
             disable_web_page_preview=True
         )
         if chat_id is not None:
@@ -843,13 +870,14 @@ async def execute_create_task(update: Update, phone: str, date_str: str, time_st
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
             if sender_kommo_id and sender_kommo_id != 10932455:
                 admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+                sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
                 if admin_chat:
                     try:
                         await update.get_bot().send_message(
                             admin_chat,
                             f"📢 *{sender_name}* yeni tapşırıq yaratdı:\n\n"
                             f"👤 Müştəri: {contact_name}\n"
+                            f"📞 {phone}\n"
                             f"📅 Tarix: {date_str} {time_str}\n"
                             f"📝 {task_text}\n\n🔗 {c_link}",
                             parse_mode="Markdown",
@@ -900,13 +928,15 @@ async def execute_show_tasks(update: Update, day: str = "today"):
         dt = datetime.fromtimestamp(task.get("complete_till", 0), tz=BAKU_TZ)
         t_entity_id = task.get("entity_id")
         t_entity_type = task.get("entity_type", "leads")
+        t_phone = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+        t_phone_line = f"\n📞 {t_phone}" if t_phone else ""
         if t_entity_id and t_entity_type == "leads":
             t_link = f"\n🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
         elif t_entity_id and t_entity_type == "contacts":
             t_link = f"\n🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
         else:
             t_link = ""
-        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}{t_link}\n"
+        msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t_text}{t_phone_line}{t_link}\n"
     msg += f"\n📊 Cəmi: {len(tasks)}"
     await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -944,6 +974,7 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
         msg = (
             f"✅ {urgency_mark}Tapşırıq yaradıldı!\n\n"
             f"👤 Müştəri: {contact_name}\n"
+            f"📞 {phone}\n"
             f"📅 Tarix: {date_str} {time_str}\n"
             f"📝 Mətn: {task_text}\n"
             f"👤 Məsul: {responsible_name}\n\n🔗 {c_link}"
@@ -958,13 +989,14 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
         sender_kommo_id = get_kommo_user_id_for_chat(chat_id) if chat_id else None
         if responsible_id != sender_kommo_id:
             assigned_chat = get_chat_id_for_kommo_user(responsible_id)
-            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş") if sender_kommo_id else "Bot"
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş") if sender_kommo_id else "Bot"
             if assigned_chat:
                 try:
                     await update.get_bot().send_message(
                         assigned_chat,
                         f"📢 {urgency_mark}*{sender_name}* sizin üçün tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
+                        f"📞 {phone}\n"
                         f"📅 Tarix: {date_str} {time_str}\n"
                         f"📝 {task_text}\n\n🔗 {c_link}",
                         parse_mode="Markdown",
@@ -975,13 +1007,14 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
         # Notify Admin if sender is not admin
         if sender_kommo_id and sender_kommo_id != 10932455:
             admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
             if admin_chat:
                 try:
                     await update.get_bot().send_message(
                         admin_chat,
                         f"📢 {urgency_mark}*{sender_name}* tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
+                        f"📞 {phone}\n"
                         f"📅 Tarix: {date_str} {time_str}\n"
                         f"📝 {task_text}\n"
                         f"👤 Məsul: {responsible_name}\n\n🔗 {c_link}",
@@ -1029,7 +1062,7 @@ async def execute_complete_tasks(update: Update, phone: str, chat_id: int = None
     c_lead_id = c_leads[0]["id"] if c_leads else None
     c_link = f"{KOMMO_BASE_URL}/leads/detail/{c_lead_id}" if c_lead_id else f"{KOMMO_BASE_URL}/contacts/detail/{contact['id']}"
     await update.message.reply_text(
-        f"✅ *{contact_name}* müştərisi üçün {completed} tapşırıq tamamlandı.\n\n🔗 {c_link}",
+        f"✅ *{contact_name}* müştərisi üçün {completed} tapşırıq tamamlandı.\n📞 {phone}\n\n🔗 {c_link}",
         parse_mode="Markdown",
         disable_web_page_preview=True
     )
@@ -1037,13 +1070,14 @@ async def execute_complete_tasks(update: Update, phone: str, chat_id: int = None
     sender_kommo_id = get_kommo_user_id_for_chat(chat_id) if chat_id else None
     if sender_kommo_id and sender_kommo_id != 10932455:
         admin_chat = get_chat_id_for_kommo_user(10932455)
-        sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+        sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
         if admin_chat:
             try:
                 await update.get_bot().send_message(
                     admin_chat,
                     f"📢 *{sender_name}* {completed} tapşırığı tamamladı:\n\n"
-                    f"👤 Müştəri: {contact_name}\n\n🔗 {c_link}",
+                    f"👤 Müştəri: {contact_name}\n"
+                    f"📞 {phone}\n\n🔗 {c_link}",
                     parse_mode="Markdown",
                     disable_web_page_preview=True
                 )
@@ -1087,14 +1121,32 @@ async def execute_show_customer_tasks(update: Update, phone: str, day_filter: st
 
     # Sort by time
     all_tasks.sort(key=lambda t: t.get("complete_till", 0))
+    # Extract phone from contact
+    c_phone = ""
+    if full_contact:
+        for cf in (full_contact.get("custom_fields_values") or []):
+            if cf.get("field_code") == "PHONE":
+                vals = cf.get("values", [])
+                if vals:
+                    c_phone = vals[0].get("value", "")
+                break
     msg = f"📅 *{contact_name}* — tapşırıqlar ({label}):*\n\n"
     for i, task in enumerate(all_tasks, 1):
         t_text = task.get("text", "Təsvirsiz")
         till = task.get("complete_till", 0)
         dt = datetime.fromtimestamp(till, tz=BAKU_TZ)
-        msg += f"{i}. ⏰ {dt.strftime('%d.%m %H:%M')} — {t_text}\n"
+        t_entity_id = task.get("entity_id")
+        t_entity_type = task.get("entity_type", "leads")
+        if t_entity_id and t_entity_type == "leads":
+            t_link = f"\n🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+        elif t_entity_id and t_entity_type == "contacts":
+            t_link = f"\n🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+        else:
+            t_link = ""
+        t_phone_line = f"\n📞 {c_phone}" if c_phone else ""
+        msg += f"{i}. ⏰ {dt.strftime('%d.%m %H:%M')} — {t_text}{t_phone_line}{t_link}\n"
     msg += f"\n📊 Cəmi: {len(all_tasks)}"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
     if chat_id is not None:
         lead_id = leads[0]["id"] if leads else None
         set_last_contact(chat_id, phone, contact["id"], contact_name, lead_id=lead_id)
@@ -1271,27 +1323,29 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Add note with the result
         if entity_id:
             add_note(entity_id, f"Tapşırıq bağlandı: {task_text}\nNəticə: {result_text}", entity_type)
-        # Build link
+        # Build link and phone
         link = ""
         if entity_type == "leads" and entity_id:
             link = f"\n\n🔗 {KOMMO_BASE_URL}/leads/detail/{entity_id}"
         elif entity_type == "contacts" and entity_id:
             link = f"\n\n🔗 {KOMMO_BASE_URL}/contacts/detail/{entity_id}"
+        t_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+        phone_line = f"\n📞 {t_phone}" if t_phone else ""
         await update.message.reply_text(
-            f"✅ Tapşırıq bağlandı!\n\n📝 {task_text}\n💬 Nəticə: {result_text}{link}",
+            f"✅ Tapşırıq bağlandı!\n\n📝 {task_text}{phone_line}\n💬 Nəticə: {result_text}{link}",
             disable_web_page_preview=True
         )
         # Notify Admin if not admin
         sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
         if sender_kommo_id and sender_kommo_id != 10932455:
             admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş")
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
             if admin_chat:
                 try:
                     await context.bot.send_message(
                         admin_chat,
                         f"📢 *{sender_name}* tapşırığı bağladı:\n\n"
-                        f"📝 {task_text}\n💬 Nəticə: {result_text}{link}",
+                        f"📝 {task_text}{phone_line}\n💬 Nəticə: {result_text}{link}",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
@@ -1683,7 +1737,7 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
         if leads:
             lead_id = leads[0]["id"]
             now = datetime.now(tz=BAKU_TZ)
-            result_msg = f"✅ Təsdiqləndi: {trigger}\n👤 Müştəri: {contact_name}"
+            result_msg = f"✅ Təsdiqləndi: {trigger}\n👤 Müştəri: {contact_name}\n📞 {phone}"
             
             # Execute the trigger
             if trigger == "new_order":
@@ -1846,6 +1900,7 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         msg = (
             f"✅ {urgency_mark}Tapşırıq yaradıldı!\n\n"
             f"👤 Müştəri: {contact_name}\n"
+            f"📞 {phone}\n"
             f"📅 Tarix: {date_str} {time_str}\n"
             f"📝 Mətn: {task_text}\n"
             f"👤 Məsul: {responsible_name}\n\n🔗 {c_link}"
@@ -1866,6 +1921,7 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                         assigned_chat,
                         f"📢 {urgency_mark}Admin sizin üçün tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
+                        f"📞 {phone}\n"
                         f"📅 Tarix: {date_str} {time_str}\n"
                         f"📝 {task_text}\n\n🔗 {c_link}",
                         disable_web_page_preview=True
@@ -1935,6 +1991,25 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except:
             pass
+    # Get contact info for admin and assigned user notifications
+    pres_lead_details = get_lead_details(lead_id)
+    pres_contact_id = None
+    pres_contact_name = "Müştəri"
+    pres_contact_phone = ""
+    if pres_lead_details:
+        pres_contacts_emb = pres_lead_details.get("_embedded", {}).get("contacts", [])
+        if pres_contacts_emb:
+            pres_contact_id = pres_contacts_emb[0]["id"]
+            pres_full_c = get_contact_details(pres_contact_id)
+            if pres_full_c:
+                pres_contact_name = pres_full_c.get("name", "Müştəri")
+                for cf in (pres_full_c.get("custom_fields_values") or []):
+                    if cf.get("field_code") == "PHONE":
+                        vals = cf.get("values", [])
+                        if vals:
+                            pres_contact_phone = vals[0].get("value", "")
+                        break
+    pres_phone_line = f"\n📞 {pres_contact_phone}" if pres_contact_phone else ""
     # Notify Admin
     admin_chat = get_chat_id_for_kommo_user(10932455)
     sender_chat = query.message.chat_id
@@ -1943,6 +2018,7 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.send_message(
                 admin_chat,
                 f"📢 Təqdimat təyin edildi:\n"
+                f"👤 Müştəri: {pres_contact_name}{pres_phone_line}\n"
                 f"👤 Məsul: {user_name}\n"
                 f"🔗 {link}",
                 disable_web_page_preview=True
@@ -1952,34 +2028,17 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Notify the assigned user and set their context
     assigned_chat = get_chat_id_for_kommo_user(user_id)
     if assigned_chat and assigned_chat != sender_chat:
-        # Get contact info for context
-        lead_details = get_lead_details(lead_id)
-        contact_id = None
-        contact_name = "Müştəri"
-        contact_phone = None
-        if lead_details:
-            contacts_embedded = lead_details.get("_embedded", {}).get("contacts", [])
-            if contacts_embedded:
-                contact_id = contacts_embedded[0]["id"]
-                full_c = get_contact_details(contact_id)
-                if full_c:
-                    contact_name = full_c.get("name", "Müştəri")
-                    # Extract phone
-                    for cf in full_c.get("custom_fields_values", []):
-                        if cf.get("field_code") == "PHONE":
-                            contact_phone = cf["values"][0]["value"]
-                            break
         # Set context for assigned user BEFORE sending message (so it's always set)
-        if contact_id and contact_phone:
-            set_last_contact(assigned_chat, contact_phone, contact_id, contact_name, lead_id=lead_id)
-            logger.info(f"Context set for assigned user chat={assigned_chat}: phone={contact_phone}, contact={contact_name}, lead={lead_id}")
+        if pres_contact_id and pres_contact_phone:
+            set_last_contact(assigned_chat, pres_contact_phone, pres_contact_id, pres_contact_name, lead_id=lead_id)
+            logger.info(f"Context set for assigned user chat={assigned_chat}: phone={pres_contact_phone}, contact={pres_contact_name}, lead={lead_id}")
         else:
-            logger.warning(f"Could not set context for assigned user chat={assigned_chat}: contact_id={contact_id}, phone={contact_phone}, lead_details={lead_details is not None}")
+            logger.warning(f"Could not set context for assigned user chat={assigned_chat}: contact_id={pres_contact_id}, phone={pres_contact_phone}, lead_details={pres_lead_details is not None}")
         try:
             await context.bot.send_message(
                 assigned_chat,
                 f"📊 *Yeni təqdimat tapşırığı!*\n\n"
-                f"👤 Müştəri: {contact_name}\n"
+                f"👤 Müştəri: {pres_contact_name}{pres_phone_line}\n"
                 f"Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et.\n\n🔗 {link}",
                 parse_mode="Markdown",
                 disable_web_page_preview=True
@@ -2361,6 +2420,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         else:
             task_link = ""
         link_line = f"\n\n🔗 {task_link}" if task_link else ""
+        # Resolve client phone
+        t_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+        phone_line = f"\n📞 {t_phone}" if t_phone else ""
         
         # ── Upcoming (within 15 min): simple reminder ──
         if window_start <= task_dt <= window_end:
@@ -2369,7 +2431,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id,
                         f"⏰ *Xatırlatma!* Tapşırığın vaxtı yaxınlaşır:\n\n"
-                        f"📝 {text}\n⏰ {time_str}{link_line}",
+                        f"📝 {text}{phone_line}\n⏰ {time_str}{link_line}",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
@@ -2388,7 +2450,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(
                                 admin_chat,
                                 f"🔔 *{responsible_name}* üçün xatırlatma göndərildi:\n\n"
-                                f"📝 {text}\n⏰ {time_str}{link_line}",
+                                f"📝 {text}{phone_line}\n⏰ {time_str}{link_line}",
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
@@ -2416,7 +2478,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id,
                         f"⚠️ *Gecikmiş tapşırıq!*\n\n"
-                        f"📝 {text}\n⏰ Son tarix: {time_str}{link_line}",
+                        f"📝 {text}{phone_line}\n⏰ Son tarix: {time_str}{link_line}",
                         parse_mode="Markdown",
                         reply_markup=reply_markup,
                         disable_web_page_preview=True
@@ -2435,7 +2497,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                             await context.bot.send_message(
                                 admin_chat,
                                 f"⚠️ *{responsible_name}* üçün gecikmiş tapşırıq bildirişi göndərildi:\n\n"
-                                f"📝 {text}\n⏰ Son tarix: {time_str}{link_line}",
+                                f"📝 {text}{phone_line}\n⏰ Son tarix: {time_str}{link_line}",
                                 parse_mode="Markdown",
                                 disable_web_page_preview=True
                             )
@@ -2465,7 +2527,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 leads = get_leads_by_status(stage_id)
                 if leads:
                     msg += f"  \u2022 {stage_name}: {len(leads)} sövdələşmə\n"
-            # Overdue tasks with links
+            # Overdue tasks with links and phone
             all_tasks = get_all_incomplete_tasks()
             overdue = [t for t in all_tasks if t.get("complete_till", 0) < int(now.timestamp())]
             if overdue:
@@ -2474,13 +2536,15 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     t_entity_id = t.get("entity_id")
                     t_entity_type = t.get("entity_type", "leads")
                     if t_entity_id and t_entity_type == "leads":
-                        t_link = f" 🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+                        t_link = f"\n     🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
                     elif t_entity_id and t_entity_type == "contacts":
-                        t_link = f" 🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+                        t_link = f"\n     🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
                     else:
                         t_link = ""
-                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_link}\n"
-            # Today tasks with links
+                    t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                    t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
+                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
+            # Today tasks with links and phone
             today_tasks = get_tasks(today_start, today_end)
             msg += f"\n📅 *Bugünkü tapşırıqlar:* {len(today_tasks)}\n"
             for t in today_tasks[:10]:
@@ -2488,18 +2552,20 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 t_entity_id = t.get("entity_id")
                 t_entity_type = t.get("entity_type", "leads")
                 if t_entity_id and t_entity_type == "leads":
-                    t_link = f" 🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
+                    t_link = f"\n     🔗 {KOMMO_BASE_URL}/leads/detail/{t_entity_id}"
                 elif t_entity_id and t_entity_type == "contacts":
-                    t_link = f" 🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
+                    t_link = f"\n     🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
                 else:
                     t_link = ""
-                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_link}\n"
+                t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
+                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
             try:
                 await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
             except:
                 pass
         else:
-            # Regular user: their tasks today with links
+            # Regular user: their tasks today with links and phone
             tasks = get_tasks(today_start, today_end, responsible_id=kommo_uid)
             if tasks:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})* \u2014 bugünkü tapşırıqlar:\n\n"
@@ -2513,7 +2579,9 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                         t_link = f"\n   🔗 {KOMMO_BASE_URL}/contacts/detail/{t_entity_id}"
                     else:
                         t_link = ""
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_link}\n"
+                    t_ph = get_phone_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
+                    t_ph_line = f"\n   📞 {t_ph}" if t_ph else ""
+                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_ph_line}{t_link}\n"
                 msg += f"\n📊 Cəmi: {len(tasks)}"
             else:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
@@ -2536,11 +2604,13 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
             if (now - lead_dt).total_seconds() > 3600:
                 lead_name = lead.get("name", "Adsız")
                 lead_id = lead.get("id")
+                stuck_phone = get_phone_from_entity(lead_id, "leads") if lead_id else ""
+                stuck_phone_line = f"\n📞 {stuck_phone}" if stuck_phone else ""
                 try:
                     await context.bot.send_message(
                         admin_chat_id,
                         f"⚠️ *Diqqət!* Sövdələşmə 1 saatdan çox 'Qiymət təklifi' mərhələsindədir:\n\n"
-                        f"📋 {lead_name}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                        f"📋 {lead_name}{stuck_phone_line}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
