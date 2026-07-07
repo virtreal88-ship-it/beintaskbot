@@ -212,10 +212,17 @@ def set_last_task(chat_id: int, task_id: int, date_str: str, time_str: str):
 # ─── Message → Task mapping (for reply-based rescheduling) ─────────────────
 _message_task_map: dict[str, dict] = {}  # "chat_id:message_id" -> {"task_id": int, "task_text": str}
 
-def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: str = ""):
+def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: str = "",
+                       entity_id: int = None, entity_type: str = None, phone: str = None):
     """Store mapping from a bot message to a task for reply-based actions."""
     key = f"{chat_id}:{message_id}"
-    _message_task_map[key] = {"task_id": task_id, "task_text": task_text}
+    _message_task_map[key] = {
+        "task_id": task_id,
+        "task_text": task_text,
+        "entity_id": entity_id,
+        "entity_type": entity_type or "leads",
+        "phone": phone or "",
+    }
 
 def get_task_from_reply(chat_id: int, message_id: int) -> dict | None:
     """Get task info from a replied-to message."""
@@ -1139,7 +1146,10 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
                     )
                     # Store message→task mapping for reply-based rescheduling
                     if task_id and sent_msg:
-                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text)
+                        _eid = c_lead_id or contact["id"]
+                        _etype = "leads" if c_lead_id else "contacts"
+                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text,
+                                           entity_id=_eid, entity_type=_etype, phone=phone)
                 except:
                     pass
         # Notify Admin if sender is not admin
@@ -2164,7 +2174,10 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                     )
                     # Store message→task mapping for reply-based rescheduling
                     if task_id and sent_msg:
-                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text)
+                        _eid2 = c_lead_id or contact["id"]
+                        _etype2 = "leads" if c_lead_id else "contacts"
+                        store_message_task(assigned_chat, sent_msg.message_id, task_id, task_text,
+                                           entity_id=_eid2, entity_type=_etype2, phone=phone)
                     # Set context for assigned user so they can reply about this client
                     set_last_contact(assigned_chat, phone, contact["id"], contact_name, lead_id=c_lead_id)
                 except:
@@ -2284,7 +2297,11 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
             # Store message→task mapping for reply-based rescheduling
             if pres_task_id and sent_pres_msg:
-                store_message_task(assigned_chat, sent_pres_msg.message_id, pres_task_id, "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et")
+                _pres_eid = lead_id or pres_contact_id
+                _pres_etype = "leads" if lead_id else "contacts"
+                store_message_task(assigned_chat, sent_pres_msg.message_id, pres_task_id,
+                                   "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et",
+                                   entity_id=_pres_eid, entity_type=_pres_etype, phone=pres_contact_phone)
         except:
             pass
 
@@ -2952,6 +2969,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     
     # ── Reply-based task rescheduling/completion ──
+    _reply_task_info = None
     if update.message.reply_to_message:
         replied_msg_id = update.message.reply_to_message.message_id
         task_info = get_task_from_reply(chat_id, replied_msg_id)
@@ -2959,6 +2977,28 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             handled = await handle_task_reply(update, context, user_text, task_info)
             if handled:
                 return
+            # Not a reschedule/complete command — but we still know which client this is about.
+            # Override the user's last_contact context with the entity from the reply mapping
+            # so that process_text_intent uses the correct client, not the last active one.
+            _reply_task_info = task_info
+            reply_phone = task_info.get("phone", "")
+            reply_entity_id = task_info.get("entity_id")
+            reply_entity_type = task_info.get("entity_type", "leads")
+            if reply_phone or reply_entity_id:
+                # Resolve contact name for context
+                _reply_contact_name = get_contact_name_from_entity(reply_entity_id, reply_entity_type) if reply_entity_id else ""
+                _reply_lead_id = reply_entity_id if reply_entity_type == "leads" else None
+                _reply_contact_id = reply_entity_id if reply_entity_type == "contacts" else None
+                # If entity is a lead, get the contact id from the lead
+                if reply_entity_type == "leads" and reply_entity_id:
+                    _lead_data = get_lead_details(reply_entity_id)
+                    if _lead_data:
+                        _emb_contacts = _lead_data.get("_embedded", {}).get("contacts", [])
+                        if _emb_contacts:
+                            _reply_contact_id = _emb_contacts[0]["id"]
+                if _reply_contact_id:
+                    set_last_contact(chat_id, reply_phone, _reply_contact_id, _reply_contact_name, lead_id=_reply_lead_id)
+                    logger.info(f"Reply context override: chat={chat_id} phone={reply_phone} contact={_reply_contact_name} lead={_reply_lead_id}")
     
     # ── Employee registration flow (waiting for name) ──
     if chat_id in _pending_employee_registration and _pending_employee_registration[chat_id] == "__ask_name__":
