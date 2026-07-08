@@ -326,43 +326,15 @@ def compute_smart_deadline(date_str: str = None, time_str: str = None) -> tuple[
     
     # If user provided date but no explicit time
     if date_str and (not time_str or time_str == "10:00"):
-        # Check if the provided date is today
-        today_str = now.strftime("%d.%m.%Y")
-        if date_str == today_str:
-            # Today: if within work hours, use now + 10 min
-            if 9 <= now.hour < 18:
-                deadline = now + timedelta(minutes=10)
-                return date_str, deadline.strftime("%H:%M")
-            elif now.hour >= 18:
-                # After work hours today → next workday 09:10
-                next_day = now + timedelta(days=1)
-                while next_day.weekday() >= 5:  # skip weekends
-                    next_day += timedelta(days=1)
-                return next_day.strftime("%d.%m.%Y"), "09:10"
-            else:
-                # Before 9 AM → same day 09:10
-                return date_str, "09:10"
-        else:
-            # Future date without explicit time → 09:10
-            return date_str, "09:10"
+        # Date provided but no explicit time → use 09:00
+        return date_str, "09:00"
     
-    # No date provided at all → compute from current time
-    if 9 <= now.hour < 18:
-        # Work hours: now + 10 minutes
-        deadline = now + timedelta(minutes=10)
-        return deadline.strftime("%d.%m.%Y"), deadline.strftime("%H:%M")
-    else:
-        # Outside work hours → next workday 09:10
-        if now.hour >= 18:
-            next_day = now + timedelta(days=1)
-        else:
-            next_day = now  # before 9 AM same day
-        while next_day.weekday() >= 5:  # skip weekends
-            next_day += timedelta(days=1)
-        # If before 9 AM on a workday, use same day
-        if next_day.date() == now.date() and now.hour < 9:
-            return now.strftime("%d.%m.%Y"), "09:10"
-        return next_day.strftime("%d.%m.%Y"), "09:10"
+    # No date provided at all → default to tomorrow 09:00
+    # No date → tomorrow 09:00
+    next_day = now + timedelta(days=1)
+    while next_day.weekday() >= 5:  # skip weekends
+        next_day += timedelta(days=1)
+    return next_day.strftime("%d.%m.%Y"), "09:00"
 
 def set_pending(chat_id: int, action: str, params: dict, missing: str = None):
     ctx = get_ctx(chat_id)
@@ -1698,13 +1670,48 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
         else:
             # Apply smart deadline defaults
             date_str, time_str = compute_smart_deadline(date_str, time_str)
-            # If sender is Admin → always ask who to assign
+            # Always route through Admin: show assignment buttons regardless of who is creating
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
             if sender_kommo_id == 10932455:
-                # Admin: show assignment buttons
+                # Admin: show assignment buttons directly
                 await ask_task_assignee(update, context, phone, date_str, time_str, task_text, urgency)
             else:
-                await execute_create_task_with_assign(update, phone, date_str, time_str, task_text, chat_id, assign_to, urgency)
+                # Non-admin: forward to Admin for assignment decision
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş") if sender_kommo_id else "Bilinməyən"
+                if admin_chat:
+                    urgency_mark = "🔴 TƏCİLİ! " if urgency == "high" else ""
+                    task_key = str(uuid.uuid4())[:8]
+                    context.bot_data[f"pending_task_{task_key}"] = {
+                        "phone": phone, "date": date_str, "time": time_str,
+                        "text": task_text, "urgency": urgency, "chat_id": admin_chat
+                    }
+                    keyboard = [
+                        [InlineKeyboardButton("Şamil Əliyev", callback_data=f"taskasgn_{task_key}_15532668")],
+                        [InlineKeyboardButton("Soltan Abbasov", callback_data=f"taskasgn_{task_key}_15531960")],
+                        [InlineKeyboardButton("Özüm (Admin)", callback_data=f"taskasgn_{task_key}_10932455")],
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    try:
+                        fwd_text = (
+                            f"{urgency_mark}📋 *{sender_name}* tərəfindən yeni tapşırıq: \n\n"
+                            f"📞 {phone}\n"
+                            f"📅 {date_str} {time_str}\n"
+                            f"📝 {task_text}\n\n"
+                            f"Kimə təyin edim?"
+                        )
+                        await context.bot.send_message(
+                            admin_chat,
+                            fwd_text,
+                            reply_markup=reply_markup,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to forward task to admin: {e}")
+                    await update.message.reply_text("✅ Tapşırıq Admin-ə göndərildi. Admin təyin edəcək.")
+                else:
+                    # Admin not found, fall back to creating with sender as responsible
+                    await execute_create_task_with_assign(update, phone, date_str, time_str, task_text, chat_id, assign_to, urgency)
 
     elif action == "add_note":
         note_text = intent.get("text")
