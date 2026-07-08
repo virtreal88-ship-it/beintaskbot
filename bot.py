@@ -229,6 +229,50 @@ def get_task_from_reply(chat_id: int, message_id: int) -> dict | None:
     key = f"{chat_id}:{message_id}"
     return _message_task_map.get(key)
 
+# ─── Message → Lead mapping (for reply-based stage changes on stuck deal alerts) ─
+_message_lead_map: dict[str, dict] = {}  # "chat_id:message_id" -> {"lead_id": int, "lead_name": str, "phone": str}
+
+def store_message_lead(chat_id: int, message_id: int, lead_id: int, lead_name: str = "", phone: str = ""):
+    """Store mapping from a stuck-deal alert message to a lead for reply-based actions."""
+    key = f"{chat_id}:{message_id}"
+    _message_lead_map[key] = {"lead_id": lead_id, "lead_name": lead_name, "phone": phone}
+
+def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
+    """Get lead info from a replied-to stuck-deal alert message."""
+    key = f"{chat_id}:{message_id}"
+    return _message_lead_map.get(key)
+
+# ─── Stage-change keyword detection ─────────────────────────────────────────
+# Maps lowercase keyword patterns → (stage_key, display_name)
+_STAGE_KEYWORDS: list[tuple[str, str, str]] = [
+    ("qiymət göndərildi", "cavab_gozlenilir", "Cavab gözlənilir"),
+    ("göndərildi", "cavab_gozlenilir", "Cavab gözlənilir"),
+    ("cavab gözlənilir", "cavab_gozlenilir", "Cavab gözlənilir"),
+    ("cavab gozlenilir", "cavab_gozlenilir", "Cavab gözlənilir"),
+    ("təqdimat olunmalıdır", "teqdimat", "Təqdimat"),
+    ("teqdimat olunmalidir", "teqdimat", "Təqdimat"),
+    ("təqdimata keçir", "teqdimat", "Təqdimat"),
+    ("teqdimata kecir", "teqdimat", "Təqdimat"),
+    ("təqdimat lazımdır", "teqdimat", "Təqdimat"),
+    ("teqdimat lazimdir", "teqdimat", "Təqdimat"),
+    ("təqdimat olundu", "teqdimat_olundu", "Təqdimat olundu"),
+    ("teqdimat olundu", "teqdimat_olundu", "Təqdimat olundu"),
+    ("yeni sifariş", "yeni_sifaris", "Yeni sifariş"),
+    ("yeni sifaris", "yeni_sifaris", "Yeni sifariş"),
+    ("satıldı", "qurashdirma", "Quraşdırma"),
+    ("satildi", "qurashdirma", "Quraşdırma"),
+    ("quraşdırma", "qurashdirma", "Quraşdırma"),
+    ("qurashdirma", "qurashdirma", "Quraşdırma"),
+]
+
+def detect_stage_change(text: str) -> tuple[str, str] | None:
+    """Detect if text is a stage-change command. Returns (stage_key, display_name) or None."""
+    t = text.lower().strip()
+    for keyword, stage_key, display_name in _STAGE_KEYWORDS:
+        if keyword in t:
+            return stage_key, display_name
+    return None
+
 # ─── Smart Deadline Defaults ──────────────────────────────────────────────────
 
 def compute_smart_deadline(date_str: str = None, time_str: str = None) -> tuple[str, str]:
@@ -3000,6 +3044,79 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     set_last_contact(chat_id, reply_phone, _reply_contact_id, _reply_contact_name, lead_id=_reply_lead_id)
                     logger.info(f"Reply context override: chat={chat_id} phone={reply_phone} contact={_reply_contact_name} lead={_reply_lead_id}")
     
+    # ── Reply on stuck-deal alert (lead mapping) ──
+    if update.message.reply_to_message:
+        replied_msg_id2 = update.message.reply_to_message.message_id
+        lead_info = get_lead_from_reply(chat_id, replied_msg_id2)
+        if lead_info:
+            lead_id_r = lead_info["lead_id"]
+            lead_name_r = lead_info.get("lead_name", "Sövdələşmə")
+            phone_r = lead_info.get("phone", "")
+            lead_link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id_r}"
+            sender_kommo_id_r = get_kommo_user_id_for_chat(chat_id)
+            # Check if text is a stage-change command
+            stage_match = detect_stage_change(user_text)
+            if stage_match:
+                stage_key, stage_display = stage_match
+                if stage_key == "teqdimat":
+                    # Presentation: needs assignee selection
+                    await ask_presentation_assignee(update, lead_id_r)
+                    return
+                else:
+                    new_stage_id = STAGES[stage_key]
+                    old_lead = get_lead_details(lead_id_r)
+                    old_stage_id = (old_lead or {}).get("status_id", 0)
+                    old_stage_name = STAGE_NAMES.get(old_stage_id, f"ID:{old_stage_id}")
+                    if sender_kommo_id_r == 10932455:
+                        # Admin: execute immediately
+                        res = update_lead_kommo(lead_id_r, {"status_id": new_stage_id, "pipeline_id": PIPELINE_ID})
+                        if res:
+                            await update.message.reply_text(
+                                f"✅ Mərhələ dəyişdirildi:\n"
+                                f"📌 {old_stage_name} → *{stage_display}*\n"
+                                f"🔗 {lead_link}",
+                                parse_mode="Markdown",
+                                disable_web_page_preview=True
+                            )
+                        else:
+                            await update.message.reply_text("❌ Mərhələni dəyişdirmək mümkün olmadı.")
+                    else:
+                        # Non-admin: send to Admin for confirmation
+                        sender_name_r = KOMMO_USERS.get(sender_kommo_id_r, "Əməkdaş")
+                        admin_chat_r = get_chat_id_for_kommo_user(10932455)
+                        if admin_chat_r:
+                            keyboard_r = [
+                                [InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{lead_id_r}_{stage_key}_{chat_id}")],
+                                [InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{lead_id_r}_reject_{chat_id}")],
+                            ]
+                            try:
+                                await context.bot.send_message(
+                                    admin_chat_r,
+                                    f"🔄 *{sender_name_r}* mərhələ keçidi istəyir:\n\n"
+                                    f"📋 {lead_name_r}\n"
+                                    f"📌 {old_stage_name} → *{stage_display}*\n"
+                                    f"🔗 {lead_link}\n\nTəsdiq edirsiniz?",
+                                    parse_mode="Markdown",
+                                    disable_web_page_preview=True,
+                                    reply_markup=InlineKeyboardMarkup(keyboard_r)
+                                )
+                            except:
+                                pass
+                            await update.message.reply_text("⏳ Admin-in təsdiqi gözlənilir...")
+                    return
+            else:
+                # Not a stage-change: treat as task creation for this lead
+                # Override context so process_text_intent uses this lead
+                if lead_id_r:
+                    _lead_data_r = get_lead_details(lead_id_r)
+                    _emb_c = (_lead_data_r or {}).get("_embedded", {}).get("contacts", [])
+                    _cid_r = _emb_c[0]["id"] if _emb_c else None
+                    _cname_r = get_contact_name_from_entity(lead_id_r, "leads")
+                    if _cid_r:
+                        set_last_contact(chat_id, phone_r, _cid_r, _cname_r, lead_id=lead_id_r)
+                        logger.info(f"Lead reply context override: chat={chat_id} lead={lead_id_r} phone={phone_r}")
+                # Fall through to process_text_intent with updated context
+
     # ── Employee registration flow (waiting for name) ──
     if chat_id in _pending_employee_registration and _pending_employee_registration[chat_id] == "__ask_name__":
         emp_name = user_text.strip()
@@ -3368,13 +3485,20 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 stuck_phone = get_phone_from_entity(lead_id, "leads") if lead_id else ""
                 stuck_phone_line = f"\n📞 {stuck_phone}" if stuck_phone else ""
                 try:
-                    await context.bot.send_message(
+                    stuck_name = get_contact_name_from_entity(lead_id, "leads") if lead_id else ""
+                    stuck_name_line = f"\n👤 Müştəri: {stuck_name}" if stuck_name else ""
+                    sent_stuck = await context.bot.send_message(
                         admin_chat_id,
                         f"⚠️ *Diqqət!* Sövdələşmə 1 saatdan çox 'Qiymət təklifi' mərhələsindədir:\n\n"
-                        f"📋 {lead_name}{stuck_phone_line}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                        f"📋 {lead_name}{stuck_name_line}{stuck_phone_line}\n"
+                        f"🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}\n\n"
+                        f"_Reply göndərin: mərhələ dəyişikliyi (məs: 'Təqdimat olunmalıdır') və ya tapşırıq (məs: 'sabah zəng et')_",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    # Store message→lead mapping for reply-based stage changes
+                    if sent_stuck and lead_id:
+                        store_message_lead(admin_chat_id, sent_stuck.message_id, lead_id, lead_name, stuck_phone)
                 except:
                     pass
 
