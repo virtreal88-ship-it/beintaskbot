@@ -2455,13 +2455,167 @@ async def webhook_stage_notification_callback(update: Update, context: ContextTy
 # Global reference to the Telegram bot application (set in main)
 _bot_app: Application = None
 
+async def _handle_kommo_task_webhook(data: dict):
+    """Process add_task / update_task Kommo webhook events."""
+    if not _bot_app:
+        return
+
+    # ── Detect event type and extract fields ──
+    # Kommo can send: tasks[add][0][...] or tasks[update][0][...]
+    prefix_add = "tasks[add][0]"
+    prefix_upd = "tasks[update][0]"
+    prefix_gen = "task[0]"
+
+    def _get(key):
+        return (
+            data.get(f"{prefix_add}[{key}]")
+            or data.get(f"{prefix_upd}[{key}]")
+            or data.get(f"{prefix_gen}[{key}]")
+            or data.get(key)
+        )
+
+    is_add = any(k.startswith(prefix_add) for k in data)
+    is_upd = any(k.startswith(prefix_upd) for k in data)
+
+    task_id_raw = _get("id")
+    task_text = _get("text") or "Tapşırıq"
+    responsible_raw = _get("responsible_user_id")
+    entity_id_raw = _get("element_id")
+    entity_type_raw = _get("element_type")  # 2 = lead, 1 = contact
+    deadline_raw = _get("complete_till")
+    is_completed_raw = _get("is_completed")
+    created_by_raw = _get("created_by")
+
+    logger.info(f"Task webhook: is_add={is_add} is_upd={is_upd} task_id={task_id_raw} resp={responsible_raw}")
+
+    responsible_id = int(responsible_raw) if responsible_raw else None
+    entity_id = int(entity_id_raw) if entity_id_raw else None
+    entity_type_num = int(entity_type_raw) if entity_type_raw else None
+    entity_type = "leads" if entity_type_num == 2 else "contacts" if entity_type_num == 1 else "leads"
+    created_by = int(created_by_raw) if created_by_raw else None
+
+    # Format deadline
+    deadline_str = ""
+    if deadline_raw:
+        try:
+            dl_dt = datetime.fromtimestamp(int(deadline_raw), tz=BAKU_TZ)
+            deadline_str = dl_dt.strftime("%d.%m.%Y %H:%M")
+        except:
+            pass
+
+    # Resolve entity link, client name, phone
+    link = ""
+    client_name = ""
+    client_phone = ""
+    if entity_id:
+        if entity_type == "leads":
+            link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}"
+        else:
+            link = f"{KOMMO_BASE_URL}/contacts/detail/{entity_id}"
+        client_name = get_contact_name_from_entity(entity_id, entity_type)
+        client_phone = get_phone_from_entity(entity_id, entity_type)
+
+    admin_chat = get_chat_id_for_kommo_user(10932455)
+
+    # ── add_task: notify assignee and optionally Admin ──
+    if is_add and responsible_id and responsible_id != 10932455:
+        assignee_chat = get_chat_id_for_kommo_user(responsible_id)
+        assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
+        creator_name = KOMMO_USERS.get(created_by, "Kommo") if created_by else "Kommo"
+
+        name_line = f"\n👤 Müştəri: {client_name}" if client_name else ""
+        phone_line = f"\n📞 {client_phone}" if client_phone else ""
+        deadline_line = f"\n⏰ Son tarix: {deadline_str}" if deadline_str else ""
+        link_line = f"\n🔗 {link}" if link else ""
+
+        assignee_msg = (
+            f"📋 *Yeni tapşırıq (Kommo-dan)!*\n"
+            f"{name_line}\n"
+            f"📝 {task_text}"
+            f"{phone_line}"
+            f"{deadline_line}"
+            f"{link_line}"
+        )
+
+        if assignee_chat:
+            try:
+                sent = await _bot_app.bot.send_message(
+                    assignee_chat,
+                    assignee_msg,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
+                # Store message→task mapping for reply-based rescheduling
+                if task_id_raw:
+                    store_message_task(assignee_chat, sent.message_id, int(task_id_raw), task_text,
+                                       entity_id=entity_id, entity_type=entity_type, phone=client_phone)
+                logger.info(f"Task webhook: notified {assignee_name} (chat {assignee_chat}) about task {task_id_raw}")
+            except Exception as e:
+                logger.error(f"Task webhook: failed to notify assignee: {e}")
+
+        # Notify Admin (if task was not created by Admin)
+        if admin_chat and created_by != 10932455:
+            admin_msg = (
+                f"📋 *Yeni tapşırıq yaradıldı (Kommo):*\n"
+                f"👤 Məsul: {assignee_name}\n"
+                f"{name_line}\n"
+                f"📝 {task_text}"
+                f"{phone_line}"
+                f"{deadline_line}"
+                f"{link_line}"
+            )
+            try:
+                await _bot_app.bot.send_message(
+                    admin_chat,
+                    admin_msg,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                logger.error(f"Task webhook: failed to notify admin about new task: {e}")
+
+    # ── update_task: if task completed, notify Admin ──
+    elif is_upd and is_completed_raw in ("1", "true", True, 1):
+        completed_by = responsible_id
+        completer_name = KOMMO_USERS.get(completed_by, "Əməkdaş") if completed_by else "Bilinməyən"
+        name_line = f"\n👤 Müştəri: {client_name}" if client_name else ""
+        phone_line = f"\n📞 {client_phone}" if client_phone else ""
+        link_line = f"\n🔗 {link}" if link else ""
+
+        if admin_chat:
+            admin_done_msg = (
+                f"✅ *Tapşırıq tamamlandı (Kommo):*\n"
+                f"👤 Məsul: {completer_name}\n"
+                f"{name_line}\n"
+                f"📝 {task_text}"
+                f"{phone_line}"
+                f"{link_line}"
+            )
+            try:
+                await _bot_app.bot.send_message(
+                    admin_chat,
+                    admin_done_msg,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
+                logger.info(f"Task webhook: notified admin about completed task {task_id_raw}")
+            except Exception as e:
+                logger.error(f"Task webhook: failed to notify admin about completed task: {e}")
+
 async def handle_kommo_webhook(request: web.Request) -> web.Response:
-    """Handle incoming Kommo CRM webhook for lead status changes."""
+    """Handle incoming Kommo CRM webhook for lead status changes and task events."""
     try:
         # Kommo sends form-encoded data
         data = await request.post()
         logger.info(f"Kommo webhook received: {dict(data)}")
-        
+
+        # ── Task events: add_task / update_task ──────────────────────────────
+        task_id_raw = data.get("task[0][id]") or data.get("tasks[add][0][id]") or data.get("tasks[update][0][id]")
+        if task_id_raw:
+            await _handle_kommo_task_webhook(data)
+            return web.Response(status=200, text="OK")
+
+        # ── Lead status change ───────────────────────────────────────────────
         # Extract lead status change fields
         # Kommo sends: leads[status][0][id], leads[status][0][status_id], etc.
         lead_id_raw = data.get("leads[status][0][id]")
