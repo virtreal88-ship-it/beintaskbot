@@ -3056,6 +3056,7 @@ def parse_reschedule_text(text: str) -> dict | None:
         return {"action": "complete"}
     
     # Relative time: "X saat", "X dəqiqə", "X gün"
+    # Also handles "X gün təxirə salındı", "X saata kımı " etc.
     m = re.search(r"(\d+)\s*(saat|sa|hour|h)", text_lower)
     if m:
         hours = int(m.group(1))
@@ -3072,6 +3073,14 @@ def parse_reschedule_text(text: str) -> dict | None:
     if m:
         days = int(m.group(1))
         new_dt = (now + timedelta(days=days)).replace(hour=9, minute=10, second=0, microsecond=0)
+        return {"action": "reschedule", "new_deadline": new_dt}
+    
+    # Postpone keywords without explicit number: "təxirə salındı", "sonraya qaldı", "sonraya kecirildi"
+    postpone_words = ["təxirə salındı", "təxirə sal", "sonraya qaldı", "sonraya keçirildi",
+                      "sonraya kecirildi", "təxirə düşdü", "təxirə düşbüş", "təxirə"]
+    if any(w in text_lower for w in postpone_words):
+        # If no explicit number found above, default to +1 day
+        new_dt = (now + timedelta(days=1)).replace(hour=9, minute=10, second=0, microsecond=0)
         return {"action": "reschedule", "new_deadline": new_dt}
     
     # "sabah" / "tomorrow"
@@ -3147,6 +3156,15 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 f"📝 {task_text}",
                 parse_mode="Markdown"
             )
+            # If the reply text has extra context beyond the reschedule command, add it as a note
+            entity_id = task_info.get("entity_id")
+            entity_type = task_info.get("entity_type", "leads")
+            if entity_id and len(user_text) > 20:
+                # Add note to Kommo entity with the full reply text
+                try:
+                    add_note(entity_id, entity_type, f"💬 {user_text}")
+                except:
+                    pass
             # Notify Admin about reschedule
             admin_chat = get_chat_id_for_kommo_user(10932455)
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
@@ -3157,7 +3175,8 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                         admin_chat,
                         f"⏰ *{sender_name}* tapşırığın vaxtını dəyişdi:\n\n"
                         f"📝 {task_text}\n"
-                        f"🕐 Yeni vaxt: *{new_time_str}*",
+                        f"🕐 Yeni vaxt: *{new_time_str}*\n"
+                        f"💬 Səbəb: {user_text}",
                         parse_mode="Markdown"
                     )
                 except:
@@ -3470,7 +3489,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         if window_start <= task_dt <= window_end:
             if chat_id:
                 try:
-                    await context.bot.send_message(
+                    sent_reminder = await context.bot.send_message(
                         chat_id,
                         f"⏰ *Xatırlatma!* Tapşırığın vaxtı yaxınlaşır:\n\n"
                         f"📝 {text}{name_line}{phone_line}\n⏰ {time_str}{link_line}",
@@ -3480,6 +3499,10 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                     notifications_sent += 1
                     if task_id:
                         _sent_deadline_notifications.add(task_id)
+                        # Store message→task mapping so user can reply to reschedule/complete
+                        if sent_reminder:
+                            store_message_task(chat_id, sent_reminder.message_id, task_id, text,
+                                               entity_id=entity_id, entity_type=entity_type, phone=t_phone)
                     await asyncio.sleep(1)
                 except Exception as e:
                     logger.error(f"Notification error: {e}")
@@ -3518,7 +3541,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 try:
                     overdue_name_part = f"{name_line}\n" if name_line else ""
-                    await context.bot.send_message(
+                    sent_overdue = await context.bot.send_message(
                         chat_id,
                         f"⚠️ *Gecikmiş tapşırıq!*\n\n"
                         f"{overdue_name_part}"
@@ -3529,6 +3552,10 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                     )
                     notifications_sent += 1
                     _sent_deadline_notifications.add(task_id)
+                    # Store message→task mapping so user can reply to reschedule/complete
+                    if sent_overdue:
+                        store_message_task(chat_id, sent_overdue.message_id, task_id, text,
+                                           entity_id=entity_id, entity_type=entity_type, phone=t_phone)
                     await asyncio.sleep(1)
                 except Exception as e:
                     logger.error(f"Overdue notification error: {e}")
