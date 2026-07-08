@@ -209,8 +209,41 @@ def set_last_task(chat_id: int, task_id: int, date_str: str, time_str: str):
     ctx["last_task_date"] = date_str
     ctx["last_task_time"] = time_str
 
-# ─── Message → Task mapping (for reply-based rescheduling) ─────────────────
-_message_task_map: dict[str, dict] = {}  # "chat_id:message_id" -> {"task_id": int, "task_text": str}
+# ─── Message → Task/Lead mapping (Persistent) ──────────────────────────────
+MESSAGE_MAPS_FILE = "message_maps.json"
+_message_task_map: dict[str, dict] = {}
+_message_lead_map: dict[str, dict] = {}
+
+def load_message_maps():
+    global _message_task_map, _message_lead_map
+    if os.path.exists(MESSAGE_MAPS_FILE):
+        try:
+            with open(MESSAGE_MAPS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                _message_task_map = data.get("tasks", {})
+                _message_lead_map = data.get("leads", {})
+                logger.info(f"Loaded {len(_message_task_map)} tasks and {len(_message_lead_map)} leads from {MESSAGE_MAPS_FILE}")
+        except Exception as e:
+            logger.error(f"Error loading message maps: {e}")
+
+def save_message_maps():
+    try:
+        # Keep only 500 latest entries in each map
+        global _message_task_map, _message_lead_map
+        if len(_message_task_map) > 500:
+            keys = sorted(_message_task_map.keys())[:-500]
+            for k in keys: del _message_task_map[k]
+        if len(_message_lead_map) > 500:
+            keys = sorted(_message_lead_map.keys())[:-500]
+            for k in keys: del _message_lead_map[k]
+            
+        with open(MESSAGE_MAPS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"tasks": _message_task_map, "leads": _message_lead_map}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving message maps: {e}")
+
+# Load on startup
+load_message_maps()
 
 def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: str = "",
                        entity_id: int = None, entity_type: str = None, phone: str = None):
@@ -222,20 +255,25 @@ def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: s
         "entity_id": entity_id,
         "entity_type": entity_type or "leads",
         "phone": phone or "",
+        "ts": int(time.time())
     }
+    save_message_maps()
 
 def get_task_from_reply(chat_id: int, message_id: int) -> dict | None:
     """Get task info from a replied-to message."""
     key = f"{chat_id}:{message_id}"
     return _message_task_map.get(key)
 
-# ─── Message → Lead mapping (for reply-based stage changes on stuck deal alerts) ─
-_message_lead_map: dict[str, dict] = {}  # "chat_id:message_id" -> {"lead_id": int, "lead_name": str, "phone": str}
-
 def store_message_lead(chat_id: int, message_id: int, lead_id: int, lead_name: str = "", phone: str = ""):
     """Store mapping from a stuck-deal alert message to a lead for reply-based actions."""
     key = f"{chat_id}:{message_id}"
-    _message_lead_map[key] = {"lead_id": lead_id, "lead_name": lead_name, "phone": phone}
+    _message_lead_map[key] = {
+        "lead_id": lead_id, 
+        "lead_name": lead_name, 
+        "phone": phone,
+        "ts": int(time.time())
+    }
+    save_message_maps()
 
 def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
     """Get lead info from a replied-to stuck-deal alert message."""
@@ -3221,22 +3259,50 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Reply-based task rescheduling/completion ──
     _reply_task_info = None
     if update.message.reply_to_message:
-        replied_msg_id = update.message.reply_to_message.message_id
+        replied_msg = update.message.reply_to_message
+        replied_msg_id = replied_msg.message_id
+        replied_text = replied_msg.text or replied_msg.caption or ""
+        
         task_info = get_task_from_reply(chat_id, replied_msg_id)
+        
+        # Fallback: if mapping not found, try to parse from text
+        if not task_info and replied_text:
+            logger.info(f"Reply mapping not found for msg {replied_msg_id}, attempting fallback text parsing")
+            f_phone = ""
+            f_name = ""
+            # Extract phone: +994... or 050...
+            m_phone = re.search(r"(\+994\d{9}|0\d{9})", replied_text)
+            if m_phone: f_phone = m_phone.group(1)
+            # Extract name: "Müştəri: {Name}"
+            m_name = re.search(r"Müştəri:\s*([^\n\r]+)", replied_text)
+            if m_name: f_name = m_name.group(1).strip()
+            # Extract link to get entity_id
+            m_link = re.search(r"leads/detail/(\d+)", replied_text)
+            if m_link:
+                task_info = {"entity_id": int(m_link.group(1)), "entity_type": "leads", "phone": f_phone, "name": f_name}
+            else:
+                m_link_c = re.search(r"contacts/detail/(\d+)", replied_text)
+                if m_link_c:
+                    task_info = {"entity_id": int(m_link_c.group(1)), "entity_type": "contacts", "phone": f_phone, "name": f_name}
+            
+            if task_info:
+                logger.info(f"Fallback parsing success: {task_info}")
+
         if task_info:
-            handled = await handle_task_reply(update, context, user_text, task_info)
-            if handled:
-                return
-            # Not a reschedule/complete command — but we still know which client this is about.
-            # Override the user's last_contact context with the entity from the reply mapping
-            # so that process_text_intent uses the correct client, not the last active one.
+            # If it's a task mapping (not lead mapping)
+            if "task_id" in task_info:
+                handled = await handle_task_reply(update, context, user_text, task_info)
+                if handled:
+                    return
+            
+            # Not handled by task_reply — override context for process_text_intent
             _reply_task_info = task_info
             reply_phone = task_info.get("phone", "")
             reply_entity_id = task_info.get("entity_id")
             reply_entity_type = task_info.get("entity_type", "leads")
             if reply_phone or reply_entity_id:
                 # Resolve contact name for context
-                _reply_contact_name = get_contact_name_from_entity(reply_entity_id, reply_entity_type) if reply_entity_id else ""
+                _reply_contact_name = task_info.get("name") or (get_contact_name_from_entity(reply_entity_id, reply_entity_type) if reply_entity_id else "")
                 _reply_lead_id = reply_entity_id if reply_entity_type == "leads" else None
                 _reply_contact_id = reply_entity_id if reply_entity_type == "contacts" else None
                 # If entity is a lead, get the contact id from the lead
@@ -3252,10 +3318,23 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ── Reply on stuck-deal alert (lead mapping) ──
     if update.message.reply_to_message:
-        replied_msg_id2 = update.message.reply_to_message.message_id
+        replied_msg2 = update.message.reply_to_message
+        replied_msg_id2 = replied_msg2.message_id
+        replied_text2 = replied_msg2.text or replied_msg2.caption or ""
+        
         lead_info = get_lead_from_reply(chat_id, replied_msg_id2)
+        
+        # Fallback for leads
+        if not lead_info and replied_text2:
+            m_link_l = re.search(r"leads/detail/(\d+)", replied_text2)
+            if m_link_l:
+                f_phone_l = ""
+                m_phone_l = re.search(r"(\+994\d{9}|0\d{9})", replied_text2)
+                if m_phone_l: f_phone_l = m_phone_l.group(1)
+                lead_info = {"lead_id": int(m_link_l.group(1)), "phone": f_phone_l}
+
         if lead_info:
-            lead_id_r = lead_info["lead_id"]
+            lead_id_r = lead_info.get("lead_id")
             lead_name_r = lead_info.get("lead_name", "Sövdələşmə")
             phone_r = lead_info.get("phone", "")
             lead_link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id_r}"
