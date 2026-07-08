@@ -2876,10 +2876,54 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
             elif new_status_id == STAGES["teqdimat"]:
                 keyboard = [[InlineKeyboardButton("✅ Təqdimat olundu", callback_data=f"whstage_{lead_id}_presented")]]
             elif new_status_id == STAGES["yeni_sifaris"]:
-                keyboard = [[InlineKeyboardButton("✅ Ələqə saxlanıldı", callback_data=f"whstage_{lead_id}_contacted")]]
+                keyboard = [[InlineKeyboardButton("✅ Ǝləqə saxlanıldı", callback_data=f"whstage_{lead_id}_contacted")]]
             else:
                 keyboard = []
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+
+            # ── Working-hours check for Qiymət təklifi only ──
+            if new_status_id == STAGES["qiymet_teklifi"]:
+                _now = datetime.now(tz=BAKU_TZ)
+                _work_start = _now.replace(hour=10, minute=0, second=0, microsecond=0)
+                _work_end = _now.replace(hour=19, minute=0, second=0, microsecond=0)
+                if _now < _work_start:
+                    # Before 10:00 — send at 10:00 today
+                    _send_at = _work_start
+                elif _now > _work_end:
+                    # After 19:00 — send at 10:00 tomorrow
+                    _send_at = (_now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                else:
+                    _send_at = None  # within working hours, send immediately
+
+                if _send_at is not None:
+                    # Schedule deferred send via job_queue
+                    _delay = (_send_at - _now).total_seconds()
+                    _job_data = {
+                        "chat_id": admin_chat,
+                        "msg": msg,
+                        "reply_markup": reply_markup,
+                        "lead_id": lead_id,
+                        "lead_name": lead_name,
+                        "contact_phone": contact_phone,
+                    }
+                    async def _send_deferred_qiymet(ctx, job_data=_job_data):
+                        try:
+                            sent_d = await ctx.bot.send_message(
+                                job_data["chat_id"], job_data["msg"],
+                                parse_mode="Markdown",
+                                reply_markup=job_data["reply_markup"],
+                                disable_web_page_preview=True
+                            )
+                            store_message_lead(job_data["chat_id"], sent_d.message_id,
+                                               job_data["lead_id"], job_data["lead_name"], job_data["contact_phone"])
+                            logger.info(f"Deferred Qiymət təklifi notification sent for lead {job_data['lead_id']}")
+                        except Exception as _e:
+                            logger.error(f"Deferred Qiymət təklifi notification failed: {_e}")
+                    _bot_app.job_queue.run_once(_send_deferred_qiymet, when=_delay)
+                    logger.info(f"Qiymət təklifi notification for lead {lead_id} deferred by {_delay:.0f}s (until {_send_at.strftime('%H:%M %d.%m')} Baku)")
+                    return web.Response(status=200, text="OK")
+                # else: fall through to immediate send below
+
             try:
                 sent_wh = await _bot_app.bot.send_message(
                     admin_chat, msg, parse_mode="Markdown",
