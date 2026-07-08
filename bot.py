@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -252,7 +253,7 @@ def store_message_task(chat_id: int, message_id: int, task_id: int, task_text: s
         "entity_id": entity_id,
         "entity_type": entity_type or "leads",
         "phone": phone or "",
-        "ts": int(time.time())
+        "ts": int(_time_module.time())
     }
     save_message_maps()
 
@@ -268,7 +269,7 @@ def store_message_lead(chat_id: int, message_id: int, lead_id: int, lead_name: s
         "lead_id": lead_id, 
         "lead_name": lead_name, 
         "phone": phone,
-        "ts": int(time.time())
+        "ts": int(_time_module.time())
     }
     save_message_maps()
 
@@ -3608,7 +3609,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         task_dt = datetime.fromtimestamp(till, tz=BAKU_TZ)
         responsible_id = task.get("responsible_user_id")
         chat_id = get_chat_id_for_kommo_user(responsible_id)
-        text = task.get("text", "Təsvirsiz")
+        text = escape_markdown(task.get("text", "Təsvirsiz"), version=1)
         time_str = task_dt.strftime("%H:%M %d.%m.%Y")
         entity_id = task.get("entity_id")
         entity_type = task.get("entity_type", "")
@@ -3763,7 +3764,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                     t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
                     t_nm_line = f"\n     👤 {t_nm}" if t_nm else ""
-                    msg += f"  \u2022 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
+                    msg += f"  \u2022 {escape_markdown(t.get('text', 'Təsvirsiz'), version=1)}{t_nm_line}{t_ph_line}{t_link}\n"
             # Today tasks with links and phone
             today_tasks = get_tasks(today_start, today_end)
             msg += f"\n📅 *Bugünkü tapşırıqlar:* {len(today_tasks)}\n"
@@ -3781,7 +3782,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                 t_ph_line = f"\n     📞 {t_ph}" if t_ph else ""
                 t_nm_line = f"\n     👤 {t_nm}" if t_nm else ""
-                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
+                msg += f"  \u2022 ⏰ {dt.strftime('%H:%M')} \u2014 {escape_markdown(t.get('text', 'Təsvirsiz'), version=1)}{t_nm_line}{t_ph_line}{t_link}\n"
             try:
                 await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
             except:
@@ -3805,7 +3806,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                     t_nm = get_contact_name_from_entity(t_entity_id, t_entity_type) if t_entity_id else ""
                     t_ph_line = f"\n   📞 {t_ph}" if t_ph else ""
                     t_nm_line = f"\n   👤 {t_nm}" if t_nm else ""
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {t.get('text', 'Təsvirsiz')}{t_nm_line}{t_ph_line}{t_link}\n"
+                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} \u2014 {escape_markdown(t.get('text', 'Təsvirsiz'), version=1)}{t_nm_line}{t_ph_line}{t_link}\n"
                 msg += f"\n📊 Cəmi: {len(tasks)}"
             else:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
