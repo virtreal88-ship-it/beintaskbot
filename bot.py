@@ -145,6 +145,7 @@ user_context: dict[int, dict] = {}
 import time as _time_module
 _BOT_START_TIME = _time_module.time()  # epoch seconds when module loaded
 _sent_deadline_notifications: set[int] = set()  # task IDs already notified
+_bot_created_tasks: set[int] = set()  # task IDs created by the bot itself (to suppress webhook echo)
 
 # ─── Partner Configuration ───────────────────────────────────────────────────
 
@@ -727,7 +728,18 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
     try:
         resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
         if resp.status_code in (200, 201):
-            return resp.json()
+            result = resp.json()
+            # Register task ID so webhook echo is suppressed
+            try:
+                created_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
+                if created_id:
+                    _bot_created_tasks.add(int(created_id))
+                    # Keep set bounded to 500 entries
+                    if len(_bot_created_tasks) > 500:
+                        _bot_created_tasks.discard(next(iter(_bot_created_tasks)))
+            except Exception:
+                pass
+            return result
     except Exception as e:
         logger.error(f"Create task error: {e}")
     return None
@@ -2576,6 +2588,14 @@ async def _handle_kommo_task_webhook(data: dict):
     admin_chat = get_chat_id_for_kommo_user(10932455)
 
     # ── add_task: notify assignee and optionally Admin ──
+    # Skip if this task was created by the bot itself (suppress webhook echo)
+    if is_add and task_id_raw:
+        tid = int(task_id_raw)
+        if tid in _bot_created_tasks:
+            _bot_created_tasks.discard(tid)
+            logger.info(f"Task webhook: suppressing echo for bot-created task {tid}")
+            return
+
     if is_add and responsible_id and responsible_id != 10932455:
         assignee_chat = get_chat_id_for_kommo_user(responsible_id)
         assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
