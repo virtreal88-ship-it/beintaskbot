@@ -3165,12 +3165,43 @@ def parse_reschedule_text(text: str) -> dict | None:
 async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str, task_info: dict) -> bool:
     """Handle a reply to a task notification message. Returns True if handled."""
     chat_id = update.message.chat_id
-    task_id = task_info["task_id"]
+    task_id = task_info.get("task_id")  # May be None for fallback-parsed replies
     task_text = task_info.get("task_text", "Tapşırıq")
     
     parsed = parse_reschedule_text(user_text)
     if not parsed:
         return False  # Not a recognized reschedule/completion command
+    
+    # If task_id is missing (fallback parse), try to find the latest open task for this entity
+    if not task_id:
+        entity_id = task_info.get("entity_id")
+        entity_type = task_info.get("entity_type", "leads")
+        if entity_id:
+            # Try the entity directly
+            entity_tasks = get_entity_tasks(entity_id, entity_type)
+            # Also try the other entity type if lead (leads embed contacts)
+            if not entity_tasks and entity_type == "leads":
+                _ld = get_lead_details(entity_id)
+                if _ld:
+                    _emb_c = _ld.get("_embedded", {}).get("contacts", [])
+                    if _emb_c:
+                        entity_tasks = get_entity_tasks(_emb_c[0]["id"], "contacts")
+            if entity_tasks:
+                # Sort by complete_till descending, pick the most recent open task
+                entity_tasks.sort(key=lambda t: t.get("complete_till", 0), reverse=True)
+                best = entity_tasks[0]
+                task_id = best["id"]
+                task_text = best.get("text", task_text)
+                task_info = dict(task_info)  # copy to avoid mutating shared dict
+                task_info["task_id"] = task_id
+                task_info["task_text"] = task_text
+                logger.info(f"Fallback resolved task_id={task_id} for entity={entity_id} ({entity_type})")
+            else:
+                await update.message.reply_text("⚠️ Bu müştəri üçün açıq tapşırıq tapilmadı.")
+                return True
+        else:
+            await update.message.reply_text("⚠️ Tapşırıq məlumatı tapilmadı.")
+            return True
     
     if parsed["action"] == "complete":
         # Mark task as completed
@@ -3289,11 +3320,10 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Fallback parsing success: {task_info}")
 
         if task_info:
-            # If it's a task mapping (not lead mapping)
-            if "task_id" in task_info:
-                handled = await handle_task_reply(update, context, user_text, task_info)
-                if handled:
-                    return
+            # Always try handle_task_reply — it now resolves task_id from entity if missing
+            handled = await handle_task_reply(update, context, user_text, task_info)
+            if handled:
+                return
             
             # Not handled by task_reply — override context for process_text_intent
             _reply_task_info = task_info
