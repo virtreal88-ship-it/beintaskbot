@@ -1053,10 +1053,10 @@ async def execute_create_task(update: Update, phone: str, date_str: str, time_st
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
             if sender_kommo_id and sender_kommo_id != 10932455:
                 admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
+                sender_name = KOMMO_USERS.get(sender_kommo_id, "ƏƏməkdaş")
                 if admin_chat:
                     try:
-                        await update.get_bot().send_message(
+                        sent_admin_ct = await update.get_bot().send_message(
                             admin_chat,
                             f"📢 *{sender_name}* yeni tapşırıq yaratdı:\n\n"
                             f"👤 Müştəri: {contact_name}\n"
@@ -1066,6 +1066,11 @@ async def execute_create_task(update: Update, phone: str, date_str: str, time_st
                             parse_mode="Markdown",
                             disable_web_page_preview=True
                         )
+                        if task_id and sent_admin_ct:
+                            _eid = c_lead_id or contact["id"]
+                            _etype = "leads" if c_lead_id else "contacts"
+                            store_message_task(admin_chat, sent_admin_ct.message_id, task_id, task_text,
+                                               entity_id=_eid, entity_type=_etype, phone=phone)
                     except:
                         pass
     else:
@@ -1199,10 +1204,10 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
         # Notify Admin if sender is not admin
         if sender_kommo_id and sender_kommo_id != 10932455:
             admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "ƏƏməkdaş")
             if admin_chat:
                 try:
-                    await update.get_bot().send_message(
+                    sent_admin_cta = await update.get_bot().send_message(
                         admin_chat,
                         f"📢 {urgency_mark}*{sender_name}* tapşırıq yaratdı:\n\n"
                         f"👤 Müştəri: {contact_name}\n"
@@ -1213,6 +1218,11 @@ async def execute_create_task_with_assign(update: Update, phone: str, date_str: 
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    if task_id and sent_admin_cta:
+                        _eid2 = c_lead_id or contact["id"]
+                        _etype2 = "leads" if c_lead_id else "contacts"
+                        store_message_task(admin_chat, sent_admin_cta.message_id, task_id, task_text,
+                                           entity_id=_eid2, entity_type=_etype2, phone=phone)
                 except:
                     pass
     else:
@@ -2572,12 +2582,16 @@ async def _handle_kommo_task_webhook(data: dict):
                 f"{link_line}"
             )
             try:
-                await _bot_app.bot.send_message(
+                sent_admin_task = await _bot_app.bot.send_message(
                     admin_chat,
                     admin_msg,
                     parse_mode="Markdown",
                     disable_web_page_preview=True
                 )
+                # Store mapping so Admin can reply to reschedule/complete
+                if task_id_raw and sent_admin_task:
+                    store_message_task(admin_chat, sent_admin_task.message_id, int(task_id_raw), task_text,
+                                       entity_id=entity_id, entity_type=entity_type, phone=client_phone)
             except Exception as e:
                 logger.error(f"Task webhook: failed to notify admin about new task: {e}")
 
