@@ -2514,6 +2514,99 @@ async def webhook_stage_notification_callback(update: Update, context: ContextTy
         except:
             pass
 
+# ─── Stage-Task Assignment Callback ─────────────────────────────────────────
+
+# Mapping of stage_key → auto-generated task text
+_STAGE_TASK_TEXTS = {
+    "teqdimat": "Müştəriyə təqdimat keçirmək",
+    "yeni_sifaris": "Yeni sifarişi rəsmiləşdirmək",
+    "gorus": "Müştəri ilə görüş keçirmək",
+    "qurashdirma": "Quraşdırmanı həyata keçirmək",
+}
+
+async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle assignee selection after a stage-change task prompt.
+    Callback data format: stgtask_{lead_id}_{stage_key}_{assignee}
+    assignee: shamil | soltan | admin | cancel
+    """
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+
+    data = query.data  # stgtask_{lead_id}_{stage_key}_{assignee}
+    parts = data.split("_", 3)
+    # parts[0] = "stgtask", parts[1] = lead_id, parts[2] = stage_key, parts[3] = assignee
+    if len(parts) < 4:
+        return
+
+    lead_id = int(parts[1])
+    stage_key = parts[2]
+    assignee_key = parts[3]
+
+    if assignee_key == "cancel":
+        try:
+            await query.edit_message_text("❌ Ləğv edildi.", disable_web_page_preview=True)
+        except:
+            pass
+        return
+
+    # Resolve assignee Kommo user ID and name
+    assignee_map = {
+        "shamil": (15532668, "Şamil Əliyev"),
+        "soltan": (15531960, "Soltan Abbasov"),
+        "admin": (10932455, "Texniki Destek"),
+    }
+    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
+
+    task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+
+    # Deadline: tomorrow 09:00 Baku
+    now = datetime.now(tz=BAKU_TZ)
+    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    deadline_ts = int(deadline_dt.timestamp())
+
+    result = create_task(lead_id, task_text, deadline_ts, responsible_user_id=assignee_uid, entity_type="leads")
+
+    if result:
+        # Notify assignee (if not Admin)
+        if assignee_uid != 10932455:
+            assignee_chat = get_chat_id_for_kommo_user(assignee_uid)
+            if assignee_chat and _bot_app:
+                try:
+                    sent_a = await _bot_app.bot.send_message(
+                        assignee_chat,
+                        f"📋 *Yeni tapşırıq!*\n\n📝 {escape_markdown(task_text, version=1)}\n⏰ Son tarix: {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+                        parse_mode="Markdown",
+                        disable_web_page_preview=True
+                    )
+                    # Store message→task mapping
+                    try:
+                        tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
+                        if tid and sent_a:
+                            store_message_task(assignee_chat, sent_a.message_id, int(tid), task_text,
+                                               entity_id=lead_id, entity_type="leads")
+                    except:
+                        pass
+                except Exception as e:
+                    logger.error(f"stage_task_assign: failed to notify assignee: {e}")
+
+        result_text = f"✅ Tapşırıq *{escape_markdown(assignee_name, version=1)}*-ə təyin edildi!\n\n📝 {escape_markdown(task_text, version=1)}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}"
+    else:
+        result_text = f"⚠️ Tapşırıq yaratılmadı. Kommo API xətası.\n🔗 {link}"
+
+    try:
+        await query.edit_message_text(result_text, parse_mode="Markdown", disable_web_page_preview=True)
+    except:
+        try:
+            await context.bot.send_message(
+                query.message.chat_id, result_text, parse_mode="Markdown", disable_web_page_preview=True
+            )
+        except:
+            pass
+
 # ─── Kommo Webhook Handler ───────────────────────────────────────────────────
 
 # Global reference to the Telegram bot application (set in main)
@@ -2800,23 +2893,63 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
 
         # ── Case B: any other stage transition within our pipeline ──
         elif old_status_id != STAGES["nerazobrannoye"]:
-            msg = (
-                f"🔄 *Mərhələ dəyişikliyi:*\n\n"
-                f"👤 Müştəri: {contact_name}\n"
-                f"📞 {contact_phone}\n"
-                f"📋 {lead_name}\n"
-                f"📌 {old_stage_name} → *{new_stage_name}*\n\n"
-                f"🔗 {link}"
-            )
-            try:
-                sent_wh2 = await _bot_app.bot.send_message(
-                    admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True
+            # Stages that require assignee selection + auto task creation
+            _STAGE_TASK_KEYS = {
+                STAGES["teqdimat"]: "teqdimat",
+                STAGES["yeni_sifaris"]: "yeni_sifaris",
+                STAGES["gorus"]: "gorus",
+                STAGES["qurashdirma"]: "qurashdirma",
+            }
+
+            if new_status_id in _STAGE_TASK_KEYS:
+                # Send assignee selection message to Admin
+                stage_key = _STAGE_TASK_KEYS[new_status_id]
+                stage_display = STAGE_NAMES.get(new_status_id, new_stage_name)
+                msg = (
+                    f"📋 *Sövdələşmə mərhələsi dəyişdi: {escape_markdown(stage_display, version=1)}*\n\n"
+                    f"👤 Müştəri: {escape_markdown(contact_name, version=1)}\n"
+                    f"📞 {contact_phone}\n"
+                    f"🔗 {link}\n\n"
+                    f"Kim icra edəcək?"
                 )
-                # Store message→lead mapping for reply-based actions
-                store_message_lead(admin_chat, sent_wh2.message_id, lead_id, lead_name, contact_phone)
-                logger.info(f"Webhook (stage change) notification sent to admin: lead {lead_id} {old_stage_name} -> {new_stage_name}")
-            except Exception as e:
-                logger.error(f"Failed to send stage-change webhook notification: {e}")
+                keyboard = [
+                    [
+                        InlineKeyboardButton("Şamil", callback_data=f"stgtask_{lead_id}_{stage_key}_shamil"),
+                        InlineKeyboardButton("Soltan", callback_data=f"stgtask_{lead_id}_{stage_key}_soltan"),
+                    ],
+                    [
+                        InlineKeyboardButton("Özüm", callback_data=f"stgtask_{lead_id}_{stage_key}_admin"),
+                        InlineKeyboardButton("❌ Ləğv et", callback_data=f"stgtask_{lead_id}_{stage_key}_cancel"),
+                    ],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                try:
+                    sent_wh2 = await _bot_app.bot.send_message(
+                        admin_chat, msg, parse_mode="Markdown",
+                        reply_markup=reply_markup, disable_web_page_preview=True
+                    )
+                    store_message_lead(admin_chat, sent_wh2.message_id, lead_id, lead_name, contact_phone)
+                    logger.info(f"Webhook stage-task prompt sent to admin: lead {lead_id} -> {stage_display}")
+                except Exception as e:
+                    logger.error(f"Failed to send stage-task prompt: {e}")
+            else:
+                # Plain stage-change notification for all other stages
+                msg = (
+                    f"🔄 *Mərhələ dəyişikliyi:*\n\n"
+                    f"👤 Müştəri: {escape_markdown(contact_name, version=1)}\n"
+                    f"📞 {contact_phone}\n"
+                    f"📋 {escape_markdown(lead_name, version=1)}\n"
+                    f"📌 {escape_markdown(old_stage_name, version=1)} → *{escape_markdown(new_stage_name, version=1)}*\n\n"
+                    f"🔗 {link}"
+                )
+                try:
+                    sent_wh2 = await _bot_app.bot.send_message(
+                        admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True
+                    )
+                    store_message_lead(admin_chat, sent_wh2.message_id, lead_id, lead_name, contact_phone)
+                    logger.info(f"Webhook (stage change) notification sent to admin: lead {lead_id} {old_stage_name} -> {new_stage_name}")
+                except Exception as e:
+                    logger.error(f"Failed to send stage-change webhook notification: {e}")
 
         return web.Response(status=200, text="OK")
     
@@ -3880,6 +4013,7 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
     app.add_handler(CallbackQueryHandler(webhook_stage_notification_callback, pattern="^whstage_"))
+    app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask_"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
 
     # Message handlers
