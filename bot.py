@@ -1689,7 +1689,8 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
                     task_key = str(uuid.uuid4())[:8]
                     context.bot_data[f"pending_task_{task_key}"] = {
                         "phone": phone, "date": date_str, "time": time_str,
-                        "text": task_text, "urgency": urgency, "chat_id": admin_chat
+                        "text": task_text, "urgency": urgency, "chat_id": admin_chat,
+                        "creator_chat_id": chat_id
                     }
                     keyboard = [
                         [InlineKeyboardButton("Şamil Əliyev", callback_data=f"taskasgn_{task_key}_15532668")],
@@ -2173,7 +2174,8 @@ async def ask_task_assignee(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     task_key = str(uuid.uuid4())[:8]
     context.bot_data[f"pending_task_{task_key}"] = {
         "phone": phone, "date": date_str, "time": time_str,
-        "text": task_text, "urgency": urgency, "chat_id": update.message.chat_id
+        "text": task_text, "urgency": urgency, "chat_id": update.message.chat_id,
+        "creator_chat_id": update.message.chat_id
     }
     keyboard = [
         [InlineKeyboardButton("Şamil Əliyev", callback_data=f"taskasgn_{task_key}_15532668")],
@@ -2286,6 +2288,22 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                     set_last_contact(assigned_chat, phone, contact["id"], contact_name, lead_id=c_lead_id)
                 except:
                     pass
+        # Notify original task creator (if different from Admin and from assigned user)
+        creator_chat_id = pending.get("creator_chat_id")
+        admin_chat_id = get_chat_id_for_kommo_user(10932455)
+        assigned_chat_id = get_chat_id_for_kommo_user(user_id)
+        if creator_chat_id and creator_chat_id != admin_chat_id and creator_chat_id != assigned_chat_id:
+            try:
+                await context.bot.send_message(
+                    creator_chat_id,
+                    f"✅ Tapşırığınız *{responsible_name}*-ə təyin edildi.\n\n"
+                    f"📅 {date_str} {time_str}\n"
+                    f"📝 {task_text}\n\n🔗 {c_link}",
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify task creator: {e}")
         # Store context
         if task_id:
             set_last_task(chat_id, task_id, date_str, time_str)
