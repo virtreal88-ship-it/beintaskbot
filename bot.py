@@ -140,10 +140,6 @@ llm_client = OpenAI(
 
 user_context: dict[int, dict] = {}
 
-# State for overdue task result collection
-# Maps chat_id -> {"task_id": ..., "task_text": ..., "entity_id": ..., "entity_type": ...}
-_pending_task_result: dict[int, dict] = {}
-
 # ─── Flood Control State ─────────────────────────────────────────────────────
 
 import time as _time_module
@@ -1527,49 +1523,6 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.message.chat_id
     ctx = get_ctx(chat_id)
 
-    # Check if user is providing task result text (overdue task flow)
-    if chat_id in _pending_task_result:
-        pending = _pending_task_result.pop(chat_id)
-        task_id = pending["task_id"]
-        task_text = pending["task_text"]
-        entity_id = pending.get("entity_id")
-        entity_type = pending.get("entity_type", "leads")
-        # Close task in Kommo with result as comment
-        result_text = user_text.strip()
-        update_task_kommo(task_id, {"is_completed": True, "result": {"text": result_text}})
-        # Add note with the result
-        if entity_id:
-            add_note(entity_id, f"Tapşırıq bağlandı: {task_text}\nNəticə: {result_text}", entity_type)
-        # Build link and phone
-        link = ""
-        if entity_type == "leads" and entity_id:
-            link = f"\n\n🔗 {KOMMO_BASE_URL}/leads/detail/{entity_id}"
-        elif entity_type == "contacts" and entity_id:
-            link = f"\n\n🔗 {KOMMO_BASE_URL}/contacts/detail/{entity_id}"
-        t_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
-        phone_line = f"\n📞 {t_phone}" if t_phone else ""
-        await update.message.reply_text(
-            f"✅ Tapşırıq bağlandı!\n\n📝 {task_text}{phone_line}\n💬 Nəticə: {result_text}{link}",
-            disable_web_page_preview=True
-        )
-        # Notify Admin if not admin
-        sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
-        if sender_kommo_id and sender_kommo_id != 10932455:
-            admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
-            if admin_chat:
-                try:
-                    await context.bot.send_message(
-                        admin_chat,
-                        f"📢 *{sender_name}* tapşırığı bağladı:\n\n"
-                        f"📝 {task_text}{phone_line}\n💬 Nəticə: {result_text}{link}",
-                        parse_mode="Markdown",
-                        disable_web_page_preview=True
-                    )
-                except:
-                    pass
-        return
-
     # Handle pending actions first
     if ctx["pending_action"] and ctx["pending_missing"]:
         missing = ctx["pending_missing"]
@@ -2439,35 +2392,55 @@ async def overdue_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data  # overdue_{task_id}_{action}
     parts = data.split("_", 2)
     task_id = int(parts[1])
-    # action is "done" or "reject"
-    
+    action = parts[2] if len(parts) > 2 else "done"  # "done" or "reject"
+
     chat_id = query.message.chat_id
-    
+
     # Get task info from bot_data
     task_info = context.bot_data.get(f"overdue_task_{task_id}", {})
     task_text = task_info.get("text", "Tapşırıq")
     entity_id = task_info.get("entity_id")
     entity_type = task_info.get("entity_type", "leads")
-    
-    # Ask user for result text
-    _pending_task_result[chat_id] = {
-        "task_id": task_id,
-        "task_text": task_text,
-        "entity_id": entity_id,
-        "entity_type": entity_type,
-    }
-    
-    # Edit message to show that user needs to provide result
-    try:
-        await query.edit_message_text(
-            f"{query.message.text}\n\n✏️ Tapşırığın nəticəsini yazın:",
-            disable_web_page_preview=True
-        )
-    except:
+
+    if action == "done":
+        # Close task immediately without asking for result text
+        update_task_kommo(task_id, {"is_completed": True})
+        link = ""
+        if entity_type == "leads" and entity_id:
+            link = f"\n\n🔗 {KOMMO_BASE_URL}/leads/detail/{entity_id}"
+        elif entity_type == "contacts" and entity_id:
+            link = f"\n\n🔗 {KOMMO_BASE_URL}/contacts/detail/{entity_id}"
+        t_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+        phone_line = f"\n📞 {t_phone}" if t_phone else ""
+        done_msg = f"✅ Tapşırıq bağlandı!\n\n📝 {task_text}{phone_line}{link}"
         try:
-            await context.bot.send_message(
-                chat_id,
-                "✏️ Tapşırığın nəticəsini yazın:"
+            await query.edit_message_text(done_msg, disable_web_page_preview=True)
+        except:
+            try:
+                await context.bot.send_message(chat_id, done_msg, disable_web_page_preview=True)
+            except:
+                pass
+        # Notify Admin if not admin
+        sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
+        if sender_kommo_id and sender_kommo_id != 10932455:
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(sender_kommo_id, "Əəməkdaş")
+            if admin_chat:
+                try:
+                    await context.bot.send_message(
+                        admin_chat,
+                        f"📢 *{sender_name}* tapşırığı bağladı:\n\n📝 {task_text}{phone_line}{link}",
+                        parse_mode="Markdown",
+                        disable_web_page_preview=True
+                    )
+                except:
+                    pass
+    else:
+        # Reject: just acknowledge
+        try:
+            await query.edit_message_text(
+                f"❌ Tapşırıq imtina edildi.\n\n📝 {task_text}",
+                disable_web_page_preview=True
             )
         except:
             pass
