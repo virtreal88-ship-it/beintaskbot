@@ -2460,22 +2460,29 @@ async def _handle_kommo_task_webhook(data: dict):
     if not _bot_app:
         return
 
+    # ── RAW DATA LOGGING for format debugging ──
+    all_keys = list(data.keys())
+    logger.info(f"[TASK WEBHOOK RAW] All keys ({len(all_keys)}): {all_keys}")
+    logger.info(f"[TASK WEBHOOK RAW] Full data: {dict(data)}")
+
     # ── Detect event type and extract fields ──
-    # Kommo can send: tasks[add][0][...] or tasks[update][0][...]
-    prefix_add = "tasks[add][0]"
-    prefix_upd = "tasks[update][0]"
-    prefix_gen = "task[0]"
+    # Kommo may send any of these formats:
+    #   tasks[add][0][key], tasks[update][0][key]
+    #   task[add][0][key],  task[update][0][key]   (singular)
+    #   task[0][key]                                (generic)
+    possible_add_prefixes = ["tasks[add][0]", "task[add][0]"]
+    possible_upd_prefixes = ["tasks[update][0]", "task[update][0]"]
+    possible_gen_prefixes = ["task[0]", "tasks[0]"]
+
+    is_add = any(k.startswith(p) for k in data for p in possible_add_prefixes)
+    is_upd = any(k.startswith(p) for k in data for p in possible_upd_prefixes)
 
     def _get(key):
-        return (
-            data.get(f"{prefix_add}[{key}]")
-            or data.get(f"{prefix_upd}[{key}]")
-            or data.get(f"{prefix_gen}[{key}]")
-            or data.get(key)
-        )
-
-    is_add = any(k.startswith(prefix_add) for k in data)
-    is_upd = any(k.startswith(prefix_upd) for k in data)
+        for p in possible_add_prefixes + possible_upd_prefixes + possible_gen_prefixes:
+            v = data.get(f"{p}[{key}]")
+            if v is not None:
+                return v
+        return data.get(key)
 
     task_id_raw = _get("id")
     task_text = _get("text") or "Tapşırıq"
@@ -2486,7 +2493,7 @@ async def _handle_kommo_task_webhook(data: dict):
     is_completed_raw = _get("is_completed")
     created_by_raw = _get("created_by")
 
-    logger.info(f"Task webhook: is_add={is_add} is_upd={is_upd} task_id={task_id_raw} resp={responsible_raw}")
+    logger.info(f"Task webhook: is_add={is_add} is_upd={is_upd} task_id={task_id_raw} resp={responsible_raw} entity={entity_id_raw}/{entity_type_raw} deadline={deadline_raw} completed={is_completed_raw}")
 
     responsible_id = int(responsible_raw) if responsible_raw else None
     entity_id = int(entity_id_raw) if entity_id_raw else None
@@ -2610,50 +2617,47 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         logger.info(f"Kommo webhook received: {dict(data)}")
 
         # ── Task events: add_task / update_task ──────────────────────────────
-        task_id_raw = data.get("task[0][id]") or data.get("tasks[add][0][id]") or data.get("tasks[update][0][id]")
+        # Kommo may use any of: tasks[add][0][id], task[add][0][id], task[0][id], tasks[0][id]
+        _task_id_candidates = [
+            "tasks[add][0][id]", "task[add][0][id]",
+            "tasks[update][0][id]", "task[update][0][id]",
+            "task[0][id]", "tasks[0][id]",
+        ]
+        task_id_raw = next((data.get(k) for k in _task_id_candidates if data.get(k)), None)
         if task_id_raw:
             await _handle_kommo_task_webhook(data)
             return web.Response(status=200, text="OK")
 
         # ── Lead status change ───────────────────────────────────────────────
-        # Extract lead status change fields
         # Kommo sends: leads[status][0][id], leads[status][0][status_id], etc.
         lead_id_raw = data.get("leads[status][0][id]")
         new_status_id_raw = data.get("leads[status][0][status_id]")
         old_status_id_raw = data.get("leads[status][0][old_status_id]")
         pipeline_id_raw = data.get("leads[status][0][pipeline_id]")
-        
+
         if not lead_id_raw or not new_status_id_raw:
             return web.Response(status=200, text="OK")
-        
+
         lead_id = int(lead_id_raw)
         new_status_id = int(new_status_id_raw)
         old_status_id = int(old_status_id_raw) if old_status_id_raw else None
         pipeline_id = int(pipeline_id_raw) if pipeline_id_raw else None
-        
+
         logger.info(f"Lead {lead_id}: {old_status_id} -> {new_status_id} (pipeline {pipeline_id})")
-        
+
         # Only process our pipeline
         if pipeline_id and pipeline_id != PIPELINE_ID:
             return web.Response(status=200, text="OK")
-        
-        # Only process transitions FROM Nerazobrannoye
-        if old_status_id != STAGES["nerazobrannoye"]:
-            return web.Response(status=200, text="OK")
-        
-        # Check if it's one of the target stages
-        if new_status_id not in (STAGES["qiymet_teklifi"], STAGES["teqdimat"], STAGES["yeni_sifaris"]):
-            return web.Response(status=200, text="OK")
-        
+
         # Get lead details
         lead_details = get_lead_details(lead_id)
         if not lead_details:
             logger.warning(f"Could not get lead details for {lead_id}")
             return web.Response(status=200, text="OK")
-        
+
         lead_name = lead_details.get("name", "Adsız sövdələşmə")
         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-        
+
         # Get contact info
         contact_name = "Adsız müştəri"
         contact_phone = ""
@@ -2669,60 +2673,75 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         if vals:
                             contact_phone = vals[0].get("value", "")
                         break
-        
-        stage_name = STAGE_NAMES.get(new_status_id, f"ID:{new_status_id}")
-        
+
+        new_stage_name = STAGE_NAMES.get(new_status_id, f"ID:{new_status_id}")
+        old_stage_name = STAGE_NAMES.get(old_status_id, f"ID:{old_status_id}") if old_status_id else "?"
+
         # Find Admin chat_id
         admin_chat = get_chat_id_for_kommo_user(10932455)
         if not admin_chat or not _bot_app:
             logger.warning("Admin chat not found or bot app not initialized")
             return web.Response(status=200, text="OK")
-        
-        # Build notification message
-        msg = (
-            f"🔔 *Nerazobrannoye-dan yeni keçid!*\n\n"
-            f"👤 Müştəri: {contact_name}\n"
-            f"📞 Telefon: {contact_phone}\n"
-            f"📋 Sövdələşmə: {lead_name}\n"
-            f"➡️ Mərhələ: *{stage_name}*\n\n"
-            f"🔗 {link}"
-        )
-        
-        # Determine button based on target stage
-        if new_status_id == STAGES["qiymet_teklifi"]:
-            # A) Qiymət təklifi → button "Göndərildi"
-            keyboard = [[InlineKeyboardButton("✅ Göndərildi", callback_data=f"whstage_{lead_id}_sent")]]
-        elif new_status_id == STAGES["teqdimat"]:
-            # B) Təqdimat → button "Təqdimat olundu"
-            keyboard = [[InlineKeyboardButton("✅ Təqdimat olundu", callback_data=f"whstage_{lead_id}_presented")]]
-        elif new_status_id == STAGES["yeni_sifaris"]:
-            # C) Yeni sifariş → button "Əlaqə saxlanıldı"
-            keyboard = [[InlineKeyboardButton("✅ Əlaqə saxlanıldı", callback_data=f"whstage_{lead_id}_contacted")]]
-        else:
-            keyboard = []
-        
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        
-        # Store task info for potential use in callback
+
+        # Store lead info for potential use in callback / reply
         _bot_app.bot_data[f"overdue_task_{lead_id}"] = {
             "text": f"Sövdələşmə: {lead_name}",
             "entity_id": lead_id,
             "entity_type": "leads",
         }
-        
-        # Send notification to Admin
-        try:
-            await _bot_app.bot.send_message(
-                admin_chat,
-                msg,
-                parse_mode="Markdown",
-                reply_markup=reply_markup,
-                disable_web_page_preview=True
+
+        # ── Case A: transition FROM nerazobrannoye to target stage ──
+        if old_status_id == STAGES["nerazobrannoye"] and new_status_id in (
+            STAGES["qiymet_teklifi"], STAGES["teqdimat"], STAGES["yeni_sifaris"]
+        ):
+            msg = (
+                f"🔔 *Nerazobrannoye-dan yeni keçid!*\n\n"
+                f"👤 Müştəri: {contact_name}\n"
+                f"📞 Telefon: {contact_phone}\n"
+                f"📋 Sövdələşmə: {lead_name}\n"
+                f"➡️ Mərhələ: *{new_stage_name}*\n\n"
+                f"🔗 {link}"
             )
-            logger.info(f"Webhook notification sent to admin for lead {lead_id} -> stage {new_status_id}")
-        except Exception as e:
-            logger.error(f"Failed to send webhook notification: {e}")
-        
+            if new_status_id == STAGES["qiymet_teklifi"]:
+                keyboard = [[InlineKeyboardButton("✅ Göndərildi", callback_data=f"whstage_{lead_id}_sent")]]
+            elif new_status_id == STAGES["teqdimat"]:
+                keyboard = [[InlineKeyboardButton("✅ Təqdimat olundu", callback_data=f"whstage_{lead_id}_presented")]]
+            elif new_status_id == STAGES["yeni_sifaris"]:
+                keyboard = [[InlineKeyboardButton("✅ Ələqə saxlanıldı", callback_data=f"whstage_{lead_id}_contacted")]]
+            else:
+                keyboard = []
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            try:
+                sent_wh = await _bot_app.bot.send_message(
+                    admin_chat, msg, parse_mode="Markdown",
+                    reply_markup=reply_markup, disable_web_page_preview=True
+                )
+                # Store message→lead mapping for reply-based actions
+                store_message_lead(admin_chat, sent_wh.message_id, lead_id, lead_name, contact_phone)
+                logger.info(f"Webhook (nerazobrannoye) notification sent to admin: lead {lead_id} -> {new_stage_name}")
+            except Exception as e:
+                logger.error(f"Failed to send webhook notification: {e}")
+
+        # ── Case B: any other stage transition within our pipeline ──
+        elif old_status_id != STAGES["nerazobrannoye"]:
+            msg = (
+                f"🔄 *Mərhələ dəyişikliyi:*\n\n"
+                f"👤 Müştəri: {contact_name}\n"
+                f"📞 {contact_phone}\n"
+                f"📋 {lead_name}\n"
+                f"📌 {old_stage_name} → *{new_stage_name}*\n\n"
+                f"🔗 {link}"
+            )
+            try:
+                sent_wh2 = await _bot_app.bot.send_message(
+                    admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True
+                )
+                # Store message→lead mapping for reply-based actions
+                store_message_lead(admin_chat, sent_wh2.message_id, lead_id, lead_name, contact_phone)
+                logger.info(f"Webhook (stage change) notification sent to admin: lead {lead_id} {old_stage_name} -> {new_stage_name}")
+            except Exception as e:
+                logger.error(f"Failed to send stage-change webhook notification: {e}")
+
         return web.Response(status=200, text="OK")
     
     except Exception as e:
