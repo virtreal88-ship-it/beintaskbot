@@ -1631,32 +1631,35 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("📞 Müştərinin telefon nömrəsini göstərin:")
 
     elif action == "create_task":
-        date_str = intent.get("date")
-        time_str = intent.get("time") or None
+        raw_date = intent.get("date")
+        raw_time = intent.get("time") or None
         task_text = intent.get("text")
+        # Determine if user explicitly specified a deadline
+        deadline_explicit = bool(raw_date or raw_time)
         if not phone:
             await update.message.reply_text(f"⚠️ Tapşırıq üçün müştəri nömrəsi lazımdır: _{task_text}_", parse_mode="Markdown")
         elif not task_text:
             await update.message.reply_text("⚠️ Tapşırığın mətni boşdur.")
         else:
             # Apply smart deadline defaults
-            date_str, time_str = compute_smart_deadline(date_str, time_str)
+            date_str, time_str = compute_smart_deadline(raw_date, raw_time)
             # Always route through Admin: show assignment buttons regardless of who is creating
             sender_kommo_id = get_kommo_user_id_for_chat(chat_id)
             if sender_kommo_id == 10932455:
                 # Admin: show assignment buttons directly
-                await ask_task_assignee(update, context, phone, date_str, time_str, task_text, urgency)
+                await ask_task_assignee(update, context, phone, date_str, time_str, task_text, urgency, deadline_explicit=deadline_explicit)
             else:
                 # Non-admin: forward to Admin for assignment decision
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(sender_kommo_id, "Əməkdaş") if sender_kommo_id else "Bilinməyən"
                 if admin_chat:
-                    urgency_mark = "🔴 TƏCİLİ! " if urgency == "high" else ""
+                    urgency_mark = "🔴 TƎCİLİ! " if urgency == "high" else ""
                     task_key = str(uuid.uuid4())[:8]
                     context.bot_data[f"pending_task_{task_key}"] = {
                         "phone": phone, "date": date_str, "time": time_str,
                         "text": task_text, "urgency": urgency, "chat_id": admin_chat,
-                        "creator_chat_id": chat_id
+                        "creator_chat_id": chat_id,
+                        "deadline_explicit": deadline_explicit
                     }
                     keyboard = [
                         [InlineKeyboardButton("Şamil Əliyev", callback_data=f"taskasgn_{task_key}_15532668")],
@@ -1666,7 +1669,7 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     try:
                         fwd_text = (
-                            f"{urgency_mark}📋 *{sender_name}* tərəfindən yeni tapşırıq: \n\n"
+                            f"{urgency_mark}📋 *{sender_name}* tərəfindən yeni tapşırıq: \n\n"
                             f"📞 {phone}\n"
                             f"📅 {date_str} {time_str}\n"
                             f"📝 {task_text}\n\n"
@@ -2134,14 +2137,15 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
         except:
             pass
 
-async def ask_task_assignee(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, date_str: str, time_str: str, task_text: str, urgency: str = "normal"):
+async def ask_task_assignee(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, date_str: str, time_str: str, task_text: str, urgency: str = "normal", deadline_explicit: bool = True):
     """Ask Admin who to assign the task to."""
-    urgency_mark = "🔴 TƏCİLİ! " if urgency == "high" else ""
+    urgency_mark = "🔴 TƎCİLİ! " if urgency == "high" else ""
     task_key = str(uuid.uuid4())[:8]
     context.bot_data[f"pending_task_{task_key}"] = {
         "phone": phone, "date": date_str, "time": time_str,
         "text": task_text, "urgency": urgency, "chat_id": update.message.chat_id,
-        "creator_chat_id": update.message.chat_id
+        "creator_chat_id": update.message.chat_id,
+        "deadline_explicit": deadline_explicit
     }
     keyboard = [
         [InlineKeyboardButton("Şamil Əliyev", callback_data=f"taskasgn_{task_key}_15532668")],
@@ -2175,6 +2179,103 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         return
     
+    deadline_explicit = pending.get("deadline_explicit", True)
+    
+    # If deadline was NOT explicitly set by user — show deadline selection buttons
+    if not deadline_explicit:
+        # Store assignee in pending and show deadline buttons
+        pending["assigned_user_id"] = user_id
+        context.bot_data[f"pending_task_{task_key}"] = pending
+        responsible_name = KOMMO_USERS.get(user_id, "")
+        dl_prefix = f"taskdl_{task_key}"  # taskdl_{task_key}_{deadline_key}
+        keyboard = [
+            [
+                InlineKeyboardButton("15 dəq", callback_data=f"{dl_prefix}_15m"),
+                InlineKeyboardButton("1 saat", callback_data=f"{dl_prefix}_1h"),
+            ],
+            [
+                InlineKeyboardButton("Bu gün", callback_data=f"{dl_prefix}_today"),
+                InlineKeyboardButton("Sabah", callback_data=f"{dl_prefix}_tomorrow"),
+            ],
+            [
+                InlineKeyboardButton("Bu həftə", callback_data=f"{dl_prefix}_week"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            await query.edit_message_text(
+                f"✅ *{responsible_name}* seçildi.\n\n"
+                f"📝 {pending['text']}\n"
+                f"📞 {pending['phone']}\n\n"
+                f"⏰ Son tarix seçin:",
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+        except:
+            pass
+        return
+    
+    # Deadline is explicit — proceed to create task immediately
+    await _execute_task_creation(query, context, pending, task_key, user_id)
+
+
+async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle deadline selection for AI-parsed tasks.
+    Callback data format: taskdl_{task_key}_{deadline_key}
+    """
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+
+    data = query.data  # taskdl_{task_key}_{deadline_key}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    task_key = parts[1]
+    deadline_key = parts[2]
+
+    pending = context.bot_data.get(f"pending_task_{task_key}")
+    if not pending:
+        try:
+            await query.edit_message_text("⚠️ Tapşırıq məlumatı tapılmadı (vaxt keçib).")
+        except:
+            pass
+        return
+
+    user_id = pending.get("assigned_user_id", 10932455)
+
+    # Compute deadline
+    now = datetime.now(tz=BAKU_TZ)
+    if deadline_key == "15m":
+        deadline_dt = now + timedelta(minutes=15)
+    elif deadline_key == "1h":
+        deadline_dt = now + timedelta(hours=1)
+    elif deadline_key == "today":
+        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        if deadline_dt <= now:
+            deadline_dt += timedelta(days=1)
+    elif deadline_key == "tomorrow":
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    elif deadline_key == "week":
+        days_until_friday = (4 - now.weekday()) % 7
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+    else:
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+
+    # Update pending with new deadline
+    pending["date"] = deadline_dt.strftime("%d.%m.%Y")
+    pending["time"] = deadline_dt.strftime("%H:%M")
+    pending["deadline_explicit"] = True  # now it's set
+
+    await _execute_task_creation(query, context, pending, task_key, user_id)
+
+
+async def _execute_task_creation(query, context, pending, task_key, user_id):
+    """Actually create the task in Kommo after assignee and deadline are determined."""
     phone = pending["phone"]
     date_str = pending["date"]
     time_str = pending["time"]
@@ -2183,10 +2284,11 @@ async def task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = pending["chat_id"]
     
     # Remove pending data
-    del context.bot_data[f"pending_task_{task_key}"]
+    if f"pending_task_{task_key}" in context.bot_data:
+        del context.bot_data[f"pending_task_{task_key}"]
     
     # Create the task
-    urgency_mark = "🔴 TƏCİLİ! " if urgency == "high" else ""
+    urgency_mark = "🔴 TƎCİLİ! " if urgency == "high" else ""
     contacts = search_contact_by_phone(phone)
     if not contacts:
         try:
@@ -2526,7 +2628,7 @@ _STAGE_TASK_TEXTS = {
 
 async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle assignee selection after a stage-change task prompt.
-    Callback data format: stgtask_{lead_id}_{stage_key}_{assignee}
+    Callback data format: stgtask-{lead_id}-{stage_key}-{assignee}
     assignee: shamil | soltan | admin | cancel
     """
     query = update.callback_query
@@ -2535,8 +2637,8 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
     except:
         pass
 
-    data = query.data  # stgtask_{lead_id}_{stage_key}_{assignee}
-    parts = data.split("_", 3)
+    data = query.data  # stgtask-{lead_id}-{stage_key}-{assignee}
+    parts = data.split("-")
     # parts[0] = "stgtask", parts[1] = lead_id, parts[2] = stage_key, parts[3] = assignee
     if len(parts) < 4:
         return
@@ -2563,9 +2665,89 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
     task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
 
-    # Deadline: tomorrow 09:00 Baku
+    # Show deadline selection buttons
+    dl_prefix = f"stgdl-{lead_id}-{stage_key}-{assignee_key}"
+    keyboard = [
+        [
+            InlineKeyboardButton("15 dəq", callback_data=f"{dl_prefix}-15m"),
+            InlineKeyboardButton("1 saat", callback_data=f"{dl_prefix}-1h"),
+        ],
+        [
+            InlineKeyboardButton("Bu gün", callback_data=f"{dl_prefix}-today"),
+            InlineKeyboardButton("Sabah", callback_data=f"{dl_prefix}-tomorrow"),
+        ],
+        [
+            InlineKeyboardButton("Bu həftə", callback_data=f"{dl_prefix}-week"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    try:
+        await query.edit_message_text(
+            f"✅ *{escape_markdown(assignee_name, version=1)}* seçildi.\n\n"
+            f"📝 {escape_markdown(task_text, version=1)}\n"
+            f"🔗 {link}\n\n"
+            f"⏰ Son tarix seçin:",
+            parse_mode="Markdown",
+            reply_markup=reply_markup,
+            disable_web_page_preview=True
+        )
+    except:
+        pass
+
+
+async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle deadline selection for stage-task.
+    Callback data format: stgdl-{lead_id}-{stage_key}-{assignee}-{deadline_key}
+    deadline_key: 15m | 1h | today | tomorrow | week
+    """
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+
+    data = query.data  # stgdl-{lead_id}-{stage_key}-{assignee}-{deadline_key}
+    parts = data.split("-")
+    if len(parts) < 5:
+        return
+
+    lead_id = int(parts[1])
+    stage_key = parts[2]
+    assignee_key = parts[3]
+    deadline_key = parts[4]
+
+    # Resolve assignee
+    assignee_map = {
+        "shamil": (15532668, "Şamil Əliyev"),
+        "soltan": (15531960, "Soltan Abbasov"),
+        "admin": (10932455, "Texniki Destek"),
+    }
+    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
+
+    task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+
+    # Compute deadline
     now = datetime.now(tz=BAKU_TZ)
-    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    if deadline_key == "15m":
+        deadline_dt = now + timedelta(minutes=15)
+    elif deadline_key == "1h":
+        deadline_dt = now + timedelta(hours=1)
+    elif deadline_key == "today":
+        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        if deadline_dt <= now:
+            deadline_dt += timedelta(days=1)
+    elif deadline_key == "tomorrow":
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    elif deadline_key == "week":
+        # Friday 18:00
+        days_until_friday = (4 - now.weekday()) % 7
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+    else:
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+
     deadline_ts = int(deadline_dt.timestamp())
 
     result = create_task(lead_id, task_text, deadline_ts, responsible_user_id=assignee_uid, entity_type="leads")
@@ -2582,7 +2764,6 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
-                    # Store message→task mapping
                     try:
                         tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                         if tid and sent_a:
@@ -2591,7 +2772,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
                     except:
                         pass
                 except Exception as e:
-                    logger.error(f"stage_task_assign: failed to notify assignee: {e}")
+                    logger.error(f"stage_task_deadline: failed to notify assignee: {e}")
 
         result_text = f"✅ Tapşırıq *{escape_markdown(assignee_name, version=1)}*-ə təyin edildi!\n\n📝 {escape_markdown(task_text, version=1)}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}"
     else:
@@ -2859,6 +3040,16 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
             "entity_type": "leads",
         }
 
+        # ── Suppress notifications for certain stages ──
+        _SILENT_STAGES = (
+            STAGES["imtina"],          # İmtina olundu
+            STAGES["danisiqlar"],      # Danışıqlar
+            STAGES["cavab_gozlenilir"],  # Cavab gözlənilir
+        )
+        if new_status_id in _SILENT_STAGES:
+            logger.info(f"Webhook: suppressing notification for silent stage {new_stage_name} (lead {lead_id})")
+            return web.Response(status=200, text="OK")
+
         # ── Case A: transition FROM nerazobrannoye to target stage ──
         if old_status_id == STAGES["nerazobrannoye"] and new_status_id in (
             STAGES["qiymet_teklifi"], STAGES["teqdimat"], STAGES["yeni_sifaris"]
@@ -2958,12 +3149,12 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 )
                 keyboard = [
                     [
-                        InlineKeyboardButton("Şamil", callback_data=f"stgtask_{lead_id}_{stage_key}_shamil"),
-                        InlineKeyboardButton("Soltan", callback_data=f"stgtask_{lead_id}_{stage_key}_soltan"),
+                        InlineKeyboardButton("Şamil", callback_data=f"stgtask-{lead_id}-{stage_key}-shamil"),
+                        InlineKeyboardButton("Soltan", callback_data=f"stgtask-{lead_id}-{stage_key}-soltan"),
                     ],
                     [
-                        InlineKeyboardButton("Özüm", callback_data=f"stgtask_{lead_id}_{stage_key}_admin"),
-                        InlineKeyboardButton("❌ Ləğv et", callback_data=f"stgtask_{lead_id}_{stage_key}_cancel"),
+                        InlineKeyboardButton("Özüm", callback_data=f"stgtask-{lead_id}-{stage_key}-admin"),
+                        InlineKeyboardButton("❌ Ləğv et", callback_data=f"stgtask-{lead_id}-{stage_key}-cancel"),
                     ],
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -4069,10 +4260,12 @@ def main():
     app.add_handler(CallbackQueryHandler(employee_approval_callback, pattern="^empreg_"))
     app.add_handler(CallbackQueryHandler(presentation_callback, pattern="^pres_"))
     app.add_handler(CallbackQueryHandler(task_assign_callback, pattern="^taskasgn_"))
+    app.add_handler(CallbackQueryHandler(task_deadline_callback, pattern="^taskdl_"))
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
     app.add_handler(CallbackQueryHandler(webhook_stage_notification_callback, pattern="^whstage_"))
-    app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask_"))
+    app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
+    app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
 
     # Message handlers
