@@ -207,6 +207,17 @@ def set_last_task(chat_id: int, task_id: int, date_str: str, time_str: str):
     ctx["last_task_date"] = date_str
     ctx["last_task_time"] = time_str
 
+def clear_user_context(chat_id: int):
+    """Clear contact/lead context for a user (new session)."""
+    ctx = get_ctx(chat_id)
+    ctx["last_phone"] = None
+    ctx["last_contact_id"] = None
+    ctx["last_contact_name"] = None
+    ctx["last_lead_id"] = None
+
+# Per-user session continuation flag
+_user_session_active: dict[int, bool] = {}
+
 # ─── Message → Task/Lead mapping (Persistent) ──────────────────────────────
 MESSAGE_MAPS_FILE = "message_maps.json"
 _message_task_map: dict[str, dict] = {}
@@ -402,15 +413,15 @@ Cari tarix və vaxt: {current_datetime} (saat qurşağı Asia/Baku, UTC+4)
 
 ═══ ƏN VACİB QAYDALAR ═══
 
-🔴 QAYDA 1: BİR MESAJ = BİR TAPŞIRIQ
-Bir mesaj = bir tapşırıq (əgər istifadəçi açıq şəkildə bir neçə fərqli tapşırıq sadalamayıbsa). Bir hərəkəti/görüşü bir neçə tapşırığa BÖLMƏ!
-Əgər mesajda yalnız bir görüş/iş haqqında danışılırsa, yalnız BİR create_task action qaytar.
+🔴 QAYDA 1: BİR MESAJ = YALNIZ BİR ACTION
+Hər mesaj üçün YALNIZ BİR action qaytar. Heç vaxt bir mesajdan iki və ya daha çox action yaratma!
+Bir hərəkəti/görüşü bir neçə tapşırığa BÖLMĘ!
 Əgər mesajda konkret vaxt/tarix varsa, onu istifadə et. "İndi" üçün əlavə tapşırıq yaratma.
 Misal: "Sabah 11:00-da dükanda müştəri ilə görüş üçün gedəcək əməkdaşı təyin etmək və ona məlumat vermək"
 SƏHV: 2 action (biri indi üçün "təyin etmək", digəri sabah 11:00 üçün "görüşmək")
 DÜZGÜN: 1 action (create_task, date="sabahın tarixi", time="11:00", text="Müştəri ilə görüş...")
 
-Əgər istifadəçi həqiqətən də fərqli problemlər sadalayırsa (məs: "Menyu yazıldı. Şəkillər qalıb. QR menyu yüklənmir."), o zaman onları ayrı action et: add_note + create_task + create_task(high).
+Hətta istifadəçi bir neçə mövzu qeyd etsə belə, YALNIZ ən vacıb olanı seç və BİR action qaytar.
 
 🔴 QAYDA 2: add_note vs create_task
 - add_note = YALNIZ keçmişdə baş vermiş hadisəni qeyd etmək ("menyu yazıldı", "müştəri ilə danışdıq", "ödəniş alındı")
@@ -1041,6 +1052,15 @@ async def execute_find_contact(update: Update, phone: str, chat_id: int = None):
             contact_name = full_contact.get("name") or "Adsız"
             lead_id = leads[0]["id"] if leads else None
             set_last_contact(chat_id, phone, contact["id"], contact_name, lead_id=lead_id)
+    # Session buttons after contact lookup
+    if chat_id is not None:
+        try:
+            await update.message.reply_text(
+                "Bu müştəri ilə başqa əməliyyat?",
+                reply_markup=get_session_keyboard()
+            )
+        except:
+            pass
 
 async def execute_create_task(update: Update, phone: str, date_str: str, time_str: str, task_text: str, chat_id: int = None):
     try:
@@ -1112,6 +1132,13 @@ async def execute_add_note(update: Update, phone: str, note_text: str, chat_id: 
         await update.message.reply_text(f"✅ Qeyd əlavə edildi!\n\n👤 Müştəri: {contact_name}\n📝 Mətn: {note_text}")
         if chat_id is not None:
             set_last_contact(chat_id, phone, contact["id"], contact_name)
+            try:
+                await update.message.reply_text(
+                    "Bu müştəri ilə başqa əməliyyat?",
+                    reply_markup=get_session_keyboard()
+                )
+            except:
+                pass
     else:
         await update.message.reply_text("❌ Qeyd əlavə edilərkən xəta baş verdi.")
 
@@ -1608,7 +1635,11 @@ async def process_text_intent(update: Update, context: ContextTypes.DEFAULT_TYPE
     parsed = parse_user_intent(user_text, chat_id)
     actions_list = parsed.get("actions", [{"action": "unknown"}])
 
-    # Process each action sequentially
+    # Enforce single-action rule: only take the first action
+    if len(actions_list) > 1:
+        logger.warning(f"AI returned {len(actions_list)} actions, enforcing single-action rule — taking only first")
+        actions_list = actions_list[:1]
+
     for intent in actions_list:
         await dispatch_single_action(update, context, intent, chat_id, ctx)
 
@@ -1620,9 +1651,10 @@ async def dispatch_single_action(update: Update, context: ContextTypes.DEFAULT_T
     assign_to = intent.get("assign_to")
     urgency = intent.get("urgency", "normal")
 
-    # Use context phone if not provided
+    # Use context phone if not provided — but ONLY if session is active (user pressed "Davam et")
     if not phone and action in ["find_contact", "create_task", "add_note", "show_lead", "update_fields", "automation_transition", "complete_tasks", "show_customer_tasks"]:
-        phone = ctx.get("last_phone")
+        if _user_session_active.get(chat_id):
+            phone = ctx.get("last_phone")
 
     if action == "find_contact":
         if phone:
@@ -2376,6 +2408,15 @@ async def _execute_task_creation(query, context, pending, task_key, user_id):
         if task_id:
             set_last_task(chat_id, task_id, date_str, time_str)
         set_last_contact(chat_id, phone, contact["id"], contact_name, lead_id=c_lead_id)
+        # Send session buttons to Admin
+        try:
+            await context.bot.send_message(
+                chat_id,
+                "Bu müştəri ilə başqa əməliyyat?",
+                reply_markup=get_session_keyboard()
+            )
+        except:
+            pass
     else:
         try:
             await query.edit_message_text("❌ Tapşırıq yaradılarkən xəta baş verdi.")
@@ -2492,6 +2533,43 @@ async def presentation_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 store_message_task(assigned_chat, sent_pres_msg.message_id, pres_task_id,
                                    "Müştəri ilə əlaqə saxla, təqdimat vaxtını təyin et",
                                    entity_id=_pres_eid, entity_type=_pres_etype, phone=pres_contact_phone)
+        except:
+            pass
+
+# ─── Session Buttons Helper ──────────────────────────────────────────────────
+
+def get_session_keyboard() -> InlineKeyboardMarkup:
+    """Return inline keyboard with session continuation buttons."""
+    keyboard = [
+        [
+            InlineKeyboardButton("Davam et ➡️", callback_data="session_continue"),
+            InlineKeyboardButton("🆕 Yeni sessiya", callback_data="session_new"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def session_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle session_continue / session_new button presses."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    chat_id = query.message.chat_id
+    action = query.data  # session_continue or session_new
+    
+    if action == "session_continue":
+        _user_session_active[chat_id] = True
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except:
+            pass
+    elif action == "session_new":
+        _user_session_active[chat_id] = False
+        clear_user_context(chat_id)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("🆕 Yeni sessiya başladı.")
         except:
             pass
 
@@ -3889,6 +3967,15 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_partner_message(update, context, user_text)
         return
     
+    # ── Session logic: clear context if user did NOT press "Davam et" ──
+    if not update.message.reply_to_message:
+        # Non-reply message: check session flag
+        if not _user_session_active.get(chat_id):
+            clear_user_context(chat_id)
+            logger.info(f"New session for chat {chat_id}: context cleared")
+        # Reset session flag after use (one-shot)
+        _user_session_active[chat_id] = False
+    
     await process_text_intent(update, context, user_text)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4279,6 +4366,7 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
+    app.add_handler(CallbackQueryHandler(session_callback, pattern="^session_"))
 
     # Message handlers
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
