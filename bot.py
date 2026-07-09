@@ -3993,19 +3993,33 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 pass
 
 async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
-    """Alert admin if a deal is stuck on 'Qiymət təklifi' for more than 1 hour."""
+    """Alert admin if a deal is stuck on 'Qiymət təklifi' for more than 1 hour.
+    Runs 3 times/day (10:00, 13:00, 17:00 Baku). Skips outside working hours.
+    Each lead is notified at most once per run.
+    """
     now = datetime.now(tz=BAKU_TZ)
+    # ── Working-hours guard: only run between 10:00 and 19:00 Baku ──
+    if not (10 <= now.hour < 19):
+        logger.info("check_stuck_deals: outside working hours, skipping.")
+        return
+
     leads = get_leads_by_status(STAGES["qiymet_teklifi"])
     admin_chat_id = get_chat_id_for_kommo_user(10932455)
     if not admin_chat_id:
         return
+
+    # Dedup: track lead IDs already notified in this single run
+    notified_this_run: set = set()
+
     for lead in leads:
+        lead_id = lead.get("id")
+        if not lead_id or lead_id in notified_this_run:
+            continue
         updated_at = lead.get("updated_at", 0)
         if updated_at:
             lead_dt = datetime.fromtimestamp(updated_at, tz=BAKU_TZ)
             if (now - lead_dt).total_seconds() > 3600:
                 lead_name = lead.get("name", "Adsız")
-                lead_id = lead.get("id")
                 stuck_phone = get_phone_from_entity(lead_id, "leads") if lead_id else ""
                 stuck_phone_line = f"\n📞 {stuck_phone}" if stuck_phone else ""
                 try:
@@ -4013,13 +4027,14 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                     stuck_name_line = f"\n👤 Müştəri: {stuck_name}" if stuck_name else ""
                     sent_stuck = await context.bot.send_message(
                         admin_chat_id,
-                        f"⚠️ *Diqqət!* Sövdələşmə 1 saatdan çox 'Qiymət təklifi' mərhələsindədir:\n\n"
+                        f"⚠️ *Diqqet!* Sövdələşmə 1 saatdan çox 'Qiymət təklifi' mərhələsindədir:\n\n"
                         f"📋 {lead_name}{stuck_name_line}{stuck_phone_line}\n"
                         f"🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}\n\n"
                         f"_Reply göndərin: mərhələ dəyişikliyi (məs: 'Təqdimat olunmalıdır') və ya tapşırıq (məs: 'sabah zəng et')_",
                         parse_mode="Markdown",
                         disable_web_page_preview=True
                     )
+                    notified_this_run.add(lead_id)
                     # Store message→lead mapping for reply-based stage changes
                     if sent_stuck and lead_id:
                         store_message_lead(admin_chat_id, sent_stuck.message_id, lead_id, lead_name, stuck_phone)
@@ -4070,8 +4085,10 @@ def main():
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
     # Morning digest at 9:00 Baku time (5:00 UTC)
     job_queue.run_daily(morning_digest, time=datetime.strptime("05:00", "%H:%M").time())
-    # Check stuck deals every 30 minutes
-    job_queue.run_repeating(check_stuck_deals, interval=1800, first=120)
+    # Check stuck deals 3x/day at 10:00, 13:00, 17:00 Baku (06:00, 09:00, 13:00 UTC)
+    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("06:00", "%H:%M").time())
+    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("09:00", "%H:%M").time())
+    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("13:00", "%H:%M").time())
 
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
