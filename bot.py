@@ -3693,8 +3693,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"Reply mapping not found for msg {replied_msg_id}, attempting fallback text parsing")
             f_phone = ""
             f_name = ""
-            # Extract phone: +994... or 050...
-            m_phone = re.search(r"(\+994\d{9}|0\d{9})", replied_text)
+            # Extract phone: +994..., 994..., 0... formats
+            m_phone = re.search(r"(\+994\d{9}|994\d{9}|0\d{9})", replied_text)
             if m_phone: f_phone = m_phone.group(1)
             # Extract name: "Müştəri: {Name}"
             m_name = re.search(r"Müştəri:\s*([^\n\r]+)", replied_text)
@@ -3712,6 +3712,13 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"Fallback parsing success: {task_info}")
 
         if task_info:
+            # If phone is missing but entity_id is known, fetch phone from Kommo
+            if not task_info.get("phone") and task_info.get("entity_id"):
+                fetched_phone = get_phone_from_entity(task_info["entity_id"], task_info.get("entity_type", "leads")) or ""
+                if fetched_phone:
+                    task_info = dict(task_info)
+                    task_info["phone"] = fetched_phone
+                    logger.info(f"Fetched phone {fetched_phone} for entity {task_info['entity_id']} in reply block 1")
             # Always try handle_task_reply — it now resolves task_id from entity if missing
             handled = await handle_task_reply(update, context, user_text, task_info)
             if handled:
@@ -3751,7 +3758,7 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             m_link_l = re.search(r"leads/detail/(\d+)", replied_text2)
             if m_link_l:
                 f_phone_l = ""
-                m_phone_l = re.search(r"(\+994\d{9}|0\d{9})", replied_text2)
+                m_phone_l = re.search(r"(\+994\d{9}|994\d{9}|0\d{9})", replied_text2)
                 if m_phone_l: f_phone_l = m_phone_l.group(1)
                 lead_info = {"lead_id": int(m_link_l.group(1)), "phone": f_phone_l}
 
@@ -3759,6 +3766,11 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lead_id_r = lead_info.get("lead_id")
             lead_name_r = lead_info.get("lead_name", "Sövdələşmə")
             phone_r = lead_info.get("phone", "")
+            # If phone is missing, fetch it from Kommo API using the lead
+            if not phone_r and lead_id_r:
+                phone_r = get_phone_from_entity(lead_id_r, "leads") or ""
+                if phone_r:
+                    logger.info(f"Fetched phone {phone_r} from lead {lead_id_r} for reply context")
             lead_link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id_r}"
             sender_kommo_id_r = get_kommo_user_id_for_chat(chat_id)
             # Check if text is a stage-change command

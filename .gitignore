@@ -17,4 +17,5 @@ ENV/
 *.json
 !railway.toml
 !users.json
+!message_maps.json
 .DS_Store
