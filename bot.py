@@ -904,9 +904,9 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 final_text = response2.choices[0].message.content
                 if final_text:
                     try:
-                        await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
+                        await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
                     except:
-                        await update.message.reply_text(final_text, disable_web_page_preview=True)
+                        await update.message.reply_text(final_text, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
                     add_to_history(chat_id, "user", user_text)
                     add_to_history(chat_id, "assistant", final_text)
         else:
@@ -914,17 +914,17 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
             final_text = msg.content if msg.content else None
             if final_text:
                 try:
-                    await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
+                    await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
                 except:
-                    await update.message.reply_text(final_text, disable_web_page_preview=True)
+                    await update.message.reply_text(final_text, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
             else:
-                await update.message.reply_text("Anlamadım. Zəhmət olmasa müştərinin telefon nömrəsini və nə etmək istədiyinizi yazın.")
+                await update.message.reply_text("Anlamadım. Zəhmət olmasa müştərinin telefon nömrəsini və nə etmək istədiyinizi yazın.", reply_markup=MAIN_KEYBOARD)
             add_to_history(chat_id, "user", user_text)
             if final_text:
                 add_to_history(chat_id, "assistant", final_text)
     except Exception as e:
         logger.error(f"AI processing error: {e}\n{traceback.format_exc()}")
-        await update.message.reply_text("⚠️ AI xətası baş verdi. Yenidən cəhd edin.")
+        await update.message.reply_text("⚠️ AI xətası baş verdi. Yenidən cəhd edin.", reply_markup=MAIN_KEYBOARD)
 
 async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Execute an AI tool and return result string. May send buttons directly."""
@@ -1458,9 +1458,9 @@ async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     info = users.get(str(chat_id))
     if info:
-        await update.message.reply_text(f"👤 {info.get('name', 'Adsız')}\n🏷 Rol: {info.get('role', 'Naməlum')}")
+        await update.message.reply_text(f"👤 {info.get('name', 'Adsız')}\n🏷 Rol: {info.get('role', 'Naməlum')}", reply_markup=MAIN_KEYBOARD)
     else:
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
 
 # ─── Registration Callbacks ──────────────────────────────────────────────────
 async def registration_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1819,7 +1819,7 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
     name_input = user_text.strip()
     partner_enums = fetch_partner_enums()
     if not partner_enums:
-        await update.message.reply_text("⚠️ Partnyor siyahısı yüklənmədi. Sonra cəhd edin.")
+        await update.message.reply_text("⚠️ Partnyor siyahısı yüklənmədi. Sonra cəhd edin.", reply_markup=MAIN_KEYBOARD)
         del _pending_partner_registration[chat_id]
         return True
     # Find matching partner
@@ -1844,7 +1844,7 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
         )
     else:
         available = ", ".join([e.get("value", "") for e in partner_enums[:10]])
-        await update.message.reply_text(f"❌ '{name_input}' tapılmadı.\n\nMövcud partnyorlar: {available}\n\nYenidən yazın:")
+        await update.message.reply_text(f"❌ '{name_input}' tapılmadı.\n\nMövcud partnyorlar: {available}\n\nYenidən yazın:", reply_markup=MAIN_KEYBOARD)
     return True
 
 async def partner_create_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1901,7 +1901,7 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 if new_dt:
                     res = update_task_kommo(task_id, {"complete_till": int(new_dt.timestamp())})
                     if res:
-                        await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown")
+                        await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
                         admin_chat = get_chat_id_for_kommo_user(10932455)
                         sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                         if admin_chat and admin_chat != chat_id:
@@ -1952,7 +1952,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_id = voice.file_id
     file_size = voice.file_size or 0
     if file_size > 20 * 1024 * 1024:
-        await update.message.reply_text("❌ Səsli mesaj çox böyükdür (20MB-dan çox).")
+        await update.message.reply_text("❌ Səsli mesaj çox böyükdür (20MB-dan çox).", reply_markup=MAIN_KEYBOARD)
         return
     status_msg = await update.message.reply_text("🎙 Səsli mesaj emal olunur...")
     try:
@@ -2420,7 +2420,7 @@ async def handle_contact_message(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = update.message.chat_id
     users = load_users()
     if str(chat_id) not in users:
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
         return
     contact = update.message.contact
     phone = contact.phone_number or ""
@@ -2481,9 +2481,9 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     except:
                         pass
-                await update.message.reply_text("⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.")
+                await update.message.reply_text("⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.", reply_markup=MAIN_KEYBOARD)
             return
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
         return
     # Check if it's a reply to a task/lead notification
     if await handle_task_reply(update, context):
