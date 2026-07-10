@@ -188,15 +188,6 @@ _pending_partner_registration: dict = {}
 _pending_employee_registration: dict = {}
 _button_flow: dict = {}  # chat_id -> {"action": "task"/"stage"/"note", "step": "phone"/"text"/...}
 
-# ─── Persistent Reply Keyboard ────────────────────────────────────────────────
-MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("📋 Yeni tapşırıq"), KeyboardButton("🔄 Mərhələ dəyiş")],
-        [KeyboardButton("📝 Qeyd əlavə et"), KeyboardButton("ℹ️ Müştəri info")],
-    ],
-    resize_keyboard=True,
-    is_persistent=True,
-)
 
 # ─── Conversation History (in-memory) ───────────────────────────────────────
 _conversation_history: dict = {}  # chat_id -> list of messages
@@ -904,9 +895,9 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 final_text = response2.choices[0].message.content
                 if final_text:
                     try:
-                        await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                        await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
                     except:
-                        await update.message.reply_text(final_text, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                        await update.message.reply_text(final_text, disable_web_page_preview=True)
                     add_to_history(chat_id, "user", user_text)
                     add_to_history(chat_id, "assistant", final_text)
         else:
@@ -914,17 +905,17 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
             final_text = msg.content if msg.content else None
             if final_text:
                 try:
-                    await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                    await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
                 except:
-                    await update.message.reply_text(final_text, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                    await update.message.reply_text(final_text, disable_web_page_preview=True)
             else:
-                await update.message.reply_text("Anlamadım. Zəhmət olmasa müştərinin telefon nömrəsini və nə etmək istədiyinizi yazın.", reply_markup=MAIN_KEYBOARD)
+                await update.message.reply_text("Anlamadım. Zəhmət olmasa müştərinin telefon nömrəsini və nə etmək istədiyinizi yazın.")
             add_to_history(chat_id, "user", user_text)
             if final_text:
                 add_to_history(chat_id, "assistant", final_text)
     except Exception as e:
         logger.error(f"AI processing error: {e}\n{traceback.format_exc()}")
-        await update.message.reply_text("⚠️ AI xətası baş verdi. Yenidən cəhd edin.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ AI xətası baş verdi. Yenidən cəhd edin.")
 
 async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
     """Execute an AI tool and return result string. May send buttons directly."""
@@ -1440,8 +1431,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = users[str(chat_id)]
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
-            f"Aşağıdakı düymələrdən istifadə edin və ya sərbəst mətn yazın.",
-            reply_markup=MAIN_KEYBOARD
+            f"📱 CRM düyməsinə basaraq Mini App-dan istifadə edin və ya sərbəst mətn yazın."
         )
         return
     keyboard = [
@@ -1458,9 +1448,9 @@ async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     info = users.get(str(chat_id))
     if info:
-        await update.message.reply_text(f"👤 {info.get('name', 'Adsız')}\n🏷 Rol: {info.get('role', 'Naməlum')}", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(f"👤 {info.get('name', 'Adsız')}\n🏷 Rol: {info.get('role', 'Naməlum')}")
     else:
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
 
 # ─── Registration Callbacks ──────────────────────────────────────────────────
 async def registration_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1819,7 +1809,7 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
     name_input = user_text.strip()
     partner_enums = fetch_partner_enums()
     if not partner_enums:
-        await update.message.reply_text("⚠️ Partnyor siyahısı yüklənmədi. Sonra cəhd edin.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ Partnyor siyahısı yüklənmədi. Sonra cəhd edin.")
         del _pending_partner_registration[chat_id]
         return True
     # Find matching partner
@@ -1844,7 +1834,7 @@ async def handle_partner_registration(update: Update, context: ContextTypes.DEFA
         )
     else:
         available = ", ".join([e.get("value", "") for e in partner_enums[:10]])
-        await update.message.reply_text(f"❌ '{name_input}' tapılmadı.\n\nMövcud partnyorlar: {available}\n\nYenidən yazın:", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(f"❌ '{name_input}' tapılmadı.\n\nMövcud partnyorlar: {available}\n\nYenidən yazın:")
     return True
 
 async def partner_create_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1901,7 +1891,7 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 if new_dt:
                     res = update_task_kommo(task_id, {"complete_till": int(new_dt.timestamp())})
                     if res:
-                        await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown", reply_markup=MAIN_KEYBOARD)
+                        await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown")
                         admin_chat = get_chat_id_for_kommo_user(10932455)
                         sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                         if admin_chat and admin_chat != chat_id:
@@ -1952,7 +1942,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_id = voice.file_id
     file_size = voice.file_size or 0
     if file_size > 20 * 1024 * 1024:
-        await update.message.reply_text("❌ Səsli mesaj çox böyükdür (20MB-dan çox).", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Səsli mesaj çox böyükdür (20MB-dan çox).")
         return
     status_msg = await update.message.reply_text("🎙 Səsli mesaj emal olunur...")
     try:
@@ -2019,16 +2009,16 @@ async def start_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     chat_id = update.message.chat_id
     if button_text == "📋 Yeni tapşırıq":
         _button_flow[chat_id] = {"action": "task", "step": "phone"}
-        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
     elif button_text == "🔄 Mərhələ dəyiş":
         _button_flow[chat_id] = {"action": "stage", "step": "phone"}
-        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
     elif button_text == "📝 Qeyd əlavə et":
         _button_flow[chat_id] = {"action": "note", "step": "phone"}
-        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
     elif button_text == "ℹ️ Müştəri info":
         _button_flow[chat_id] = {"action": "info", "step": "phone"}
-        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
 
 async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
     """Handle step-by-step input for button flows."""
@@ -2040,7 +2030,7 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Allow cancel
     if user_text.lower() in ("ləğv", "cancel", "/cancel"):
         del _button_flow[chat_id]
-        await update.message.reply_text("❌ Ləğv edildi.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Ləğv edildi.")
         return
 
     # If user presses another main button, restart
@@ -2053,7 +2043,7 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Validate: must contain at least 7 digits
         digits_only = re.sub(r'[^\d]', '', user_text)
         if len(digits_only) < 7:
-            await update.message.reply_text("❌ Düzgün telefon nömrəsi daxil edin (minimum 7 rəqəm):", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text("❌ Düzgün telefon nömrəsi daxil edin (minimum 7 rəqəm):")
             return
         phone_match = re.search(r'\+?\d[\d\s\-]{7,}', user_text)
         phone = re.sub(r'[\s\-]', '', phone_match.group()) if phone_match else user_text.strip()
@@ -2080,17 +2070,17 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
             del _button_flow[chat_id]
             result = execute_tool_get_lead_info(phone)
             try:
-                await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True)
             except:
-                await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+                await update.message.reply_text(result, disable_web_page_preview=True)
             return
         elif action == "note":
             flow["step"] = "text"
-            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Qeydi yazın:", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Qeydi yazın:")
             return
         elif action == "task":
             flow["step"] = "text"
-            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Tapşırığın mətnini yazın:", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Tapşırığın mətnini yazın:")
             return
         elif action == "stage":
             flow["step"] = "stage_select"
@@ -2180,14 +2170,14 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 )
                 return
             else:
-                await update.message.reply_text("❌ Səhv rəqəm. Yenidən seçin:", reply_markup=MAIN_KEYBOARD)
+                await update.message.reply_text("❌ Səhv rəqəm. Yenidən seçin:")
                 return
         except ValueError:
-            await update.message.reply_text("❌ Rəqəm daxil edin (1-8):", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text("❌ Rəqəm daxil edin (1-8):")
             return
 
     del _button_flow[chat_id]
-    await update.message.reply_text("❌ Xəta baş verdi. Yenidən başlayın.", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text("❌ Xəta baş verdi. Yenidən başlayın.")
 
 async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button flow callbacks: newcontact, cancelflow, stage selection, assignee."""
@@ -2420,12 +2410,12 @@ async def handle_contact_message(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = update.message.chat_id
     users = load_users()
     if str(chat_id) not in users:
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
         return
     contact = update.message.contact
     phone = contact.phone_number or ""
     if not phone:
-        await update.message.reply_text("❌ Telefon nömrəsi tapılmadı.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Telefon nömrəsi tapılmadı.")
         return
     # Normalize: add + if starts with digit
     if phone and phone[0].isdigit():
@@ -2437,9 +2427,9 @@ async def handle_contact_message(update: Update, context: ContextTypes.DEFAULT_T
     # Otherwise treat as info request
     result = execute_tool_get_lead_info(phone)
     try:
-        await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True)
     except:
-        await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(result, disable_web_page_preview=True)
 
 # ─── Web App Data Handler ────────────────────────────────────────────────────
 async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2449,25 +2439,25 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.message.chat_id
     users = load_users()
     if str(chat_id) not in users:
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
         return
     try:
         data = json.loads(update.message.web_app_data.data)
     except:
-        await update.message.reply_text("❌ Xəta baş verdi.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("❌ Xəta baş verdi.")
         return
     action = data.get("action")
     phone = data.get("phone", "")
     if action == "info":
         result = execute_tool_get_lead_info(phone)
         try:
-            await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True)
         except:
-            await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(result, disable_web_page_preview=True)
     elif action == "note":
         text = data.get("text", "")
         result = execute_tool_add_note(phone, text)
-        await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text(result, disable_web_page_preview=True)
         # Admin notification
         admin_chat = get_chat_id_for_kommo_user(10932455)
         sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
@@ -2480,7 +2470,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         stage = data.get("stage", "")
         result = execute_tool_change_stage(phone, stage, chat_id)
         if not result["success"]:
-            await update.message.reply_text(result["message"], reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(result["message"])
         elif result.get("needs_confirmation"):
             # Non-admin: send to admin
             conf_key = str(uuid.uuid4())[:8]
@@ -2498,13 +2488,13 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
                 except:
                     pass
-            await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
         else:
             # Admin: execute
             update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
             stage_display = STAGE_NAMES.get(result["status_id"], stage)
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
-            await update.message.reply_text(f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}\n🔗 {link}", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}\n🔗 {link}", disable_web_page_preview=True)
     elif action == "task":
         text = data.get("text", "")
         assignee = data.get("assignee", "admin")
@@ -2524,16 +2514,16 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
         result = execute_tool_create_task(phone, text, None, None, assignee)
         if isinstance(result, str):
-            await update.message.reply_text(result, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(result)
             return
         if not result["success"]:
-            await update.message.reply_text(result["message"], reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(result["message"])
             return
         deadline_ts = int(deadline_dt.timestamp())
         res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
         if res:
             msg = f"✅ Tapşırıq yaradıldı!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}"
-            await update.message.reply_text(msg, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text(msg, disable_web_page_preview=True)
             # Notify assignee
             if result["assignee_id"] != 10932455:
                 assignee_chat = get_chat_id_for_kommo_user(result["assignee_id"])
@@ -2549,7 +2539,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await context.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
                 except: pass
         else:
-            await update.message.reply_text("❌ Tapşırıq yaradılarkən xəta.", reply_markup=MAIN_KEYBOARD)
+            await update.message.reply_text("❌ Tapşırıq yaradılarkən xəta.")
 
 # ─── Free Text Handler ───────────────────────────────────────────────────────
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2591,9 +2581,9 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     except:
                         pass
-                await update.message.reply_text("⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.", reply_markup=MAIN_KEYBOARD)
+                await update.message.reply_text("⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.")
             return
-        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
         return
     # Check if it's a reply to a task/lead notification
     if await handle_task_reply(update, context):
@@ -2819,9 +2809,125 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
 async def health_check(request: web.Request) -> web.Response:
     return web.Response(status=200, text="Bot is running")
 
+async def handle_api_action(request: web.Request) -> web.Response:
+    """Handle Web App API requests (fetch-based SPA)."""
+    try:
+        data = await request.json()
+    except:
+        return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
+    tg_user_id = request.headers.get("X-TG-User-ID", "")
+    # Find chat_id from telegram user id
+    chat_id = None
+    users = load_users()
+    for cid, info in users.items():
+        # Telegram user ID in header matches chat_id for private chats
+        if cid == tg_user_id:
+            chat_id = int(cid)
+            break
+    if not chat_id:
+        return web.json_response({"success": False, "error": "İstifadəçi tapılmadı. Botda /start yazın."}, status=403)
+    action = data.get("action", "")
+    phone = data.get("phone", "")
+    try:
+        if action == "info":
+            result = execute_tool_get_lead_info(phone)
+            return web.json_response({"success": True, "message": result})
+        elif action == "add_note":
+            text = data.get("text", "")
+            if not text:
+                return web.json_response({"success": False, "error": "Qeyd mətni boşdur."})
+            result = execute_tool_add_note(phone, text)
+            # Subtask
+            if data.get("create_subtask") and data.get("subtask_text"):
+                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
+                if isinstance(st_result, dict) and st_result.get("success"):
+                    now = datetime.now(tz=BAKU_TZ)
+                    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+                    create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
+            # Admin notify
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            if admin_chat and admin_chat != chat_id and _bot_app:
+                try:
+                    await _bot_app.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
+                except: pass
+            return web.json_response({"success": True, "message": result})
+        elif action == "task":
+            text = data.get("text", "")
+            assignee = data.get("assignee", "admin")
+            deadline_key = data.get("deadline", "today")
+            now = datetime.now(tz=BAKU_TZ)
+            if deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
+            elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
+            elif deadline_key == "today":
+                deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+                if deadline_dt <= now: deadline_dt += timedelta(days=1)
+            elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            result = execute_tool_create_task(phone, text, None, None, assignee)
+            if isinstance(result, str):
+                return web.json_response({"success": False, "error": result})
+            if not result.get("success"):
+                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
+            deadline_ts = int(deadline_dt.timestamp())
+            res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
+            if res:
+                msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
+                # Notify admin
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                if admin_chat and admin_chat != chat_id and _bot_app:
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n{msg}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                    except: pass
+                return web.json_response({"success": True, "message": msg})
+            return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
+        elif action == "create_deal":
+            # For now, create_deal = change stage to specified + optionally create subtask
+            stage = data.get("stage", "yeni_sifaris")
+            result = execute_tool_change_stage(phone, stage, chat_id)
+            if not result.get("success"):
+                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
+            if result.get("needs_confirmation"):
+                return web.json_response({"success": False, "error": "Admin təsdiqi lazımdır. Botdan istifadə edin."})
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
+            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            # Subtask
+            if data.get("create_subtask") and data.get("subtask_text"):
+                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
+                if isinstance(st_result, dict) and st_result.get("success"):
+                    now = datetime.now(tz=BAKU_TZ)
+                    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+                    create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
+            msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
+            return web.json_response({"success": True, "message": msg})
+        elif action == "close_job_report":
+            comment = data.get("master_comment", "")
+            if not comment:
+                return web.json_response({"success": False, "error": "Hesabat mətni boşdur."})
+            # Notify admin about job completion
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            if admin_chat and _bot_app:
+                try:
+                    await _bot_app.bot.send_message(admin_chat, f"✅ *{sender_name}* iş hesabatı:\n\n📝 {comment}", parse_mode="Markdown")
+                except: pass
+            return web.json_response({"success": True, "message": "✅ Hesabat göndərildi!"})
+        else:
+            return web.json_response({"success": False, "error": f"Naməlum əməliyyat: {action}"})
+    except Exception as e:
+        logger.error(f"API action error: {e}\n{traceback.format_exc()}")
+        return web.json_response({"success": False, "error": "Server xətası."}, status=500)
+
+async def serve_webapp(request: web.Request) -> web.Response:
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
+    return web.FileResponse(html_path)
+
 async def start_webhook_server():
     app_web = web.Application()
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    app_web.router.add_post("/api/action", handle_api_action)
+    app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)

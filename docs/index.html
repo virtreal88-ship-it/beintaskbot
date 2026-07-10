@@ -3,147 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Bein Systems CRM</title>
+    <title>Bein Systems Pro</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        :root {
-            --bg-color: var(--tg-theme-bg-color, #ffffff);
-            --text-color: var(--tg-theme-text-color, #000000);
-            --hint-color: var(--tg-theme-hint-color, #999999);
-            --link-color: var(--tg-theme-link-color, #2481cc);
-            --button-color: var(--tg-theme-button-color, #2481cc);
-            --button-text-color: var(--tg-theme-button-text-color, #ffffff);
-            --secondary-bg-color: var(--tg-theme-secondary-bg-color, #f4f4f5);
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-tap-highlight-color: transparent; }
-        body { background-color: var(--bg-color); color: var(--text-color); padding: 16px; display: flex; flex-direction: column; min-height: 100vh; overflow-x: hidden; }
-        .header { text-align: center; margin-bottom: 24px; }
-        .header h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-        .header p { font-size: 14px; color: var(--hint-color); }
-        .screen { display: none; flex-direction: column; gap: 16px; animation: fadeIn 0.2s ease-in-out; }
-        .screen.active { display: flex; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        .main-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .btn { background-color: var(--button-color); color: var(--button-text-color); border: none; border-radius: 12px; padding: 16px; font-size: 15px; font-weight: 600; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; transition: opacity 0.1s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .btn:active { opacity: 0.85; }
-        .btn-main-menu { height: 100px; background-color: var(--secondary-bg-color); color: var(--text-color); }
-        .btn-main-menu .icon { font-size: 24px; }
-        .btn-submit { margin-top: auto; padding: 16px; font-size: 16px; width: 100%; }
-        .form-group { display: flex; flex-direction: column; gap: 8px; }
-        .form-group label { font-size: 14px; font-weight: 500; color: var(--hint-color); padding-left: 4px; }
-        .input-field { background-color: var(--secondary-bg-color); color: var(--text-color); border: 2px solid transparent; border-radius: 12px; padding: 14px; font-size: 16px; outline: none; width: 100%; transition: border-color 0.2s; }
-        .input-field:focus { border-color: var(--button-color); }
-        textarea.input-field { resize: none; height: 100px; }
-        .options-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
-        .options-list { display: flex; flex-direction: column; gap: 8px; }
-        .option-card { background-color: var(--secondary-bg-color); color: var(--text-color); border: 2px solid transparent; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 500; text-align: center; cursor: pointer; transition: all 0.15s ease; }
-        .option-card.selected { background-color: var(--button-color); color: var(--button-text-color); border-color: var(--button-color); }
-        .nav-bar { display: flex; align-items: center; margin-bottom: 8px; }
-        .btn-back { background: none; border: none; color: var(--link-color); font-size: 16px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 4px; }
-        .error-msg { color: #ff4d4d; font-size: 13px; display: none; padding-left: 4px; }
+        :root{--bg-color:var(--tg-theme-bg-color,#fff);--text-color:var(--tg-theme-text-color,#000);--hint-color:var(--tg-theme-hint-color,#999);--link-color:var(--tg-theme-link-color,#2481cc);--button-color:var(--tg-theme-button-color,#2481cc);--button-text-color:var(--tg-theme-button-text-color,#fff);--secondary-bg-color:var(--tg-theme-secondary-bg-color,#f4f4f5)}
+        *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+        body{background:var(--bg-color);color:var(--text-color);padding:16px;display:flex;flex-direction:column;min-height:100vh}
+        #toast{position:fixed;top:-60px;left:50%;transform:translateX(-50%);background:#10b981;color:#fff;padding:12px 24px;border-radius:30px;font-size:14px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:top .3s;z-index:1000}
+        #toast.error{background:#ef4444}
+        .header{text-align:center;margin-bottom:20px}.header h1{font-size:20px;font-weight:700}.header p{font-size:13px;color:var(--hint-color)}
+        .screen{display:none;flex-direction:column;gap:16px;animation:fadeIn .2s}.screen.active{display:flex}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+        .main-menu{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        .btn{background:var(--button-color);color:var(--button-text-color);border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center}
+        .btn:disabled{opacity:.6}.btn-main-menu{height:105px;background:var(--secondary-bg-color);color:var(--text-color)}.btn-main-menu .icon{font-size:24px}
+        .btn-submit{margin-top:20px;padding:16px;width:100%}
+        .form-group{display:flex;flex-direction:column;gap:8px}.form-group label{font-size:14px;font-weight:500;color:var(--hint-color)}
+        .input-field{background:var(--secondary-bg-color);color:var(--text-color);border:2px solid transparent;border-radius:12px;padding:14px;font-size:16px;outline:none;width:100%}.input-field:focus{border-color:var(--button-color)}
+        textarea.input-field{height:100px;resize:none}
+        .options-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
+        .options-list{display:flex;flex-direction:column;gap:8px}
+        .option-card{background:var(--secondary-bg-color);color:var(--text-color);border:2px solid transparent;border-radius:12px;padding:12px;font-size:14px;text-align:center;cursor:pointer}
+        .option-card.selected{background:var(--button-color);color:var(--button-text-color)}
+        .nav-bar{display:flex;align-items:center;margin-bottom:4px}.btn-back{background:none;border:none;color:var(--link-color);font-size:15px;cursor:pointer}
+        .checkbox-container{display:flex;align-items:center;gap:12px;background:var(--secondary-bg-color);padding:14px;border-radius:12px;cursor:pointer}.checkbox-container input{width:18px;height:18px}
+        .subtask-block{border-left:3px solid var(--button-color);padding-left:12px;margin-top:10px;display:none;flex-direction:column;gap:12px}
+        .error-msg{color:#ff4d4d;font-size:13px;display:none}
     </style>
 </head>
 <body>
-    <div class="header"><h1>Bein Systems</h1><p>CRM Assistant</p></div>
-    <div id="main-screen" class="screen active">
-        <div class="main-menu">
-            <button class="btn btn-main-menu" onclick="openFlow('task')"><span class="icon">📋</span><span>Yeni tapşırıq</span></button>
-            <button class="btn btn-main-menu" onclick="openFlow('stage')"><span class="icon">🔄</span><span>Mərhələ dəyiş</span></button>
-            <button class="btn btn-main-menu" onclick="openFlow('note')"><span class="icon">📝</span><span>Qeyd əlavə et</span></button>
-            <button class="btn btn-main-menu" onclick="openFlow('info')"><span class="icon">ℹ️</span><span>Müştəri info</span></button>
-        </div>
+<div id="toast"></div>
+<div class="header"><h1>Bein Systems</h1><p>CRM Smart Assistant</p></div>
+<div id="main-screen" class="screen active">
+    <div class="main-menu">
+        <button class="btn btn-main-menu" onclick="openFlow('task')"><span class="icon">📋</span><span>Yeni tapşırıq</span></button>
+        <button class="btn btn-main-menu" onclick="openFlow('deal')"><span class="icon">🤝</span><span>Yeni sifariş</span></button>
+        <button class="btn btn-main-menu" onclick="openFlow('note')"><span class="icon">📝</span><span>Qeyd & Alt-tapşırıq</span></button>
+        <button class="btn btn-main-menu" onclick="openFlow('info')"><span class="icon">ℹ️</span><span>Müştəri info</span></button>
+        <button class="btn btn-main-menu" style="grid-column:span 2;height:80px;background:#e0f2fe;color:#0369a1" onclick="openFlow('close_job')"><span class="icon">✅</span><span>İşin təhvil verilməsi</span></button>
     </div>
-    <div id="step-phone" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Geri</button></div>
-        <div class="form-group">
-            <label for="phone-input">Müştərinin telefon nömrəsi:</label>
-            <input type="tel" id="phone-input" class="input-field" placeholder="Nümunə: 0505232933" autocomplete="off">
-            <div id="phone-error" class="error-msg">Nömrə minimum 7 rəqəmdən ibarət olmalıdır.</div>
-        </div>
-        <button class="btn btn-submit" onclick="validatePhoneAndProceed()">Davam et</button>
-    </div>
-    <div id="step-task-text" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('step-phone')">← Geri</button></div>
-        <div class="form-group">
-            <label for="task-text-input">Tapşırığın mətni:</label>
-            <textarea id="task-text-input" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea>
-            <div id="task-text-error" class="error-msg">Mətni daxil edin.</div>
-        </div>
-        <button class="btn btn-submit" onclick="validateTaskTextAndProceed()">Davam et</button>
-    </div>
-    <div id="step-task-assignee" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('step-task-text')">← Geri</button></div>
-        <div class="form-group">
-            <label>İcraçı seçin:</label>
-            <div class="options-grid">
-                <div class="option-card" onclick="selectOption('assignee','shamil',this)">Şamil Əliyev</div>
-                <div class="option-card" onclick="selectOption('assignee','soltan',this)">Soltan Abbasov</div>
-                <div class="option-card" onclick="selectOption('assignee','admin',this)">Admin</div>
-            </div>
-            <div id="assignee-error" class="error-msg">İcraçı seçilməyib.</div>
-        </div>
-        <button class="btn btn-submit" onclick="validateAssigneeAndProceed()">Davam et</button>
-    </div>
-    <div id="step-task-deadline" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('step-task-assignee')">← Geri</button></div>
-        <div class="form-group">
-            <label>Son icra tarixi:</label>
-            <div class="options-grid">
-                <div class="option-card" onclick="selectOption('deadline','15m',this)">15 dəq</div>
-                <div class="option-card" onclick="selectOption('deadline','1h',this)">1 saat</div>
-                <div class="option-card" onclick="selectOption('deadline','today',this)">Bu gün</div>
-                <div class="option-card" onclick="selectOption('deadline','tomorrow',this)">Sabah</div>
-                <div class="option-card" onclick="selectOption('deadline','week',this)">Bu həftə</div>
-            </div>
-            <div id="deadline-error" class="error-msg">Deadline seçilməyib.</div>
-        </div>
-        <button class="btn btn-submit" onclick="submitTask()">Təsdiqlə və Göndər</button>
-    </div>
-    <div id="step-stage-select" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('step-phone')">← Geri</button></div>
-        <div class="form-group">
-            <label>Yeni mərhələni seçin:</label>
-            <div class="options-list">
-                <div class="option-card" onclick="selectOption('stage','danisiqlar',this)">Danışıqlar</div>
-                <div class="option-card" onclick="selectOption('stage','qiymet_teklifi',this)">Qiymət təklifi</div>
-                <div class="option-card" onclick="selectOption('stage','teqdimat',this)">Təqdimat</div>
-                <div class="option-card" onclick="selectOption('stage','teqdimat_olundu',this)">Təqdimat olundu</div>
-                <div class="option-card" onclick="selectOption('stage','yeni_sifaris',this)">Yeni sifariş</div>
-                <div class="option-card" onclick="selectOption('stage','gorus',this)">Görüş</div>
-                <div class="option-card" onclick="selectOption('stage','qurashdirma',this)">Quraşdırma</div>
-                <div class="option-card" onclick="selectOption('stage','ugurlu',this)">Uğurlu sifariş</div>
-            </div>
-            <div id="stage-error" class="error-msg">Mərhələ seçilməyib.</div>
-        </div>
-        <button class="btn btn-submit" onclick="submitStage()">Təsdiqlə və Göndər</button>
-    </div>
-    <div id="step-note-text" class="screen">
-        <div class="nav-bar"><button class="btn-back" onclick="goBack('step-phone')">← Geri</button></div>
-        <div class="form-group">
-            <label for="note-text-input">Qeyd:</label>
-            <textarea id="note-text-input" class="input-field" placeholder="Qeydinizi bura yazın..."></textarea>
-            <div id="note-text-error" class="error-msg">Mətni daxil edin.</div>
-        </div>
-        <button class="btn btn-submit" onclick="submitNote()">Təsdiqlə və Göndər</button>
-    </div>
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
-        let currentFlow = '';
-        let formData = { action:'', phone:'', text:'', assignee:'', deadline:'', stage:'' };
-        function navigateTo(id) { document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); document.getElementById(id).classList.add('active'); window.scrollTo(0,0); }
-        function goBack(id) { document.querySelectorAll('.error-msg').forEach(e=>e.style.display='none'); navigateTo(id); }
-        function openFlow(type) { currentFlow=type; formData={action:type,phone:'',text:'',assignee:'',deadline:'',stage:''}; document.getElementById('phone-input').value=''; document.getElementById('task-text-input').value=''; document.getElementById('note-text-input').value=''; document.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected')); navigateTo('step-phone'); }
-        function validatePhoneAndProceed() { const p=document.getElementById('phone-input'); const e=document.getElementById('phone-error'); if(p.value.replace(/\D/g,'').length<7){e.style.display='block';return;} e.style.display='none'; formData.phone=p.value.trim(); if(currentFlow==='task')navigateTo('step-task-text'); else if(currentFlow==='stage')navigateTo('step-stage-select'); else if(currentFlow==='note')navigateTo('step-note-text'); else if(currentFlow==='info')submitInfo(); }
-        function validateTaskTextAndProceed() { const t=document.getElementById('task-text-input'); const e=document.getElementById('task-text-error'); if(!t.value.trim()){e.style.display='block';return;} e.style.display='none'; formData.text=t.value.trim(); navigateTo('step-task-assignee'); }
-        function selectOption(key,value,el) { el.parentNode.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected')); el.classList.add('selected'); formData[key]=value; const m={assignee:'assignee-error',deadline:'deadline-error',stage:'stage-error'}; if(m[key])document.getElementById(m[key]).style.display='none'; }
-        function validateAssigneeAndProceed() { if(!formData.assignee){document.getElementById('assignee-error').style.display='block';return;} navigateTo('step-task-deadline'); }
-        function submitTask() { if(!formData.deadline){document.getElementById('deadline-error').style.display='block';return;} sendDataToBot({action:"task",phone:formData.phone,text:formData.text,assignee:formData.assignee,deadline:formData.deadline}); }
-        function submitStage() { if(!formData.stage){document.getElementById('stage-error').style.display='block';return;} sendDataToBot({action:"stage",phone:formData.phone,stage:formData.stage}); }
-        function submitNote() { const n=document.getElementById('note-text-input'); if(!n.value.trim()){document.getElementById('note-text-error').style.display='block';return;} sendDataToBot({action:"note",phone:formData.phone,text:n.value.trim()}); }
-        function submitInfo() { sendDataToBot({action:"info",phone:formData.phone}); }
-        function sendDataToBot(data) { tg.sendData(JSON.stringify(data)); tg.close(); }
-    </script>
+</div>
+<div id="step-search" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button></div>
+    <div class="form-group"><label>Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone" class="input-field" placeholder="0505232933"><div id="search-error" class="error-msg">Min 7 rəqəm daxil edin.</div></div>
+    <button class="btn btn-submit" id="search-submit-btn" onclick="handleSearchProceed()">Davam et</button>
+</div>
+<div id="screen-task-details" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
+    <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
+    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div></div></div>
+    <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
+</div>
+<div id="screen-deal-create" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
+    <div class="form-group"><label>Müştərinin Adı:</label><input type="text" id="deal-customer-name" class="input-field" placeholder="Ad Soyad"></div>
+    <div class="form-group"><label>Mərhələ:</label><div class="options-list"><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div></div></div>
+    <label class="checkbox-container"><input type="checkbox" id="deal-subtask-toggle" onchange="tog('deal-subtask-block',this)"><span>Alt-tapşırıq əlavə edilsin?</span></label>
+    <div id="deal-subtask-block" class="subtask-block"><input type="text" id="deal-subtask-text" class="input-field" placeholder="Alt-tapşırıq mətni"></div>
+    <button class="btn btn-submit" id="deal-submit-btn" onclick="submitDeal()">Sifarişi Yarat</button>
+</div>
+<div id="screen-note-add" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
+    <div class="form-group"><label>Qeyd:</label><textarea id="note-text" class="input-field" placeholder="Qeydinizi yazın..."></textarea></div>
+    <label class="checkbox-container"><input type="checkbox" id="note-subtask-toggle" onchange="tog('note-subtask-block',this)"><span>Alt-tapşırıq yaradılsın?</span></label>
+    <div id="note-subtask-block" class="subtask-block"><input type="text" id="note-subtask-text" class="input-field" placeholder="Tapşırıq mətni"></div>
+    <button class="btn btn-submit" id="note-submit-btn" onclick="submitNote()">Qeydi Əlavə Et</button>
+</div>
+<div id="screen-close-job" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button></div>
+    <div class="form-group"><label>Yekun hesabat:</label><textarea id="job-comment" class="input-field" placeholder="Görülən işlər..."></textarea><div id="job-comment-error" class="error-msg">Hesabat yazın.</div></div>
+    <button class="btn btn-submit" style="background:#0284c7" id="job-submit-btn" onclick="submitClose()">Tapşırığı tamamla</button>
+</div>
+<script>
+const tg=window.Telegram.WebApp;tg.ready();tg.expand();
+const API_BASE='';
+let flow='',gd={phone:'',deadline:'',stage:''};
+function toast(m,err){const t=document.getElementById('toast');t.textContent=m;t.className=err?'error':'';t.style.top='20px';setTimeout(()=>t.style.top='-60px',3000)}
+function nav(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0)}
+function goBack(id){nav(id)}
+function openFlow(f){flow=f;gd={phone:'',deadline:'',stage:''};document.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected'));if(f==='close_job'){document.getElementById('job-comment').value='';nav('screen-close-job')}else{document.getElementById('search-phone').value='';nav('step-search')}}
+function handleSearchProceed(){const p=document.getElementById('search-phone').value.trim();if(p.replace(/\D/g,'').length<7){document.getElementById('search-error').style.display='block';return}document.getElementById('search-error').style.display='none';gd.phone=p;if(flow==='task')nav('screen-task-details');else if(flow==='deal')nav('screen-deal-create');else if(flow==='note')nav('screen-note-add');else if(flow==='info')doFetch({action:'info',phone:p},'search-submit-btn')}
+function sel(k,v,el){el.parentNode.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected');gd[k]=v}
+function tog(id,cb){document.getElementById(id).style.display=cb.checked?'flex':'none'}
+async function doFetch(payload,btnId){const btn=document.getElementById(btnId);if(btn)btn.disabled=true;try{const r=await fetch(API_BASE+'/api/action',{method:'POST',headers:{'Content-Type':'application/json','X-TG-User-ID':String(tg.initDataUnsafe?.user?.id||'')},body:JSON.stringify(payload)});const j=await r.json();if(r.ok&&j.success){toast(j.message||'Uğurla!');setTimeout(()=>nav('main-screen'),1200)}else toast(j.error||'Xəta!',true)}catch(e){toast('Sistem xətası!',true)}finally{if(btn)btn.disabled=false}}
+function submitTask(){doFetch({action:'task',phone:gd.phone,text:document.getElementById('task-desc').value.trim(),deadline:gd.deadline||'today'},'task-submit-btn')}
+function submitDeal(){const hs=document.getElementById('deal-subtask-toggle').checked;doFetch({action:'create_deal',phone:gd.phone,customer_name:document.getElementById('deal-customer-name').value.trim(),stage:gd.stage||'yeni_sifaris',create_subtask:hs,subtask_text:hs?document.getElementById('deal-subtask-text').value.trim():''},'deal-submit-btn')}
+function submitNote(){const hs=document.getElementById('note-subtask-toggle').checked;doFetch({action:'add_note',phone:gd.phone,text:document.getElementById('note-text').value.trim(),create_subtask:hs,subtask_text:hs?document.getElementById('note-subtask-text').value.trim():''},'note-submit-btn')}
+function submitClose(){const c=document.getElementById('job-comment').value.trim();if(!c){document.getElementById('job-comment-error').style.display='block';return}doFetch({action:'close_job_report',master_comment:c},'job-submit-btn')}
+</script>
 </body>
 </html>
