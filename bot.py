@@ -23,7 +23,7 @@ import uuid
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -1431,7 +1431,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = users[str(chat_id)]
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
-            f"📱 CRM düyməsinə basaraq Mini App-dan istifadə edin və ya sərbəst mətn yazın."
+            f"📱 CRM düyməsinə basaraq Mini App-dan istifadə edin və ya sərbəst mətn yazın.",
+            reply_markup=ReplyKeyboardRemove()
         )
         return
     keyboard = [
