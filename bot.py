@@ -23,7 +23,7 @@ import uuid
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from openai import OpenAI
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -186,6 +186,17 @@ _bot_created_tasks: set = set()
 # ─── Pending registrations ───────────────────────────────────────────────────
 _pending_partner_registration: dict = {}
 _pending_employee_registration: dict = {}
+_button_flow: dict = {}  # chat_id -> {"action": "task"/"stage"/"note", "step": "phone"/"text"/...}
+
+# ─── Persistent Reply Keyboard ────────────────────────────────────────────────
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("📋 Yeni tapşırıq"), KeyboardButton("🔄 Mərhələ dəyiş")],
+        [KeyboardButton("📝 Qeyd əlavə et"), KeyboardButton("ℹ️ Müştəri info")],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 
 # ─── Conversation History (in-memory) ───────────────────────────────────────
 _conversation_history: dict = {}  # chat_id -> list of messages
@@ -1412,8 +1423,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = users[str(chat_id)]
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
-            f"💬 Mənə mətn yazın və ya səsli mesaj göndərin.\n"
-            f"📋 Tapşırıq yaratmaq, müştəri axtarmaq, mərhələ dəyişmək — hamısını natural dildə yaza bilərsiniz.",
+            f"Aşağıdakı düymələrdən istifadə edin və ya sərbəst mətn yazın.",
+            reply_markup=MAIN_KEYBOARD
         )
         return
     keyboard = [
@@ -1977,6 +1988,272 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+# ─── Button Flow Handlers ────────────────────────────────────────────────────
+async def start_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, button_text: str):
+    """Start a step-by-step flow when user presses a main keyboard button."""
+    chat_id = update.message.chat_id
+    if button_text == "📋 Yeni tapşırıq":
+        _button_flow[chat_id] = {"action": "task", "step": "phone"}
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+    elif button_text == "🔄 Mərhələ dəyiş":
+        _button_flow[chat_id] = {"action": "stage", "step": "phone"}
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+    elif button_text == "📝 Qeyd əlavə et":
+        _button_flow[chat_id] = {"action": "note", "step": "phone"}
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+    elif button_text == "ℹ️ Müştəri info":
+        _button_flow[chat_id] = {"action": "info", "step": "phone"}
+        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:", reply_markup=MAIN_KEYBOARD)
+
+async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
+    """Handle step-by-step input for button flows."""
+    chat_id = update.message.chat_id
+    flow = _button_flow[chat_id]
+    action = flow["action"]
+    step = flow["step"]
+
+    # Allow cancel
+    if user_text.lower() in ("ləğv", "cancel", "/cancel"):
+        del _button_flow[chat_id]
+        await update.message.reply_text("❌ Ləğv edildi.", reply_markup=MAIN_KEYBOARD)
+        return
+
+    # If user presses another main button, restart
+    if user_text in ("📋 Yeni tapşırıq", "🔄 Mərhələ dəyiş", "📝 Qeyd əlavə et", "ℹ️ Müştəri info"):
+        del _button_flow[chat_id]
+        await start_button_flow(update, context, user_text)
+        return
+
+    if step == "phone":
+        phone_match = re.search(r'\+?\d[\d\s\-]{7,}', user_text)
+        phone = re.sub(r'[\s\-]', '', phone_match.group()) if phone_match else user_text.strip()
+        contacts = search_contact_by_phone(phone)
+        if not contacts:
+            await update.message.reply_text(f"❌ '{phone}' nömrəli müştəri tapılmadı. Yenidən cəhd edin:", reply_markup=MAIN_KEYBOARD)
+            return
+        contact = contacts[0]
+        contact_name = contact.get("name", "Adsız")
+        flow["phone"] = phone
+        flow["contact"] = contact
+        flow["contact_name"] = contact_name
+
+        if action == "info":
+            del _button_flow[chat_id]
+            result = execute_tool_get_lead_info(phone)
+            try:
+                await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            except:
+                await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            return
+        elif action == "note":
+            flow["step"] = "text"
+            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Qeydi yazın:", reply_markup=MAIN_KEYBOARD)
+            return
+        elif action == "task":
+            flow["step"] = "text"
+            await update.message.reply_text(f"✅ {contact_name}\n\n📝 Tapşırığın mətnini yazın:", reply_markup=MAIN_KEYBOARD)
+            return
+        elif action == "stage":
+            flow["step"] = "stage_select"
+            stages_text = "\n".join([f"{i+1}. {name}" for i, (key, name) in enumerate([
+                ("danisiqlar", "Danışıqlar"), ("qiymet_teklifi", "Qiymət təklifi"),
+                ("teqdimat", "Təqdimat"), ("teqdimat_olundu", "Təqdimat olundu"),
+                ("yeni_sifaris", "Yeni sifariş"), ("gorus", "Görüş"),
+                ("qurashdirma", "Quraşdırma"), ("ugurlu", "Uğurlu sifariş"),
+            ])])
+            flow["stage_options"] = ["danisiqlar", "qiymet_teklifi", "teqdimat", "teqdimat_olundu", "yeni_sifaris", "gorus", "qurashdirma", "ugurlu"]
+            await update.message.reply_text(f"✅ {contact_name}\n\n📌 Mərhələ seçin (rəqəm yazın):\n\n{stages_text}", reply_markup=MAIN_KEYBOARD)
+            return
+
+    elif step == "text":
+        if action == "note":
+            del _button_flow[chat_id]
+            action_key = str(uuid.uuid4())[:8]
+            _pending_actions[action_key] = {
+                "action": "add_note",
+                "args": {"phone": flow["phone"], "text": user_text},
+                "chat_id": chat_id,
+                "summary": f"📝 Qeyd əlavə edəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n💬 {user_text}",
+            }
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Təsdiq et", callback_data=f"actconf_{action_key}_yes"),
+                    InlineKeyboardButton("❌ Ləğv et", callback_data=f"actconf_{action_key}_no"),
+                ]
+            ]
+            await update.message.reply_text(
+                f"🤖 📝 Qeyd əlavə edəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n💬 {user_text}\n\nTəsdiq edirsiniz?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        elif action == "task":
+            flow["task_text"] = user_text
+            flow["step"] = "assignee"
+            keyboard = [
+                [
+                    InlineKeyboardButton("Şamil", callback_data=f"btnflow_{chat_id}_shamil"),
+                    InlineKeyboardButton("Soltan", callback_data=f"btnflow_{chat_id}_soltan"),
+                ],
+                [InlineKeyboardButton("Admin", callback_data=f"btnflow_{chat_id}_admin")],
+            ]
+            await update.message.reply_text(
+                f"📋 Tapşırıq:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📝 {user_text}\n\n👤 Kim icra edəcək?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+
+    elif step == "stage_select":
+        try:
+            idx = int(user_text.strip()) - 1
+            stage_options = flow.get("stage_options", [])
+            if 0 <= idx < len(stage_options):
+                selected_stage = stage_options[idx]
+                del _button_flow[chat_id]
+                stage_display = STAGE_NAMES.get(STAGES.get(selected_stage, 0), selected_stage)
+                action_key = str(uuid.uuid4())[:8]
+                _pending_actions[action_key] = {
+                    "action": "change_stage",
+                    "args": {"phone": flow["phone"], "stage": selected_stage},
+                    "chat_id": chat_id,
+                    "summary": f"🔄 Mərhələ dəyişəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📌 Yeni mərhələ: {stage_display}",
+                }
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Təsdiq et", callback_data=f"actconf_{action_key}_yes"),
+                        InlineKeyboardButton("❌ Ləğv et", callback_data=f"actconf_{action_key}_no"),
+                    ]
+                ]
+                await update.message.reply_text(
+                    f"🤖 🔄 Mərhələ dəyişəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📌 Yeni mərhələ: {stage_display}\n\nTəsdiq edirsiniz?",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
+            else:
+                await update.message.reply_text("❌ Səhv rəqəm. Yenidən seçin:", reply_markup=MAIN_KEYBOARD)
+                return
+        except ValueError:
+            await update.message.reply_text("❌ Rəqəm daxil edin (1-8):", reply_markup=MAIN_KEYBOARD)
+            return
+
+    del _button_flow[chat_id]
+    await update.message.reply_text("❌ Xəta baş verdi. Yenidən başlayın.", reply_markup=MAIN_KEYBOARD)
+
+async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle assignee selection in button flow for task creation."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # btnflow_{chat_id}_{assignee}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    chat_id = int(parts[1])
+    assignee_key = parts[2]
+    flow = _button_flow.get(chat_id)
+    if not flow or flow.get("action") != "task":
+        await query.edit_message_text("❌ Vaxtı keçib.")
+        return
+    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin")}
+    assignee_id, assignee_name = assignee_map.get(assignee_key, (10932455, "Admin"))
+    flow["assignee_id"] = assignee_id
+    flow["assignee_name"] = assignee_name
+    flow["step"] = "deadline"
+    keyboard = [
+        [
+            InlineKeyboardButton("15 dəq", callback_data=f"btnflowdl_{chat_id}_15m"),
+            InlineKeyboardButton("1 saat", callback_data=f"btnflowdl_{chat_id}_1h"),
+        ],
+        [
+            InlineKeyboardButton("Bu gün", callback_data=f"btnflowdl_{chat_id}_today"),
+            InlineKeyboardButton("Sabah", callback_data=f"btnflowdl_{chat_id}_tomorrow"),
+        ],
+        [InlineKeyboardButton("Bu həftə", callback_data=f"btnflowdl_{chat_id}_week")],
+    ]
+    await query.edit_message_text(
+        f"📋 Tapşırıq:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📝 {flow['task_text']}\n👤 Məsul: {assignee_name}\n\n⏰ Son tarix seçin:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def btnflowdl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle deadline selection in button flow for task creation."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # btnflowdl_{chat_id}_{deadline}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    chat_id = int(parts[1])
+    dl_key = parts[2]
+    flow = _button_flow.pop(chat_id, None)
+    if not flow or flow.get("action") != "task":
+        await query.edit_message_text("❌ Vaxtı keçib.")
+        return
+    now = datetime.now(tz=BAKU_TZ)
+    dl_map = {
+        "15m": now + timedelta(minutes=15),
+        "1h": now + timedelta(hours=1),
+        "today": now.replace(hour=18, minute=0, second=0),
+        "tomorrow": (now + timedelta(days=1)).replace(hour=12, minute=0, second=0),
+        "week": (now + timedelta(days=(7 - now.weekday()))).replace(hour=12, minute=0, second=0),
+    }
+    deadline_dt = dl_map.get(dl_key, now + timedelta(hours=1))
+    complete_till = int(deadline_dt.timestamp())
+    contact = flow["contact"]
+    entity_id = contact["id"]
+    entity_type = "contacts"
+    full_c = get_contact_details(contact["id"])
+    if full_c:
+        leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+        if leads:
+            entity_id = leads[0]["id"]
+            entity_type = "leads"
+    res = create_task(entity_id, flow["task_text"], complete_till,
+                      responsible_user_id=flow["assignee_id"], entity_type=entity_type)
+    if res:
+        link = f"{KOMMO_BASE_URL}/{entity_type}/detail/{entity_id}"
+        msg = (f"✅ Tapşırıq yaradıldı!\n\n"
+               f"👤 {flow['contact_name']}\n📞 {flow['phone']}\n"
+               f"📝 {flow['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n"
+               f"👤 Məsul: {flow['assignee_name']}\n🔗 {link}")
+        await query.edit_message_text(msg, disable_web_page_preview=True)
+        # Notify assignee
+        if flow["assignee_id"] != 10932455:
+            assignee_chat = get_chat_id_for_kommo_user(flow["assignee_id"])
+            if assignee_chat:
+                try:
+                    sent = await context.bot.send_message(
+                        assignee_chat,
+                        f"📢 Yeni tapşırıq:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n"
+                        f"📝 {flow['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+                        disable_web_page_preview=True
+                    )
+                    if sent:
+                        store_message_task(assignee_chat, sent.message_id, res.get("id", 0),
+                                           flow["task_text"], entity_id, entity_type, flow["phone"])
+                except:
+                    pass
+        # Notify admin
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+        if admin_chat and admin_chat != chat_id:
+            try:
+                await context.bot.send_message(
+                    admin_chat,
+                    f"📢 {sender_name} tapşırıq yaratdı:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n"
+                    f"📝 {flow['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n"
+                    f"👤 Məsul: {flow['assignee_name']}\n🔗 {link}",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
+    else:
+        await query.edit_message_text("❌ Tapşırıq yaradılarkən xəta.")
+
 # ─── Free Text Handler ───────────────────────────────────────────────────────
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -2027,6 +2304,14 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check pending partner registration
     if chat_id in _pending_partner_registration:
         await handle_partner_registration(update, context, user_text)
+        return
+    # Handle button flow (step-by-step)
+    if chat_id in _button_flow:
+        await handle_button_flow(update, context, user_text)
+        return
+    # Handle main keyboard button presses
+    if user_text in ("📋 Yeni tapşırıq", "🔄 Mərhələ dəyiş", "📝 Qeyd əlavə et", "ℹ️ Müştəri info"):
+        await start_button_flow(update, context, user_text)
         return
     # Process through AI
     await process_ai_message(update, context, user_text)
@@ -2410,6 +2695,8 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
+    app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
+    app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
     # Message handlers
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
