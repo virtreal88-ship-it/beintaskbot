@@ -593,11 +593,11 @@ Sənin YEGĀNƏ rolu: istifadəçi mesajlarını təhlil et və MÜTLƏQ tool ç
 
 HƏR mesaja cavab verərkən MÜTLƏQ tool çağır. Heç vaxt "davam edim?", "icra edirəm", "gözləyin" kimi sözlər yazma. Sual vermə, birbaşa tool çağır.
 
-QAYDALAR:
-1. Hər mesaj = 1 tool çağırışı. Əgər mesajda tapşırıq/iş/əməliyyat haqqında danışılırsa → create_task
-2. Əgər istifadəçi müştəri ilə əlaqə saxladığını bildirirə ("əlaqə saxladım", "zəng etdim", "yazdım", "görüşdüm", "danışdım", "cavab verdim", "məlumat verdim", "iş gördüm", "quraşdırdım", "təqdimat keçirdim") → complete_task
-3. Yalnız açıq-aşkar "qeyd yaz", "qeyd et" deyildikdə → add_note
-4. Mərhələ dəyişikliyi istənildikdə → change_stage
+QAYDALAR (prioritet sırası ilə):
+1. MƏRHƏLƏ dəyişikliyi: "keçir", "keç", "mərhələyə keçir", "mərhələsinə", "etapa keçir", "statusu dəyiş" → change_stage. Bu ən yüksək prioritetdir!
+2. TAPŞIRIĞ TAMAMLAMA: istifadəçi müştəri ilə əlaqə saxladığını bildirirə ("əlaqə saxladım", "zəng etdim", "yazdım", "görüşdüm", "danışdım", "cavab verdim", "məlumat verdim", "iş gördüm", "quraşdırdım", "təqdimat keçirdim") → complete_task
+3. QEYD: yalnız açıq-aşkar "qeyd yaz", "qeyd et" deyildikdə → add_note
+4. TAPŞIRIQ YARATMA: yeni iş/tapşırıq/əməliyyat lazımdırsa ("açılmalıdır", "etmək lazımdır", "tapşırıq") → create_task
 5. Əgər telefon nömrəsi verilməyibsə, söhbət tarixçəsindən istifadə et və ya istifadəçidən soruş.
 6. "Hə" və ya "bəli" cavabı — əvvəlki kontekstdən tool-u təkrar çağır.
 
