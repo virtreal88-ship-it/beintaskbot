@@ -2412,6 +2412,35 @@ async def btnflowdl_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await query.edit_message_text("❌ Tapşırıq yaradılarkən xəta.")
 
+# ─── Contact Message Handler ─────────────────────────────────────────────────
+async def handle_contact_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle shared contact from phone book."""
+    if not update.message or not update.message.contact:
+        return
+    chat_id = update.message.chat_id
+    users = load_users()
+    if str(chat_id) not in users:
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
+        return
+    contact = update.message.contact
+    phone = contact.phone_number or ""
+    if not phone:
+        await update.message.reply_text("❌ Telefon nömrəsi tapılmadı.", reply_markup=MAIN_KEYBOARD)
+        return
+    # Normalize: add + if starts with digit
+    if phone and phone[0].isdigit():
+        phone = "+" + phone
+    # If in button flow on phone step, process it
+    if chat_id in _button_flow and _button_flow[chat_id].get("step") == "phone":
+        await handle_button_flow(update, context, phone)
+        return
+    # Otherwise treat as info request
+    result = execute_tool_get_lead_info(phone)
+    try:
+        await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+    except:
+        await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+
 # ─── Free Text Handler ───────────────────────────────────────────────────────
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -2856,6 +2885,7 @@ def main():
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
     # Message handlers
+    app.add_handler(MessageHandler(filters.CONTACT, handle_contact_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
     # Background jobs
