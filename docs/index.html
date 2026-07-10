@@ -78,16 +78,16 @@
 <script>
 const tg=window.Telegram.WebApp;tg.ready();tg.expand();
 const API_BASE='';
-let flow='',gd={phone:'',deadline:'',stage:'',assignee:'admin'};
+let flow='',gd={phone:'',deadline:'',stage:'',assignee:''};
 function toast(m,err){const t=document.getElementById('toast');t.textContent=m;t.className=err?'error':'';t.style.top='20px';setTimeout(()=>t.style.top='-60px',3000)}
 function nav(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0)}
 function goBack(id){nav(id)}
-function openFlow(f){flow=f;gd={phone:'',deadline:'',stage:'',assignee:'admin'};document.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected'));if(f==='close_job'){document.getElementById('job-comment').value='';nav('screen-close-job')}else{document.getElementById('search-phone').value='';nav('step-search')}}
+function openFlow(f){flow=f;gd={phone:'',deadline:'',stage:'',assignee:''};document.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected'));if(f==='close_job'){document.getElementById('job-comment').value='';nav('screen-close-job')}else{document.getElementById('search-phone').value='';nav('step-search')}}
 function handleSearchProceed(){const p=document.getElementById('search-phone').value.trim();if(p.replace(/\D/g,'').length<7){document.getElementById('search-error').style.display='block';return}document.getElementById('search-error').style.display='none';gd.phone=p;if(flow==='task')nav('screen-task-details');else if(flow==='deal')nav('screen-deal-create');else if(flow==='note')nav('screen-note-add');else if(flow==='info')doFetch({action:'info',phone:p},'search-submit-btn')}
 function sel(k,v,el){el.parentNode.querySelectorAll('.option-card').forEach(c=>c.classList.remove('selected'));el.classList.add('selected');gd[k]=v}
 function tog(id,cb){document.getElementById(id).style.display=cb.checked?'flex':'none'}
 async function doFetch(payload,btnId){const btn=document.getElementById(btnId);if(btn)btn.disabled=true;try{const r=await fetch(API_BASE+'/api/action',{method:'POST',headers:{'Content-Type':'application/json','X-TG-User-ID':String(tg.initDataUnsafe?.user?.id||'')},body:JSON.stringify(payload)});const j=await r.json();if(r.ok&&j.success){toast(j.message||'Uğurla!');setTimeout(()=>nav('main-screen'),1200)}else toast(j.error||'Xəta!',true)}catch(e){toast('Sistem xətası!',true)}finally{if(btn)btn.disabled=false}}
-function submitTask(){doFetch({action:'task',phone:gd.phone,text:document.getElementById('task-desc').value.trim(),assignee:gd.assignee||'admin',deadline:gd.deadline||'today'},'task-submit-btn')}
+function submitTask(){const t=document.getElementById('task-desc').value.trim();if(!t){toast('Tapşırıq mətni yazın!',true);return}if(!gd.assignee){toast('İcraçı seçin!',true);return}if(!gd.deadline){toast('Deadline seçin!',true);return}doFetch({action:'task',phone:gd.phone,text:t,assignee:gd.assignee,deadline:gd.deadline},'task-submit-btn')}
 function submitDeal(){const hs=document.getElementById('deal-subtask-toggle').checked;doFetch({action:'create_deal',phone:gd.phone,customer_name:document.getElementById('deal-customer-name').value.trim(),stage:gd.stage||'yeni_sifaris',create_subtask:hs,subtask_text:hs?document.getElementById('deal-subtask-text').value.trim():''},'deal-submit-btn')}
 function submitNote(){const hs=document.getElementById('note-subtask-toggle').checked;doFetch({action:'add_note',phone:gd.phone,text:document.getElementById('note-text').value.trim(),create_subtask:hs,subtask_text:hs?document.getElementById('note-subtask-text').value.trim():''},'note-submit-btn')}
 function submitClose(){const c=document.getElementById('job-comment').value.trim();if(!c){document.getElementById('job-comment-error').style.display='block';return}doFetch({action:'close_job_report',master_comment:c},'job-submit-btn')}
