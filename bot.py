@@ -668,9 +668,26 @@ def execute_tool_add_note(phone: str, text: str) -> str:
         return f"❌ '{phone}' nömrəli müştəri tapılmadı."
     contact = contacts[0]
     contact_name = contact.get("name", "Adsız")
-    result = add_note(contact["id"], text, "contacts")
+    contact_id = contact.get("id")
+    # Get phone from contact
+    contact_phone = phone
+    for cf in (contact.get("custom_fields_values") or []):
+        if cf.get("field_code") == "PHONE":
+            vals = cf.get("values", [])
+            if vals:
+                contact_phone = vals[0].get("value", phone)
+                break
+    # Get lead link if available
+    link = f"{KOMMO_BASE_URL}/contacts/detail/{contact_id}"
+    full_c = get_contact_details(contact_id)
+    if full_c:
+        leads = full_c.get("_embedded", {}).get("leads", [])
+        if leads:
+            lead_id = leads[0]["id"]
+            link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+    result = add_note(contact_id, text, "contacts")
     if result:
-        return f"✅ Qeyd əlavə edildi!\n👤 {contact_name}\n📝 {text}"
+        return f"✅ Qeyd əlavə edildi!\n👤 {contact_name}\n📞 {contact_phone}\n📝 {text}\n🔗 {link}"
     return "❌ Qeyd əlavə edilərkən xəta baş verdi."
 
 def execute_tool_change_stage(phone: str, stage: str, chat_id: int) -> dict:
