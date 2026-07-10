@@ -1989,6 +1989,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 # ─── Button Flow Handlers ────────────────────────────────────────────────────
+def _next_step_after_phone(action: str) -> str:
+    """Return the next step after phone/contact is resolved."""
+    if action in ("task", "note"):
+        return "text"
+    elif action == "stage":
+        return "stage_select"
+    return "done"
+
 async def start_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, button_text: str):
     """Start a step-by-step flow when user presses a main keyboard button."""
     chat_id = update.message.chat_id
@@ -2025,11 +2033,25 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     if step == "phone":
+        # Validate: must contain at least 7 digits
+        digits_only = re.sub(r'[^\d]', '', user_text)
+        if len(digits_only) < 7:
+            await update.message.reply_text("❌ Düzgün telefon nömrəsi daxil edin (minimum 7 rəqəm):", reply_markup=MAIN_KEYBOARD)
+            return
         phone_match = re.search(r'\+?\d[\d\s\-]{7,}', user_text)
         phone = re.sub(r'[\s\-]', '', phone_match.group()) if phone_match else user_text.strip()
         contacts = search_contact_by_phone(phone)
         if not contacts:
-            await update.message.reply_text(f"❌ '{phone}' nömrəli müştəri tapılmadı. Yenidən cəhd edin:", reply_markup=MAIN_KEYBOARD)
+            flow["phone"] = phone
+            flow["step"] = "create_contact"
+            keyboard = [
+                [InlineKeyboardButton("✅ Yeni kontakt yarat", callback_data=f"btnflow_{chat_id}_newcontact")],
+                [InlineKeyboardButton("❌ Ləğv et", callback_data=f"btnflow_{chat_id}_cancelflow")],
+            ]
+            await update.message.reply_text(
+                f"❌ '{phone}' nömrəli müştəri tapılmadı.\n\nYeni kontakt yaratmaq istəyirsiniz?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             return
         contact = contacts[0]
         contact_name = contact.get("name", "Adsız")
@@ -2055,14 +2077,26 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
         elif action == "stage":
             flow["step"] = "stage_select"
-            stages_text = "\n".join([f"{i+1}. {name}" for i, (key, name) in enumerate([
+            stage_list = [
                 ("danisiqlar", "Danışıqlar"), ("qiymet_teklifi", "Qiymət təklifi"),
                 ("teqdimat", "Təqdimat"), ("teqdimat_olundu", "Təqdimat olundu"),
                 ("yeni_sifaris", "Yeni sifariş"), ("gorus", "Görüş"),
                 ("qurashdirma", "Quraşdırma"), ("ugurlu", "Uğurlu sifariş"),
-            ])])
-            flow["stage_options"] = ["danisiqlar", "qiymet_teklifi", "teqdimat", "teqdimat_olundu", "yeni_sifaris", "gorus", "qurashdirma", "ugurlu"]
-            await update.message.reply_text(f"✅ {contact_name}\n\n📌 Mərhələ seçin (rəqəm yazın):\n\n{stages_text}", reply_markup=MAIN_KEYBOARD)
+            ]
+            flow["stage_options"] = [k for k, v in stage_list]
+            keyboard = []
+            row = []
+            for i, (key, name) in enumerate(stage_list):
+                row.append(InlineKeyboardButton(name, callback_data=f"btnflow_{chat_id}_stg{i}"))
+                if len(row) == 2:
+                    keyboard.append(row)
+                    row = []
+            if row:
+                keyboard.append(row)
+            await update.message.reply_text(
+                f"✅ {contact_name}\n📞 {phone}\n\n📌 Yeni mərhələ seçin:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             return
 
     elif step == "text":
@@ -2139,24 +2173,131 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
     await update.message.reply_text("❌ Xəta baş verdi. Yenidən başlayın.", reply_markup=MAIN_KEYBOARD)
 
 async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle assignee selection in button flow for task creation."""
+    """Handle button flow callbacks: newcontact, cancelflow, stage selection, assignee."""
     query = update.callback_query
     try:
         await query.answer()
     except:
         pass
-    data = query.data  # btnflow_{chat_id}_{assignee}
+    data = query.data  # btnflow_{chat_id}_{action}
     parts = data.split("_")
     if len(parts) < 3:
         return
     chat_id = int(parts[1])
-    assignee_key = parts[2]
+    action_key = "_".join(parts[2:])  # handle multi-part keys like stg0
     flow = _button_flow.get(chat_id)
+
+    # Cancel flow
+    if action_key == "cancelflow":
+        _button_flow.pop(chat_id, None)
+        await query.edit_message_text("❌ Ləğv edildi.")
+        return
+
+    # Create new contact
+    if action_key == "newcontact":
+        if not flow:
+            await query.edit_message_text("❌ Vaxtı keçib.")
+            return
+        phone = flow.get("phone", "")
+        # Create contact with phone as name (user can rename later)
+        result = create_contact_kommo(phone, phone)
+        if result:
+            contact_data = result.get("_embedded", {}).get("contacts", [{}])[0]
+            contact_id = contact_data.get("id")
+            # Create a lead for this contact
+            lead_payload = [{
+                "name": f"Sövdələşmə - {phone}",
+                "pipeline_id": PIPELINE_ID,
+                "status_id": STAGES["danisiqlar"],
+                "responsible_user_id": 10932455,
+                "_embedded": {"contacts": [{"id": contact_id}]}
+            }]
+            try:
+                resp = requests.post(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, json=lead_payload, timeout=15)
+                lead_result = resp.json() if resp.status_code in (200, 201) else None
+            except:
+                lead_result = None
+            # Get full contact
+            full_contact = get_contact_details(contact_id) or {"id": contact_id, "name": phone}
+            flow["contact"] = full_contact
+            flow["contact_name"] = phone
+            flow["step"] = _next_step_after_phone(flow["action"])
+            action = flow["action"]
+            if action == "task":
+                await query.edit_message_text(f"✅ Kontakt yaradıldı: {phone}\n\n📝 Tapşırığın mətnini yazın:")
+            elif action == "note":
+                await query.edit_message_text(f"✅ Kontakt yaradıldı: {phone}\n\n📝 Qeydi yazın:")
+            elif action == "stage":
+                stage_list = [
+                    ("danisiqlar", "Danışıqlar"), ("qiymet_teklifi", "Qiymət təklifi"),
+                    ("teqdimat", "Təqdimat"), ("teqdimat_olundu", "Təqdimat olundu"),
+                    ("yeni_sifaris", "Yeni sifariş"), ("gorus", "Görüş"),
+                    ("qurashdirma", "Quraşdırma"), ("ugurlu", "Uğurlu sifariş"),
+                ]
+                flow["stage_options"] = [k for k, v in stage_list]
+                keyboard = []
+                row = []
+                for i, (key, name) in enumerate(stage_list):
+                    row.append(InlineKeyboardButton(name, callback_data=f"btnflow_{chat_id}_stg{i}"))
+                    if len(row) == 2:
+                        keyboard.append(row)
+                        row = []
+                if row:
+                    keyboard.append(row)
+                await query.edit_message_text(
+                    f"✅ Kontakt yaradıldı: {phone}\n\n📌 Mərhələ seçin:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            elif action == "info":
+                _button_flow.pop(chat_id, None)
+                link = f"{KOMMO_BASE_URL}/contacts/detail/{contact_id}"
+                await query.edit_message_text(f"✅ Kontakt yaradıldı: {phone}\n🔗 {link}", disable_web_page_preview=True)
+        else:
+            await query.edit_message_text("❌ Kontakt yaradılarkən xəta baş verdi.")
+            _button_flow.pop(chat_id, None)
+        return
+
+    # Stage selection (stg0, stg1, ...)
+    if action_key.startswith("stg"):
+        if not flow:
+            await query.edit_message_text("❌ Vaxtı keçib.")
+            return
+        try:
+            idx = int(action_key[3:])
+        except ValueError:
+            return
+        stage_options = flow.get("stage_options", [])
+        if 0 <= idx < len(stage_options):
+            selected_stage = stage_options[idx]
+            stage_display = STAGE_NAMES.get(STAGES.get(selected_stage, 0), selected_stage)
+            _button_flow.pop(chat_id, None)
+            action_key_id = str(uuid.uuid4())[:8]
+            _pending_actions[action_key_id] = {
+                "action": "change_stage",
+                "args": {"phone": flow["phone"], "stage": selected_stage},
+                "chat_id": chat_id,
+                "summary": f"🔄 Mərhələ dəyişəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📌 Yeni mərhələ: {stage_display}",
+            }
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Təsdiq et", callback_data=f"actconf_{action_key_id}_yes"),
+                    InlineKeyboardButton("❌ Ləğv et", callback_data=f"actconf_{action_key_id}_no"),
+                ]
+            ]
+            await query.edit_message_text(
+                f"🤖 🔄 Mərhələ dəyişəcəm:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📌 Yeni mərhələ: {stage_display}\n\nTəsdiq edirsiniz?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text("❌ Səhv seçim.")
+        return
+
+    # Assignee selection for task
     if not flow or flow.get("action") != "task":
         await query.edit_message_text("❌ Vaxtı keçib.")
         return
     assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin")}
-    assignee_id, assignee_name = assignee_map.get(assignee_key, (10932455, "Admin"))
+    assignee_id, assignee_name = assignee_map.get(action_key, (10932455, "Admin"))
     flow["assignee_id"] = assignee_id
     flow["assignee_name"] = assignee_name
     flow["step"] = "deadline"
