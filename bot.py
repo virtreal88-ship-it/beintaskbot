@@ -1397,51 +1397,55 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_text = update.message.text.strip() if update.message.text else ""
     if not user_text:
         return False
-    # Check if it's a task completion
-    complete_words = ["bitdi", "hazır", "tamamlandı", "oldu", "icra olundu", "done", "bitti", "edildi"]
-    is_complete = any(w in user_text.lower() for w in complete_words)
-    if task_info and is_complete:
+    # Any reply to a task message = complete the task (+ add note with the reply text)
+    if task_info:
         task_id = task_info.get("task_id")
         if task_id:
+            # Check if it's a reschedule (date/time in reply)
+            new_date = resolve_date_from_text(user_text)
+            new_time = resolve_time_from_text(user_text)
+            if new_date or new_time:
+                now = datetime.now(tz=BAKU_TZ)
+                if new_date and new_time:
+                    new_dt = datetime.strptime(f"{new_date} {new_time}", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
+                elif new_date:
+                    new_dt = datetime.strptime(f"{new_date} 09:00", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
+                elif new_time:
+                    new_dt = datetime.strptime(f"{now.strftime('%d.%m.%Y')} {new_time}", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
+                else:
+                    new_dt = None
+                if new_dt:
+                    res = update_task_kommo(task_id, {"complete_till": int(new_dt.timestamp())})
+                    if res:
+                        await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown")
+                        admin_chat = get_chat_id_for_kommo_user(10932455)
+                        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                        if admin_chat and admin_chat != chat_id:
+                            try:
+                                await context.bot.send_message(
+                                    admin_chat, f"⏰ *{sender_name}* vaxtı dəyişdi:\n📝 {task_info.get('task_text', '')}\n🕐 {new_dt.strftime('%d.%m.%Y %H:%M')}",
+                                    parse_mode="Markdown"
+                                )
+                            except:
+                                pass
+                    return True
+            # Otherwise — complete the task
             res = update_task_kommo(task_id, {"is_completed": True, "result": {"text": user_text}})
             if res:
-                await update.message.reply_text(f"✅ Tapşırıq tamamlandı!\n📝 {task_info.get('task_text', '')}")
+                # Also add a note to the entity with the reply text
+                entity_id = task_info.get("entity_id")
+                entity_type = task_info.get("entity_type", "leads")
+                if entity_id:
+                    add_note(entity_id, user_text, entity_type)
+                phone = task_info.get("phone", "")
+                await update.message.reply_text(f"✅ Tapşırıq tamamlandı!\n📝 {task_info.get('task_text', '')}\n💬 {user_text}")
                 # Notify admin
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                 if admin_chat and admin_chat != chat_id:
                     try:
                         await context.bot.send_message(
-                            admin_chat, f"✅ *{sender_name}* tapşırığı tamamladı:\n📝 {task_info.get('task_text', '')}",
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass
-                return True
-    # Check if it's a reschedule
-    new_date = resolve_date_from_text(user_text)
-    new_time = resolve_time_from_text(user_text)
-    if task_info and (new_date or new_time):
-        task_id = task_info.get("task_id")
-        if task_id:
-            now = datetime.now(tz=BAKU_TZ)
-            if new_date and new_time:
-                new_dt = datetime.strptime(f"{new_date} {new_time}", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
-            elif new_date:
-                new_dt = datetime.strptime(f"{new_date} 09:00", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
-            elif new_time:
-                new_dt = datetime.strptime(f"{now.strftime('%d.%m.%Y')} {new_time}", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
-            else:
-                return False
-            res = update_task_kommo(task_id, {"complete_till": int(new_dt.timestamp())})
-            if res:
-                await update.message.reply_text(f"✅ Yeni vaxt: *{new_dt.strftime('%d.%m.%Y %H:%M')}*\n📝 {task_info.get('task_text', '')}", parse_mode="Markdown")
-                admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                if admin_chat and admin_chat != chat_id:
-                    try:
-                        await context.bot.send_message(
-                            admin_chat, f"⏰ *{sender_name}* vaxtı dəyişdi:\n📝 {task_info.get('task_text', '')}\n🕐 {new_dt.strftime('%d.%m.%Y %H:%M')}",
+                            admin_chat, f"✅ *{sender_name}* tapşırığı tamamladı:\n📝 {task_info.get('task_text', '')}\n💬 {user_text}",
                             parse_mode="Markdown"
                         )
                     except:
