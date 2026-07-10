@@ -822,7 +822,7 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
             model=LLM_MODEL,
             messages=messages,
             tools=AI_TOOLS,
-            tool_choice="auto",
+            tool_choice="required",
             timeout=60,
         )
         msg = response.choices[0].message
@@ -882,14 +882,18 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     add_to_history(chat_id, "user", user_text)
                     add_to_history(chat_id, "assistant", final_text)
         else:
-            # No tool call - just a text response
-            final_text = msg.content or "Anlamadım. Zəhmət olmasa daha dəqiq yazın."
-            try:
-                await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
-            except:
-                await update.message.reply_text(final_text, disable_web_page_preview=True)
+            # No tool call even with required - ask user to be more specific
+            final_text = msg.content if msg.content else None
+            if final_text:
+                try:
+                    await update.message.reply_text(final_text, parse_mode="Markdown", disable_web_page_preview=True)
+                except:
+                    await update.message.reply_text(final_text, disable_web_page_preview=True)
+            else:
+                await update.message.reply_text("Anlamadım. Zəhmət olmasa müştərinin telefon nömrəsini və nə etmək istədiyinizi yazın.")
             add_to_history(chat_id, "user", user_text)
-            add_to_history(chat_id, "assistant", final_text)
+            if final_text:
+                add_to_history(chat_id, "assistant", final_text)
     except Exception as e:
         logger.error(f"AI processing error: {e}\n{traceback.format_exc()}")
         await update.message.reply_text("⚠️ AI xətası baş verdi. Yenidən cəhd edin.")
