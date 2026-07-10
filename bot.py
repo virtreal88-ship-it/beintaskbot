@@ -2441,6 +2441,116 @@ async def handle_contact_message(update: Update, context: ContextTypes.DEFAULT_T
     except:
         await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
 
+# ─── Web App Data Handler ────────────────────────────────────────────────────
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle data sent from Telegram Web App (Mini App)."""
+    if not update.message or not update.message.web_app_data:
+        return
+    chat_id = update.message.chat_id
+    users = load_users()
+    if str(chat_id) not in users:
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.", reply_markup=MAIN_KEYBOARD)
+        return
+    try:
+        data = json.loads(update.message.web_app_data.data)
+    except:
+        await update.message.reply_text("❌ Xəta baş verdi.", reply_markup=MAIN_KEYBOARD)
+        return
+    action = data.get("action")
+    phone = data.get("phone", "")
+    if action == "info":
+        result = execute_tool_get_lead_info(phone)
+        try:
+            await update.message.reply_text(result, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+        except:
+            await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+    elif action == "note":
+        text = data.get("text", "")
+        result = execute_tool_add_note(phone, text)
+        await update.message.reply_text(result, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+        # Admin notification
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+        if admin_chat and admin_chat != chat_id:
+            try:
+                await context.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
+            except:
+                pass
+    elif action == "stage":
+        stage = data.get("stage", "")
+        result = execute_tool_change_stage(phone, stage, chat_id)
+        if not result["success"]:
+            await update.message.reply_text(result["message"], reply_markup=MAIN_KEYBOARD)
+        elif result.get("needs_confirmation"):
+            # Non-admin: send to admin
+            conf_key = str(uuid.uuid4())[:8]
+            context.bot_data[f"confirm_{conf_key}"] = {
+                "phone": result["phone"], "stage": stage,
+                "lead_id": result["lead_id"], "status_id": result["status_id"],
+                "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
+            }
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            if admin_chat:
+                keyboard = [[InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no")]]
+                try:
+                    await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                except:
+                    pass
+            await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}", reply_markup=MAIN_KEYBOARD)
+        else:
+            # Admin: execute
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
+            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
+            await update.message.reply_text(f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}\n🔗 {link}", disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+    elif action == "task":
+        text = data.get("text", "")
+        assignee = data.get("assignee", "admin")
+        deadline_key = data.get("deadline", "tomorrow")
+        # Resolve deadline
+        now = datetime.now(tz=BAKU_TZ)
+        if deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
+        elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
+        elif deadline_key == "today":
+            deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+            if deadline_dt <= now: deadline_dt += timedelta(days=1)
+        elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        elif deadline_key == "week":
+            days_until_friday = (4 - now.weekday()) % 7
+            if days_until_friday == 0 and now.hour >= 18: days_until_friday = 7
+            deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+        else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        result = execute_tool_create_task(phone, text, None, None, assignee)
+        if isinstance(result, str):
+            await update.message.reply_text(result, reply_markup=MAIN_KEYBOARD)
+            return
+        if not result["success"]:
+            await update.message.reply_text(result["message"], reply_markup=MAIN_KEYBOARD)
+            return
+        deadline_ts = int(deadline_dt.timestamp())
+        res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
+        if res:
+            msg = f"✅ Tapşırıq yaradıldı!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}"
+            await update.message.reply_text(msg, disable_web_page_preview=True, reply_markup=MAIN_KEYBOARD)
+            # Notify assignee
+            if result["assignee_id"] != 10932455:
+                assignee_chat = get_chat_id_for_kommo_user(result["assignee_id"])
+                if assignee_chat:
+                    try:
+                        await context.bot.send_message(assignee_chat, f"📋 *Yeni tapşırıq!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                    except: pass
+            # Notify admin
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            if admin_chat and admin_chat != chat_id:
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                try:
+                    await context.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                except: pass
+        else:
+            await update.message.reply_text("❌ Tapşırıq yaradılarkən xəta.", reply_markup=MAIN_KEYBOARD)
+
 # ─── Free Text Handler ───────────────────────────────────────────────────────
 async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -2885,6 +2995,7 @@ def main():
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
     # Message handlers
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
