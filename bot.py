@@ -592,6 +592,10 @@ Komanda: Admin (Texniki Destek), Şamil Əliyev (satış), Soltan Abbasov (texni
 Müştəri ilə bağlı əməliyyatlar üçün müvafiq tool-u çağır.
 Əgər telefon nömrəsi verilməyibsə, söhbət tarixçəsindən istifadə et və ya istifadəçidən soruş.
 Hər mesajda yalnız 1 əməliyyat icra et.
+
+VACİB QAYDA: Əgər istifadəçi müştəri ilə əlaqə saxladığını bildirirə (məs: "əlaqə saxladım", "zəng etdim", "yazdım", "görüşdüm", "danışdım", "cavab verdim", "məlumat verdim", "iş gördüm", "quraşdırdım", "təqdimat keçirdim") — bu TAPŞIRIĞIN TAMAMLANMASI deməkdir. complete_task tool-unu çağır, add_note deyil!
+Yalnız açıq-aşkar "qeyd yaz", "qeyd et", "qeyd əlavə et" deyildikdə add_note istifadə et.
+
 Bugünkü tarix: {current_date}
 Mesaj göndərən: {sender_name}"""
 
@@ -678,21 +682,42 @@ def execute_tool_complete_task(phone: str) -> str:
         return f"❌ '{phone}' nömrəli müştəri tapılmadı."
     contact = contacts[0]
     contact_name = contact.get("name", "Adsız")
+    contact_phone = phone
+    # Get actual phone from contact
+    for cf in (contact.get("custom_fields_values") or []):
+        if cf.get("field_code") == "PHONE":
+            vals = cf.get("values", [])
+            if vals:
+                contact_phone = vals[0].get("value", phone)
     # Find open tasks for this contact
     tasks = get_entity_tasks(contact["id"], "contacts")
     full_c = get_contact_details(contact["id"])
     leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+    lead_id = leads[0]["id"] if leads else None
     for lead in leads:
         tasks.extend(get_entity_tasks(lead["id"], "leads"))
     open_tasks = [t for t in tasks if not t.get("is_completed")]
     if not open_tasks:
         return f"⚠️ {contact_name} üçün açıq tapşırıq tapılmadı."
-    # Complete the most recent task
-    open_tasks.sort(key=lambda t: t.get("complete_till", 0), reverse=True)
+    # Complete the most recent task (closest deadline)
+    open_tasks.sort(key=lambda t: t.get("complete_till", 0))
     task = open_tasks[0]
+    deadline_ts = task.get("complete_till", 0)
+    deadline_str = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
+    responsible_id = task.get("responsible_user_id", 0)
+    responsible_name = KOMMO_USERS.get(responsible_id, "")
+    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else ""
     res = update_task_kommo(task["id"], {"is_completed": True})
     if res:
-        return f"✅ Tapşırıq tamamlandı!\n👤 {contact_name}\n📝 {task.get('text', '')}"
+        result = (f"✅ Tapşırıq tamamlandı!\n\n"
+                  f"👤 {contact_name}\n"
+                  f"📞 {contact_phone}\n"
+                  f"📝 {task.get('text', '')}\n"
+                  f"⏰ Son tarix: {deadline_str}\n"
+                  f"👤 Məsul: {responsible_name}")
+        if link:
+            result += f"\n🔗 {link}"
+        return result
     return "❌ Tapşırıq tamamlanarkən xəta baş verdi."
 
 def execute_tool_get_tasks(period: str, phone: str = None) -> str:
@@ -988,7 +1013,32 @@ def _build_action_summary(fn_name: str, fn_args: dict) -> str:
     if fn_name == "add_note":
         return f"📝 Qeyd əlavə edəcəm:\n📞 {fn_args.get('phone', '')}\n💬 {fn_args.get('text', '')}"
     elif fn_name == "complete_task":
-        return f"✅ Tapşırığı tamamlayacam:\n📞 {fn_args.get('phone', '')}"
+        # Try to find the actual task details for the summary
+        phone = fn_args.get('phone', '')
+        try:
+            contacts = search_contact_by_phone(phone)
+            if contacts:
+                contact = contacts[0]
+                contact_name = contact.get("name", "Adsız")
+                tasks = get_entity_tasks(contact["id"], "contacts")
+                full_c = get_contact_details(contact["id"])
+                leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+                for lead in leads:
+                    tasks.extend(get_entity_tasks(lead["id"], "leads"))
+                open_tasks = [t for t in tasks if not t.get("is_completed")]
+                if open_tasks:
+                    open_tasks.sort(key=lambda t: t.get("complete_till", 0))
+                    task = open_tasks[0]
+                    deadline_ts = task.get("complete_till", 0)
+                    deadline_str = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
+                    return (f"✅ Tapşırığı tamamlayacam:\n\n"
+                            f"👤 {contact_name}\n📞 {phone}\n"
+                            f"📝 {task.get('text', '')}\n⏰ {deadline_str}")
+                else:
+                    return f"⚠️ {contact_name} üçün açıq tapşırıq tapılmadı."
+        except:
+            pass
+        return f"✅ Tapşırığı tamamlayacam:\n📞 {phone}"
     elif fn_name == "create_task":
         assign_names = {"shamil": "Şamil", "soltan": "Soltan", "admin": "Admin"}
         assignee = assign_names.get(fn_args.get('assign_to', ''), 'Admin')
@@ -1083,6 +1133,20 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 except:
                     pass
             add_to_history(chat_id, "assistant", result_text)
+            # Notify admin about any confirmed action
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            if admin_chat and admin_chat != chat_id:
+                action_labels = {"complete_task": "✅ tamamladı", "add_note": "📝 qeyd əlavə etdi", "change_stage": "🔄 mərhələ dəyişdi", "create_task": "📋 tapşırıq yaratdı"}
+                action_label = action_labels.get(fn_name, fn_name)
+                try:
+                    await context.bot.send_message(
+                        admin_chat,
+                        f"📢 *{sender_name}* {action_label}:\n{result_text[:500]}",
+                        parse_mode="Markdown", disable_web_page_preview=True
+                    )
+                except:
+                    pass
     except Exception as e:
         logger.error(f"Action confirm execution error: {e}")
         try:
