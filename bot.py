@@ -1837,8 +1837,15 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     replied_msg_id = update.message.reply_to_message.message_id
     task_info = get_task_from_reply(chat_id, replied_msg_id)
     lead_info = get_lead_from_reply(chat_id, replied_msg_id)
+    # Fallback: if no stored context, try to extract phone from replied message text
     if not task_info and not lead_info:
-        return False
+        replied_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
+        phone_match = re.search(r'\+?994\d{9}|0\d{9}', replied_text)
+        if phone_match:
+            extracted_phone = phone_match.group()
+            lead_info = {"lead_name": "", "phone": extracted_phone}
+        else:
+            return False
     user_text = update.message.text.strip() if update.message.text else ""
     if not user_text:
         return False
