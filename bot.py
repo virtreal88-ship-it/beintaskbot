@@ -41,7 +41,7 @@ KOMMO_TOKEN = os.environ.get("KOMMO_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiI
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
-LLM_MODEL = "gpt-4o"
+LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 
 # OpenAI client
