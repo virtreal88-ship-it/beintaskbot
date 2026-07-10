@@ -1148,6 +1148,44 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 pass
         return
     
+    # Special case: create_task — show assignee selection buttons
+    if fn_name == "create_task":
+        fn_args = pending["args"]
+        # Prepare task result for the multi-step flow
+        result = execute_tool_create_task(
+            fn_args["phone"], fn_args["text"],
+            fn_args.get("date"), fn_args.get("time"),
+            fn_args.get("assign_to")
+        )
+        if isinstance(result, str) or not result.get("success"):
+            err_msg = result if isinstance(result, str) else result.get("message", "Xəta")
+            try:
+                await query.edit_message_text(err_msg)
+            except:
+                pass
+            return
+        # Store for assignee selection
+        task_key = str(uuid.uuid4())[:8]
+        _pending_tasks[f"ai_{task_key}"] = result
+        keyboard = [
+            [
+                InlineKeyboardButton("Şamil Əliyev", callback_data=f"aitask_{task_key}_shamil"),
+                InlineKeyboardButton("Soltan Abbasov", callback_data=f"aitask_{task_key}_soltan"),
+            ],
+            [InlineKeyboardButton("Admin", callback_data=f"aitask_{task_key}_admin")],
+        ]
+        try:
+            await query.edit_message_text(
+                f"✅ Təsdiqləndi!\n\n"
+                f"👤 {result['contact_name']}\n📞 {result['phone']}\n"
+                f"📝 {result['task_text']}\n\n"
+                f"👤 İcraçını seçin:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except:
+            pass
+        return
+    
     # Regular AI tool actions
     fn_args = pending["args"]
     try:
@@ -1179,6 +1217,152 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         logger.error(f"Action confirm execution error: {e}")
         try:
             await query.edit_message_text("⚠️ Xəta baş verdi.")
+        except:
+            pass
+
+# ─── AI Task Assignee Callback ──────────────────────────────────────────────
+async def ai_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle assignee selection for AI-created tasks. Callback: aitask_{key}_{assignee}"""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # aitask_{key}_{assignee}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    task_key = parts[1]
+    assignee_key = parts[2]
+    pending_key = f"ai_{task_key}"
+    task_data = _pending_tasks.get(pending_key)
+    if not task_data:
+        try:
+            await query.edit_message_text("⚠️ Vaxt keçib, yenidən cəhd edin.")
+        except:
+            pass
+        return
+    # Update assignee
+    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin")}
+    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Admin"))
+    task_data["assignee_id"] = assignee_uid
+    task_data["assignee_name"] = assignee_name
+    _pending_tasks[pending_key] = task_data
+    # Show deadline buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("15 dəq", callback_data=f"aitaskdl_{task_key}_15m"),
+            InlineKeyboardButton("1 saat", callback_data=f"aitaskdl_{task_key}_1h"),
+        ],
+        [
+            InlineKeyboardButton("Bu gün", callback_data=f"aitaskdl_{task_key}_today"),
+            InlineKeyboardButton("Sabah", callback_data=f"aitaskdl_{task_key}_tomorrow"),
+        ],
+        [InlineKeyboardButton("Bu həftə", callback_data=f"aitaskdl_{task_key}_week")],
+    ]
+    try:
+        await query.edit_message_text(
+            f"✅ *{assignee_name}* seçildi.\n\n"
+            f"👤 {task_data['contact_name']}\n📞 {task_data['phone']}\n"
+            f"📝 {task_data['task_text']}\n\n⏰ Son tarix seçin:",
+            parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except:
+        pass
+
+async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle deadline selection for AI-created tasks. Callback: aitaskdl_{key}_{deadline}"""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # aitaskdl_{key}_{deadline}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    task_key = parts[1]
+    deadline_key = parts[2]
+    pending_key = f"ai_{task_key}"
+    task_data = _pending_tasks.pop(pending_key, None)
+    if not task_data:
+        try:
+            await query.edit_message_text("⚠️ Vaxt keçib, yenidən cəhd edin.")
+        except:
+            pass
+        return
+    now = datetime.now(tz=BAKU_TZ)
+    if deadline_key == "15m":
+        deadline_dt = now + timedelta(minutes=15)
+    elif deadline_key == "1h":
+        deadline_dt = now + timedelta(hours=1)
+    elif deadline_key == "today":
+        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        if deadline_dt <= now:
+            deadline_dt += timedelta(days=1)
+    elif deadline_key == "tomorrow":
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    elif deadline_key == "week":
+        days_until_friday = (4 - now.weekday()) % 7
+        if days_until_friday == 0 and now.hour >= 18:
+            days_until_friday = 7
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+    else:
+        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    deadline_ts = int(deadline_dt.timestamp())
+    assignee_id = task_data["assignee_id"]
+    assignee_name = task_data["assignee_name"]
+    entity_id = task_data["entity_id"]
+    entity_type = task_data["entity_type"]
+    task_text = task_data["task_text"]
+    link = task_data.get("link", "")
+    contact_name = task_data["contact_name"]
+    phone = task_data["phone"]
+    result = create_task(entity_id, task_text, deadline_ts, responsible_user_id=assignee_id, entity_type=entity_type)
+    if result:
+        result_text = (f"✅ Tapşırıq yaradıldı!\n\n"
+                       f"👤 {contact_name}\n📞 {phone}\n"
+                       f"📝 {task_text}\n"
+                       f"⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n"
+                       f"👤 Məsul: {assignee_name}\n🔗 {link}")
+        # Notify assignee
+        if assignee_id != 10932455:
+            assignee_chat = get_chat_id_for_kommo_user(assignee_id)
+            if assignee_chat:
+                try:
+                    sent_a = await context.bot.send_message(
+                        assignee_chat,
+                        f"📋 *Yeni tapşırıq!*\n\n👤 {contact_name}\n📞 {phone}\n"
+                        f"📝 {task_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+                        parse_mode="Markdown", disable_web_page_preview=True
+                    )
+                    tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
+                    if tid and sent_a:
+                        store_message_task(assignee_chat, sent_a.message_id, int(tid), task_text, entity_id=entity_id, entity_type=entity_type, phone=phone)
+                except:
+                    pass
+        # Notify admin
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        sender_chat = query.message.chat_id if query.message else None
+        if admin_chat and admin_chat != sender_chat:
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(sender_chat), "Əməkdaş") if sender_chat else ""
+            try:
+                await context.bot.send_message(
+                    admin_chat,
+                    f"📢 *{sender_name}* tapşırıq yaratdı:\n\n👤 {contact_name}\n📞 {phone}\n"
+                    f"📝 {task_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n"
+                    f"👤 Məsul: {assignee_name}\n🔗 {link}",
+                    parse_mode="Markdown", disable_web_page_preview=True
+                )
+            except:
+                pass
+    else:
+        result_text = "❌ Tapşırıq yaradılarkən xəta."
+    try:
+        await query.edit_message_text(result_text, parse_mode="Markdown", disable_web_page_preview=True)
+    except:
+        try:
+            await query.edit_message_text(result_text, disable_web_page_preview=True)
         except:
             pass
 
@@ -2176,6 +2360,8 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
     app.add_handler(CallbackQueryHandler(action_confirm_callback, pattern="^actconf_"))
+    app.add_handler(CallbackQueryHandler(ai_task_assign_callback, pattern="^aitask_"))
+    app.add_handler(CallbackQueryHandler(ai_task_deadline_callback, pattern="^aitaskdl_"))
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
