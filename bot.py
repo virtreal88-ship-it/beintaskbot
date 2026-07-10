@@ -1133,12 +1133,29 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 # Notify admin
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                task_phone = task_info.get("phone", "")
+                # Get contact name from entity
+                task_entity_id = task_info.get("entity_id")
+                task_entity_type = task_info.get("entity_type", "leads")
+                contact_name_for_notif = ""
+                if task_entity_id:
+                    contact_name_for_notif = get_contact_name_from_entity(task_entity_id, task_entity_type) or ""
+                    if not task_phone:
+                        task_phone = get_phone_from_entity(task_entity_id, task_entity_type) or ""
+                link_for_notif = f"{KOMMO_BASE_URL}/leads/detail/{task_entity_id}" if task_entity_type == "leads" and task_entity_id else ""
                 if admin_chat and admin_chat != chat_id:
                     try:
-                        await context.bot.send_message(
-                            admin_chat, f"✅ *{sender_name}* tapşırığı tamamladı:\n📝 {task_info.get('task_text', '')}\n💬 {user_text}",
-                            parse_mode="Markdown"
+                        notif_text = (f"✅ *{sender_name}* tapşırığı tamamladı:\n\n"
+                                      f"👤 {contact_name_for_notif}\n📞 {task_phone}\n"
+                                      f"📝 {task_info.get('task_text', '')}\n💬 {user_text}")
+                        if link_for_notif:
+                            notif_text += f"\n🔗 {link_for_notif}"
+                        sent_notif = await context.bot.send_message(
+                            admin_chat, notif_text,
+                            parse_mode="Markdown", disable_web_page_preview=True
                         )
+                        if sent_notif and task_entity_id:
+                            store_message_lead(admin_chat, sent_notif.message_id, task_entity_id, contact_name_for_notif, task_phone)
                     except:
                         pass
             else:
@@ -1211,12 +1228,23 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
             if admin_chat and admin_chat != chat_id:
                 action_labels = {"complete_task": "✅ tamamladı", "add_note": "📝 qeyd əlavə etdi", "change_stage": "🔄 mərhələ dəyişdi", "create_task": "📋 tapşırıq yaratdı"}
                 action_label = action_labels.get(fn_name, fn_name)
+                # Get phone from args for reply context
+                notif_phone = fn_args.get("phone", "")
                 try:
-                    await context.bot.send_message(
+                    sent_admin = await context.bot.send_message(
                         admin_chat,
                         f"📢 *{sender_name}* {action_label}:\n{result_text[:500]}",
                         parse_mode="Markdown", disable_web_page_preview=True
                     )
+                    # Store for reply context so admin can reply to this notification
+                    if sent_admin and notif_phone:
+                        contacts = search_contact_by_phone(notif_phone)
+                        if contacts:
+                            c = contacts[0]
+                            full_c = get_contact_details(c["id"])
+                            leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+                            if leads:
+                                store_message_lead(admin_chat, sent_admin.message_id, leads[0]["id"], c.get("name", ""), notif_phone)
                 except:
                     pass
     except Exception as e:
