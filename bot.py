@@ -765,6 +765,7 @@ def execute_tool_get_lead_info(phone: str) -> str:
 
 # ─── Pending task creation (for deadline buttons) ───────────────────────────
 _pending_tasks: dict = {}  # key -> task info
+_pending_actions: dict = {}  # key -> {"action": ..., "args": ..., "chat_id": ..., "summary": ...}
 
 # ─── AI Message Processing ───────────────────────────────────────────────────
 async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text: str):
@@ -802,7 +803,33 @@ async def process_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
             fn_args = json.loads(tool_call.function.arguments)
             logger.info(f"AI tool call: {fn_name}({fn_args}) from {sender_name}")
             
-            # Execute the tool
+            # For actions that modify CRM, show confirmation first
+            needs_confirm = fn_name in ("add_note", "complete_task", "change_stage", "create_task")
+            if needs_confirm:
+                # Build a human-readable summary of what bot wants to do
+                summary = _build_action_summary(fn_name, fn_args)
+                action_key = str(uuid.uuid4())[:8]
+                _pending_actions[action_key] = {
+                    "action": fn_name,
+                    "args": fn_args,
+                    "chat_id": chat_id,
+                    "summary": summary,
+                    "user_text": user_text,
+                }
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✅ Təsdiq et", callback_data=f"actconf_{action_key}_yes"),
+                        InlineKeyboardButton("❌ Ləğv et", callback_data=f"actconf_{action_key}_no"),
+                    ]
+                ]
+                await update.message.reply_text(
+                    f"🤖 {summary}\n\nTəsdiq edirsiniz?",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                add_to_history(chat_id, "user", user_text)
+                return
+            
+            # Non-modifying tools (search, get_tasks, get_lead_info) - execute immediately
             result_text = await execute_ai_tool(fn_name, fn_args, chat_id, update, context)
             
             if result_text:
@@ -954,6 +981,114 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
         return execute_tool_get_lead_info(fn_args["phone"])
     
     return "⚠️ Naməlum əməliyyat."
+
+# ─── Action Summary Builder ────────────────────────────────────────────────
+def _build_action_summary(fn_name: str, fn_args: dict) -> str:
+    """Build a human-readable summary of what the bot wants to do."""
+    if fn_name == "add_note":
+        return f"📝 Qeyd əlavə edəcəm:\n📞 {fn_args.get('phone', '')}\n💬 {fn_args.get('text', '')}"
+    elif fn_name == "complete_task":
+        return f"✅ Tapşırığı tamamlayacam:\n📞 {fn_args.get('phone', '')}"
+    elif fn_name == "create_task":
+        assign_names = {"shamil": "Şamil", "soltan": "Soltan", "admin": "Admin"}
+        assignee = assign_names.get(fn_args.get('assign_to', ''), 'Admin')
+        return f"📋 Tapşırıq yaradacam:\n📞 {fn_args.get('phone', '')}\n📝 {fn_args.get('text', '')}\n👤 Məsul: {assignee}"
+    elif fn_name == "change_stage":
+        stage_display = STAGE_NAMES.get(STAGES.get(fn_args.get('stage', ''), 0), fn_args.get('stage', ''))
+        return f"🔄 Mərhələ dəyişəcəm:\n📞 {fn_args.get('phone', '')}\n📌 Yeni mərhələ: {stage_display}"
+    return f"⚙️ Əməliyyat: {fn_name}"
+
+# ─── Action Confirmation Callback ─────────────────────────────────────────────
+async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle confirmation/rejection of AI-proposed actions."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data  # actconf_{key}_{yes/no}
+    parts = data.split("_")
+    if len(parts) < 3:
+        return
+    action_key = parts[1]
+    decision = parts[2]
+    pending = _pending_actions.pop(action_key, None)
+    if not pending:
+        try:
+            await query.edit_message_text("⚠️ Vaxt keçib, yenidən cəhd edin.")
+        except:
+            pass
+        return
+    if decision == "no":
+        try:
+            await query.edit_message_text("❌ Ləğv edildi.")
+        except:
+            pass
+        return
+    # Execute the confirmed action
+    fn_name = pending["action"]
+    chat_id = pending["chat_id"]
+    
+    # Special case: reply-to-task completion
+    if fn_name == "_complete_task_reply":
+        task_id = pending["task_id"]
+        task_info = pending["task_info"]
+        user_text = pending["user_text"]
+        try:
+            res = update_task_kommo(task_id, {"is_completed": True, "result": {"text": user_text}})
+            if res:
+                entity_id = task_info.get("entity_id")
+                entity_type = task_info.get("entity_type", "leads")
+                if entity_id:
+                    add_note(entity_id, user_text, entity_type)
+                result_msg = f"✅ Tapşırıq tamamlandı!\n📝 {task_info.get('task_text', '')}\n💬 {user_text}"
+                try:
+                    await query.edit_message_text(result_msg)
+                except:
+                    pass
+                # Notify admin
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                if admin_chat and admin_chat != chat_id:
+                    try:
+                        await context.bot.send_message(
+                            admin_chat, f"✅ *{sender_name}* tapşırığı tamamladı:\n📝 {task_info.get('task_text', '')}\n💬 {user_text}",
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass
+            else:
+                try:
+                    await query.edit_message_text("❌ Xəta baş verdi.")
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"Task reply confirm error: {e}")
+            try:
+                await query.edit_message_text("⚠️ Xəta baş verdi.")
+            except:
+                pass
+        return
+    
+    # Regular AI tool actions
+    fn_args = pending["args"]
+    try:
+        result_text = await execute_ai_tool(fn_name, fn_args, chat_id, update, context)
+        if result_text:
+            try:
+                await query.edit_message_text(result_text, parse_mode="Markdown", disable_web_page_preview=True)
+            except:
+                try:
+                    await query.edit_message_text(result_text, disable_web_page_preview=True)
+                except:
+                    pass
+            add_to_history(chat_id, "assistant", result_text)
+    except Exception as e:
+        logger.error(f"Action confirm execution error: {e}")
+        try:
+            await query.edit_message_text("⚠️ Xəta baş verdi.")
+        except:
+            pass
 
 # ─── Telegram Handlers ───────────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1429,28 +1564,29 @@ async def handle_task_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                             except:
                                 pass
                     return True
-            # Otherwise — complete the task
-            res = update_task_kommo(task_id, {"is_completed": True, "result": {"text": user_text}})
-            if res:
-                # Also add a note to the entity with the reply text
-                entity_id = task_info.get("entity_id")
-                entity_type = task_info.get("entity_type", "leads")
-                if entity_id:
-                    add_note(entity_id, user_text, entity_type)
-                phone = task_info.get("phone", "")
-                await update.message.reply_text(f"✅ Tapşırıq tamamlandı!\n📝 {task_info.get('task_text', '')}\n💬 {user_text}")
-                # Notify admin
-                admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                if admin_chat and admin_chat != chat_id:
-                    try:
-                        await context.bot.send_message(
-                            admin_chat, f"✅ *{sender_name}* tapşırığı tamamladı:\n📝 {task_info.get('task_text', '')}\n💬 {user_text}",
-                            parse_mode="Markdown"
-                        )
-                    except:
-                        pass
-                return True
+            # Otherwise — show confirmation before completing the task
+            action_key = str(uuid.uuid4())[:8]
+            _pending_actions[action_key] = {
+                "action": "_complete_task_reply",
+                "task_id": task_id,
+                "task_info": task_info,
+                "user_text": user_text,
+                "chat_id": chat_id,
+            }
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Bəli, tamamla", callback_data=f"actconf_{action_key}_yes"),
+                    InlineKeyboardButton("❌ Xeyr", callback_data=f"actconf_{action_key}_no"),
+                ]
+            ]
+            await update.message.reply_text(
+                f"🤖 Tapşırığı tamamlayacam + qeyd əlavə edəcəm:\n\n"
+                f"📝 Tapşırıq: {task_info.get('task_text', '')}\n"
+                f"💬 Qeyd: {user_text}\n\n"
+                f"Təsdiq edirsiniz?",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return True
     # If replying to a lead notification, process as AI message with context
     if lead_info:
         # Add lead context to the message
@@ -1947,6 +2083,7 @@ def main():
     app.add_handler(CallbackQueryHandler(task_deadline_callback, pattern="^taskdl_"))
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
+    app.add_handler(CallbackQueryHandler(action_confirm_callback, pattern="^actconf_"))
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
