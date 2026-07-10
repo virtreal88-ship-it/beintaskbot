@@ -1009,19 +1009,28 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
 
 # ─── Action Summary Builder ────────────────────────────────────────────────
 def _build_action_summary(fn_name: str, fn_args: dict) -> str:
-    """Build a human-readable summary of what the bot wants to do."""
+    """Build a human-readable summary of what the bot wants to do. Always includes client name."""
+    phone = fn_args.get('phone', '')
+    # Look up client name for all actions
+    contact_name = ""
+    contact_obj = None
+    try:
+        contacts = search_contact_by_phone(phone)
+        if contacts:
+            contact_obj = contacts[0]
+            contact_name = contact_obj.get("name", "Adsız")
+    except:
+        pass
+    client_line = f"👤 {contact_name}\n📞 {phone}" if contact_name else f"📞 {phone}"
+
     if fn_name == "add_note":
-        return f"📝 Qeyd əlavə edəcəm:\n📞 {fn_args.get('phone', '')}\n💬 {fn_args.get('text', '')}"
+        return f"📝 Qeyd əlavə edəcəm:\n\n{client_line}\n💬 {fn_args.get('text', '')}"
     elif fn_name == "complete_task":
-        # Try to find the actual task details for the summary
-        phone = fn_args.get('phone', '')
-        try:
-            contacts = search_contact_by_phone(phone)
-            if contacts:
-                contact = contacts[0]
-                contact_name = contact.get("name", "Adsız")
-                tasks = get_entity_tasks(contact["id"], "contacts")
-                full_c = get_contact_details(contact["id"])
+        # Find the actual task details
+        if contact_obj:
+            try:
+                tasks = get_entity_tasks(contact_obj["id"], "contacts")
+                full_c = get_contact_details(contact_obj["id"])
                 leads = (full_c or {}).get("_embedded", {}).get("leads", [])
                 for lead in leads:
                     tasks.extend(get_entity_tasks(lead["id"], "leads"))
@@ -1031,21 +1040,40 @@ def _build_action_summary(fn_name: str, fn_args: dict) -> str:
                     task = open_tasks[0]
                     deadline_ts = task.get("complete_till", 0)
                     deadline_str = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
+                    responsible_name = KOMMO_USERS.get(task.get("responsible_user_id", 0), "")
                     return (f"✅ Tapşırığı tamamlayacam:\n\n"
-                            f"👤 {contact_name}\n📞 {phone}\n"
-                            f"📝 {task.get('text', '')}\n⏰ {deadline_str}")
+                            f"{client_line}\n"
+                            f"📝 {task.get('text', '')}\n"
+                            f"⏰ Son tarix: {deadline_str}\n"
+                            f"👤 Məsul: {responsible_name}")
                 else:
                     return f"⚠️ {contact_name} üçün açıq tapşırıq tapılmadı."
-        except:
-            pass
-        return f"✅ Tapşırığı tamamlayacam:\n📞 {phone}"
+            except:
+                pass
+        return f"✅ Tapşırığı tamamlayacam:\n\n{client_line}"
     elif fn_name == "create_task":
-        assign_names = {"shamil": "Şamil", "soltan": "Soltan", "admin": "Admin"}
+        assign_names = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "admin": "Admin"}
         assignee = assign_names.get(fn_args.get('assign_to', ''), 'Admin')
-        return f"📋 Tapşırıq yaradacam:\n📞 {fn_args.get('phone', '')}\n📝 {fn_args.get('text', '')}\n👤 Məsul: {assignee}"
+        return (f"📋 Tapşırıq yaradacam:\n\n"
+                f"{client_line}\n"
+                f"📝 {fn_args.get('text', '')}\n"
+                f"👤 Məsul: {assignee}")
     elif fn_name == "change_stage":
         stage_display = STAGE_NAMES.get(STAGES.get(fn_args.get('stage', ''), 0), fn_args.get('stage', ''))
-        return f"🔄 Mərhələ dəyişəcəm:\n📞 {fn_args.get('phone', '')}\n📌 Yeni mərhələ: {stage_display}"
+        # Get current stage
+        current_stage = ""
+        if contact_obj:
+            try:
+                full_c = get_contact_details(contact_obj["id"])
+                leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+                if leads:
+                    lead = get_lead_details(leads[0]["id"])
+                    if lead:
+                        current_stage = STAGE_NAMES.get(lead.get("status_id", 0), "")
+            except:
+                pass
+        stage_info = f"📌 {current_stage} → {stage_display}" if current_stage else f"📌 Yeni mərhələ: {stage_display}"
+        return f"🔄 Mərhələ dəyişəcəm:\n\n{client_line}\n{stage_info}"
     return f"⚙️ Əməliyyat: {fn_name}"
 
 # ─── Action Confirmation Callback ─────────────────────────────────────────────
