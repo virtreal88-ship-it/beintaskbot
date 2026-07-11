@@ -86,6 +86,7 @@ KOMMO_USERS = {
     15532668: "Şamil Əliyev",
 }
 _STAGE_TASK_TEXTS = {
+    "qiymet_teklifi": "Qiymət təklifini göndər",
     "teqdimat": "Müştəriyə təqdimat keçirmək",
     "yeni_sifaris": "Yeni sifarişi rəsmiləşdirmək",
     "gorus": "Müştəri ilə görüş keçirmək",
@@ -2742,21 +2743,9 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         admin_chat = get_chat_id_for_kommo_user(10932455)
         if not admin_chat or not _bot_app:
             return web.Response(status=200, text="OK")
-        # Qiymət təklifi - deferred notification (only during work hours)
-        if new_status_id == STAGES["qiymet_teklifi"]:
-            now = datetime.now(tz=BAKU_TZ)
-            if 10 <= now.hour < 19:
-                msg = (f"💰 *Qiymət təklifi mərhələsinə keçdi:*\n\n"
-                       f"👤 {contact_name}\n📞 {contact_phone}\n📋 {lead_name}\n🔗 {link}")
-                try:
-                    sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
-                    if sent:
-                        store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-                except:
-                    pass
-            return web.Response(status=200, text="OK")
-        # Stages that require assignee selection
+        # Stages that require assignee selection + task creation
         _STAGE_TASK_KEYS = {
+            STAGES["qiymet_teklifi"]: "qiymet_teklifi",
             STAGES["teqdimat"]: "teqdimat",
             STAGES["yeni_sifaris"]: "yeni_sifaris",
             STAGES["gorus"]: "gorus",
