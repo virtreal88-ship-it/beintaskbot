@@ -28,6 +28,14 @@
         .checkbox-container{display:flex;align-items:center;gap:12px;background:var(--secondary-bg-color);padding:14px;border-radius:12px;cursor:pointer}.checkbox-container input{width:18px;height:18px}
         .subtask-block{border-left:3px solid var(--button-color);padding-left:12px;margin-top:10px;display:none;flex-direction:column;gap:12px}
         .error-msg{color:#ff4d4d;font-size:13px;display:none}
+        .stage-row{display:flex;align-items:center;padding:14px 12px;border-bottom:1px solid #eee;cursor:pointer;transition:background .15s}
+        .stage-row:last-child{border-bottom:none}
+        .stage-row:active{background:var(--secondary-bg-color)}
+        .stage-row.selected{background:var(--secondary-bg-color)}
+        .stage-dot{width:28px;height:28px;border-radius:50%;flex-shrink:0}
+        .stage-name{flex:1;font-size:15px;margin-left:14px;font-weight:500}
+        .stage-check{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:transparent;font-size:18px;font-weight:700}
+        .stage-row.selected .stage-check{color:#333}
     </style>
 </head>
 <body>
@@ -136,18 +144,34 @@
         <button class="btn" style="flex: 1; background: #ef4444; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('delete')">🗑 Sil</button>
     </div>
     <div id="complete-stage-panel" style="display:none; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
-        <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--hint-color);">Hansı mərhələyə keçsin?</div>
-        <div class="options-list" style="gap:6px; max-height:200px; overflow-y:auto;">
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('danisiqlar', this)">Danışıqlar</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('qiymet_teklifi', this)">Qiymət təklifi</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('teqdimat', this)">Təqdimat</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('teqdimat_olundu', this)">Təqdimat olundu</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('yeni_sifaris', this)">Yeni sifariş</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('gorus', this)">Görüş</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('qurashdirma', this)">Quraşdırma</div>
-            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('ugurlu', this)">Uğurlu sifariş</div>
+        <div style="font-size:15px; font-weight:700; margin-bottom:12px;">Mərhələ seçin</div>
+        <div id="stage-list" style="max-height:280px; overflow-y:auto;">
+            <div class="stage-row" onclick="completeWithStage('danisiqlar', this)" data-stage="danisiqlar">
+                <span class="stage-dot" style="background:#90cdf4;"></span><span class="stage-name">Danışıqlar</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('qiymet_teklifi', this)" data-stage="qiymet_teklifi">
+                <span class="stage-dot" style="background:#fde047;"></span><span class="stage-name">Qiymət təklifi</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('teqdimat', this)" data-stage="teqdimat">
+                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Təqdimat</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('teqdimat_olundu', this)" data-stage="teqdimat_olundu">
+                <span class="stage-dot" style="background:#a5b4fc;"></span><span class="stage-name">Təqdimat olundu</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('yeni_sifaris', this)" data-stage="yeni_sifaris">
+                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Yeni sifariş</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('gorus', this)" data-stage="gorus">
+                <span class="stage-dot" style="background:#fb923c;"></span><span class="stage-name">Görüş</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('qurashdirma', this)" data-stage="qurashdirma">
+                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Quraşdırma</span><span class="stage-check">✓</span>
+            </div>
+            <div class="stage-row" onclick="completeWithStage('ugurlu', this)" data-stage="ugurlu">
+                <span class="stage-dot" style="background:#4ade80;"></span><span class="stage-name">Uğurlu sifariş</span><span class="stage-check">✓</span>
+            </div>
         </div>
-        <button class="btn" style="width:100%; margin-top:10px; background:#10b981; color:white; justify-content:center; font-size:14px;" onclick="confirmComplete()">İcra olundu</button>
+        <button class="btn" id="btn-icra-olundu" style="width:100%; margin-top:12px; background:#ccc; color:white; justify-content:center; font-size:14px; pointer-events:none;" onclick="confirmComplete()">İcra olundu</button>
     </div>
 </div>
 
@@ -341,21 +365,27 @@ let completeStageSelected = '';
 function showCompleteStageSelect() {
     completeStageSelected = '';
     document.getElementById('complete-stage-panel').style.display = 'block';
-    document.querySelectorAll('#complete-stage-panel .option-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
+    const btn = document.getElementById('btn-icra-olundu');
+    btn.style.background = '#ccc';
+    btn.style.pointerEvents = 'none';
 }
 
 function completeWithStage(stage, el) {
-    el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
     el.classList.add('selected');
     completeStageSelected = stage;
+    const btn = document.getElementById('btn-icra-olundu');
+    btn.style.background = '#10b981';
+    btn.style.pointerEvents = 'auto';
 }
 
 async function confirmComplete() {
+    if(!completeStageSelected) { toast('Mərhələ seçin!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-    let payload = {action: 'complete_task', task_id: task.id};
-    if(completeStageSelected) { payload.new_stage = completeStageSelected; payload.phone = task.phone; }
+    let payload = {action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || ''};
     closeBottomBar(); renderNotifications();
     await doFetch(payload, null);
 }
