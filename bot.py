@@ -2601,7 +2601,10 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_text in ("📋 Yeni tapşırıq", "🔄 Mərhələ dəyiş", "📝 Qeyd əlavə et", "ℹ️ Müştəri info"):
         await start_button_flow(update, context, user_text)
         return
-    # Process through AI
+    # Process through AI (only for Admin to save tokens)
+    if not is_admin(chat_id):
+        await update.message.reply_text("📱 Mini App-dan istifadə edin (sol aşağıdakı CRM düyməsi).")
+        return
     await process_ai_message(update, context, user_text)
 
 # ─── Kommo Webhook Handler ───────────────────────────────────────────────────
