@@ -2843,7 +2843,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
                 except: pass
-            return web.json_response({"success": True, "message": result})
+            # Extract link from result message
+            link = ""
+            if "\ud83d\udd17" in result:
+                parts = result.split("\ud83d\udd17 ")
+                if len(parts) > 1:
+                    link = parts[1].strip()
+            return web.json_response({"success": True, "message": result, "link": link})
         elif action == "task":
             text = data.get("text", "")
             assignee = data.get("assignee", "admin")
@@ -2960,14 +2966,31 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             result = update_task_kommo(task_id, {"is_completed": True})
+            link = ""
+            stage_msg = ""
             # Also change stage if requested
             new_stage = data.get("new_stage")
             if new_stage and data.get("phone"):
                 stage_result = execute_tool_change_stage(data["phone"], new_stage, chat_id)
-                if stage_result.get("success") and not stage_result.get("needs_confirmation"):
-                    update_lead_kommo(stage_result["lead_id"], {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
+                if stage_result.get("success"):
+                    if stage_result.get("needs_confirmation"):
+                        # Non-admin: send confirmation to admin
+                        admin_chat = get_chat_id_for_kommo_user(10932455)
+                        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                        if admin_chat and _bot_app:
+                            try:
+                                await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {stage_result['contact_name']}\n\ud83d\udcde {data['phone']}\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
+                            except: pass
+                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
+                    else:
+                        update_lead_kommo(stage_result["lead_id"], {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
+                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                    link = f"{KOMMO_BASE_URL}/leads/detail/{stage_result['lead_id']}"
             if result:
-                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!"})
+                msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+                return web.json_response({"success": True, "message": msg, "link": link})
             else:
                 return web.json_response({"success": False, "error": "Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131."})
         elif action == "update_task_deadline":
