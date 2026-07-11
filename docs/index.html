@@ -62,7 +62,7 @@
         <button class="btn btn-main-menu" onclick="openFlow('deal')"><span class="icon">🤝</span><span>Yeni sifariş</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('note')"><span class="icon">📝</span><span>Qeyd & Alt-tapşırıq</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('info')"><span class="icon">ℹ️</span><span>Müştəri info</span></button>
-        <button class="btn btn-main-menu" style="grid-column:span 2;height:80px;background:#e0f2fe;color:#0369a1" onclick="openFlow('close_job')"><span class="icon">✅</span><span>İşin təhvil verilməsi</span></button>
+
     </div>
 </div>
 
@@ -83,10 +83,10 @@
     <button class="btn btn-submit" id="search-submit-btn" onclick="handleSearchProceed()">Davam et</button>
 </div>
 <div id="screen-task-details" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
+    <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
     <div class="form-group"><label>İcraçı:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
-    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div></div></div>
+    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
 <div id="screen-stage-select" class="screen">
@@ -132,14 +132,10 @@
     <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
         <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('close')">✓ Bitdi</button>
-        <button class="btn" style="flex: 1; background: #f59e0b; color: white; justify-content: center; font-size: 14px;" onclick="togglePostponeMenu()">🕒 Vaxtı dəyiş</button>
         <button class="btn" style="flex: 1; background: var(--secondary-bg-color); color: var(--text-color); justify-content: center; font-size: 14px;" onclick="handleBarAction('edit')">✏️ Düzəliş</button>
+        <button class="btn" style="flex: 1; background: #ef4444; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('delete')">🗑 Sil</button>
     </div>
-    <div id="postpone-fast-menu" style="display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
-        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('+2h')">+2 saat</button>
-        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('sabah')">Sabah</button>
-        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('gelen_hefte')">Həftəyə</button>
-    </div>
+
 </div>
 
 <script>
@@ -172,6 +168,8 @@ function goBack(id) { nav(id); }
 
 function openFlow(f) {
     flow = f; gd = {phone:'', deadline:'', stage:'', assignee:''};
+    editingTaskId = null;
+    const tbb = document.getElementById('task-back-btn'); if(tbb) tbb.setAttribute('onclick', "goBack('step-search')");
     document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
     else { document.getElementById('search-phone').value = ''; nav('step-search'); }
@@ -191,8 +189,10 @@ function handleSearchProceed() {
 function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; }
 function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'flex' : 'none'; }
 
-function showSuccessScreen(msg) {
-    document.getElementById('success-msg').textContent = msg;
+function showSuccessScreen(msg, link) {
+    let html = msg;
+    if(link) html += '<br><a href="' + link + '" target="_blank" style="color:var(--link-color);font-size:14px;">🔗 Kommo-da bax</a>';
+    document.getElementById('success-msg').innerHTML = html;
     document.getElementById('screen-success').style.display = 'flex';
 }
 
@@ -211,7 +211,7 @@ async function doFetch(payload, btnId) {
             body: JSON.stringify(payload)
         });
         const j = await r.json();
-        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!'); }
+        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || ''); }
         else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) btn.disabled = false; }
 }
@@ -291,7 +291,7 @@ function clickNotification(id, desc, metaText) {
     renderNotifications();
     document.getElementById('bottom-bar-title').textContent = desc;
     document.getElementById('bottom-bar-meta').textContent = metaText || '';
-    document.getElementById('postpone-fast-menu').style.display = 'none';
+
     const bar = document.getElementById('bottom-action-bar');
     bar.style.display = 'block';
     setTimeout(() => bar.style.transform = 'translateY(0)', 10);
@@ -309,10 +309,7 @@ function closeBottomBar() {
     if (container) renderNotifications();
 }
 
-function togglePostponeMenu() {
-    const m = document.getElementById('postpone-fast-menu');
-    m.style.display = m.style.display === 'none' ? 'grid' : 'none';
-}
+
 
 function markAllAsRead() { mockTasks = []; renderNotifications(); toast("B\u00fct\u00fcn bildiri\u015fl\u0259r t\u0259mizl\u0259ndi", false); }
 
@@ -332,17 +329,16 @@ function handleBarAction(actionType) {
         document.getElementById('task-desc').value = task.desc;
         document.getElementById('search-phone').value = task.phone || '';
         currentEditScreen = 'screen-task-details';
+        document.getElementById('task-back-btn').setAttribute('onclick', "goBack('screen-notifications')");
         closeBottomBar(); nav('screen-task-details');
+    } else if(actionType === 'delete') {
+        mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+        doFetch({action: 'delete_task', task_id: task.id}, null);
+        closeBottomBar(); renderNotifications();
     }
 }
 
-function handlePostponeTime(timePreset) {
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
-    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-    doFetch({action: 'update_task_deadline', task_id: task.id, time_preset: timePreset}, null);
-    closeBottomBar(); renderNotifications();
-}
+
 
 document.addEventListener("DOMContentLoaded", async () => {
     try {

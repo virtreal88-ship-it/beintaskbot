@@ -2872,7 +2872,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     try:
                         await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n{msg}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
                     except: pass
-                return web.json_response({"success": True, "message": msg})
+                return web.json_response({"success": True, "message": msg, "link": result.get('link', '')})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
             stage = data.get("stage", "")
@@ -2900,7 +2900,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
                 except: pass
-            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}"})
+            link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
+            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}", "link": link})
         elif action == "create_deal":
             # For now, create_deal = change stage to specified + optionally create subtask
             stage = data.get("stage", "yeni_sifaris")
@@ -2972,6 +2973,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": f"\u2705 Vaxt d\u0259yi\u015fdirildi: {new_deadline.strftime('%d.%m %H:%M')}"})
             else:
                 return web.json_response({"success": False, "error": "Tapşırıq yenilənmədi."})
+        elif action == "delete_task":
+            task_id = data.get("task_id")
+            if not task_id:
+                return web.json_response({"success": False, "error": "task_id yoxdur."})
+            headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+            resp = requests.delete(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers)
+            if resp.status_code in (200, 204):
+                return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi!"})
+            else:
+                return web.json_response({"success": False, "error": "Silinmədi."})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:
