@@ -2763,16 +2763,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         admin_chat = get_chat_id_for_kommo_user(10932455)
         if not admin_chat or not _bot_app:
             return web.Response(status=200, text="OK")
-        # Qiymət təklifi - auto-create task for Admin (no assignee selection needed)
+        # Qiymət təklifi - notification only (task creation is handled in API handler)
         if new_status_id == STAGES["qiymet_teklifi"]:
-            task_text = _STAGE_TASK_TEXTS["qiymet_teklifi"]
-            now = datetime.now(tz=BAKU_TZ)
-            deadline_dt = now + timedelta(hours=2)
-            deadline_ts = int(deadline_dt.timestamp())
-            create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
             msg = (f"💰 *Qiymət təklifi mərhələsinə keçdi:*\n\n"
-                   f"👤 {contact_name}\n📞 {contact_phone}\n📋 {lead_name}\n🔗 {link}\n\n"
-                   f"✅ Tapşırıq yaradıldı: {task_text} (2 saat)")
+                   f"👤 {contact_name}\n📞 {contact_phone}\n📋 {lead_name}\n🔗 {link}")
             try:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
