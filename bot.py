@@ -2883,6 +2883,33 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     except: pass
                 return web.json_response({"success": True, "message": msg})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
+        elif action == "stage":
+            stage = data.get("stage", "")
+            if not stage:
+                return web.json_response({"success": False, "error": "Mərhələ seçilməyib."})
+            result = execute_tool_change_stage(phone, stage, chat_id)
+            if not result.get("success"):
+                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
+            if result.get("needs_confirmation"):
+                # Non-admin needs confirmation - notify admin
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                stage_display = STAGE_NAMES.get(result["status_id"], stage)
+                if admin_chat and _bot_app:
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
+                    except: pass
+                return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
+            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            # Notify admin
+            admin_chat = get_chat_id_for_kommo_user(10932455)
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            if admin_chat and admin_chat != chat_id and _bot_app:
+                try:
+                    await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
+                except: pass
+            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}"})
         elif action == "create_deal":
             # For now, create_deal = change stage to specified + optionally create subtask
             stage = data.get("stage", "yeni_sifaris")
