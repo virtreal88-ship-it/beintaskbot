@@ -2970,8 +2970,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             stage_msg = ""
             # Also change stage if requested
             new_stage = data.get("new_stage")
+            logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={data.get('phone')}, result={result}")
             if new_stage and data.get("phone"):
                 stage_result = execute_tool_change_stage(data["phone"], new_stage, chat_id)
+                logger.info(f"complete_task stage_result: {stage_result}")
                 if stage_result.get("success"):
                     if stage_result.get("needs_confirmation"):
                         # Non-admin: send confirmation to admin
@@ -3016,12 +3018,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-            resp = requests.delete(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers)
+            del_headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+            resp = requests.delete(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=del_headers, timeout=15)
+            logger.info(f"Delete task {task_id}: status={resp.status_code}")
             if resp.status_code in (200, 204):
                 return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi!"})
             else:
-                return web.json_response({"success": False, "error": "Silinmədi."})
+                return web.json_response({"success": False, "error": f"Silinmədi (status {resp.status_code})."})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:

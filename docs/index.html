@@ -40,7 +40,7 @@
     <div id="success-msg" style="font-size: 15px; color: var(--hint-color); margin-bottom: 32px;">Məlumatlar uğurla yadda saxlanıldı.</div>
     <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
         <button class="btn" style="background: var(--secondary-bg-color); color: var(--text-color); justify-content: center;" onclick="resumeEdit()">✏️ Düzəliş et</button>
-        <button class="btn btn-submit" style="margin: 0; justify-content: center;" onclick="nav('main-screen')">Ana menyuya qayıt</button>
+        <button class="btn btn-submit" style="margin: 0; justify-content: center;" onclick="nav('screen-notifications')">Tapşırıqlara qayıt</button>
     </div>
 </div>
 
@@ -301,6 +301,8 @@ function renderNotifications() {
 
 function clickNotification(id, desc, metaText) {
     selectedTaskId = id;
+    completeStageSelected = '';
+    document.getElementById('complete-stage-panel').style.display = 'none';
     renderNotifications();
     const task = mockTasks.find(t => t.id === id);
     document.getElementById('bottom-bar-title').textContent = desc;
