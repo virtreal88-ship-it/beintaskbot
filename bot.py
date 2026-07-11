@@ -2960,6 +2960,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             result = update_task_kommo(task_id, {"is_completed": True})
+            # Also change stage if requested
+            new_stage = data.get("new_stage")
+            if new_stage and data.get("phone"):
+                stage_result = execute_tool_change_stage(data["phone"], new_stage, chat_id)
+                if stage_result.get("success") and not stage_result.get("needs_confirmation"):
+                    update_lead_kommo(stage_result["lead_id"], {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
             if result:
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!"})
             else:

@@ -131,11 +131,25 @@
     <div id="bottom-bar-title" style="font-weight: 700; margin-bottom: 5px; font-size: 15px;">Seçilmiş tapşırıq</div>
     <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('close')">✓ Bitdi</button>
+        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="showCompleteStageSelect()">✓ Bitdi</button>
         <button class="btn" style="flex: 1; background: var(--secondary-bg-color); color: var(--text-color); justify-content: center; font-size: 14px;" onclick="handleBarAction('edit')">✏️ Düzəliş</button>
         <button class="btn" style="flex: 1; background: #ef4444; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('delete')">🗑 Sil</button>
     </div>
-
+    <div id="complete-stage-panel" style="display:none; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--hint-color);">Hansı mərhələyə keçsin?</div>
+        <div class="options-list" style="gap:6px; max-height:200px; overflow-y:auto;">
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('danisiqlar', this)">Danışıqlar</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('qiymet_teklifi', this)">Qiymət təklifi</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('teqdimat', this)">Təqdimat</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('teqdimat_olundu', this)">Təqdimat olundu</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('yeni_sifaris', this)">Yeni sifariş</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('gorus', this)">Görüş</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('qurasdirma', this)">Quraşdırma</div>
+            <div class="option-card" style="padding:10px; font-size:13px;" onclick="completeWithStage('ugurlu_sifaris', this)">Uğurlu sifariş</div>
+        </div>
+        <button class="btn" style="width:100%; margin-top:10px; background:#0284c7; color:white; justify-content:center; font-size:14px;" onclick="confirmComplete()">Yadda saxla və tamamla</button>
+        <button class="btn" style="width:100%; margin-top:6px; background:var(--secondary-bg-color); color:var(--text-color); justify-content:center; font-size:13px;" onclick="confirmCompleteKeep()">Cari mərhələdə saxla və tamamla</button>
+    </div>
 </div>
 
 <script>
@@ -315,14 +329,41 @@ function markAllAsRead() { mockTasks = []; renderNotifications(); toast("B\u00fc
 
 let editingTaskId = null;
 
+let completeStageSelected = '';
+
+function showCompleteStageSelect() {
+    completeStageSelected = '';
+    document.getElementById('complete-stage-panel').style.display = 'block';
+    document.querySelectorAll('#complete-stage-panel .option-card').forEach(c => c.classList.remove('selected'));
+}
+
+function completeWithStage(stage, el) {
+    el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    completeStageSelected = stage;
+}
+
+function confirmComplete() {
+    if(!completeStageSelected) { toast('Mərhələ seçin!', true); return; }
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    if(!task) return;
+    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+    doFetch({action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone}, null);
+    closeBottomBar(); renderNotifications();
+}
+
+function confirmCompleteKeep() {
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    if(!task) return;
+    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+    doFetch({action: 'complete_task', task_id: task.id}, null);
+    closeBottomBar(); renderNotifications();
+}
+
 function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
-    if(actionType === 'close') {
-        mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-        doFetch({action: 'complete_task', task_id: task.id}, null);
-        closeBottomBar(); renderNotifications();
-    } else if(actionType === 'edit') {
+    if(actionType === 'edit') {
         editingTaskId = task.id;
         flow = 'task'; gd.phone = task.phone || '';
         gd.assignee = task.responsible || '';
