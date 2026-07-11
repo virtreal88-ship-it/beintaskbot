@@ -2592,19 +2592,8 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in _pending_partner_registration:
         await handle_partner_registration(update, context, user_text)
         return
-    # Handle button flow (step-by-step)
-    if chat_id in _button_flow:
-        await handle_button_flow(update, context, user_text)
-        return
-    # Handle main keyboard button presses
-    if user_text in ("📋 Yeni tapşırıq", "🔄 Mərhələ dəyiş", "📝 Qeyd əlavə et", "ℹ️ Müştəri info"):
-        await start_button_flow(update, context, user_text)
-        return
-    # Process through AI (only for Admin to save tokens)
-    if not is_admin(chat_id):
-        await update.message.reply_text("📱 Mini App-dan istifadə edin (sol aşağıdakı CRM düyməsi).")
-        return
-    await process_ai_message(update, context, user_text)
+    # All actions moved to Mini App
+    await update.message.reply_text("📱 Bütün əməliyyatlar üçün Mini App-dan istifadə edin (sol aşağıdakı CRM düyməsi).")
 
 # ─── Kommo Webhook Handler ───────────────────────────────────────────────────
 _bot_app: Application = None
@@ -3317,7 +3306,6 @@ def main():
     # Message handlers
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact_message))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
     # Background jobs
     job_queue = app.job_queue
