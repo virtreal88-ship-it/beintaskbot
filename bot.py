@@ -425,12 +425,15 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
         logger.error(f"Update lead error: {e}")
     return None
 
-def update_task_kommo(task_id: int, data: dict) -> dict | None:
+def update_task_kommo(task_id, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}"
     try:
         resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
+        logger.info(f"update_task_kommo {task_id}: status={resp.status_code}")
         if resp.status_code == 200:
             return resp.json()
+        else:
+            logger.error(f"update_task_kommo failed: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         logger.error(f"Update task error: {e}")
     return None
@@ -3018,13 +3021,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            del_headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-            resp = requests.delete(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=del_headers, timeout=15)
-            logger.info(f"Delete task {task_id}: status={resp.status_code}")
-            if resp.status_code in (200, 204):
-                return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi!"})
+            # Kommo API does not support task deletion; mark as completed instead
+            result = update_task_kommo(task_id, {"is_completed": True})
+            if result:
+                return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi (bağlandı)!"})
             else:
-                return web.json_response({"success": False, "error": f"Silinmədi (status {resp.status_code})."})
+                return web.json_response({"success": False, "error": "Silinmədi."})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:

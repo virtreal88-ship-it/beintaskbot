@@ -350,17 +350,17 @@ function completeWithStage(stage, el) {
     completeStageSelected = stage;
 }
 
-function confirmComplete() {
+async function confirmComplete() {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
     let payload = {action: 'complete_task', task_id: task.id};
     if(completeStageSelected) { payload.new_stage = completeStageSelected; payload.phone = task.phone; }
-    doFetch(payload, null);
     closeBottomBar(); renderNotifications();
+    await doFetch(payload, null);
 }
 
-function handleBarAction(actionType) {
+async function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     if(actionType === 'edit') {
@@ -375,8 +375,8 @@ function handleBarAction(actionType) {
     } else if(actionType === 'delete') {
         if(!confirm('Bu tap\u015f\u0131r\u0131\u011f\u0131 silm\u0259k ist\u0259yirsiniz?')) return;
         mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-        doFetch({action: 'delete_task', task_id: task.id}, null);
         closeBottomBar(); renderNotifications();
+        await doFetch({action: 'delete_task', task_id: task.id}, null);
     }
 }
 
