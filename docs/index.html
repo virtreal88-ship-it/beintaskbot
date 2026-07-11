@@ -208,8 +208,13 @@ async function doFetch(payload, btnId) {
 
 function submitTask() {
     const t = document.getElementById('task-desc').value.trim();
-    if(!t || !gd.assignee || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
-    doFetch({action: 'task', phone: gd.phone, text: t, assignee: gd.assignee, deadline: gd.deadline}, 'task-submit-btn');
+    if(!t || !gd.assignee || !gd.deadline) { toast('B\u00fct\u00fcn sah\u0259l\u0259ri doldurun!', true); return; }
+    if(editingTaskId) {
+        doFetch({action: 'update_task', task_id: editingTaskId, text: t, deadline: gd.deadline}, 'task-submit-btn');
+        editingTaskId = null;
+    } else {
+        doFetch({action: 'task', phone: gd.phone, text: t, assignee: gd.assignee, deadline: gd.deadline}, 'task-submit-btn');
+    }
 }
 
 function submitDeal() {
@@ -296,6 +301,8 @@ function togglePostponeMenu() {
 
 function markAllAsRead() { mockTasks = []; renderNotifications(); toast("B\u00fct\u00fcn bildiri\u015fl\u0259r t\u0259mizl\u0259ndi", false); }
 
+let editingTaskId = null;
+
 function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
@@ -304,6 +311,7 @@ function handleBarAction(actionType) {
         doFetch({action: 'complete_task', task_id: task.id}, null);
         closeBottomBar(); renderNotifications();
     } else if(actionType === 'edit') {
+        editingTaskId = task.id;
         flow = 'task'; gd.phone = task.phone || '';
         gd.assignee = task.responsible || '';
         document.getElementById('task-desc').value = task.desc;

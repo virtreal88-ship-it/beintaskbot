@@ -2932,6 +2932,30 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
             return web.json_response({"success": True, "message": msg})
+        elif action == "update_task":
+            task_id = data.get("task_id")
+            if not task_id:
+                return web.json_response({"success": False, "error": "task_id yoxdur."})
+            update_data = {}
+            if data.get("text"):
+                update_data["text"] = data["text"]
+            if data.get("deadline"):
+                now = datetime.now(tz=BAKU_TZ)
+                dl = data["deadline"]
+                if dl == "15m": new_dl = now + timedelta(minutes=15)
+                elif dl == "1h": new_dl = now + timedelta(hours=1)
+                elif dl == "today": new_dl = now.replace(hour=18, minute=0, second=0)
+                elif dl == "tomorrow": new_dl = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
+                elif dl == "week": new_dl = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
+                else: new_dl = now + timedelta(hours=2)
+                update_data["complete_till"] = int(new_dl.timestamp())
+            if not update_data:
+                return web.json_response({"success": False, "error": "Heç nə dəyişdirilmədi."})
+            result = update_task_kommo(task_id, update_data)
+            if result:
+                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!"})
+            else:
+                return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
         elif action == "complete_task":
             task_id = data.get("task_id")
             if not task_id:
