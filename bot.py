@@ -2932,6 +2932,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
             return web.json_response({"success": True, "message": msg})
+        elif action == "complete_task":
+            task_id = data.get("task_id")
+            if not task_id:
+                return web.json_response({"success": False, "error": "task_id yoxdur."})
+            result = update_task_kommo(task_id, {"is_completed": True})
+            if result:
+                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!"})
+            else:
+                return web.json_response({"success": False, "error": "Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131."})
         elif action == "update_task_deadline":
             task_id = data.get("task_id")
             time_preset = data.get("time_preset", "+2h")

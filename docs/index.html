@@ -301,11 +301,13 @@ function handleBarAction(actionType) {
     if(!task) return;
     if(actionType === 'close') {
         mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-        doFetch({action: 'close_job_report', master_comment: `Tapşırıq paneldən tamamlandı: ${task.desc}`, phone: task.phone}, null);
+        doFetch({action: 'complete_task', task_id: task.id}, null);
         closeBottomBar(); renderNotifications();
     } else if(actionType === 'edit') {
-        flow = 'task'; gd.phone = task.phone;
+        flow = 'task'; gd.phone = task.phone || '';
+        gd.assignee = task.responsible || '';
         document.getElementById('task-desc').value = task.desc;
+        document.getElementById('search-phone').value = task.phone || '';
         currentEditScreen = 'screen-task-details';
         closeBottomBar(); nav('screen-task-details');
     }
