@@ -2920,7 +2920,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
-            return web.json_response({"success": True, "message": msg})
+            link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
+            return web.json_response({"success": True, "message": msg, "link": link})
         elif action == "update_task":
             task_id = data.get("task_id")
             if not task_id:
