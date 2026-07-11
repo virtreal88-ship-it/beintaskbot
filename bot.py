@@ -2973,26 +2973,65 @@ async def handle_api_action(request: web.Request) -> web.Response:
             stage_msg = ""
             # Also change stage if requested
             new_stage = data.get("new_stage")
-            logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={data.get('phone')}, result={result}")
-            if new_stage and data.get("phone"):
-                stage_result = execute_tool_change_stage(data["phone"], new_stage, chat_id)
-                logger.info(f"complete_task stage_result: {stage_result}")
-                if stage_result.get("success"):
-                    if stage_result.get("needs_confirmation"):
-                        # Non-admin: send confirmation to admin
-                        admin_chat = get_chat_id_for_kommo_user(10932455)
-                        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
-                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
-                        if admin_chat and _bot_app:
-                            try:
-                                await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {stage_result['contact_name']}\n\ud83d\udcde {data['phone']}\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
-                            except: pass
-                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
-                    else:
-                        update_lead_kommo(stage_result["lead_id"], {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
-                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
-                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
-                    link = f"{KOMMO_BASE_URL}/leads/detail/{stage_result['lead_id']}"
+            phone = data.get("phone", "")
+            logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={phone}, result={bool(result)}")
+            if new_stage:
+                # Try to find lead: by phone or by task entity
+                lead_id = None
+                status_id = STAGES.get(new_stage)
+                contact_name = ""
+                if phone:
+                    stage_result = execute_tool_change_stage(phone, new_stage, chat_id)
+                    logger.info(f"complete_task stage_result: {stage_result}")
+                    if stage_result.get("success"):
+                        lead_id = stage_result["lead_id"]
+                        contact_name = stage_result.get("contact_name", "")
+                        if stage_result.get("needs_confirmation"):
+                            admin_chat = get_chat_id_for_kommo_user(10932455)
+                            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+                            stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                            if admin_chat and _bot_app:
+                                try:
+                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
+                                except: pass
+                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
+                        else:
+                            update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
+                            stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                        link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+                else:
+                    # No phone - try to get lead from task entity
+                    try:
+                        task_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=15)
+                        if task_resp.status_code == 200:
+                            task_data = task_resp.json()
+                            entity_id = task_data.get("entity_id")
+                            entity_type = task_data.get("entity_type", "contacts")
+                            if entity_type == "leads":
+                                lead_id = entity_id
+                            elif entity_type == "contacts":
+                                full_c = get_contact_details(entity_id)
+                                if full_c:
+                                    leads = full_c.get("_embedded", {}).get("leads", [])
+                                    if leads:
+                                        lead_id = leads[0]["id"]
+                    except: pass
+                    if lead_id and status_id:
+                        if is_admin(chat_id):
+                            update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
+                            stage_display = STAGE_NAMES.get(status_id, new_stage)
+                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                        else:
+                            admin_chat = get_chat_id_for_kommo_user(10932455)
+                            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+                            stage_display = STAGE_NAMES.get(status_id, new_stage)
+                            if admin_chat and _bot_app:
+                                try:
+                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
+                                except: pass
+                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
+                        link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
             if result:
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
                 return web.json_response({"success": True, "message": msg, "link": link})
@@ -3079,9 +3118,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 # Batch fetch contacts
                 contacts_cache = {}
                 if contact_ids:
-                    ids_param = ",".join(str(i) for i in list(contact_ids)[:50])
+                    id_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(contact_ids)[:50])}
+                    id_params["limit"] = 50
                     try:
-                        cr = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params={"filter[id]": ids_param, "limit": 50}, timeout=15)
+                        cr = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=15)
                         if cr.status_code == 200:
                             for c in cr.json().get("_embedded", {}).get("contacts", []):
                                 phone_val = ""
@@ -3094,9 +3134,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 # Batch fetch leads (get first contact from each)
                 leads_contact_cache = {}
                 if lead_ids:
-                    ids_param = ",".join(str(i) for i in list(lead_ids)[:50])
+                    lead_params = {f"filter[id][{i}]": lid for i, lid in enumerate(list(lead_ids)[:50])}
+                    lead_params.update({"with": "contacts", "limit": 50})
                     try:
-                        lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params={"filter[id]": ids_param, "with": "contacts", "limit": 50}, timeout=15)
+                        lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=15)
                         if lr.status_code == 200:
                             for lead in lr.json().get("_embedded", {}).get("leads", []):
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
@@ -3108,9 +3149,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     # Fetch any new contact_ids from leads
                     new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
                     if new_cids:
-                        ids_param = ",".join(str(i) for i in list(new_cids)[:50])
+                        new_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(new_cids)[:50])}
+                        new_params["limit"] = 50
                         try:
-                            cr2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params={"filter[id]": ids_param, "limit": 50}, timeout=15)
+                            cr2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=15)
                             if cr2.status_code == 200:
                                 for c in cr2.json().get("_embedded", {}).get("contacts", []):
                                     phone_val = ""
