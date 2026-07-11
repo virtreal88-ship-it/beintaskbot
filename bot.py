@@ -2983,17 +2983,32 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 time_str = f"{hours} saat gecikir"
                             else:
                                 mins = int(diff.total_seconds() // 60)
-                                time_str = f"{mins} dəq gecikir"
+                                time_str = f"{mins} d\u0259q gecikir"
                     else:
                         time_str = ""
+                    # Enrich with contact info
+                    entity_id = t.get("entity_id")
+                    entity_type = t.get("entity_type", "contacts")
+                    contact_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
+                    phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+                    responsible_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
+                    # Build Kommo link
+                    if entity_type == "leads":
+                        kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
+                    else:
+                        kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     tasks_list.append({
                         "id": t.get("id"),
-                        "title": "⚠️ Gecikmiş tapşırıq" if is_overdue else "📋 Aktiv tapşırıq",
+                        "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
                         "desc": t.get("text", ""),
                         "time": time_str,
                         "is_overdue": is_overdue,
-                        "entity_id": t.get("entity_id"),
-                        "task_id": t.get("id")
+                        "entity_id": entity_id,
+                        "task_id": t.get("id"),
+                        "contact_name": contact_name,
+                        "phone": phone,
+                        "responsible": responsible_name,
+                        "kommo_link": kommo_link
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
