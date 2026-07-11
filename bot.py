@@ -2970,6 +2970,61 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
             if resp.status_code == 200:
                 raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
+                # Batch: collect unique contact entity_ids and fetch them in one request
+                contact_ids = set()
+                lead_ids = set()
+                for t in raw_tasks:
+                    eid = t.get("entity_id")
+                    etype = t.get("entity_type", "contacts")
+                    if eid:
+                        if etype == "contacts":
+                            contact_ids.add(eid)
+                        else:
+                            lead_ids.add(eid)
+                # Batch fetch contacts
+                contacts_cache = {}
+                if contact_ids:
+                    ids_param = ",".join(str(i) for i in list(contact_ids)[:50])
+                    try:
+                        cr = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params={"filter[id]": ids_param, "limit": 50}, timeout=15)
+                        if cr.status_code == 200:
+                            for c in cr.json().get("_embedded", {}).get("contacts", []):
+                                phone_val = ""
+                                for cf in (c.get("custom_fields_values") or []):
+                                    if cf.get("field_code") == "PHONE":
+                                        vals = cf.get("values", [])
+                                        if vals: phone_val = vals[0].get("value", "")
+                                contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+                    except: pass
+                # Batch fetch leads (get first contact from each)
+                leads_contact_cache = {}
+                if lead_ids:
+                    ids_param = ",".join(str(i) for i in list(lead_ids)[:50])
+                    try:
+                        lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params={"filter[id]": ids_param, "with": "contacts", "limit": 50}, timeout=15)
+                        if lr.status_code == 200:
+                            for lead in lr.json().get("_embedded", {}).get("leads", []):
+                                emb_contacts = lead.get("_embedded", {}).get("contacts", [])
+                                if emb_contacts:
+                                    cid = emb_contacts[0]["id"]
+                                    leads_contact_cache[lead["id"]] = cid
+                                    contact_ids.add(cid)
+                    except: pass
+                    # Fetch any new contact_ids from leads
+                    new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
+                    if new_cids:
+                        ids_param = ",".join(str(i) for i in list(new_cids)[:50])
+                        try:
+                            cr2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params={"filter[id]": ids_param, "limit": 50}, timeout=15)
+                            if cr2.status_code == 200:
+                                for c in cr2.json().get("_embedded", {}).get("contacts", []):
+                                    phone_val = ""
+                                    for cf in (c.get("custom_fields_values") or []):
+                                        if cf.get("field_code") == "PHONE":
+                                            vals = cf.get("values", [])
+                                            if vals: phone_val = vals[0].get("value", "")
+                                    contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+                        except: pass
                 for t in raw_tasks:
                     deadline_ts = t.get("complete_till", 0)
                     deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ) if deadline_ts else None
@@ -2986,13 +3041,20 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 time_str = f"{mins} d\u0259q gecikir"
                     else:
                         time_str = ""
-                    # Enrich with contact info
                     entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
-                    contact_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
-                    phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+                    # Resolve from cache
+                    if entity_type == "contacts" and entity_id in contacts_cache:
+                        contact_name = contacts_cache[entity_id]["name"]
+                        phone = contacts_cache[entity_id]["phone"]
+                    elif entity_type == "leads" and entity_id in leads_contact_cache:
+                        cid = leads_contact_cache[entity_id]
+                        contact_name = contacts_cache.get(cid, {}).get("name", "")
+                        phone = contacts_cache.get(cid, {}).get("phone", "")
+                    else:
+                        contact_name = ""
+                        phone = ""
                     responsible_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
-                    # Build Kommo link
                     if entity_type == "leads":
                         kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
                     else:
