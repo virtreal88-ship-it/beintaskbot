@@ -2932,6 +2932,25 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
             return web.json_response({"success": True, "message": msg})
+        elif action == "update_task_deadline":
+            task_id = data.get("task_id")
+            time_preset = data.get("time_preset", "+2h")
+            if not task_id:
+                return web.json_response({"success": False, "error": "task_id yoxdur."})
+            now = datetime.now(tz=BAKU_TZ)
+            if time_preset == "+2h":
+                new_deadline = now + timedelta(hours=2)
+            elif time_preset == "sabah":
+                new_deadline = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
+            elif time_preset == "gelen_hefte":
+                new_deadline = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
+            else:
+                new_deadline = now + timedelta(hours=2)
+            result = update_task_kommo(task_id, {"complete_till": int(new_deadline.timestamp())})
+            if result:
+                return web.json_response({"success": True, "message": f"\u2705 Vaxt d\u0259yi\u015fdirildi: {new_deadline.strftime('%d.%m %H:%M')}"})
+            else:
+                return web.json_response({"success": False, "error": "Tapşırıq yenilənmədi."})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:

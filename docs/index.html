@@ -232,6 +232,8 @@ function submitClose() {
 
 /* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
 async function openNotifications() {
+    const bell = document.getElementById('noti-bell-btn');
+    if(bell) { bell.style.opacity = '0.4'; bell.style.pointerEvents = 'none'; }
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
@@ -239,6 +241,7 @@ async function openNotifications() {
         const j = await r.json();
         if(j.success && j.tasks) { mockTasks = j.tasks; }
     } catch(e) { toast('Bildirişlər yüklənmədi', true); }
+    if(bell) { bell.style.opacity = '1'; bell.style.pointerEvents = 'auto'; }
     renderNotifications(); nav('screen-notifications');
 }
 
@@ -312,7 +315,7 @@ function handlePostponeTime(timePreset) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-    doFetch({action: 'task', action_modifier: 'postpone_' + timePreset, phone: task.phone, text: task.desc}, null);
+    doFetch({action: 'update_task_deadline', task_id: task.id, time_preset: timePreset}, null);
     closeBottomBar(); renderNotifications();
 }
 
