@@ -2012,8 +2012,7 @@ async def start_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         _button_flow[chat_id] = {"action": "task", "step": "phone"}
         await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
     elif button_text == "🔄 Mərhələ dəyiş":
-        _button_flow[chat_id] = {"action": "stage", "step": "phone"}
-        await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")
+        await update.message.reply_text("📱 Mərhələ dəyişmək üçün Mini App-dan istifadə edin (sol alt küncdeki CRM düyməsi).")
     elif button_text == "📝 Qeyd əlavə et":
         _button_flow[chat_id] = {"action": "note", "step": "phone"}
         await update.message.reply_text("📞 Müştərinin telefon nömrəsini yazın:")

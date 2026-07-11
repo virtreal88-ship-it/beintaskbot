@@ -92,7 +92,17 @@
 <div id="screen-stage-select" class="screen">
     <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Yeni mərhələni seçin:</label><div class="options-list"><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div><div class="option-card" onclick="sel('stage','qiymet_teklifi',this)">Qiymət təklifi</div><div class="option-card" onclick="sel('stage','teqdimat',this)">Təqdimat</div><div class="option-card" onclick="sel('stage','teqdimat_olundu',this)">Təqdimat olundu</div><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','gorus',this)">Görüş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','ugurlu',this)">Uğurlu sifariş</div></div></div>
-    <button class="btn btn-submit" id="stage-submit-btn" onclick="submitStage()">Mərhələni dəyiş</button>
+    <button class="btn btn-submit" onclick="stageNextStep1()">Davam et</button>
+</div>
+<div id="screen-stage-assignee" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-stage-select')">← Geri</button></div>
+    <div class="form-group"><label>İcraçı seçin:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil Əliyev</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
+    <button class="btn btn-submit" onclick="stageNextStep2()">Davam et</button>
+</div>
+<div id="screen-stage-deadline" class="screen">
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-stage-assignee')">← Geri</button></div>
+    <div class="form-group"><label>Deadline seçin:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div></div></div>
+    <button class="btn btn-submit" id="stage-submit-btn" onclick="submitStage()">Təsdiqlə və Göndər</button>
 </div>
 <div id="screen-deal-create" class="screen">
     <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
@@ -230,7 +240,9 @@ function submitNote() {
     doFetch({action: 'add_note', phone: gd.phone, text: document.getElementById('note-text').value.trim(), create_subtask: hs, subtask_text: hs ? document.getElementById('note-subtask-text').value.trim() : ''}, 'note-submit-btn');
 }
 
-function submitStage() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage}, 'stage-submit-btn'); }
+function stageNextStep1() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } nav('screen-stage-assignee'); }
+function stageNextStep2() { if(!gd.assignee) { toast('İcraçı seçin!', true); return; } nav('screen-stage-deadline'); }
+function submitStage() { if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
 
 function submitClose() {
     const c = document.getElementById('job-comment').value.trim();
