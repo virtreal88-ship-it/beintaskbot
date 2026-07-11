@@ -137,11 +137,7 @@ const API_BASE = '';
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 
-let mockTasks = [
-    {id: 1, title: "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q", desc: "Z\u0259ng etm\u0259k: \u018fli m\u00fc\u0259llim (0502223344)", phone: "0502223344", time: "5 saat gecikir"},
-    {id: 2, title: "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q", desc: "Kassa aparat\u0131n\u0131n qura\u015fd\u0131r\u0131lmas\u0131", phone: "0551234567", time: "Bu g\u00fcn, 16:00"},
-    {id: 3, title: "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q", desc: "Qiym\u0259t t\u0259klifi g\u00f6nd\u0259r: Leyla xan\u0131m", phone: "0709876543", time: "D\u00fcn\u0259n, 18:00"}
-];
+let mockTasks = [];
 
 function updateBadge() {
     const b = document.getElementById('noti-badge');
@@ -234,7 +230,16 @@ function submitClose() {
 }
 
 /* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
-function openNotifications() { renderNotifications(); nav('screen-notifications'); }
+async function openNotifications() {
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', {
+            headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
+        });
+        const j = await r.json();
+        if(j.success && j.tasks) { mockTasks = j.tasks; }
+    } catch(e) { toast('Bildirişlər yüklənmədi', true); }
+    renderNotifications(); nav('screen-notifications');
+}
 
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
@@ -299,7 +304,16 @@ function handlePostponeTime(timePreset) {
     closeBottomBar(); renderNotifications();
 }
 
-document.addEventListener("DOMContentLoaded", () => updateBadge());
+document.addEventListener("DOMContentLoaded", async () => {
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', {
+            headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
+        });
+        const j = await r.json();
+        if(j.success && j.tasks) { mockTasks = j.tasks; }
+    } catch(e) {}
+    updateBadge();
+});
 </script>
 </body>
 </html>

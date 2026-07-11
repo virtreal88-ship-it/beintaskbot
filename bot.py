@@ -2950,6 +2950,60 @@ async def handle_api_action(request: web.Request) -> web.Response:
         logger.error(f"API action error: {e}\n{traceback.format_exc()}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
 
+async def handle_api_notifications(request: web.Request) -> web.Response:
+    """Return active tasks for the requesting user."""
+    try:
+        tg_user_id = request.headers.get("X-TG-User-ID", "")
+        chat_id = int(tg_user_id) if tg_user_id else None
+        if not chat_id:
+            return web.json_response({"success": False, "error": "User not identified"}, status=401)
+        kommo_user_id = get_kommo_user_id_for_chat(chat_id)
+        if not kommo_user_id:
+            return web.json_response({"success": True, "tasks": []})
+        # Get tasks for this user (incomplete)
+        now = datetime.now(tz=BAKU_TZ)
+        # Get all incomplete tasks for this responsible user
+        url = f"{KOMMO_BASE_URL}/api/v4/tasks"
+        params = {"filter[is_completed]": 0, "filter[responsible_user_id]": kommo_user_id, "limit": 50}
+        tasks_list = []
+        try:
+            resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+            if resp.status_code == 200:
+                raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
+                for t in raw_tasks:
+                    deadline_ts = t.get("complete_till", 0)
+                    deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ) if deadline_ts else None
+                    is_overdue = deadline_dt < now if deadline_dt else False
+                    if deadline_dt:
+                        time_str = deadline_dt.strftime("%d.%m %H:%M")
+                        if is_overdue:
+                            diff = now - deadline_dt
+                            hours = int(diff.total_seconds() // 3600)
+                            if hours > 0:
+                                time_str = f"{hours} saat gecikir"
+                            else:
+                                mins = int(diff.total_seconds() // 60)
+                                time_str = f"{mins} dəq gecikir"
+                    else:
+                        time_str = ""
+                    tasks_list.append({
+                        "id": t.get("id"),
+                        "title": "⚠️ Gecikmiş tapşırıq" if is_overdue else "📋 Aktiv tapşırıq",
+                        "desc": t.get("text", ""),
+                        "time": time_str,
+                        "is_overdue": is_overdue,
+                        "entity_id": t.get("entity_id"),
+                        "task_id": t.get("id")
+                    })
+                # Sort: overdue first
+                tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
+        except Exception as e:
+            logger.error(f"Notifications fetch error: {e}")
+        return web.json_response({"success": True, "tasks": tasks_list})
+    except Exception as e:
+        logger.error(f"API notifications error: {e}")
+        return web.json_response({"success": False, "error": "Server xətası."}, status=500)
+
 async def serve_webapp(request: web.Request) -> web.Response:
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
     return web.FileResponse(html_path)
@@ -2958,6 +3012,7 @@ async def start_webhook_server():
     app_web = web.Application()
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
+    app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
