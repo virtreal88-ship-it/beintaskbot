@@ -2935,7 +2935,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
                 except: pass
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
-            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}", "link": link})
+            # Auto-create task for the new stage if applicable
+            task_msg = ""
+            if stage in _STAGE_TASK_TEXTS:
+                task_text = _STAGE_TASK_TEXTS[stage]
+                now_dt = datetime.now(tz=BAKU_TZ)
+                deadline_ts = int((now_dt + timedelta(hours=2)).timestamp())
+                if stage == "qiymet_teklifi":
+                    create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+                else:
+                    kommo_uid = get_kommo_user_id_for_chat(chat_id) or 10932455
+                    create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=kommo_uid, entity_type="leads")
+                task_msg = f"\n\u2705 Tap\u015f\u0131r\u0131q: {task_text}"
+            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}{task_msg}", "link": link})
         elif action == "create_deal":
             # For now, create_deal = change stage to specified + optionally create subtask
             stage = data.get("stage", "yeni_sifaris")
@@ -3057,6 +3069,20 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 except: pass
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+            # Auto-create task for the new stage if applicable
+            if lead_id and new_stage in _STAGE_TASK_TEXTS:
+                task_text = _STAGE_TASK_TEXTS[new_stage]
+                now_dt = datetime.now(tz=BAKU_TZ)
+                deadline_dt = now_dt + timedelta(hours=2)
+                deadline_ts = int(deadline_dt.timestamp())
+                # qiymet_teklifi always goes to admin
+                if new_stage == "qiymet_teklifi":
+                    create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+                else:
+                    # Other stages: assign to whoever completed the task
+                    kommo_uid = get_kommo_user_id_for_chat(chat_id) or 10932455
+                    create_task(lead_id, task_text, deadline_ts, responsible_user_id=kommo_uid, entity_type="leads")
+                stage_msg += f"\n\u2705 Yeni tap\u015f\u0131r\u0131q: {task_text}"
             if result:
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
                 return web.json_response({"success": True, "message": msg, "link": link})
