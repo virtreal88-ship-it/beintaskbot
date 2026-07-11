@@ -2943,7 +2943,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Heç nə dəyişdirilmədi."})
             result = update_task_kommo(task_id, update_data)
             if result:
-                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!"})
+                # Try to get lead link from task
+                try:
+                    headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers)
+                    t_data = t_resp.json()
+                    entity_id = t_data.get("entity_id", "")
+                    link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
+                except:
+                    link = ""
+                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
         elif action == "complete_task":
