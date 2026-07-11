@@ -183,6 +183,8 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 
 # ─── Bot-created tasks (suppress webhook echo) ──────────────────────────────
 _bot_created_tasks: set = set()
+# Bot-initiated lead stage changes (suppress webhook echo)
+_bot_changed_leads: dict = {}  # {lead_id: timestamp}
 
 # ─── Pending registrations ───────────────────────────────────────────────────
 _pending_partner_registration: dict = {}
@@ -421,6 +423,15 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     try:
         resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
         if resp.status_code == 200:
+            # Track bot-initiated stage changes to suppress webhook echo
+            if "status_id" in data:
+                import time as _time
+                _bot_changed_leads[int(lead_id)] = _time.time()
+                # Cleanup old entries (>60s)
+                cutoff = _time.time() - 60
+                for k in list(_bot_changed_leads.keys()):
+                    if _bot_changed_leads[k] < cutoff:
+                        del _bot_changed_leads[k]
             return resp.json()
     except Exception as e:
         logger.error(f"Update lead error: {e}")
@@ -2714,6 +2725,15 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         pipeline_id = int(pipeline_id) if pipeline_id else 0
         if pipeline_id != PIPELINE_ID:
             return web.Response(status=200, text="OK")
+        # Suppress webhook echo when bot itself changed the stage
+        import time as _time
+        if lead_id in _bot_changed_leads:
+            if _time.time() - _bot_changed_leads[lead_id] < 30:
+                logger.info(f"Webhook suppressed: bot-initiated stage change for lead {lead_id}")
+                del _bot_changed_leads[lead_id]
+                return web.Response(status=200, text="OK")
+            else:
+                del _bot_changed_leads[lead_id]
         # Suppressed stages - no notification
         suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["cavab_gozlenilir"]}
         if new_status_id in suppressed:
