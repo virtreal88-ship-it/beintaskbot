@@ -645,7 +645,29 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
     """Returns dict with result info. If deadline not specified, returns pending state."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
-        return {"success": False, "message": f"❌ '{phone}' nömrəli müştəri tapılmadı."}
+        # Auto-create contact + lead
+        result = create_contact_kommo(phone, phone)
+        if not result:
+            return {"success": False, "message": f"❌ '{phone}' kontakt yaradıla bilmədi."}
+        contact_data = result.get("_embedded", {}).get("contacts", [{}])[0]
+        contact_id = contact_data.get("id")
+        if not contact_id:
+            return {"success": False, "message": f"❌ '{phone}' kontakt yaradıla bilmədi."}
+        # Create a lead for this contact
+        lead_payload = [{
+            "name": f"Sövdələşmə - {phone}",
+            "pipeline_id": PIPELINE_ID,
+            "status_id": STAGES["danisiqlar"],
+            "responsible_user_id": 10932455,
+            "_embedded": {"contacts": [{"id": contact_id}]}
+        }]
+        try:
+            resp = requests.post(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, json=lead_payload, timeout=15)
+            lead_result = resp.json() if resp.status_code in (200, 201) else None
+        except:
+            lead_result = None
+        contacts = [{"id": contact_id, "name": phone}]
+        logger.info(f"Auto-created contact {contact_id} + lead for phone {phone}")
     contact = contacts[0]
     contact_id = contact["id"]
     contact_name = contact.get("name", "Adsız")
