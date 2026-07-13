@@ -220,7 +220,7 @@ function nav(id) {
         document.getElementById('tab-bar').style.display = 'none';
     }
 }
-function goBack(id) { nav(id); }
+function goBack(id) { nav(id); if(id === 'screen-notifications') openNotifications(); }
 
 function openFlow(f) {
     flow = f; gd = {phone:'', deadline:'', stage:'', assignee:''};
@@ -442,7 +442,13 @@ async function handleBarAction(actionType) {
         document.getElementById('task-desc').value = task.desc;
         document.getElementById('search-phone').value = task.phone || '';
         document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
-        const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
+        const dp = document.getElementById('task-deadline-custom');
+        if(dp && task.complete_till) {
+            const d = new Date(task.complete_till * 1000);
+            const pad = n => String(n).padStart(2,'0');
+            dp.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+            gd.deadline = 'custom:' + dp.value;
+        } else if(dp) { dp.value = ''; }
         // Highlight assignee if known
         const assigneeMap = {'Şamil Əliyev':'shamil','Soltan Abbasov':'soltan','Texniki Destek':'admin'};
         const assigneeKey = assigneeMap[task.responsible] || '';
@@ -472,6 +478,7 @@ function switchTab(tab) {
         tabMenu.querySelector('span:last-child').style.color = 'var(--hint-color)';
         tabMenu.querySelector('span:last-child').style.fontWeight = '500';
         nav('screen-notifications');
+        openNotifications();
     } else {
         tabMenu.querySelector('span:last-child').style.color = 'var(--button-color)';
         tabMenu.querySelector('span:last-child').style.fontWeight = '600';

@@ -3345,7 +3345,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "contact_name": contact_name,
                         "phone": phone,
                         "responsible": responsible_name,
-                        "kommo_link": kommo_link
+                        "kommo_link": kommo_link,
+                        "complete_till": t.get("complete_till", 0)
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
