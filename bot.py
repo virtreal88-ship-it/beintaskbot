@@ -238,6 +238,7 @@ HEADERS = {
 
 def search_contact_by_phone(phone: str) -> list:
     digits = re.sub(r"[^\d]", "", phone)
+    target_suffix = digits[-9:] if len(digits) >= 9 else digits
     variants = set()
     if len(digits) >= 9:
         variants.add(digits[-9:])
@@ -261,8 +262,20 @@ def search_contact_by_phone(phone: str) -> list:
                 contacts = resp.json().get("_embedded", {}).get("contacts", [])
                 for c in contacts:
                     if c["id"] not in seen_ids:
-                        seen_ids.add(c["id"])
-                        all_contacts.append(c)
+                        # Verify phone actually matches
+                        phone_match = False
+                        for cf in c.get("custom_fields_values", []) or []:
+                            if cf.get("field_code") == "PHONE":
+                                for val in cf.get("values", []):
+                                    contact_digits = re.sub(r"[^\d]", "", val.get("value", ""))
+                                    if contact_digits[-9:] == target_suffix:
+                                        phone_match = True
+                                        break
+                            if phone_match:
+                                break
+                        if phone_match:
+                            seen_ids.add(c["id"])
+                            all_contacts.append(c)
         except Exception as e:
             logger.error(f"Search contact error ({variant}): {e}")
     return all_contacts
