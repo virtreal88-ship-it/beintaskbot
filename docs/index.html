@@ -48,7 +48,7 @@
     <div id="success-msg" style="font-size: 15px; color: var(--hint-color); margin-bottom: 32px;">Məlumatlar uğurla yadda saxlanıldı.</div>
     <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
         <button class="btn" style="background: var(--secondary-bg-color); color: var(--text-color); justify-content: center;" onclick="resumeEdit()">✏️ Düzəliş et</button>
-        <button class="btn btn-submit" style="margin: 0; justify-content: center;" onclick="nav('screen-notifications')">Tapşırıqlara qayıt</button>
+        <button class="btn btn-submit" style="margin: 0; justify-content: center;" onclick="switchTab('tasks')">Tapşırıqlara qayıt</button>
     </div>
 </div>
 
@@ -58,35 +58,31 @@
         <h1 style="font-size:20px;font-weight:700;">Bein Systems</h1>
         <p style="font-size:13px;color:var(--hint-color);">CRM Smart Assistant</p>
     </div>
-    <div id="noti-bell-btn" onclick="openNotifications()" style="position: absolute; right: 10px; cursor: pointer; font-size: 22px; user-select: none;">
-        🔔<span id="noti-badge" style="position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; font-size: 10px; font-weight: bold; border-radius: 50%; padding: 2px 6px; display: inline-block;">3</span>
-    </div>
+
 </div>
 
-<div id="main-screen" class="screen active">
+<div id="main-screen" class="screen">
     <div class="main-menu">
         <button class="btn btn-main-menu" onclick="openFlow('task')"><span class="icon">📋</span><span>Yeni tapşırıq</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('stage')"><span class="icon">🔄</span><span>Mərhələ dəyiş</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('deal')"><span class="icon">🤝</span><span>Yeni sifariş</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('note')"><span class="icon">📝</span><span>Qeyd & Alt-tapşırıq</span></button>
         <button class="btn btn-main-menu" onclick="openFlow('info')"><span class="icon">ℹ️</span><span>Müştəri info</span></button>
-
     </div>
 </div>
 
-<!-- Notifications Screen -->
-<div id="screen-notifications" class="screen">
+<!-- Notifications/Tasks Screen (now main) -->
+<div id="screen-notifications" class="screen active">
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button>
+        <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
         <button onclick="markAllAsRead()" style="background: none; border: none; color: var(--link-color); font-size: 13px; cursor: pointer;">Hamısını oxunmuş et</button>
     </div>
-    <div class="form-group"><label>Aktiv tapşırıqlar:</label></div>
-    <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px;">
+    <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 80px;">
     </div>
 </div>
 
 <div id="step-search" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button></div>
+    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-notifications')">← Geri</button></div>
     <div class="form-group"><label>Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone" class="input-field" placeholder="0505232933"><div id="search-error" class="error-msg">Min 7 rəqəm daxil edin.</div></div>
     <button class="btn btn-submit" id="search-submit-btn" onclick="handleSearchProceed()">Davam et</button>
 </div>
@@ -131,6 +127,18 @@
     <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button></div>
     <div class="form-group"><label>Yekun hesabat:</label><textarea id="job-comment" class="input-field" placeholder="Görülən işlər..."></textarea><div id="job-comment-error" class="error-msg">Hesabat yazın.</div></div>
     <button class="btn btn-submit" style="background:#0284c7" id="job-submit-btn" onclick="submitClose()">Tapşırığı tamamla</button>
+</div>
+
+<!-- Tab Bar -->
+<div id="tab-bar" style="position:fixed; bottom:0; left:0; right:0; background:var(--bg-color); border-top:1px solid var(--secondary-bg-color); display:flex; z-index:1000; padding:8px 0 env(safe-area-inset-bottom, 8px) 0;">
+    <button id="tab-tasks" onclick="switchTab('tasks')" style="flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; padding:6px 0;">
+        <span style="font-size:20px;">📋</span>
+        <span style="font-size:11px; font-weight:600; color:var(--button-color);">Tapşırıqlar</span>
+    </button>
+    <button id="tab-menu" onclick="switchTab('menu')" style="flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; padding:6px 0;">
+        <span style="font-size:20px;">⚙️</span>
+        <span style="font-size:11px; font-weight:500; color:var(--hint-color);">Menyu</span>
+    </button>
 </div>
 
 <!-- Bottom Action Bar -->
@@ -204,6 +212,10 @@ function nav(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     window.scrollTo(0, 0);
+    // Show tab bar on main screens
+    if(id === 'screen-notifications' || id === 'main-screen') {
+        document.getElementById('tab-bar').style.display = 'flex';
+    }
 }
 function goBack(id) { nav(id); }
 
@@ -214,6 +226,7 @@ function openFlow(f) {
     document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
     else { document.getElementById('search-phone').value = ''; nav('step-search'); }
+    document.getElementById('tab-bar').style.display = 'none';
 }
 
 function handleSearchProceed() {
@@ -422,6 +435,24 @@ async function handleBarAction(actionType) {
 
 
 
+function switchTab(tab) {
+    const tabTasks = document.getElementById('tab-tasks');
+    const tabMenu = document.getElementById('tab-menu');
+    if(tab === 'tasks') {
+        tabTasks.querySelector('span:last-child').style.color = 'var(--button-color)';
+        tabTasks.querySelector('span:last-child').style.fontWeight = '600';
+        tabMenu.querySelector('span:last-child').style.color = 'var(--hint-color)';
+        tabMenu.querySelector('span:last-child').style.fontWeight = '500';
+        nav('screen-notifications');
+    } else {
+        tabMenu.querySelector('span:last-child').style.color = 'var(--button-color)';
+        tabMenu.querySelector('span:last-child').style.fontWeight = '600';
+        tabTasks.querySelector('span:last-child').style.color = 'var(--hint-color)';
+        tabTasks.querySelector('span:last-child').style.fontWeight = '500';
+        nav('main-screen');
+    }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
@@ -430,7 +461,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const j = await r.json();
         if(j.success && j.tasks) { mockTasks = j.tasks; }
     } catch(e) {}
-    updateBadge();
+    renderNotifications();
 });
 </script>
 </body>
