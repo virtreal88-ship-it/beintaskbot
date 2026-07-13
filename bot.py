@@ -3029,7 +3029,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if data.get("deadline"):
                 now = datetime.now(tz=BAKU_TZ)
                 dl = data["deadline"]
-                if dl == "15m": new_dl = now + timedelta(minutes=15)
+                if dl.startswith('custom:'):
+                    try:
+                        new_dl = datetime.fromisoformat(dl.replace('custom:', '')).replace(tzinfo=BAKU_TZ)
+                    except:
+                        new_dl = now + timedelta(hours=2)
+                elif dl == "15m": new_dl = now + timedelta(minutes=15)
                 elif dl == "1h": new_dl = now + timedelta(hours=1)
                 elif dl == "today": new_dl = now.replace(hour=18, minute=0, second=0)
                 elif dl == "tomorrow": new_dl = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
