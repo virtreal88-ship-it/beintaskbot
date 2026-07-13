@@ -2696,6 +2696,13 @@ async def _handle_kommo_task_webhook(data: dict):
         if tid in _bot_created_tasks:
             _bot_created_tasks.discard(tid)
             return
+    # Suppress "Cavab gözlənilir" task type - no notifications
+    if task_type_id_raw:
+        try:
+            if int(task_type_id_raw) == 4229224:
+                return
+        except:
+            pass
     if is_add and responsible_id and responsible_id != 10932455:
         assignee_chat = get_chat_id_for_kommo_user(responsible_id)
         assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
@@ -3252,6 +3259,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                     contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
                         except: pass
                 for t in raw_tasks:
+                    # Skip "Cavab gözlənilir" task type
+                    if t.get("task_type_id") == 4229224:
+                        continue
                     deadline_ts = t.get("complete_till", 0)
                     deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ) if deadline_ts else None
                     is_overdue = deadline_dt < now if deadline_dt else False
