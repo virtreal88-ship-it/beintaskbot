@@ -2921,7 +2921,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             assignee = data.get("assignee", "admin")
             deadline_key = data.get("deadline", "today")
             now = datetime.now(tz=BAKU_TZ)
-            if deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
+            if deadline_key.startswith('custom:'):
+                try:
+                    custom_val = deadline_key.replace('custom:', '')
+                    deadline_dt = datetime.fromisoformat(custom_val).replace(tzinfo=BAKU_TZ)
+                except:
+                    deadline_dt = now + timedelta(hours=2)
+            elif deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
             elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
             elif deadline_key == "today":
                 deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)

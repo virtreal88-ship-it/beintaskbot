@@ -76,7 +76,10 @@
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
         <span id="overdue-count" style="font-size:13px; color:#ef4444; font-weight:600;"></span>
-        <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
+        <div style="display:flex; gap:8px;">
+            <button onclick="refreshTasks()" style="background:var(--secondary-bg-color); color:var(--text-color); border:none; border-radius:8px; padding:6px 10px; font-size:13px; cursor:pointer;">🔄</button>
+            <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
+        </div>
     </div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 80px;">
     </div>
@@ -91,7 +94,7 @@
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
     <div class="form-group"><label>İcraçı:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
-    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div></div>
+    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><input type="datetime-local" id="task-deadline-custom" class="input-field" style="margin-top:8px;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .options-grid .option-card').forEach(c=>c.classList.remove('selected'));"></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
 <div id="screen-stage-select" class="screen">
@@ -306,6 +309,17 @@ function submitClose() {
 }
 
 /* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
+async function refreshTasks() {
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', {
+            headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
+        });
+        const j = await r.json();
+        if(j.success && j.tasks) { mockTasks = j.tasks; }
+    } catch(e) { toast('Yenilənmədi', true); }
+    renderNotifications();
+}
+
 async function openNotifications() {
     const bell = document.getElementById('noti-bell-btn');
     if(bell) { bell.style.opacity = '0.4'; bell.style.pointerEvents = 'none'; }
