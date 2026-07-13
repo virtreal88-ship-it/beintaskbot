@@ -9,6 +9,8 @@
         :root{--bg-color:var(--tg-theme-bg-color,#fff);--text-color:var(--tg-theme-text-color,#000);--hint-color:var(--tg-theme-hint-color,#999);--link-color:var(--tg-theme-link-color,#2481cc);--button-color:var(--tg-theme-button-color,#2481cc);--button-text-color:var(--tg-theme-button-text-color,#fff);--secondary-bg-color:var(--tg-theme-secondary-bg-color,#f4f4f5)}
         *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
         body{background:var(--bg-color);color:var(--text-color);padding:16px;display:flex;flex-direction:column;min-height:100vh}
+        .spinner{width:32px;height:32px;border:3px solid var(--hint-color);border-top-color:var(--button-color);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
+        @keyframes spin{to{transform:rotate(360deg)}}
         #toast{position:fixed;top:-60px;left:50%;transform:translateX(-50%);background:#10b981;color:#fff;padding:12px 24px;border-radius:30px;font-size:14px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:top .3s;z-index:1000}
         #toast.error{background:#ef4444}
         .screen{display:none;flex-direction:column;gap:16px;animation:fadeIn .2s}.screen.active{display:flex}
@@ -322,8 +324,8 @@ async function refreshTasks() {
 }
 
 async function openNotifications() {
-    const bell = document.getElementById('noti-bell-btn');
-    if(bell) { bell.style.opacity = '0.4'; bell.style.pointerEvents = 'none'; }
+    const container = document.getElementById('notifications-container');
+    container.innerHTML = '<div style="text-align:center;padding:40px;"><div class="spinner"></div></div>';
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
@@ -331,7 +333,6 @@ async function openNotifications() {
         const j = await r.json();
         if(j.success && j.tasks) { mockTasks = j.tasks; }
     } catch(e) { toast('Bildirişlər yüklənmədi', true); }
-    if(bell) { bell.style.opacity = '1'; bell.style.pointerEvents = 'auto'; }
     renderNotifications(); nav('screen-notifications');
 }
 
