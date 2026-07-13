@@ -2657,6 +2657,19 @@ async def _handle_kommo_task_webhook(data: dict):
     entity_type_raw = _get("element_type")
     deadline_raw = _get("complete_till")
     created_by_raw = _get("created_by")
+    task_type_id_raw = _get("task_type_id") or _get("task_type")
+    # Task type names mapping
+    _TASK_TYPE_NAMES = {
+        1: "Follow-up", 2: "Meeting", 3263995: "Təqdimat",
+        4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir"
+    }
+    task_type_name = ""
+    if task_type_id_raw:
+        try:
+            task_type_name = _TASK_TYPE_NAMES.get(int(task_type_id_raw), "")
+        except:
+            pass
     responsible_id = int(responsible_raw) if responsible_raw else None
     entity_id = int(entity_id_raw) if entity_id_raw else None
     entity_type_num = int(entity_type_raw) if entity_type_raw else None
@@ -2691,11 +2704,12 @@ async def _handle_kommo_task_webhook(data: dict):
         phone_line = f"\n📞 {client_phone}" if client_phone else ""
         deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
         link_line = f"\n🔗 {link}" if link else ""
+        type_line = f"\n📌 {task_type_name}" if task_type_name else ""
         if assignee_chat:
             try:
                 sent = await _bot_app.bot.send_message(
                     assignee_chat,
-                    f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{name_line}{phone_line}{deadline_line}{link_line}",
+                    f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{link_line}",
                     disable_web_page_preview=True
                 )
                 if sent and task_id_raw:
@@ -2711,10 +2725,11 @@ async def _handle_kommo_task_webhook(data: dict):
         link_line = f"\n🔗 {link}" if link else ""
         responsible_name = KOMMO_USERS.get(responsible_id, "") if responsible_id else ""
         resp_line = f"\n👤 Məsul: {responsible_name}" if responsible_name else ""
+        type_line = f"\n📌 {task_type_name}" if task_type_name else ""
         try:
             await _bot_app.bot.send_message(
                 admin_chat,
-                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{name_line}{phone_line}{deadline_line}{resp_line}{link_line}",
+                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{resp_line}{link_line}",
                 disable_web_page_preview=True
             )
         except:
