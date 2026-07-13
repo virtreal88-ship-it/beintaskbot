@@ -227,6 +227,8 @@ function openFlow(f) {
     editingTaskId = null;
     const tbb = document.getElementById('task-back-btn'); if(tbb) tbb.setAttribute('onclick', "goBack('step-search')");
     document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('task-desc').value = '';
+    const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
     else { document.getElementById('search-phone').value = ''; nav('step-search'); }
     document.getElementById('tab-bar').style.display = 'none';
@@ -435,10 +437,19 @@ async function handleBarAction(actionType) {
     if(!task) return;
     if(actionType === 'edit') {
         editingTaskId = task.id;
-        flow = 'task'; gd.phone = task.phone || '';
-        gd.assignee = task.responsible || '';
+        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: ''};
+        // Clear form first
         document.getElementById('task-desc').value = task.desc;
         document.getElementById('search-phone').value = task.phone || '';
+        document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
+        const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
+        // Highlight assignee if known
+        const assigneeMap = {'Şamil Əliyev':'shamil','Soltan Abbasov':'soltan','Texniki Destek':'admin'};
+        const assigneeKey = assigneeMap[task.responsible] || '';
+        if(assigneeKey) {
+            gd.assignee = assigneeKey;
+            document.querySelectorAll('#screen-task-details .option-card').forEach(c => { if(c.textContent.trim().toLowerCase().includes(assigneeKey === 'shamil' ? 'şamil' : assigneeKey === 'soltan' ? 'soltan' : 'admin')) c.classList.add('selected'); });
+        }
         currentEditScreen = 'screen-task-details';
         document.getElementById('task-back-btn').setAttribute('onclick', "goBack('screen-notifications')");
         closeBottomBar(); nav('screen-task-details');
