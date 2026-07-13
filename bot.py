@@ -2915,6 +2915,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
             if res:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
+                # Notify assignee
+                if result["assignee_id"] != get_kommo_user_id_for_chat(chat_id):
+                    assignee_chat = get_chat_id_for_kommo_user(result["assignee_id"])
+                    if assignee_chat and _bot_app:
+                        try:
+                            await _bot_app.bot.send_message(assignee_chat, f"📋 *Yeni tapşırıq!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                        except: pass
                 # Notify admin
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
