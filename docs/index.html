@@ -75,7 +75,7 @@
 <div id="screen-notifications" class="screen active">
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
-        <button onclick="markAllAsRead()" style="background: none; border: none; color: var(--link-color); font-size: 13px; cursor: pointer;">Hamısını oxunmuş et</button>
+        <span id="overdue-count" style="font-size:13px; color:#ef4444; font-weight:600;"></span>
     </div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 80px;">
     </div>
@@ -142,7 +142,7 @@
 </div>
 
 <!-- Bottom Action Bar -->
-<div id="bottom-action-bar" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-color); box-shadow: 0 -4px 20px rgba(0,0,0,0.15); border-radius: 20px 20px 0 0; padding: 20px; z-index: 1100; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1);" onclick="event.stopPropagation();">
+<div id="bottom-action-bar" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-color); box-shadow: 0 -4px 20px rgba(0,0,0,0.15); border-radius: 20px 20px 0 0; padding: 20px; z-index: 1100; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1); max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation();">
     <div style="width: 40px; height: 5px; background: #ccc; border-radius: 3px; margin: 0 auto 15px auto; cursor: pointer;" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <div id="bottom-bar-title" style="font-weight: 700; margin-bottom: 5px; font-size: 15px;">Seçilmiş tapşırıq</div>
     <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
@@ -153,7 +153,7 @@
     </div>
     <div id="complete-stage-panel" style="display:none; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
         <div style="font-size:15px; font-weight:700; margin-bottom:12px;">Mərhələ seçin</div>
-        <div id="stage-list" style="max-height:280px; overflow-y:auto;">
+        <div id="stage-list" style="max-height:200px; overflow-y:auto;">
             <div class="stage-row" onclick="completeWithStage('danisiqlar', this)" data-stage="danisiqlar">
                 <span class="stage-dot" style="background:#90cdf4;"></span><span class="stage-name">Danışıqlar</span><span class="stage-check">✓</span>
             </div>
@@ -322,7 +322,10 @@ async function openNotifications() {
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
     container.innerHTML = '';
-    updateBadge();
+    // Update overdue count
+    const overdueCount = mockTasks.filter(t => t.title && t.title.includes('Gecikmi\u015f')).length;
+    const overdueEl = document.getElementById('overdue-count');
+    if(overdueEl) overdueEl.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
     if(mockTasks.length === 0) { container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>'; return; }
     mockTasks.forEach(t => {
         const item = document.createElement('div');
