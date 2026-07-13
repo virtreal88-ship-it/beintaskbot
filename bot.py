@@ -3347,8 +3347,21 @@ async def serve_webapp(request: web.Request) -> web.Response:
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
     return web.FileResponse(html_path)
 
+@web.middleware
+async def cors_middleware(request, handler):
+    if request.method == 'OPTIONS':
+        resp = web.Response()
+    else:
+        resp = await handler(request)
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-TG-User-ID'
+    return resp
+
 async def start_webhook_server():
-    app_web = web.Application()
+    app_web = web.Application(middlewares=[cors_middleware])
+    app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
