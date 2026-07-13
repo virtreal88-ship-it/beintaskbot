@@ -3114,6 +3114,21 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 except: pass
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+            # Save note to lead/contact if provided
+            note_text = data.get("note", "").strip()
+            if note_text and lead_id:
+                add_note(lead_id, note_text, "leads")
+            elif note_text and not lead_id:
+                # Try to find contact to add note
+                try:
+                    task_resp2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=15)
+                    if task_resp2.status_code == 200:
+                        td2 = task_resp2.json()
+                        eid2 = td2.get("entity_id")
+                        etype2 = td2.get("entity_type", "contacts")
+                        if eid2:
+                            add_note(eid2, note_text, etype2)
+                except: pass
             # Auto-create task for the new stage if applicable
             if lead_id and new_stage in _STAGE_TASK_TEXTS:
                 task_text = _STAGE_TASK_TEXTS[new_stage]
