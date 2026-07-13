@@ -74,12 +74,12 @@
 <!-- Notifications/Tasks Screen (now main) -->
 <div id="screen-notifications" class="screen active">
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
-        <span id="overdue-count" style="font-size:13px; color:#ef4444; font-weight:600;"></span>
-        <div style="display:flex; gap:8px;">
-            <button onclick="refreshTasks()" style="background:var(--secondary-bg-color); color:var(--text-color); border:none; border-radius:8px; padding:6px 10px; font-size:13px; cursor:pointer;">🔄</button>
-            <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
+            <button onclick="refreshTasks()" style="background:none; border:none; font-size:18px; cursor:pointer; padding:4px;">🔄</button>
         </div>
+        <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
+        <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 80px;">
     </div>
@@ -90,11 +90,11 @@
     <div class="form-group"><label>Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone" class="input-field" placeholder="0505232933"><div id="search-error" class="error-msg">Min 7 rəqəm daxil edin.</div></div>
     <button class="btn btn-submit" id="search-submit-btn" onclick="handleSearchProceed()">Davam et</button>
 </div>
-<div id="screen-task-details" class="screen">
+<div id="screen-task-details" class="screen" style="padding-bottom:30px;">
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
     <div class="form-group"><label>İcraçı:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
-    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:12px; color:var(--hint-color); margin-bottom:4px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" class="input-field" style="font-size:14px;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
+    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
 <div id="screen-stage-select" class="screen">
@@ -216,9 +216,11 @@ function nav(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     window.scrollTo(0, 0);
-    // Show tab bar on main screens
+    // Show/hide tab bar
     if(id === 'screen-notifications' || id === 'main-screen') {
         document.getElementById('tab-bar').style.display = 'flex';
+    } else {
+        document.getElementById('tab-bar').style.display = 'none';
     }
 }
 function goBack(id) { nav(id); }
