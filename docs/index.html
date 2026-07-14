@@ -85,6 +85,7 @@
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
     <div class="form-group"><label>Sağa = Bitdi | Sola = +2 saat</label></div>
+    <div id="filter-row" style="display:none; margin-bottom:10px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option></select></div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
 </div>
@@ -343,23 +344,32 @@ async function openNotifications() {
         const j = await r.json();
         if(j.success && j.tasks) {
             mockTasks = j.tasks;
+            if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
         }
     } catch(e) { toast('Bildirişlər yüklənmədi', true); }
     hideLoader();
     renderNotifications(); nav('screen-notifications');
 }
 
+let currentFilter = 'all';
+function filterTasks() {
+    currentFilter = document.getElementById('filter-assignee').value;
+    renderNotifications();
+}
+
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
     container.innerHTML = ''; updateBadge();
-    const overdueCount = mockTasks.filter(t => t.is_overdue).length;
+    let filtered = mockTasks;
+    if(currentFilter !== 'all') filtered = mockTasks.filter(t => (t.assigneeName || '') === currentFilter);
+    const overdueCount = filtered.filter(t => t.is_overdue).length;
     const oc = document.getElementById('overdue-count');
     if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
-    if(mockTasks.length === 0) {
+    if(filtered.length === 0) {
         container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>';
         return;
     }
-    mockTasks.forEach(t => {
+    filtered.forEach(t => {
         const swipeWrapper = document.createElement('div');
         swipeWrapper.style.cssText = "position: relative; border-radius: 12px; overflow: hidden; background: #e5e7eb;";
         const bgAction = document.createElement('div');

@@ -3533,7 +3533,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     break
             if user_marker_name:
                 tasks_list = [t for t in tasks_list if t.get("assigneeName", "").lower() == user_marker_name.lower()]
-        return web.json_response({"success": True, "tasks": tasks_list})
+        return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
