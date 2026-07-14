@@ -129,6 +129,11 @@ def is_admin(chat_id: int) -> bool:
 
 # Name-to-chat mapping for marker-based notifications
 NAME_TO_CHAT = {
+    "Şamil Əliyev": 7962757442,
+    "Soltan Abbasov": 7262243946,
+    "Hüseyn Səfərov": 7329891614,
+    "Nizami Qasımov": 1628569350,
+    "Rasim Əsgərov": 7920785774,
     "Şamil": 7962757442,
     "Soltan": 7262243946,
     "Hüseyn": 7329891614,
@@ -2858,7 +2863,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
         if lead_id in _bot_changed_leads:
-            if _time.time() - _bot_changed_leads[lead_id] < 30:
+            if _time.time() - _bot_changed_leads[lead_id] < 60:
                 logger.info(f"Webhook suppressed: bot-initiated stage change for lead {lead_id}")
                 del _bot_changed_leads[lead_id]
                 return web.Response(status=200, text="OK")
@@ -3006,7 +3011,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             text = data.get("text", "")
             assignee_name_raw = data.get("assigneeName", "")
             # Routing: Nizami = admin's own tasks, everyone else = Sahə Meneceri
-            if assignee_name_raw.lower() == "nizami":
+            if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
                 assignee = "admin"
             else:
                 assignee = "sahe_meneceri"
@@ -3471,7 +3476,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     tasks_list.append({
                         "id": t.get("id"),
@@ -3547,6 +3552,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
     end = now + timedelta(minutes=15)
     tasks = get_tasks(start, end)
     for t in tasks:
+        # Skip cavab gözlənilir
+        if t.get("task_type_id") == 4229224:
+            continue
         responsible_id = t.get("responsible_user_id")
         if not responsible_id:
             continue
@@ -3580,6 +3588,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
             continue
         # Skip overdue notification for admin
         if responsible_id == 10932455:
+            continue
+        # Skip cavab gözlənilir tasks
+        if t.get("task_type_id") == 4229224:
             continue
         chat_id = get_chat_id_for_kommo_user(responsible_id)
         if not chat_id:

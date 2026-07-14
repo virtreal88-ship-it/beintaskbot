@@ -97,7 +97,7 @@
 <div id="screen-task-details" class="screen" style="padding-bottom:30px;">
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
-    <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil">Şamil</option><option value="Soltan">Soltan</option><option value="Hüseyn">Hüseyn</option><option value="Nizami">Nizami</option><option value="Rasim">Rasim</option></select></div>
+    <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option></select></div>
     <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
     <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
@@ -370,7 +370,7 @@ function renderNotifications() {
         const isUrgent = t.title.includes('Gecikmiş');
         item.style.cssText = `position: relative; background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; z-index: 2; transition: transform 0.1s ease-out, border 0.2s;`;
         if(selectedTaskId === t.id) item.style.border = '2px solid var(--button-color)';
-        const displayDesc = (t.desc || '').replace(/^\[(Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*/i, '');
+        const displayDesc = (t.desc || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*/i, '');
         const assigneeName = t.assigneeName || t.responsible || '';
         item.innerHTML = `
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -491,7 +491,7 @@ async function handleBarAction(actionType) {
         editingTaskId = task.id;
         flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', assigneeName: '', task_type: ''};
         const rawDesc = task.desc || '';
-        const markerMatch = rawDesc.match(/^\[(Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*/);
+        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*/);
         if(markerMatch) {
             gd.assigneeName = markerMatch[1];
             document.getElementById('task-desc').value = rawDesc.replace(markerMatch[0], '');
