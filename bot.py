@@ -347,7 +347,7 @@ def get_contact_name_from_entity(entity_id: int, entity_type: str) -> str:
 def get_contact_notes(contact_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
     try:
-        resp = requests.get(url, headers=HEADERS, params={"limit": 5, "order[created_at]": "desc"}, timeout=15)
+        resp = requests.get(url, headers=HEADERS, params={"limit": 20, "order[created_at]": "desc"}, timeout=15)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("notes", [])
     except:
@@ -508,14 +508,33 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
     name = contact.get("name", "Adsız")
     contact_id = contact.get("id", "")
     phone = ""
+    email = ""
+    partner = ""
+    reg_date = ""
     for cf in (contact.get("custom_fields_values") or []):
         if cf.get("field_code") == "PHONE":
             vals = cf.get("values", [])
             if vals:
                 phone = vals[0].get("value", "")
-                break
+        elif cf.get("field_code") == "EMAIL":
+            vals = cf.get("values", [])
+            if vals:
+                email = vals[0].get("value", "")
+        elif cf.get("field_id") == 2989615:
+            vals = cf.get("values", [])
+            if vals:
+                partner = vals[0].get("value", "")
+        elif cf.get("field_id") == 2989617:
+            vals = cf.get("values", [])
+            if vals:
+                reg_date = vals[0].get("value", "")
+    # Created at
+    created_at = contact.get("created_at", 0)
+    created_str = datetime.fromtimestamp(created_at, tz=BAKU_TZ).strftime("%d.%m.%Y") if created_at else ""
+    # Lead info + lead notes
     leads = contact.get("_embedded", {}).get("leads", [])
     lead_info = ""
+    lead_notes_list = []
     if leads:
         lead_id = leads[0]["id"]
         lead = get_lead_details(lead_id)
@@ -523,15 +542,45 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
             status_id = lead.get("status_id")
             stage_name = STAGE_NAMES.get(status_id, "Naməlum")
             responsible = KOMMO_USERS.get(lead.get("responsible_user_id"), "Naməlum")
-            lead_info = f"\n📋 Sövdələşmə: {lead.get('name', '')}\n📌 Mərhələ: {stage_name}\n👤 Məsul: {responsible}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}"
+            price = lead.get("price", 0)
+            price_str = f"\n💰 Məbləğ: {price} AZN" if price else ""
+            lead_info = f"\n\n📋 *Sövdələşmə:* {lead.get('name', '')}\n📌 Mərhələ: {stage_name}\n👤 Məsul: {responsible}{price_str}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}"
+            # Get lead notes too
+            try:
+                resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", headers=HEADERS, params={"limit": 20, "order[created_at]": "desc"}, timeout=15)
+                if resp.status_code == 200:
+                    lead_notes_list = resp.json().get("_embedded", {}).get("notes", [])
+            except:
+                pass
+    # Combine notes (contact + lead)
+    all_notes = []
+    for n in (notes or []):
+        all_notes.append(n)
+    for n in lead_notes_list:
+        all_notes.append(n)
+    # Sort by created_at desc
+    all_notes.sort(key=lambda x: x.get("created_at", 0), reverse=True)
     notes_text = ""
-    if notes:
-        notes_text = "\n\n📝 *Son qeydlər:*"
-        for n in notes[:3]:
+    if all_notes:
+        notes_text = "\n\n📝 *Son qeydlər və hadisələr:*"
+        shown = 0
+        for n in all_notes:
+            if shown >= 10:
+                break
+            note_type = n.get("note_type", "")
             params = n.get("params", {})
-            text = params.get("text", "") if isinstance(params, dict) else ""
-            if text:
-                notes_text += f"\n  • {text[:100]}"
+            text = ""
+            if isinstance(params, dict):
+                text = params.get("text", "") or params.get("service", "") or params.get("uniq", "")
+            if not text and note_type == "common":
+                text = params.get("text", "") if isinstance(params, dict) else str(params)
+            if not text:
+                continue
+            created = n.get("created_at", 0)
+            date_str = datetime.fromtimestamp(created, tz=BAKU_TZ).strftime("%d.%m %H:%M") if created else ""
+            notes_text += f"\n  {date_str} • {text[:120]}"
+            shown += 1
+    # Tasks
     tasks_text = ""
     if tasks:
         open_tasks = [t for t in tasks if not t.get("is_completed")]
@@ -539,8 +588,19 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
             tasks_text = f"\n\n📋 *Açıq tapşırıqlar ({len(open_tasks)}):*"
             for t in open_tasks[:5]:
                 dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-                tasks_text += f"\n  • {dt.strftime('%d.%m %H:%M')} — {t.get('text', '')[:60]}"
-    msg = f"👤 *{name}*\n📞 {phone}{lead_info}{notes_text}{tasks_text}"
+                resp_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
+                tasks_text += f"\n  ⏰ {dt.strftime('%d.%m %H:%M')} — {t.get('text', '')[:60]} ({resp_name})"
+    # Build header
+    header = f"👤 *{name}*\n📞 {phone}"
+    if email:
+        header += f"\n📧 {email}"
+    if partner:
+        header += f"\n🤝 Partnyor: {partner}"
+    if reg_date:
+        header += f"\n📅 Qeydiyyat: {reg_date}"
+    elif created_str:
+        header += f"\n📅 Yaradılıb: {created_str}"
+    msg = f"{header}{lead_info}{notes_text}{tasks_text}"
     return msg
 
 # ─── Partner helpers ─────────────────────────────────────────────────────────
