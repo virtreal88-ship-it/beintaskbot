@@ -133,6 +133,7 @@ NAME_TO_CHAT = {
     "Soltan": 7262243946,
     "Hüseyn": 7329891614,
     "Nizami": 1628569350,
+    "Rasim": 7920785774,
 }
 
 def get_chat_id_by_name(name: str) -> int | None:
@@ -2745,7 +2746,7 @@ async def _handle_kommo_task_webhook(data: dict):
     task_type_id_raw = _get("task_type_id") or _get("task_type")
     # Task type names mapping
     _TASK_TYPE_NAMES = {
-        1: "Follow-up", 2: "Meeting", 3263995: "Təqdimat",
+        1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
         3267595: "Zəng et", 4229224: "Cavab gözlənilir"
     }
@@ -3576,6 +3577,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         task_id = t.get("id")
         responsible_id = t.get("responsible_user_id")
         if not responsible_id or not task_id:
+            continue
+        # Skip overdue notification for admin
+        if responsible_id == 10932455:
             continue
         chat_id = get_chat_id_for_kommo_user(responsible_id)
         if not chat_id:

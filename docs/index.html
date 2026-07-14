@@ -401,8 +401,8 @@ function renderNotifications() {
         }, {passive: true});
         item.addEventListener('touchend', () => {
             isSwiping = false; item.style.transition = 'transform 0.2s cubic-bezier(0.1, 0.5, 0.1, 1)';
-            if (currentX > 80) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); showCompletePanel(); }, 200); }
-            else if (currentX < -80) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
+            if (currentX > 130) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); showCompletePanel(); }, 200); }
+            else if (currentX < -130) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
             else { item.style.transform = 'translateX(0)'; bgAction.style.background = 'transparent'; }
             currentX = 0;
         });
@@ -495,13 +495,16 @@ async function handleBarAction(actionType) {
         if(markerMatch) {
             gd.assigneeName = markerMatch[1];
             document.getElementById('task-desc').value = rawDesc.replace(markerMatch[0], '');
+        } else if(task.assigneeName) {
+            gd.assigneeName = task.assigneeName;
+            document.getElementById('task-desc').value = rawDesc;
         } else {
             document.getElementById('task-desc').value = rawDesc;
         }
         document.getElementById('search-phone').value = task.phone || '';
         document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
         const asel = document.getElementById('task-assignee-select');
-        if(asel && gd.assigneeName) asel.value = gd.assigneeName;
+        if(asel) asel.value = gd.assigneeName || '';
         const dp = document.getElementById('task-deadline-custom');
         if(dp && task.complete_till) {
             const d = new Date(task.complete_till * 1000);
