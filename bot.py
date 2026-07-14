@@ -3462,6 +3462,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
         if kommo_uid == 10932455:
             # Admin: all tasks today
             tasks = get_tasks(today_start, today_end)
+            tasks = [t for t in tasks if t.get('task_type_id') != 4229224]
             if tasks:
                 msg = f"☀️ *Səhər hesabatı* — bugünkü tapşırıqlar ({len(tasks)}):\n\n"
                 for i, t in enumerate(tasks, 1):
@@ -3478,6 +3479,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
                 msg = "☀️ *Səhər hesabatı*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
         else:
             tasks = get_tasks(today_start, today_end, responsible_id=kommo_uid)
+            tasks = [t for t in tasks if t.get('task_type_id') != 4229224]
             if tasks:
                 msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})* — bugünkü tapşırıqlar:\n\n"
                 for i, t in enumerate(tasks, 1):
