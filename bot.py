@@ -3389,15 +3389,18 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         # Get tasks for this user (incomplete)
         now = datetime.now(tz=BAKU_TZ)
         # Always fetch tasks for Sahə Meneceri (15532668) - all employee tasks are there with markers
-        # If admin requests, also fetch admin's own tasks (10932455)
+        # If admin requests, fetch BOTH admin's own tasks AND Sahə Meneceri tasks
         url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-        fetch_user_id = 15532668 if kommo_user_id != 10932455 else kommo_user_id
-        params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fetch_user_id, "limit": 50}
         tasks_list = []
+        fetch_ids = [15532668] if kommo_user_id != 10932455 else [10932455, 15532668]
+        raw_tasks = []
         try:
-            resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
-            if resp.status_code == 200:
-                raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
+            for fid in fetch_ids:
+                params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fid, "limit": 50}
+                resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+                if resp.status_code == 200:
+                    raw_tasks.extend(resp.json().get("_embedded", {}).get("tasks", []))
+            if raw_tasks:
                 # Batch: collect unique contact entity_ids and fetch them in one request
                 contact_ids = set()
                 lead_ids = set()
