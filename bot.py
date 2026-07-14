@@ -3491,6 +3491,16 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
         except Exception as e:
             logger.error(f"Notifications fetch error: {e}")
+        # Filter by marker for non-admin users
+        if kommo_user_id != 10932455:
+            # Find this user's name from NAME_TO_CHAT reverse lookup
+            user_marker_name = None
+            for name, cid in NAME_TO_CHAT.items():
+                if cid == chat_id:
+                    user_marker_name = name
+                    break
+            if user_marker_name:
+                tasks_list = [t for t in tasks_list if t.get("assigneeName", "").lower() == user_marker_name.lower()]
         return web.json_response({"success": True, "tasks": tasks_list})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
