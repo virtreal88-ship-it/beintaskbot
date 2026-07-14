@@ -127,6 +127,17 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
 def is_admin(chat_id: int) -> bool:
     return get_kommo_user_id_for_chat(chat_id) == 10932455
 
+# Name-to-chat mapping for marker-based notifications
+NAME_TO_CHAT = {
+    "Şamil": 7962757442,
+    "Soltan": 7262243946,
+    "Hüseyn": 7329891614,
+    "Nizami": 1628569350,
+}
+
+def get_chat_id_by_name(name: str) -> int | None:
+    return NAME_TO_CHAT.get(name)
+
 # ─── Message Maps (reply context) ───────────────────────────────────────────
 MESSAGE_MAPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message_maps.json")
 _message_task_map: dict = {}
@@ -2992,7 +3003,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "message": result, "link": link})
         elif action == "task":
             text = data.get("text", "")
-            assignee = data.get("assignee", "admin")
+            assignee_name_raw = data.get("assigneeName", "")
+            # Routing: Nizami = admin's own tasks, everyone else = Sahə Meneceri
+            if assignee_name_raw.lower() == "nizami":
+                assignee = "admin"
+            else:
+                assignee = "sahe_meneceri"
+            # Prepend marker to text
+            if assignee_name_raw:
+                text = f"[{assignee_name_raw}] {text}"
             deadline_key = data.get("deadline", "today")
             now = datetime.now(tz=BAKU_TZ)
             if deadline_key.startswith('custom:'):
@@ -3018,12 +3037,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], task_type_id=task_type_id)
             if res:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
-                # Notify assignee
-                if result["assignee_id"] != get_kommo_user_id_for_chat(chat_id):
-                    assignee_chat = get_chat_id_for_kommo_user(result["assignee_id"])
-                    if assignee_chat and _bot_app:
+                # Notify assignee by marker name
+                if assignee_name_raw and _bot_app:
+                    target_chat = get_chat_id_by_name(assignee_name_raw)
+                    if target_chat and target_chat != chat_id:
                         try:
-                            await _bot_app.bot.send_message(assignee_chat, f"📋 *Yeni tapşırıq!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                            display_text = text.replace(f'[{assignee_name_raw}] ', '')
+                            await _bot_app.bot.send_message(target_chat, f"📋 *Yeni tap\u015f\u0131r\u0131q!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
                         except: pass
                 # Notify admin
                 admin_chat = get_chat_id_for_kommo_user(10932455)
@@ -3343,9 +3363,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "tasks": []})
         # Get tasks for this user (incomplete)
         now = datetime.now(tz=BAKU_TZ)
-        # Get all incomplete tasks for this responsible user
+        # Always fetch tasks for Sahə Meneceri (15532668) - all employee tasks are there with markers
+        # If admin requests, also fetch admin's own tasks (10932455)
         url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-        params = {"filter[is_completed]": 0, "filter[responsible_user_id]": kommo_user_id, "limit": 50}
+        fetch_user_id = 15532668 if kommo_user_id != 10932455 else kommo_user_id
+        params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fetch_user_id, "limit": 50}
         tasks_list = []
         try:
             resp = requests.get(url, headers=HEADERS, params=params, timeout=15)

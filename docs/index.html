@@ -73,19 +73,12 @@
     </div>
 </div>
 
-<!-- Onboarding: choose identity -->
-<div id="screen-onboarding" class="screen" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;">
-    <div style="font-size:18px;font-weight:700;margin-bottom:20px;">Sizi tanıyaq</div>
-    <div class="form-group" style="width:100%;"><label>İsminizi seçin:</label><select id="onboard-select" class="input-field" style="padding:12px;border-radius:10px;font-size:15px;"><option value="">— Seçin —</option><option value="Şamil">Şamil</option><option value="Soltan">Soltan</option><option value="Hüseyn">Hüseyn</option><option value="Nizami">Nizami</option><option value="Rasim">Rasim</option></select></div>
-    <button class="btn btn-submit" style="margin-top:15px;" onclick="saveIdentity()">Davam et</button>
-</div>
-
 <!-- Preloader -->
 <div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg-color);z-index:9999;align-items:center;justify-content:center;"><div style="width:36px;height:36px;border:4px solid var(--hint-color);border-top-color:var(--button-color);border-radius:50%;animation:spin 0.8s linear infinite;"></div></div>
 <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 
 <!-- Notifications/Tasks Screen (now main) -->
-<div id="screen-notifications" class="screen">
+<div id="screen-notifications" class="screen active">
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
         <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
@@ -173,26 +166,9 @@ const tg = window.Telegram.WebApp; tg.ready(); tg.expand();
 const API_BASE = 'https://worker-production-3e3e.up.railway.app';
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
-let myIdentity = localStorage.getItem('myIdentity') || '';
-
 let mockTasks = [];
 
-// Onboarding
 function initApp() {
-    if(!myIdentity) {
-        document.getElementById('screen-onboarding').classList.add('active');
-    } else {
-        document.getElementById('screen-notifications').classList.add('active');
-        openNotifications();
-    }
-}
-function saveIdentity() {
-    const v = document.getElementById('onboard-select').value;
-    if(!v) { toast('Ad seçin!', true); return; }
-    myIdentity = v;
-    localStorage.setItem('myIdentity', v);
-    document.getElementById('screen-onboarding').classList.remove('active');
-    document.getElementById('screen-notifications').classList.add('active');
     openNotifications();
 }
 
@@ -202,7 +178,7 @@ function hideLoader() { document.getElementById('preloader').style.display = 'no
 
 // Re-render on page visibility
 document.addEventListener('visibilitychange', () => {
-    if(!document.hidden && myIdentity) openNotifications();
+    if(!document.hidden) openNotifications();
 });
 
 function updateBadge() {
@@ -301,14 +277,13 @@ function submitTask() {
         let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
         let payload = {action: 'update_task', task_id: editingTaskId, text: finalText};
         if(gd.deadline) payload.deadline = gd.deadline;
-        payload.assignee = 'sahe_meneceri';
+        payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase() === 'nizami' ? 'admin' : 'sahe_meneceri';
         if(gd.task_type) payload.task_type = gd.task_type;
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
     } else {
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
-        const finalKommoText = `[${gd.assigneeName}] ${textInput}`;
-        doFetch({action: 'task', phone: gd.phone, text: finalKommoText, assignee: 'sahe_meneceri', deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
+        doFetch({action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
     }
 }
 
@@ -352,12 +327,7 @@ async function openNotifications() {
         });
         const j = await r.json();
         if(j.success && j.tasks) {
-            // Filter by myIdentity marker
-            if(myIdentity) {
-                mockTasks = j.tasks.filter(t => (t.assigneeName || '').toLowerCase() === myIdentity.toLowerCase());
-            } else {
-                mockTasks = j.tasks;
-            }
+            mockTasks = j.tasks;
         }
     } catch(e) { toast('Bildirişlər yüklənmədi', true); }
     hideLoader();
