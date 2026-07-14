@@ -3448,7 +3448,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil|Soltan)\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     tasks_list.append({
                         "id": t.get("id"),
