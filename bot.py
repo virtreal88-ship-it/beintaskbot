@@ -81,7 +81,7 @@ STAGE_NAMES = {
     143: "imtina olundu",
 }
 KOMMO_USERS = {
-    10932455: "Texniki Destek",
+    10932455: "Nizami Qasımov",
     15531960: "Soltan Abbasov",
     15532668: "Sahə Meneceri",
 }
@@ -1813,7 +1813,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
-        assignee_name = "Texniki Destek"
+        assignee_name = "Nizami Qasımov"
     else:
         assignee_uid = 15532668
         assignee_name = marker_name or "Sahə Meneceri"
@@ -1860,7 +1860,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
-        assignee_name = "Texniki Destek"
+        assignee_name = "Nizami Qasımov"
     else:
         assignee_uid = 15532668
         assignee_name = marker_name or "Sahə Meneceri"
@@ -3500,6 +3500,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     task_text = t.get("text", "")
                     _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
+                    if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
+                        assignee_name_from_marker = "Nizami Qas\u0131mov"
                     _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     tasks_list.append({
