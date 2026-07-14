@@ -293,6 +293,7 @@ function submitTask() {
         if(!t) { toast('M\u0259tni daxil edin!', true); return; }
         let payload = {action: 'update_task', task_id: editingTaskId, text: t};
         if(gd.deadline) payload.deadline = gd.deadline;
+        if(gd.assignee) payload.assignee = gd.assignee;
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
     } else {

@@ -3099,6 +3099,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             update_data = {}
             if data.get("text"):
                 update_data["text"] = data["text"]
+            # Handle assignee change
+            assignee = data.get("assignee")
+            if assignee:
+                assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455}
+                assignee_id = assignee_map.get(assignee)
+                if assignee_id:
+                    update_data["responsible_user_id"] = assignee_id
             if data.get("deadline"):
                 now = datetime.now(tz=BAKU_TZ)
                 dl = data["deadline"]
@@ -3158,8 +3165,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
                             if admin_chat and _bot_app:
                                 try:
-                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
-                                except: pass
+                                    conf_key = str(uuid.uuid4())[:8]
+                                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                                        "phone": phone, "stage": new_stage,
+                                        "lead_id": lead_id, "status_id": stage_result["status_id"],
+                                        "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
+                                    }
+                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
+                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
+                                except Exception as e:
+                                    logger.error(f"complete_task confirmation send error: {e}")
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         else:
                             update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
@@ -3194,8 +3209,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             stage_display = STAGE_NAMES.get(status_id, new_stage)
                             if admin_chat and _bot_app:
                                 try:
-                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown")
-                                except: pass
+                                    conf_key = str(uuid.uuid4())[:8]
+                                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                                        "phone": phone, "stage": new_stage,
+                                        "lead_id": lead_id, "status_id": status_id,
+                                        "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
+                                    }
+                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
+                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
+                                except Exception as e:
+                                    logger.error(f"complete_task confirmation (no phone) error: {e}")
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
             # Save note to lead/contact if provided
