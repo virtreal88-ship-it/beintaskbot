@@ -394,7 +394,7 @@ def get_all_incomplete_tasks() -> list:
         pass
     return []
 
-def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts") -> dict | None:
+def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     payload = [{
         "text": text,
@@ -402,6 +402,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
         "entity_id": entity_id,
         "entity_type": entity_type,
         "responsible_user_id": responsible_user_id or 10932455,
+        "task_type_id": task_type_id,
     }]
     try:
         resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
@@ -3007,13 +3008,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if deadline_dt <= now: deadline_dt += timedelta(days=1)
             elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
             else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            task_type_id = int(data.get("task_type", "1") or "1")
             result = execute_tool_create_task(phone, text, None, None, assignee)
             if isinstance(result, str):
                 return web.json_response({"success": False, "error": result})
             if not result.get("success"):
                 return web.json_response({"success": False, "error": result.get("message", "Xəta")})
             deadline_ts = int(deadline_dt.timestamp())
-            res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
+            res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], task_type_id=task_type_id)
             if res:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee
@@ -3106,6 +3108,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 assignee_id = assignee_map.get(assignee)
                 if assignee_id:
                     update_data["responsible_user_id"] = assignee_id
+            # Handle task type change
+            task_type = data.get("task_type")
+            if task_type:
+                try:
+                    update_data["task_type_id"] = int(task_type)
+                except: pass
             if data.get("deadline"):
                 now = datetime.now(tz=BAKU_TZ)
                 dl = data["deadline"]

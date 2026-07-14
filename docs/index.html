@@ -93,6 +93,7 @@
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
     <div class="form-group"><label>İcraçı:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
+    <div class="form-group"><label>Tapşırıq növü:</label><div class="options-grid"><div class="option-card" onclick="sel('task_type','1',this)">Связаться</div><div class="option-card" onclick="sel('task_type','2',this)">Встреча</div><div class="option-card" onclick="sel('task_type','3263995',this)">Təqdimat</div><div class="option-card" onclick="sel('task_type','3263999',this)">Quraşdırma</div><div class="option-card" onclick="sel('task_type','3267595',this)">Zəng et</div></div></div>
     <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
@@ -240,7 +241,7 @@ function handleSearchProceed() {
     const p = document.getElementById('search-phone').value.trim();
     if(p.replace(/\D/g,'').length < 7) { document.getElementById('search-error').style.display = 'block'; return; }
     document.getElementById('search-error').style.display = 'none'; gd.phone = p;
-    if(flow === 'task') { currentEditScreen = 'screen-task-details'; nav('screen-task-details'); }
+    if(flow === 'task') { gd.task_type = ''; currentEditScreen = 'screen-task-details'; nav('screen-task-details'); }
     else if(flow === 'stage') { currentEditScreen = 'screen-stage-select'; nav('screen-stage-select'); }
     else if(flow === 'deal') { currentEditScreen = 'screen-deal-create'; nav('screen-deal-create'); }
     else if(flow === 'note') { currentEditScreen = 'screen-note-add'; nav('screen-note-add'); }
@@ -294,11 +295,12 @@ function submitTask() {
         let payload = {action: 'update_task', task_id: editingTaskId, text: t};
         if(gd.deadline) payload.deadline = gd.deadline;
         if(gd.assignee) payload.assignee = gd.assignee;
+        if(gd.task_type) payload.task_type = gd.task_type;
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
     } else {
         if(!t || !gd.assignee || !gd.deadline) { toast('B\u00fct\u00fcn sah\u0259l\u0259ri doldurun!', true); return; }
-        doFetch({action: 'task', phone: gd.phone, text: t, assignee: gd.assignee, deadline: gd.deadline}, 'task-submit-btn');
+        doFetch({action: 'task', phone: gd.phone, text: t, assignee: gd.assignee, deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
     }
 }
 
@@ -449,7 +451,7 @@ async function handleBarAction(actionType) {
     if(!task) return;
     if(actionType === 'edit') {
         editingTaskId = task.id;
-        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: ''};
+        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', task_type: ''};
         // Clear form first
         document.getElementById('task-desc').value = task.desc;
         document.getElementById('search-phone').value = task.phone || '';
