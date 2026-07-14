@@ -505,6 +505,9 @@ async function handleBarAction(actionType) {
         document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
         const asel = document.getElementById('task-assignee-select');
         if(asel) asel.value = gd.assigneeName || '';
+        // Set task type from task data
+        const tsel = document.getElementById('task-type-select');
+        if(tsel && task.task_type_id) { tsel.value = task.task_type_id; gd.task_type = String(task.task_type_id); }
         const dp = document.getElementById('task-deadline-custom');
         if(dp && task.complete_till) {
             const d = new Date(task.complete_till * 1000);
