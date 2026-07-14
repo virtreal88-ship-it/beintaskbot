@@ -1808,9 +1808,17 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         except:
             pass
         return
-    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
-    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
-    task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    # All employees go to Sahə Meneceri with marker; admin goes to admin
+    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
+    if assignee_key == "admin":
+        assignee_uid = 10932455
+        assignee_name = "Texniki Destek"
+    else:
+        assignee_uid = 15532668
+        assignee_name = marker_name or "Sahə Meneceri"
+    base_task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    task_text = f"[{marker_name}] {base_task_text}" if marker_name else base_task_text
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
     # Show deadline buttons
     keyboard = [
@@ -1848,9 +1856,16 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
-    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
-    task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
+    if assignee_key == "admin":
+        assignee_uid = 10932455
+        assignee_name = "Texniki Destek"
+    else:
+        assignee_uid = 15532668
+        assignee_name = marker_name or "Sahə Meneceri"
+    base_task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
+    task_text = f"[{marker_name}] {base_task_text}" if marker_name else base_task_text
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
     now = datetime.now(tz=BAKU_TZ)
     if deadline_key == "15m":
@@ -1873,8 +1888,8 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     deadline_ts = int(deadline_dt.timestamp())
     result = create_task(lead_id, task_text, deadline_ts, responsible_user_id=assignee_uid, entity_type="leads")
     if result:
-        if assignee_uid != 10932455:
-            assignee_chat = get_chat_id_for_kommo_user(assignee_uid)
+        if assignee_uid != 10932455 and marker_name:
+            assignee_chat = get_chat_id_by_name(marker_name)
             if assignee_chat and _bot_app:
                 try:
                     sent_a = await _bot_app.bot.send_message(
@@ -2925,6 +2940,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 [
                     InlineKeyboardButton("Şamil", callback_data=f"stgtask-{lead_id}-{stage_key}-shamil"),
                     InlineKeyboardButton("Soltan", callback_data=f"stgtask-{lead_id}-{stage_key}-soltan"),
+                ],
+                [
+                    InlineKeyboardButton("Hüseyn", callback_data=f"stgtask-{lead_id}-{stage_key}-huseyn"),
+                    InlineKeyboardButton("Rasim", callback_data=f"stgtask-{lead_id}-{stage_key}-rasim"),
                 ],
                 [
                     InlineKeyboardButton("Özüm", callback_data=f"stgtask-{lead_id}-{stage_key}-admin"),
