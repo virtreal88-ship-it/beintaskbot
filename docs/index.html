@@ -380,7 +380,7 @@ function renderNotifications() {
             <div style="font-size:14px; font-weight:700; color: var(--text-color);">${displayDesc}</div>
             <div style="font-size:13px; color: var(--text-color); margin-top: 2px;">
                 👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}<br>
-                👤 <b>İcraçı:</b> ${assigneeName}
+                👤 <b>İcraçı:</b> ${assigneeName}${t.task_type_name ? '<br>📌 <b>Növ:</b> '+t.task_type_name : ''}
             </div>
             <div style="margin-top: 4px; font-size: 12px;">
                 ${t.kommo_link ? `🔗 <a href="${t.kommo_link}" target="_blank" style="color: var(--link-color); font-weight: bold; text-decoration: underline;" onclick="event.stopPropagation();">Kommo CRM Kartı</a>` : ''}

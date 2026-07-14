@@ -3497,6 +3497,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     task_text = t.get("text", "")
                     _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir"}
+                    task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
@@ -3510,7 +3512,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "responsible": responsible_name,
                         "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
-                        "complete_till": t.get("complete_till", 0)
+                        "complete_till": t.get("complete_till", 0),
+                        "task_type_name": task_type_name
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
