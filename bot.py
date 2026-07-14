@@ -83,7 +83,7 @@ STAGE_NAMES = {
 KOMMO_USERS = {
     10932455: "Texniki Destek",
     15531960: "Soltan Abbasov",
-    15532668: "Şamil Əliyev",
+    15532668: "Sahə Meneceri",
 }
 _STAGE_TASK_TEXTS = {
     "qiymet_teklifi": "Qiymət təklifini göndər",
@@ -752,7 +752,7 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
     entity_type = "leads" if lead_id else "contacts"
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else f"{KOMMO_BASE_URL}/contacts/detail/{contact_id}"
     # Resolve assignee
-    assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455}
+    assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
     assignee_id = assignee_map.get(assign_to, 10932455)
     assignee_name = KOMMO_USERS.get(assignee_id, "Admin")
     return {
@@ -1411,7 +1411,7 @@ async def ai_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
     # Update assignee
-    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin")}
+    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
     assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Admin"))
     task_data["assignee_id"] = assignee_uid
     task_data["assignee_name"] = assignee_name
@@ -1791,7 +1791,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         except:
             pass
         return
-    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek")}
+    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
     assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
     task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
@@ -1831,7 +1831,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek")}
+    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Texniki Destek"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
     assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Texniki Destek"))
     task_text = _STAGE_TASK_TEXTS.get(stage_key, "Mərhələ tapşırığı")
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
@@ -2414,7 +2414,7 @@ async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not flow or flow.get("action") != "task":
         await query.edit_message_text("❌ Vaxtı keçib.")
         return
-    assignee_map = {"shamil": (15532668, "Şamil Əliyev"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin")}
+    assignee_map = {"shamil": (15532668, "Sahə Meneceri"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin"), "sahe_meneceri": (15532668, "Sahə Meneceri")}
     assignee_id, assignee_name = assignee_map.get(action_key, (10932455, "Admin"))
     flow["assignee_id"] = assignee_id
     flow["assignee_name"] = assignee_name
@@ -3104,7 +3104,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # Handle assignee change
             assignee = data.get("assignee")
             if assignee:
-                assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455}
+                assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
                 assignee_id = assignee_map.get(assignee)
                 if assignee_id:
                     update_data["responsible_user_id"] = assignee_id
@@ -3145,6 +3145,27 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
+        elif action == "update_task_deadline":
+            task_id = data.get("task_id")
+            time_preset = data.get("time_preset", "+2h")
+            if not task_id:
+                return web.json_response({"success": False, "error": "task_id yoxdur."})
+            now = datetime.now(tz=BAKU_TZ)
+            if time_preset == "+2h":
+                new_dl = now + timedelta(hours=2)
+            elif time_preset == "sabah":
+                new_dl = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+            elif time_preset == "gelen_hefte":
+                days_ahead = 7 - now.weekday()
+                if days_ahead <= 0: days_ahead += 7
+                new_dl = (now + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
+            else:
+                new_dl = now + timedelta(hours=2)
+            result = update_task_kommo(task_id, {"complete_till": int(new_dl.timestamp())})
+            if result:
+                return web.json_response({"success": True, "message": "Vaxt dəyişdirildi."})
+            else:
+                return web.json_response({"success": False, "error": "Yeniləmə uğursuz."})
         elif action == "complete_task":
             task_id = data.get("task_id")
             if not task_id:
@@ -3425,10 +3446,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
                     else:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
+                    # Extract assigneeName from marker
+                    task_text = t.get("text", "")
+                    _marker_match = re.match(r'^\[(Şamil|Soltan)\]\s*', task_text)
+                    assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
-                        "desc": t.get("text", ""),
+                        "desc": task_text,
                         "time": time_str,
                         "is_overdue": is_overdue,
                         "entity_id": entity_id,
@@ -3436,6 +3461,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "contact_name": contact_name,
                         "phone": phone,
                         "responsible": responsible_name,
+                        "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
                         "complete_till": t.get("complete_till", 0)
                     })

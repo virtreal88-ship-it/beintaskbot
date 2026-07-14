@@ -80,7 +80,8 @@
         <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
-    <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 80px;">
+    <div class="form-group"><label>Aktiv tapşırıqlar (İcra etmək üçün sağa, +2saat üçün sola sürüşdürün):</label></div>
+    <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
 </div>
 
@@ -92,8 +93,8 @@
 <div id="screen-task-details" class="screen" style="padding-bottom:30px;">
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
-    <div class="form-group"><label>Tapşırıq təsviri:</label><textarea id="task-desc" class="input-field" placeholder="Mətni yazın..."></textarea></div>
-    <div class="form-group"><label>İcraçı:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
+    <div class="form-group"><label>İcraçı:</label><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:6px;"><div class="option-card" onclick="sel('assigneeName','Şamil',this)">👤 Şamil</div><div class="option-card" onclick="sel('assigneeName','Soltan',this)">👤 Soltan</div></div></div>
+    <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
     <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
@@ -146,55 +147,26 @@
 </div>
 
 <!-- Bottom Action Bar -->
-<div id="bottom-action-bar" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-color); box-shadow: 0 -4px 20px rgba(0,0,0,0.15); border-radius: 20px 20px 0 0; padding: 20px; z-index: 1100; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1); max-height: 85vh; overflow-y: auto;" onclick="event.stopPropagation();">
+<div id="bottom-action-bar" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-color); box-shadow: 0 -4px 20px rgba(0,0,0,0.15); border-radius: 20px 20px 0 0; padding: 20px; z-index: 1100; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1);" onclick="event.stopPropagation();">
     <div style="width: 40px; height: 5px; background: #ccc; border-radius: 3px; margin: 0 auto 15px auto; cursor: pointer;" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <div id="bottom-bar-title" style="font-weight: 700; margin-bottom: 5px; font-size: 15px;">Seçilmiş tapşırıq</div>
     <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="showCompleteStageSelect()">✓ Bitdi</button>
+        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('close')">✓ Bitdi</button>
+        <button class="btn" style="flex: 1; background: #f59e0b; color: white; justify-content: center; font-size: 14px;" onclick="togglePostponeMenu()">🕒 Vaxtı dəyiş</button>
         <button class="btn" style="flex: 1; background: var(--secondary-bg-color); color: var(--text-color); justify-content: center; font-size: 14px;" onclick="handleBarAction('edit')">✏️ Düzəliş</button>
-        <button class="btn" style="flex: 1; background: #ef4444; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('delete')">🗑 Sil</button>
     </div>
-    <div id="complete-stage-panel" style="display:none; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
-        <div style="font-size:15px; font-weight:700; margin-bottom:12px;">Mərhələ seçin</div>
-        <div id="stage-list" style="max-height:200px; overflow-y:auto;">
-            <div class="stage-row" onclick="completeWithStage('danisiqlar', this)" data-stage="danisiqlar">
-                <span class="stage-dot" style="background:#90cdf4;"></span><span class="stage-name">Danışıqlar</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('qiymet_teklifi', this)" data-stage="qiymet_teklifi">
-                <span class="stage-dot" style="background:#fde047;"></span><span class="stage-name">Qiymət təklifi</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('teqdimat', this)" data-stage="teqdimat">
-                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Təqdimat</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('teqdimat_olundu', this)" data-stage="teqdimat_olundu">
-                <span class="stage-dot" style="background:#a5b4fc;"></span><span class="stage-name">Təqdimat olundu</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('yeni_sifaris', this)" data-stage="yeni_sifaris">
-                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Yeni sifariş</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('gorus', this)" data-stage="gorus">
-                <span class="stage-dot" style="background:#fb923c;"></span><span class="stage-name">Görüş</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('qurashdirma', this)" data-stage="qurashdirma">
-                <span class="stage-dot" style="background:#f0abfc;"></span><span class="stage-name">Quraşdırma</span><span class="stage-check">✓</span>
-            </div>
-            <div class="stage-row" onclick="completeWithStage('ugurlu', this)" data-stage="ugurlu">
-                <span class="stage-dot" style="background:#4ade80;"></span><span class="stage-name">Uğurlu sifariş</span><span class="stage-check">✓</span>
-            </div>
-        </div>
-        <div id="complete-note-block" style="display:none; margin-top:12px;">
-            <label style="font-size:13px; color:var(--hint-color); margin-bottom:4px; display:block;">Qeyd (məcburi):</label>
-            <textarea id="complete-note-text" class="input-field" style="min-height:60px; font-size:14px; resize:vertical;" placeholder="Qeyd yazın..."></textarea>
-        </div>
-        <button class="btn" id="btn-icra-olundu" style="width:100%; margin-top:12px; background:#ccc; color:white; justify-content:center; font-size:14px; pointer-events:none;" onclick="confirmComplete()">İcra olundu</button>
+    <div id="postpone-fast-menu" style="display: none; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; border-top: 1px solid var(--secondary-bg-color); padding-top: 12px;">
+        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('+2h')">+2 saat</button>
+        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('sabah')">Sabah</button>
+        <button class="option-card" style="padding: 10px; font-size: 13px;" onclick="handlePostponeTime('gelen_hefte')">Həftəyə</button>
     </div>
 </div>
 
 <script>
 const tg = window.Telegram.WebApp; tg.ready(); tg.expand();
 const API_BASE = 'https://worker-production-3e3e.up.railway.app';
-let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:''};
+let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 
 let mockTasks = [];
@@ -289,18 +261,20 @@ async function doFetch(payload, btnId) {
 }
 
 function submitTask() {
-    const t = document.getElementById('task-desc').value.trim();
+    const textInput = document.getElementById('task-desc').value.trim();
     if(editingTaskId) {
-        if(!t) { toast('M\u0259tni daxil edin!', true); return; }
-        let payload = {action: 'update_task', task_id: editingTaskId, text: t};
+        if(!textInput) { toast('Mətni daxil edin!', true); return; }
+        let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
+        let payload = {action: 'update_task', task_id: editingTaskId, text: finalText};
         if(gd.deadline) payload.deadline = gd.deadline;
-        if(gd.assignee) payload.assignee = gd.assignee;
+        payload.assignee = 'sahe_meneceri';
         if(gd.task_type) payload.task_type = gd.task_type;
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
     } else {
-        if(!t || !gd.assignee || !gd.deadline) { toast('B\u00fct\u00fcn sah\u0259l\u0259ri doldurun!', true); return; }
-        doFetch({action: 'task', phone: gd.phone, text: t, assignee: gd.assignee, deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
+        if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
+        const finalKommoText = `[${gd.assigneeName}] ${textInput}`;
+        doFetch({action: 'task', phone: gd.phone, text: finalKommoText, assignee: 'sahe_meneceri', deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
     }
 }
 
@@ -351,57 +325,94 @@ async function openNotifications() {
 
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
-    container.innerHTML = '';
-    // Update overdue count
-    const overdueCount = mockTasks.filter(t => t.title && t.title.includes('Gecikmi\u015f')).length;
-    const overdueEl = document.getElementById('overdue-count');
-    if(overdueEl) overdueEl.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
-    if(mockTasks.length === 0) { container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>'; return; }
+    container.innerHTML = ''; updateBadge();
+    if(mockTasks.length === 0) {
+        container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>';
+        return;
+    }
     mockTasks.forEach(t => {
+        const swipeWrapper = document.createElement('div');
+        swipeWrapper.style.cssText = "position: relative; border-radius: 12px; overflow: hidden; background: #e5e7eb;";
+        const bgAction = document.createElement('div');
+        bgAction.style.cssText = "position: absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:space-between; padding: 0 20px; font-weight:bold; color:white; font-size:14px; border-radius:12px; transition: background 0.2s;";
+        bgAction.innerHTML = `<span style="opacity:0;">✓ Bitdi</span><span style="opacity:0;">🕒 +2 saat</span>`;
+        swipeWrapper.appendChild(bgAction);
         const item = document.createElement('div');
-        const isUrgent = t.title.includes('Gecikmi\u015f');
-        item.style.cssText = `background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; transition: transform 0.2s;`;
+        const isUrgent = t.title.includes('Gecikmiş');
+        item.style.cssText = `position: relative; background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; z-index: 2; transition: transform 0.1s ease-out, border 0.2s;`;
         if(selectedTaskId === t.id) item.style.border = '2px solid var(--button-color)';
-        let meta = '';
-        if(t.contact_name) meta += `\ud83d\udc64 ${t.contact_name}`;
-        if(t.phone) meta += `  \ud83d\udcde ${t.phone}`;
-        if(t.responsible) meta += `  \ud83d\udc77 ${t.responsible}`;
-        let linkHtml = t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" style="font-size:12px;color:var(--link-color);text-decoration:none;" onclick="event.stopPropagation();">\ud83d\udd17 Kommo</a>` : '';
-        item.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><span style="font-weight:700; font-size:14px; color:${isUrgent ? '#ef4444' : 'inherit'};">${t.title}</span><span style="font-size:11px; color:var(--hint-color);">${t.time}</span></div><div style="font-size:14px; font-weight:500;">${t.desc}</div><div style="font-size:12px; color:var(--hint-color);">${meta}</div>${linkHtml}`;
-        item.onclick = (e) => { e.stopPropagation(); clickNotification(t.id, t.desc, t.time); };
-        container.appendChild(item);
+        const displayDesc = (t.desc || '').replace(/^\[(Şamil|Soltan)\]\s*/i, '');
+        const assigneeName = t.assigneeName || t.responsible || '';
+        item.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-weight:700; font-size:14px; color:${isUrgent ? '#ef4444' : 'inherit'};">${t.title}</span>
+                <span style="font-size:11px; color:var(--hint-color);">${t.time}</span>
+            </div>
+            <div style="font-size:14px; font-weight:700; color: var(--text-color);">${displayDesc}</div>
+            <div style="font-size:13px; color: var(--text-color); margin-top: 2px;">
+                👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}<br>
+                👤 <b>İcraçı:</b> ${assigneeName}
+            </div>
+            <div style="margin-top: 4px; font-size: 12px;">
+                ${t.kommo_link ? `🔗 <a href="${t.kommo_link}" target="_blank" style="color: var(--link-color); font-weight: bold; text-decoration: underline;" onclick="event.stopPropagation();">Kommo CRM Kartı</a>` : ''}
+            </div>`;
+        item.onclick = (e) => { e.stopPropagation(); clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
+        let startX = 0, currentX = 0, isSwiping = false;
+        item.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; item.style.transition = 'none'; }, {passive: true});
+        item.addEventListener('touchmove', (e) => {
+            if (!isSwiping) return;
+            currentX = e.touches[0].clientX - startX;
+            if (currentX > 120) currentX = 120 + (currentX - 120) * 0.2;
+            if (currentX < -120) currentX = -120 + (currentX + 120) * 0.2;
+            item.style.transform = `translateX(${currentX}px)`;
+            const textLeft = bgAction.children[0]; const textRight = bgAction.children[1];
+            if (currentX > 20) { bgAction.style.background = '#10b981'; textLeft.style.opacity = '1'; textRight.style.opacity = '0'; }
+            else if (currentX < -20) { bgAction.style.background = '#f59e0b'; textLeft.style.opacity = '0'; textRight.style.opacity = '1'; }
+            else { bgAction.style.background = 'transparent'; textLeft.style.opacity = '0'; textRight.style.opacity = '0'; }
+        }, {passive: true});
+        item.addEventListener('touchend', () => {
+            isSwiping = false; item.style.transition = 'transform 0.2s cubic-bezier(0.1, 0.5, 0.1, 1)';
+            if (currentX > 80) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; handleBarAction('close'); }, 200); }
+            else if (currentX < -80) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
+            else { item.style.transform = 'translateX(0)'; bgAction.style.background = 'transparent'; }
+            currentX = 0;
+        });
+        swipeWrapper.appendChild(item); container.appendChild(swipeWrapper);
     });
 }
 
 function clickNotification(id, desc, metaText) {
-    selectedTaskId = id;
-    completeStageSelected = '';
-    document.getElementById('complete-stage-panel').style.display = 'none';
-    renderNotifications();
-    const task = mockTasks.find(t => t.id === id);
+    selectedTaskId = id; renderNotifications();
     document.getElementById('bottom-bar-title').textContent = desc;
-    let meta = metaText || '';
-    if(task) {
-        if(task.responsible) meta += (meta ? ' • ' : '') + '\ud83d\udc77 ' + task.responsible;
-        if(task.contact_name) meta += (meta ? ' • ' : '') + '\ud83d\udc64 ' + task.contact_name;
-    }
-    document.getElementById('bottom-bar-meta').textContent = meta;
-
+    document.getElementById('bottom-bar-meta').textContent = metaText;
+    document.getElementById('postpone-fast-menu').style.display = 'none';
     const bar = document.getElementById('bottom-action-bar');
-    bar.style.display = 'block';
-    setTimeout(() => bar.style.transform = 'translateY(0)', 10);
+    bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
     setTimeout(() => { document.addEventListener('click', closeBottomBar); }, 50);
 }
 
 function closeBottomBar() {
-    const bar = document.getElementById('bottom-action-bar');
-    if (!bar || bar.style.display === 'none') return;
+    const bar = document.getElementById('bottom-action-bar'); if (!bar || bar.style.display === 'none') return;
     bar.style.transform = 'translateY(100%)';
     setTimeout(() => { bar.style.display = 'none'; }, 300);
     selectedTaskId = null;
     document.removeEventListener('click', closeBottomBar);
     const container = document.getElementById('notifications-container');
     if (container) renderNotifications();
+}
+
+function togglePostponeMenu() {
+    const menu = document.getElementById('postpone-fast-menu');
+    menu.style.display = menu.style.display === 'grid' ? 'none' : 'grid';
+}
+
+function handlePostponeTime(preset) {
+    if(!selectedTaskId) return;
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    if(!task) return;
+    doFetch({action: 'update_task_deadline', task_id: task.id, time_preset: preset}, null);
+    closeBottomBar();
+    toast('🕒 Vaxt dəyişdirildi', false);
 }
 
 
@@ -412,50 +423,30 @@ let editingTaskId = null;
 
 let completeStageSelected = '';
 
-function showCompleteStageSelect() {
-    completeStageSelected = '';
-    document.getElementById('complete-stage-panel').style.display = 'block';
-    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    document.getElementById('complete-note-block').style.display = 'none';
-    document.getElementById('complete-note-text').value = '';
-    const btn = document.getElementById('btn-icra-olundu');
-    btn.style.background = '#ccc';
-    btn.style.pointerEvents = 'none';
-}
-
-function completeWithStage(stage, el) {
-    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    el.classList.add('selected');
-    completeStageSelected = stage;
-    document.getElementById('complete-note-block').style.display = 'block';
-    document.getElementById('complete-note-text').value = '';
-    const btn = document.getElementById('btn-icra-olundu');
-    btn.style.background = '#10b981';
-    btn.style.pointerEvents = 'auto';
-}
-
-async function confirmComplete() {
-    if(!completeStageSelected) { toast('Mərhələ seçin!', true); return; }
-    const noteText = document.getElementById('complete-note-text').value.trim();
-    if(!noteText) { toast('Qeyd yazın!', true); return; }
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
-    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-    let payload = {action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || '', note: noteText};
-    closeBottomBar(); renderNotifications();
-    await doFetch(payload, null);
-}
-
 async function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
-    if(actionType === 'edit') {
+    if(actionType === 'close') {
+        mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+        closeBottomBar(); renderNotifications();
+        await doFetch({action: 'complete_task', task_id: task.id, phone: task.phone || ''}, null);
+        toast('✓ Tapşırıq bağlandı', false);
+    } else if(actionType === 'edit') {
         editingTaskId = task.id;
-        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', task_type: ''};
-        // Clear form first
-        document.getElementById('task-desc').value = task.desc;
+        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', assigneeName: '', task_type: ''};
+        const rawDesc = task.desc || '';
+        const markerMatch = rawDesc.match(/^\[(Şamil|Soltan)\]\s*/);
+        if(markerMatch) {
+            gd.assigneeName = markerMatch[1];
+            document.getElementById('task-desc').value = rawDesc.replace(markerMatch[0], '');
+        } else {
+            document.getElementById('task-desc').value = rawDesc;
+        }
         document.getElementById('search-phone').value = task.phone || '';
         document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
+        if(gd.assigneeName) {
+            document.querySelectorAll('#screen-task-details .option-card').forEach(c => { if(c.textContent.includes(gd.assigneeName)) c.classList.add('selected'); });
+        }
         const dp = document.getElementById('task-deadline-custom');
         if(dp && task.complete_till) {
             const d = new Date(task.complete_till * 1000);
@@ -463,21 +454,9 @@ async function handleBarAction(actionType) {
             dp.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
             gd.deadline = 'custom:' + dp.value;
         } else if(dp) { dp.value = ''; }
-        // Highlight assignee if known
-        const assigneeMap = {'Şamil Əliyev':'shamil','Soltan Abbasov':'soltan','Texniki Destek':'admin'};
-        const assigneeKey = assigneeMap[task.responsible] || '';
-        if(assigneeKey) {
-            gd.assignee = assigneeKey;
-            document.querySelectorAll('#screen-task-details .option-card').forEach(c => { if(c.textContent.trim().toLowerCase().includes(assigneeKey === 'shamil' ? 'şamil' : assigneeKey === 'soltan' ? 'soltan' : 'admin')) c.classList.add('selected'); });
-        }
         currentEditScreen = 'screen-task-details';
         document.getElementById('task-back-btn').setAttribute('onclick', "goBack('screen-notifications')");
         closeBottomBar(); nav('screen-task-details');
-    } else if(actionType === 'delete') {
-        if(!confirm('Bu tap\u015f\u0131r\u0131\u011f\u0131 silm\u0259k ist\u0259yirsiniz?')) return;
-        mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-        closeBottomBar(); renderNotifications();
-        await doFetch({action: 'delete_task', task_id: task.id}, null);
     }
 }
 
