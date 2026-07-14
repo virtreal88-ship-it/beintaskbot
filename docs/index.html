@@ -84,7 +84,7 @@
         <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
-    <div class="form-group"><label>Bitirmək üçün sağa sürüşdürün:</label></div>
+    <div class="form-group"><label>Sağa = Bitdi | Sola = +2 saat</label></div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
 </div>
@@ -155,9 +155,30 @@
     <div style="width: 40px; height: 5px; background: #ccc; border-radius: 3px; margin: 0 auto 15px auto; cursor: pointer;" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <div id="bottom-bar-title" style="font-weight: 700; margin-bottom: 5px; font-size: 15px;">Seçilmiş tapşırıq</div>
     <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
-    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="handleBarAction('close')">✓ Bitdi</button>
+    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="showCompletePanel()">✓ Bitdi</button>
+        <button class="btn" style="flex: 1; background: #f59e0b; color: white; justify-content: center; font-size: 14px;" onclick="togglePostponeMenu()">🕒 Vaxtı dəyiş</button>
         <button class="btn" style="flex: 1; background: var(--secondary-bg-color); color: var(--text-color); justify-content: center; font-size: 14px;" onclick="handleBarAction('edit')">✏️ Düzəliş</button>
+    </div>
+    <div id="postpone-fast-menu" style="display:none; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:10px;">
+        <button class="option-card" style="padding:10px;font-size:13px;" onclick="handlePostponeTime('+2h')">+2 saat</button>
+        <button class="option-card" style="padding:10px;font-size:13px;" onclick="handlePostponeTime('sabah')">Sabah</button>
+        <button class="option-card" style="padding:10px;font-size:13px;" onclick="handlePostponeTime('gelen_hefte')">Həftəyə</button>
+    </div>
+    <div id="complete-panel" style="display:none;">
+        <div style="font-weight:600;font-size:14px;margin-bottom:8px;">Mərhələ seçin:</div>
+        <div id="stage-list" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('danisiqlar',this)">Danışıqlar</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('qiymet_teklifi',this)">Qiymət təklifi</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('teqdimat',this)">Təqdimat</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('yeni_sifaris',this)">Yeni sifariş</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('gorus',this)">Görüş</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('qurashdirma',this)">Quraşdırma</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('ugurlu',this)">Uğurlu</div>
+            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('imtina',this)">İmtina</div>
+        </div>
+        <div id="complete-note-block" style="display:none;margin-bottom:10px;"><textarea id="complete-note-text" class="input-field" placeholder="Qeyd yazın..."></textarea></div>
+        <button id="btn-confirm-complete" class="btn btn-submit" style="background:#ccc;pointer-events:none;" onclick="confirmComplete()">Təsdiqlə</button>
     </div>
 </div>
 
@@ -337,6 +358,9 @@ async function openNotifications() {
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
     container.innerHTML = ''; updateBadge();
+    const overdueCount = mockTasks.filter(t => t.is_overdue).length;
+    const oc = document.getElementById('overdue-count');
+    if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
     if(mockTasks.length === 0) {
         container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>';
         return;
@@ -346,7 +370,7 @@ function renderNotifications() {
         swipeWrapper.style.cssText = "position: relative; border-radius: 12px; overflow: hidden; background: #e5e7eb;";
         const bgAction = document.createElement('div');
         bgAction.style.cssText = "position: absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:space-between; padding: 0 20px; font-weight:bold; color:white; font-size:14px; border-radius:12px; transition: background 0.2s;";
-        bgAction.innerHTML = `<span style="opacity:0;">✓ Bitdi</span>`;
+        bgAction.innerHTML = `<span style="opacity:0;">✓ Bitdi</span><span style="opacity:0;">🕒 +2 saat</span>`;
         swipeWrapper.appendChild(bgAction);
         const item = document.createElement('div');
         const isUrgent = t.title.includes('Gecikmiş');
@@ -374,15 +398,17 @@ function renderNotifications() {
             if (!isSwiping) return;
             currentX = e.touches[0].clientX - startX;
             if (currentX > 120) currentX = 120 + (currentX - 120) * 0.2;
-            if (currentX < 0) currentX = 0;
+            if (currentX < -120) currentX = -120 + (currentX + 120) * 0.2;
             item.style.transform = `translateX(${currentX}px)`;
-
-            if (currentX > 20) { bgAction.style.background = '#10b981'; bgAction.children[0].style.opacity = '1'; }
-            else { bgAction.style.background = 'transparent'; bgAction.children[0].style.opacity = '0'; }
+            const textLeft = bgAction.children[0]; const textRight = bgAction.children[1];
+            if (currentX > 20) { bgAction.style.background = '#10b981'; textLeft.style.opacity = '1'; textRight.style.opacity = '0'; }
+            else if (currentX < -20) { bgAction.style.background = '#f59e0b'; textLeft.style.opacity = '0'; textRight.style.opacity = '1'; }
+            else { bgAction.style.background = 'transparent'; textLeft.style.opacity = '0'; textRight.style.opacity = '0'; }
         }, {passive: true});
         item.addEventListener('touchend', () => {
             isSwiping = false; item.style.transition = 'transform 0.2s cubic-bezier(0.1, 0.5, 0.1, 1)';
-            if (currentX > 80) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; handleBarAction('close'); }, 200); }
+            if (currentX > 80) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); showCompletePanel(); }, 200); }
+            else if (currentX < -80) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
             else { item.style.transform = 'translateX(0)'; bgAction.style.background = 'transparent'; }
             currentX = 0;
         });
@@ -420,15 +446,54 @@ let editingTaskId = null;
 
 let completeStageSelected = '';
 
+function showCompletePanel() {
+    completeStageSelected = '';
+    document.getElementById('complete-panel').style.display = 'block';
+    document.getElementById('postpone-fast-menu').style.display = 'none';
+    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
+    document.getElementById('complete-note-block').style.display = 'none';
+    document.getElementById('complete-note-text').value = '';
+    const btn = document.getElementById('btn-confirm-complete');
+    btn.style.background = '#ccc'; btn.style.pointerEvents = 'none';
+}
+function selectCompleteStage(stage, el) {
+    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    completeStageSelected = stage;
+    document.getElementById('complete-note-block').style.display = 'block';
+    const btn = document.getElementById('btn-confirm-complete');
+    btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
+}
+async function confirmComplete() {
+    if(!completeStageSelected) { toast('Mərhələ seçin!', true); return; }
+    const noteText = document.getElementById('complete-note-text').value.trim();
+    if(!noteText) { toast('Qeyd yazın!', true); return; }
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    if(!task) return;
+    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+    closeBottomBar(); renderNotifications();
+    await doFetch({action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || '', note: noteText}, null);
+    toast('✓ Tapşırıq bağlandı', false);
+}
+function togglePostponeMenu() {
+    const menu = document.getElementById('postpone-fast-menu');
+    menu.style.display = menu.style.display === 'grid' ? 'none' : 'grid';
+    document.getElementById('complete-panel').style.display = 'none';
+}
+async function handlePostponeTime(preset) {
+    if(!selectedTaskId) return;
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    if(!task) return;
+    closeBottomBar();
+    await doFetch({action: 'update_task_deadline', task_id: task.id, time_preset: preset}, null);
+    toast('🕒 Vaxt dəyişdirildi', false);
+    openNotifications();
+}
+
 async function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
-    if(actionType === 'close') {
-        mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-        closeBottomBar(); renderNotifications();
-        await doFetch({action: 'complete_task', task_id: task.id, phone: task.phone || ''}, null);
-        toast('✓ Tapşırıq bağlandı', false);
-    } else if(actionType === 'edit') {
+    if(actionType === 'edit') {
         editingTaskId = task.id;
         flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', assigneeName: '', task_type: ''};
         const rawDesc = task.desc || '';
