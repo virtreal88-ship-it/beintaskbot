@@ -201,7 +201,8 @@
 </div>
 
 <script>
-const tg = window.Telegram.WebApp; tg.ready(); tg.expand();
+const tg = window.Telegram?.WebApp || {};
+try { tg.ready(); tg.expand(); } catch(e) {}
 const API_BASE = 'https://worker-production-3e3e.up.railway.app';
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;

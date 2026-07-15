@@ -1,8 +1,6 @@
-const CACHE_NAME = 'beintask-v1';
-const ASSETS = ['/', '/beintaskbot/', '/beintaskbot/index.html'];
+const CACHE_NAME = 'beintask-v2';
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS)));
   self.skipWaiting();
 });
 
@@ -12,5 +10,14 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+  // Network-first: always try fresh, fallback to cache
+  e.respondWith(
+    fetch(e.request).then(r => {
+      if(r.ok && e.request.method === 'GET') {
+        const clone = r.clone();
+        caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+      }
+      return r;
+    }).catch(() => caches.match(e.request))
+  );
 });
