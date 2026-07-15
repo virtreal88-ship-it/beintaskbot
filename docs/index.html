@@ -62,11 +62,12 @@
     </style>
 </head>
 <body>
-<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:2000;text-align:center;">
-<div style="height:4px;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1s linear infinite;"></div>
-<div style="font-size:11px;color:#2481cc;font-weight:600;padding:2px 0;background:rgba(255,255,255,0.95);">Sinxronizasiya...</div>
+<div id="sync-indicator" style="display:none;position:fixed;top:8px;right:12px;z-index:2000;align-items:center;gap:6px;background:rgba(255,255,255,0.95);padding:4px 10px;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);transition:opacity 0.3s;">
+<span class="sync-spinner"></span><span style="font-size:11px;color:var(--hint-color);font-weight:500;">Sinxronizasiya...</span>
 </div>
-<style>@keyframes syncAnim{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>
+<style>
+.sync-spinner{width:12px;height:12px;border:2px solid var(--hint-color);border-top-color:transparent;border-radius:50%;display:inline-block;animation:spin 0.8s linear infinite;}
+</style>
 <div id="toast"></div>
 
 <!-- Success Screen -->
@@ -228,23 +229,26 @@ function getUserId() {
 }
 const CURRENT_USER_ID = getUserId();
 
-// Cache helpers
-function getCachedTasks() { try { const d = JSON.parse(localStorage.getItem('tasks_'+CURRENT_USER_ID)); if(d && d.tasks) return d; } catch(e){} return null; }
-function setCachedTasks(tasks, is_admin) { try { localStorage.setItem('tasks_'+CURRENT_USER_ID, JSON.stringify({tasks, is_admin, ts: Date.now()})); } catch(e){} }
+// SWR Cache
+const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
+let isAdmin = false;
+
+function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
+function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
 
 // Sync indicator
-function showSync() { const s = document.getElementById('sync-bar'); if(s) s.style.display = 'block'; }
-function hideSync() { const s = document.getElementById('sync-bar'); if(s) s.style.display = 'none'; }
+function showSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.display = 'flex'; s.style.opacity = '1'; } }
+function hideSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.opacity = '0'; setTimeout(() => { s.style.display = 'none'; }, 300); } }
 
 function initApp() {
     openNotifications();
 }
 
-// Preloader
+// Preloader (only for first load when no cache)
 function showLoader() { document.getElementById('preloader').style.display = 'flex'; }
 function hideLoader() { document.getElementById('preloader').style.display = 'none'; }
 
-// Re-render on page visibility
+// Re-render on page visibility (SWR revalidate)
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) openNotifications();
 });
@@ -337,11 +341,11 @@ async function doFetch(payload, btnId) {
         const j = await r.json();
         if(r.ok && j.success) {
             showSuccessScreen(j.message || 'U\u011furla tamamland\u0131!', j.link || '', payload.action === 'info');
-            // Refresh task list in background so it's ready when user goes back
+            // Background SWR revalidate (update cache silently)
             try {
                 const r2 = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
                 const j2 = await r2.json();
-                if(j2.success && j2.tasks) { mockTasks = j2.tasks; }
+                if(j2.success && j2.tasks) { mockTasks = j2.tasks; setCachedTasks(j2.tasks); }
             } catch(e2) {}
         }
         else { toast(j.error || 'X\u0259ta!', true); }
@@ -386,39 +390,41 @@ function submitClose() {
     doFetch({action: 'close_job_report', master_comment: c}, 'job-submit-btn');
 }
 
-/* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
-async function refreshTasks() {
-    showLoader();
-    try {
-        const r = await fetch(API_BASE + '/api/notifications', {
-            headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        });
-        const j = await r.json();
-        if(j.success && j.tasks) { mockTasks = j.tasks; setCachedTasks(j.tasks, j.is_admin); }
-    } catch(e) { toast('Yenilənmədi', true); }
-    hideLoader();
-    renderNotifications();
-}
-
+/* ================= NOTIFICATIONS & BOTTOM SHEET (SWR) ================= */
 async function openNotifications() {
     nav('screen-notifications');
-    // Show existing tasks but disabled + loading overlay
-    const container = document.getElementById('notification-list');
-    if(container) { container.style.opacity = '0.5'; container.style.pointerEvents = 'none'; }
-    showLoader();
+    
+    // Шаг A: Мгновенно рендерим кэш (Stale)
+    const cachedData = getCachedTasks();
+    if (cachedData && cachedData.length > 0) {
+        mockTasks = cachedData;
+        renderNotifications();
+    } else if (mockTasks.length === 0) {
+        // Нет кэша — показываем полноэкранный прелоадер только в первый раз
+        showLoader();
+    }
+    
+    // Шаг B: Фоновая ревалидация (Revalidate)
+    showSyncIndicator();
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': CURRENT_USER_ID}
         });
         const j = await r.json();
         if(j.success && j.tasks) {
-            mockTasks = j.tasks;
-            if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
-            renderNotifications();
+            if(j.is_admin) { isAdmin = true; const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+            // Сравниваем — если данные изменились, мягко обновляем UI
+            if (JSON.stringify(j.tasks) !== JSON.stringify(mockTasks)) {
+                mockTasks = j.tasks;
+                setCachedTasks(j.tasks);
+                renderNotifications();
+            }
         }
-    } catch(e) { toast('Bildiri\u015fl\u0259r y\u00fckl\u0259nm\u0259di', true); }
+    } catch(e) {
+        if(!cachedData || cachedData.length === 0) toast('Bildiri\u015fl\u0259r y\u00fckl\u0259nm\u0259di', true);
+    }
     hideLoader();
-    if(container) { container.style.opacity = '1'; container.style.pointerEvents = ''; }
+    hideSyncIndicator();
 }
 
 let currentFilter = 'all';
@@ -532,21 +538,29 @@ async function submitNote() {
     if(!task) return;
     document.getElementById('note-text-input').value = '';
     closeBottomBar();
-    // Disable only this task card
-    const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
-    if(taskEl) { taskEl.style.pointerEvents = 'none'; taskEl.style.animation = 'pulse 1s infinite'; }
-    // Send note
+    
+    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e
+    const oldNote = task.last_note;
+    task.last_note = noteText;
+    setCachedTasks(mockTasks);
+    renderNotifications();
+    toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
+    
+    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440
     try {
-        await fetch(API_BASE + '/api/action', {
+        const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
             body: JSON.stringify({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''})
         });
-    } catch(e) {}
-    // Update ONLY this task locally
-    task.last_note = noteText;
-    renderNotifications();
-    toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
+        if(!r.ok) throw new Error('server error');
+    } catch(e) {
+        // ROLLBACK: \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u043c \u0441\u0442\u0430\u0440\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435
+        task.last_note = oldNote;
+        setCachedTasks(mockTasks);
+        renderNotifications();
+        toast('X\u0259ta! Qeyd g\u00f6nd\u0259rilm\u0259di', true);
+    }
 }
 function showCompletePanel() {
     completeStageSelected = '';
@@ -568,15 +582,34 @@ function selectCompleteStage(stage, el) {
     btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
 }
 async function confirmComplete() {
-
     const noteText = document.getElementById('complete-note-text').value.trim();
-    if(!noteText) { toast('Qeyd yazın!', true); return; }
+    if(!noteText) { toast('Qeyd yaz\u0131n!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
+    
+    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u0443\u0431\u0438\u0440\u0430\u0435\u043c \u0437\u0430\u0434\u0430\u0447\u0443
+    const backupTasks = [...mockTasks];
     mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
-    closeBottomBar(); renderNotifications();
-    await doFetch({action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || '', note: noteText}, null);
-    toast('✓ Tapşırıq bağlandı', false);
+    setCachedTasks(mockTasks);
+    closeBottomBar();
+    renderNotifications();
+    toast('\u2713 Tap\u015f\u0131r\u0131q ba\u011fland\u0131', false);
+    
+    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || '', note: noteText})
+        });
+        if(!r.ok) throw new Error('server error');
+    } catch(e) {
+        // ROLLBACK
+        mockTasks = backupTasks;
+        setCachedTasks(mockTasks);
+        renderNotifications();
+        toast('X\u0259ta! Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131', true);
+    }
 }
 function togglePostponeMenu() {
     const menu = document.getElementById('postpone-fast-menu');
@@ -588,9 +621,30 @@ async function handlePostponeTime(preset) {
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     closeBottomBar();
-    await doFetch({action: 'update_task_deadline', task_id: task.id, time_preset: preset}, null);
-    toast('🕒 Vaxt dəyişdirildi', false);
-    openNotifications();
+    
+    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u0432\u0440\u0435\u043c\u044f
+    const oldTime = task.time;
+    task.time = preset === '+2h' ? '+2 saat' : preset;
+    task.is_overdue = false;
+    task.title = 'Aktiv tap\u015f\u0131r\u0131q';
+    setCachedTasks(mockTasks);
+    renderNotifications();
+    toast('\uD83D\uDD52 Vaxt d\u0259yi\u015fdirildi', false);
+    
+    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({action: 'update_task_deadline', task_id: task.id, time_preset: preset})
+        });
+        if(!r.ok) throw new Error('server error');
+    } catch(e) {
+        task.time = oldTime;
+        setCachedTasks(mockTasks);
+        renderNotifications();
+        toast('X\u0259ta! Vaxt d\u0259yi\u015fm\u0259di', true);
+    }
 }
 
 async function handleBarAction(actionType) {
