@@ -134,6 +134,7 @@ NAME_TO_CHAT = {
     "Hüseyn Səfərov": 7329891614,
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
+    "Texniki Dəstək": 8835096199,
     "Şamil": 7962757442,
     "Soltan": 7262243946,
     "Hüseyn": 7329891614,
@@ -1809,7 +1810,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
             pass
         return
     # All employees go to Sahə Meneceri with marker; admin goes to admin
-    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -1856,7 +1857,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -2946,7 +2947,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     InlineKeyboardButton("Rasim", callback_data=f"stgtask-{lead_id}-{stage_key}-rasim"),
                 ],
                 [
+                    InlineKeyboardButton("Texniki", callback_data=f"stgtask-{lead_id}-{stage_key}-texniki"),
                     InlineKeyboardButton("Özüm", callback_data=f"stgtask-{lead_id}-{stage_key}-admin"),
+                ],
+                [
                     InlineKeyboardButton("❌ Ləğv", callback_data=f"stgtask-{lead_id}-{stage_key}-cancel"),
                 ],
             ]
@@ -3513,7 +3517,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Şamil|Soltan|Hüseyn|Nizami|Rasim)\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
