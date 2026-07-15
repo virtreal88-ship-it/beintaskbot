@@ -107,7 +107,7 @@
 <!-- Notifications/Tasks Screen (now main) -->
 <div id="screen-notifications" class="screen active">
     <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar</span>
+        <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar <span id="task-total-count" style="font-size:13px;font-weight:600;color:var(--hint-color);"></span></span>
         <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
         <button onclick="openNotifications()" style="background:transparent; border:1px solid var(--button-color); color:var(--button-color); border-radius:8px; padding:6px 10px; font-size:13px; font-weight:600; cursor:pointer;">🔄</button>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
@@ -128,6 +128,7 @@
     <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
     <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
     <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
+    <div class="form-group"><label>Son qeyd:</label><textarea id="task-note-edit" class="input-field" placeholder="Qeyd..."></textarea></div>
     <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
@@ -345,7 +346,11 @@ async function doFetch(payload, btnId) {
             try {
                 const r2 = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
                 const j2 = await r2.json();
-                if(j2.success && j2.tasks) { mockTasks = j2.tasks; setCachedTasks(j2.tasks); }
+                if(j2.success && j2.tasks) {
+                    let ft = j2.tasks;
+                    if(typeof _completedTaskIds !== 'undefined' && Object.keys(_completedTaskIds).length > 0) { ft = j2.tasks.filter(t => !_completedTaskIds[t.id]); }
+                    mockTasks = ft; setCachedTasks(ft);
+                }
             } catch(e2) {}
         }
         else { toast(j.error || 'X\u0259ta!', true); }
@@ -362,6 +367,9 @@ function submitTask() {
         payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.task_type) payload.task_type = gd.task_type;
+        // Include note from edit screen
+        const editNote = document.getElementById('task-note-edit');
+        if(editNote && editNote.value.trim()) payload.note = editNote.value.trim();
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
     } else {
@@ -415,10 +423,15 @@ async function openNotifications() {
         const j = await r.json();
         if(j.success && j.tasks) {
             if(j.is_admin) { isAdmin = true; const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'flex'; const fa = document.getElementById('filter-assignee'); if(fa && currentFilter !== 'all') fa.value = currentFilter; }
+            // Filter out recently completed tasks that server hasn't processed yet
+            let filteredTasks = j.tasks;
+            if(typeof _completedTaskIds !== 'undefined' && Object.keys(_completedTaskIds).length > 0) {
+                filteredTasks = j.tasks.filter(t => !_completedTaskIds[t.id]);
+            }
             // Сравниваем — если данные изменились, мягко обновляем UI
-            if (JSON.stringify(j.tasks) !== JSON.stringify(mockTasks)) {
-                mockTasks = j.tasks;
-                setCachedTasks(j.tasks);
+            if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) {
+                mockTasks = filteredTasks;
+                setCachedTasks(filteredTasks);
                 renderNotifications();
             }
         }
@@ -450,6 +463,8 @@ function renderNotifications() {
     const overdueCount = filtered.filter(t => t.is_overdue).length;
     const oc = document.getElementById('overdue-count');
     if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
+    const tc = document.getElementById('task-total-count');
+    if(tc) tc.textContent = `(${filtered.length})`;
     if(filtered.length === 0) {
         container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>';
         return;
@@ -577,7 +592,7 @@ function showCompletePanel() {
     document.getElementById('complete-panel').style.display = 'block';
     document.getElementById('postpone-fast-menu').style.display = 'none';
     document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    document.getElementById('complete-note-block').style.display = 'none';
+    document.getElementById('complete-note-block').style.display = 'block';
     document.getElementById('complete-note-text').value = '';
     const btn = document.getElementById('btn-confirm-complete');
     btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
@@ -590,30 +605,37 @@ function selectCompleteStage(stage, el) {
     const btn = document.getElementById('btn-confirm-complete');
     btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
 }
+// Track recently completed task IDs to prevent SWR from restoring them
+let _completedTaskIds = {};
 async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yaz\u0131n!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
     
-    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u0443\u0431\u0438\u0440\u0430\u0435\u043c \u0437\u0430\u0434\u0430\u0447\u0443
+    // OPTIMISTIC UI: мгновенно убираем задачу
     const backupTasks = [...mockTasks];
-    mockTasks = mockTasks.filter(t => t.id !== selectedTaskId);
+    const completedId = task.id;
+    _completedTaskIds[completedId] = Date.now();
+    mockTasks = mockTasks.filter(t => t.id !== completedId);
     setCachedTasks(mockTasks);
     closeBottomBar();
     renderNotifications();
     toast('\u2713 Tap\u015f\u0131r\u0131q ba\u011fland\u0131', false);
     
-    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430
+    // Фоновая отправка
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action: 'complete_task', task_id: task.id, new_stage: completeStageSelected, phone: task.phone || '', note: noteText})
+            body: JSON.stringify({action: 'complete_task', task_id: completedId, new_stage: completeStageSelected, phone: task.phone || '', note: noteText})
         });
         if(!r.ok) throw new Error('server error');
+        // Keep blocking this task from SWR for 60 seconds
+        setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
     } catch(e) {
         // ROLLBACK
+        delete _completedTaskIds[completedId];
         mockTasks = backupTasks;
         setCachedTasks(mockTasks);
         renderNotifications();
@@ -687,6 +709,9 @@ async function handleBarAction(actionType) {
             dp.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
             gd.deadline = 'custom:' + dp.value;
         } else if(dp) { dp.value = ''; }
+        // Pre-fill last note in edit screen
+        const noteEditField = document.getElementById('task-note-edit');
+        if(noteEditField) noteEditField.value = task.last_note || '';
         currentEditScreen = 'screen-task-details';
         document.getElementById('task-back-btn').setAttribute('onclick', "goBack('screen-notifications')");
         closeBottomBar(); nav('screen-task-details');
