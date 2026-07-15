@@ -1483,18 +1483,18 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
     elif deadline_key == "1h":
         deadline_dt = now + timedelta(hours=1)
     elif deadline_key == "today":
-        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
         if deadline_dt <= now:
             deadline_dt += timedelta(days=1)
     elif deadline_key == "tomorrow":
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     elif deadline_key == "week":
         days_until_friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
-        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=17, minute=0, second=0, microsecond=0)
     else:
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     deadline_ts = int(deadline_dt.timestamp())
     assignee_id = task_data["assignee_id"]
     assignee_name = task_data["assignee_name"]
@@ -1675,18 +1675,18 @@ async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_T
     elif deadline_key == "1h":
         deadline_dt = now + timedelta(hours=1)
     elif deadline_key == "today":
-        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
         if deadline_dt <= now:
             deadline_dt += timedelta(days=1)
     elif deadline_key == "tomorrow":
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     elif deadline_key == "week":
         days_until_friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
-        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=17, minute=0, second=0, microsecond=0)
     else:
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     
     deadline_ts = int(deadline_dt.timestamp())
     result = create_task(pending["entity_id"], pending["task_text"], deadline_ts,
@@ -1891,18 +1891,18 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     elif deadline_key == "1h":
         deadline_dt = now + timedelta(hours=1)
     elif deadline_key == "today":
-        deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
         if deadline_dt <= now:
             deadline_dt += timedelta(days=1)
     elif deadline_key == "tomorrow":
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     elif deadline_key == "week":
         days_until_friday = (4 - now.weekday()) % 7
         if days_until_friday == 0 and now.hour >= 18:
             days_until_friday = 7
-        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=17, minute=0, second=0, microsecond=0)
     else:
-        deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     deadline_ts = int(deadline_dt.timestamp())
     result = create_task(lead_id, task_text, deadline_ts, responsible_user_id=assignee_uid, entity_type="leads")
     if result:
@@ -2665,14 +2665,14 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         if deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
         elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
         elif deadline_key == "today":
-            deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+            deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
             if deadline_dt <= now: deadline_dt += timedelta(days=1)
-        elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
         elif deadline_key == "week":
             days_until_friday = (4 - now.weekday()) % 7
             if days_until_friday == 0 and now.hour >= 18: days_until_friday = 7
-            deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=18, minute=0, second=0, microsecond=0)
-        else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            deadline_dt = (now + timedelta(days=days_until_friday)).replace(hour=17, minute=0, second=0, microsecond=0)
+        else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
         result = execute_tool_create_task(phone, text, None, None, assignee)
         if isinstance(result, str):
             await update.message.reply_text(result)
@@ -3044,7 +3044,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
                 if isinstance(st_result, dict) and st_result.get("success"):
                     now = datetime.now(tz=BAKU_TZ)
-                    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+                    deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             # Admin notify
             admin_chat = get_chat_id_for_kommo_user(10932455)
@@ -3082,10 +3082,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             elif deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
             elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
             elif deadline_key == "today":
-                deadline_dt = now.replace(hour=19, minute=0, second=0, microsecond=0)
+                deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
                 if deadline_dt <= now: deadline_dt += timedelta(days=1)
-            elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-            else: deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+            else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
             task_type_id = int(data.get("task_type", "1") or "1")
             result = execute_tool_create_task(phone, text, None, None, assignee)
             if isinstance(result, str):
@@ -3195,7 +3195,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
                 if isinstance(st_result, dict) and st_result.get("success"):
                     now = datetime.now(tz=BAKU_TZ)
-                    deadline_dt = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+                    deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
