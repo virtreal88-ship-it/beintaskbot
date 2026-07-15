@@ -3103,7 +3103,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if _cid == chat_id and len(_n) > 5:
                     creator_name = _n
                     break
-            creates_for_self = (creator_name and assignee_name_raw == creator_name)
+            creates_for_self = False  # Always require admin confirmation
             if not is_admin_user and not creates_for_self and _bot_app:
                 # Store pending task in bot_data
                 conf_key = str(uuid.uuid4())[:8]
@@ -3247,16 +3247,31 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if _cid == chat_id and len(_n) > 5:
                     creator_name = _n
                     break
-            if not is_admin_user and assignee_name_raw and assignee_name_raw != creator_name and _bot_app:
+            if not is_admin_user and assignee_name_raw and _bot_app:
+                # Non-admin changing assignee -> confirmation required
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
                 display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
+                conf_key = str(uuid.uuid4())[:8]
+                _bot_app.bot_data.setdefault("pending_updates", {})[conf_key] = {
+                    "task_id": task_id, "update_data": update_data,
+                    "assignee_name_raw": assignee_name_raw, "sender_name": sender_name,
+                    "creator_chat_id": chat_id
+                }
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"updtask-{conf_key}-yes")],
+                    [InlineKeyboardButton("\u015eamil", callback_data=f"updtask-{conf_key}-shamil"), InlineKeyboardButton("Soltan", callback_data=f"updtask-{conf_key}-soltan")],
+                    [InlineKeyboardButton("H\u00fcseyn", callback_data=f"updtask-{conf_key}-huseyn"), InlineKeyboardButton("Rasim", callback_data=f"updtask-{conf_key}-rasim")],
+                    [InlineKeyboardButton("Texniki", callback_data=f"updtask-{conf_key}-texniki"), InlineKeyboardButton("\u00d6z\u00fcm", callback_data=f"updtask-{conf_key}-admin")],
+                    [InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"updtask-{conf_key}-no")],
+                ])
                 try:
-                    await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* tap\u015f\u0131r\u0131\u011f\u0131 d\u0259yi\u015fdi:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}", parse_mode="Markdown")
+                    await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}", parse_mode="Markdown", reply_markup=kb)
                 except: pass
+                return web.json_response({"success": True, "message": "\u23f3 D\u0259yi\u015fiklik t\u0259sdiq \u00fc\u00e7\u00fcn g\u00f6nd\u0259rildi."})
+            # Admin updates directly
             result = update_task_kommo(task_id, update_data)
             if result:
-                # Try to get lead link from task
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
                     t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
@@ -3265,13 +3280,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
                 except:
                     link = ""
-                # Notify admin about update
-                if not is_admin_user and _bot_app and not assignee_name_raw:
-                    admin_chat = get_chat_id_for_kommo_user(10932455)
-                    sender_name = creator_name or "\u018fm\u0259kda\u015f"
-                    try:
-                        await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* tap\u015f\u0131r\u0131\u011f\u0131 yenil\u0259di (ID:{task_id})", parse_mode="Markdown")
-                    except: pass
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
@@ -3845,6 +3853,58 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
+async def update_task_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle updtask-{key}-yes/no/employee for update_task confirmation."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except: pass
+    parts = query.data.split("-")
+    if len(parts) < 3: return
+    conf_key = parts[1]
+    decision = parts[2]
+    pending_updates = context.bot_data.get("pending_updates", {})
+    pending = pending_updates.pop(conf_key, None)
+    if not pending:
+        try: await query.edit_message_text("⚠️ Bu təsdiq artıq keçərsizdir.")
+        except: pass
+        return
+    if decision == "no":
+        try: await query.edit_message_text("❌ Dəyişiklik rədd edildi.")
+        except: pass
+        creator_chat = pending.get("creator_chat_id")
+        if creator_chat and _bot_app:
+            try: await _bot_app.bot.send_message(creator_chat, "❌ Dəyişiklik rədd edildi.")
+            except: pass
+        return
+    # Resolve assignee
+    _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": ("Texniki Dəstək", 15532668), "admin": ("Nizami Qasımov", 10932455)}
+    update_data = pending["update_data"]
+    if decision != "yes":
+        marker_info = _UPD_MARKER.get(decision)
+        if marker_info:
+            new_name, new_id = marker_info
+            update_data["responsible_user_id"] = new_id
+            old_text = update_data.get("text", "")
+            import re as _re2
+            old_text = _re2.sub(r"^\[.*?\]\s*", "", old_text)
+            if new_name and decision != "admin":
+                update_data["text"] = f"[{new_name}] {old_text}"
+            else:
+                update_data["text"] = old_text
+    result = update_task_kommo(pending["task_id"], update_data)
+    if result:
+        chosen = _UPD_MARKER.get(decision, (pending.get("assignee_name_raw",""), None))[0] if decision != "yes" else pending.get("assignee_name_raw", "")
+        try: await query.edit_message_text(f"✅ Təsdiqləndi! İcraçı: {chosen}")
+        except: pass
+        creator_chat = pending.get("creator_chat_id")
+        if creator_chat and _bot_app:
+            try: await _bot_app.bot.send_message(creator_chat, "✅ Dəyişiklik təsdiq edildi!")
+            except: pass
+    else:
+        try: await query.edit_message_text("⚠️ Yeniləmə uğursuz oldu.")
+        except: pass
+
 async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle cnftask-{key}-yes/no for task creation confirmation."""
     query = update.callback_query
@@ -3956,6 +4016,7 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
+    app.add_handler(CallbackQueryHandler(update_task_confirm_callback, pattern="^updtask-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))

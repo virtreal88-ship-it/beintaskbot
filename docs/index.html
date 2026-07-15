@@ -62,7 +62,10 @@
     </style>
 </head>
 <body>
-<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;height:4px;z-index:2000;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1s linear infinite;box-shadow:0 1px 4px rgba(36,129,204,0.4);"></div>
+<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:2000;text-align:center;">
+<div style="height:4px;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1s linear infinite;"></div>
+<div style="font-size:11px;color:#2481cc;font-weight:600;padding:2px 0;background:rgba(255,255,255,0.95);">Sinxronizasiya...</div>
+</div>
 <style>@keyframes syncAnim{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>
 <div id="toast"></div>
 
