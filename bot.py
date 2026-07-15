@@ -3684,11 +3684,25 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
         name_line = f"\n👤 {client_name}" if client_name else ""
         phone_line = f"\n📞 {client_phone}" if client_phone else ""
+        link_line = f"\n🔗 {KOMMO_BASE_URL}/{'leads' if entity_type == 'leads' else 'contacts'}/detail/{entity_id}" if entity_id else ""
+        # Fetch last note
+        _note_15 = ""
+        if entity_id:
+            try:
+                _nr = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                if _nr.status_code == 200:
+                    _nd = _nr.json().get("_embedded", {}).get("notes", [])
+                    if _nd:
+                        _note_15 = _nd[0].get("params", {}).get("text", "")[:100]
+            except:
+                pass
+        note_line = f"\n📝 Qeyd: {_note_15}" if _note_15 else ""
         try:
             await context.bot.send_message(
                 chat_id,
-                f"⏰ *Tapşırıq 15 dəqiqəyə bitməlidir!*\n\n📝 {task_text}{name_line}{phone_line}\n🕐 {dt.strftime('%H:%M')}",
-                parse_mode="Markdown"
+                f"⏰ *Tapşırıq 15 dəqiqəyə bitməlidir!*\n\n📝 {task_text}{name_line}{phone_line}\n🕐 {dt.strftime('%H:%M')}{note_line}{link_line}",
+                parse_mode="Markdown",
+                disable_web_page_preview=True
             )
         except:
             pass
