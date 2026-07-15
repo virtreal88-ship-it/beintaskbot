@@ -365,7 +365,7 @@ def get_contact_name_from_entity(entity_id: int, entity_type: str) -> str:
 def get_contact_notes(contact_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
     try:
-        resp = requests.get(url, headers=HEADERS, params={"limit": 20, "order[created_at]": "desc"}, timeout=15)
+        resp = requests.get(url, headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=15)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("notes", [])
     except:
@@ -566,7 +566,7 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
             lead_info = f"\n\n📋 *Sövdələşmə:* {lead.get('name', '')}\n📌 Mərhələ: {stage_name}\n👤 Məsul: {responsible}{price_str}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}"
             # Get lead notes too
             try:
-                resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", headers=HEADERS, params={"limit": 20, "order[created_at]": "desc"}, timeout=15)
+                resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=15)
                 if resp.status_code == 200:
                     lead_notes_list = resp.json().get("_embedded", {}).get("notes", [])
             except:
@@ -861,7 +861,7 @@ def execute_tool_complete_task(phone: str) -> str:
     responsible_id = task.get("responsible_user_id", 0)
     responsible_name = KOMMO_USERS.get(responsible_id, "")
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else ""
-    res = update_task_kommo(task["id"], {"is_completed": True})
+    res = update_task_kommo(task["id"], {"is_completed": True, "result": {"text": "Tamamlandı"}})
     if res:
         result = (f"✅ Tapşırıq tamamlandı!\n\n"
                   f"👤 {contact_name}\n"
@@ -1942,7 +1942,7 @@ async def overdue_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
     task_id = int(parts[1])
     action = parts[2]
     if action == "done":
-        res = update_task_kommo(task_id, {"is_completed": True})
+        res = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
         if res:
             try:
                 await query.edit_message_text("✅ Tapşırıq tamamlandı!")
@@ -2832,7 +2832,7 @@ async def _handle_kommo_task_webhook(data: dict):
     if entity_id:
         try:
             _n_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-            _n_resp = requests.get(_n_url, headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+            _n_resp = requests.get(_n_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
             if _n_resp.status_code == 200:
                 _n_data = _n_resp.json().get("_embedded", {}).get("notes", [])
                 if _n_data:
@@ -3344,7 +3344,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            result = update_task_kommo(task_id, {"is_completed": True})
+            result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
             link = ""
             stage_msg = ""
             # Also change stage if requested
@@ -3491,7 +3491,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             # Kommo API does not support task deletion; mark as completed instead
-            result = update_task_kommo(task_id, {"is_completed": True})
+            result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
             if result:
                 return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi (bağlandı)!"})
             else:
@@ -3651,7 +3651,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         pass
                     try:
                         _note_url = f"{KOMMO_BASE_URL}/api/v4/{_note_entity_type}/{_note_entity_id}/notes"
-                        _note_resp = requests.get(_note_url, headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                        _note_resp = requests.get(_note_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
                         if _note_resp.status_code == 200:
                             _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
                             if _notes_data:
@@ -3757,7 +3757,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         _note_15 = ""
         if entity_id:
             try:
-                _nr = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                _nr = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
                 if _nr.status_code == 200:
                     _nd = _nr.json().get("_embedded", {}).get("notes", [])
                     if _nd:
