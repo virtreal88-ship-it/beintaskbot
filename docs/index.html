@@ -110,7 +110,7 @@
         <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
-    <div class="form-group"><label>Sağa = Bitdi | Sola = +2 saat</label></div>
+    <div class="form-group"><label>Sağa = Düzəliş | Sola = +2 saat</label></div>
     <div id="filter-row" style="display:none; margin-bottom:10px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
@@ -185,7 +185,6 @@
     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
         <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="showCompletePanel()">✓ Bitdi</button>
         <button class="btn" style="flex: 1; background: #3b82f6; color: white; justify-content: center; font-size: 14px;" onclick="showNotePanel()">📝 Qeyd</button>
-        <button class="btn" style="flex: 1; background: var(--secondary-bg-color); color: var(--text-color); justify-content: center; font-size: 14px;" onclick="handleBarAction('edit')">✏️ Düzəliş</button>
     </div>
     <div id="note-panel" style="display:none;margin-bottom:10px;">
         <textarea id="note-text-input" class="input-field" placeholder="Qeyd yazın..."></textarea>
@@ -398,22 +397,35 @@ async function openNotifications() {
         mockTasks = cached.tasks;
         if(cached.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
         renderNotifications();
-    }
-    nav('screen-notifications');
-    showLoader();
-    try {
-        const r = await fetch(API_BASE + '/api/notifications', {
+        nav('screen-notifications');
+        // Background refresh without blocking UI
+        fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        });
-        const j = await r.json();
-        if(j.success && j.tasks) {
-            mockTasks = j.tasks;
-            setCachedTasks(j.tasks, j.is_admin);
-            if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
-            renderNotifications();
-        }
-    } catch(e) { if(!cached) toast('Bildirişlər yüklənmədi', true); }
-    hideLoader();
+        }).then(r => r.json()).then(j => {
+            if(j.success && j.tasks) {
+                mockTasks = j.tasks;
+                setCachedTasks(j.tasks, j.is_admin);
+                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+                renderNotifications();
+            }
+        }).catch(() => {});
+    } else {
+        nav('screen-notifications');
+        showLoader();
+        try {
+            const r = await fetch(API_BASE + '/api/notifications', {
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            });
+            const j = await r.json();
+            if(j.success && j.tasks) {
+                mockTasks = j.tasks;
+                setCachedTasks(j.tasks, j.is_admin);
+                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+                renderNotifications();
+            }
+        } catch(e) { toast('Bildiri\u015fl\u0259r y\u00fckl\u0259nm\u0259di', true); }
+        hideLoader();
+    }
 }
 
 let currentFilter = 'all';
@@ -439,7 +451,7 @@ function renderNotifications() {
         swipeWrapper.style.cssText = "position: relative; border-radius: 12px; overflow: hidden; background: #e5e7eb;";
         const bgAction = document.createElement('div');
         bgAction.style.cssText = "position: absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:space-between; padding: 0 20px; font-weight:bold; color:white; font-size:14px; border-radius:12px; transition: background 0.2s;";
-        bgAction.innerHTML = `<span style="opacity:0;">✓ Bitdi</span><span style="opacity:0;">🕒 +2 saat</span>`;
+        bgAction.innerHTML = `<span style="opacity:0;">✏️ Düzəliş</span><span style="opacity:0;">🕒 +2 saat</span>`;
         swipeWrapper.appendChild(bgAction);
         const item = document.createElement('div');
         const isUrgent = t.title.includes('Gecikmiş');
@@ -470,13 +482,13 @@ function renderNotifications() {
             if (currentX < -120) currentX = -120 + (currentX + 120) * 0.2;
             item.style.transform = `translateX(${currentX}px)`;
             const textLeft = bgAction.children[0]; const textRight = bgAction.children[1];
-            if (currentX > 20) { bgAction.style.background = '#10b981'; textLeft.style.opacity = '1'; textRight.style.opacity = '0'; }
+            if (currentX > 20) { bgAction.style.background = '#3b82f6'; textLeft.style.opacity = '1'; textRight.style.opacity = '0'; }
             else if (currentX < -20) { bgAction.style.background = '#f59e0b'; textLeft.style.opacity = '0'; textRight.style.opacity = '1'; }
             else { bgAction.style.background = 'transparent'; textLeft.style.opacity = '0'; textRight.style.opacity = '0'; }
         }, {passive: true});
         item.addEventListener('touchend', () => {
             isSwiping = false; item.style.transition = 'transform 0.2s cubic-bezier(0.1, 0.5, 0.1, 1)';
-            if (currentX > 130) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); showCompletePanel(); }, 200); }
+            if (currentX > 130) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); handleBarAction('edit'); }, 200); }
             else if (currentX < -130) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
             else { item.style.transform = 'translateX(0)'; bgAction.style.background = 'transparent'; }
             currentX = 0;
