@@ -13,7 +13,7 @@
         *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
         body{background:var(--bg-color);color:var(--text-color);padding:16px;display:flex;flex-direction:column;min-height:100vh}
         .spinner{width:32px;height:32px;border:3px solid var(--hint-color);border-top-color:var(--button-color);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
-        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes spin{to{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
         #toast{position:fixed;top:-60px;left:50%;transform:translateX(-50%);background:#10b981;color:#fff;padding:12px 24px;border-radius:30px;font-size:14px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:top .3s;z-index:1000}
         #toast.error{background:#ef4444}
         .screen{display:none;flex-direction:column;gap:16px;animation:fadeIn .2s}.screen.active{display:flex}
@@ -539,9 +539,13 @@ async function submitNote() {
     if(!task) return;
     document.getElementById('note-text-input').value = '';
     closeBottomBar();
-    // Show spinner on that task card
+    // Disable card + pulse animation
     const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
-    if(taskEl) { taskEl.style.opacity = '0.5'; taskEl.insertAdjacentHTML('beforeend', '<div class="task-spinner" style="text-align:center;padding:4px;font-size:11px;color:#3b82f6;">Y\u00fckl\u0259nir...</div>'); }
+    if(taskEl) {
+        taskEl.style.pointerEvents = 'none';
+        taskEl.style.animation = 'pulse 1s infinite';
+        taskEl.insertAdjacentHTML('beforeend', '<div class="task-spinner" style="text-align:center;padding:6px;font-size:12px;color:#3b82f6;font-weight:600;">\u2B6E Qeyd g\u00f6nd\u0259rilir...</div>');
+    }
     // Send note
     try {
         await fetch(API_BASE + '/api/action', {
@@ -550,10 +554,17 @@ async function submitNote() {
             body: JSON.stringify({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''})
         });
     } catch(e) {}
-    // Update just this task's note locally
-    task.last_note = noteText;
-    setCachedTasks(mockTasks, document.getElementById('filter-row')?.style.display === 'block');
-    if(taskEl) { taskEl.style.opacity = '1'; const sp = taskEl.querySelector('.task-spinner'); if(sp) sp.remove(); }
+    // Fetch fresh data for this task from server
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(j.success && j.tasks) {
+            mockTasks = j.tasks;
+            setCachedTasks(j.tasks, j.is_admin);
+        }
+    } catch(e) {}
+    // Re-enable and render
+    if(taskEl) { taskEl.style.pointerEvents = ''; taskEl.style.animation = ''; }
     renderNotifications();
     toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
 }
