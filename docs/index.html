@@ -113,7 +113,7 @@
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
     </div>
     <div class="form-group"><label>Sağa = Düzəliş | Sola = +2 saat</label></div>
-    <div id="filter-row" style="display:none; margin-bottom:10px; display:flex; align-items:center; gap:8px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;flex:1;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select><button onclick="pinFilter()" style="padding:8px 12px;border-radius:8px;border:1px solid #ddd;background:#fff;font-size:16px;cursor:pointer;" title="Bərkitmək">📌</button></div>
+    <div id="filter-row" style="display:none; margin-bottom:10px; align-items:center; gap:8px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;flex:1;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select><button onclick="pinFilter()" style="padding:8px 12px;border-radius:8px;border:1px solid #ddd;background:#fff;font-size:16px;cursor:pointer;" title="Bərkitmək">📌</button></div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
 </div>
@@ -393,14 +393,16 @@ function submitClose() {
 /* ================= NOTIFICATIONS & BOTTOM SHEET (SWR) ================= */
 async function openNotifications() {
     nav('screen-notifications');
-    
+    // Установить фильтр из localStorage
+    const fa = document.getElementById('filter-assignee');
+    if(fa && currentFilter !== 'all') { fa.value = currentFilter; }
+    if(isAdmin || currentFilter !== 'all') { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'flex'; }
     // Шаг A: Мгновенно рендерим кэш (Stale)
     const cachedData = getCachedTasks();
     if (cachedData && cachedData.length > 0) {
         mockTasks = cachedData;
         renderNotifications();
     } else if (mockTasks.length === 0) {
-        // Нет кэша — показываем полноэкранный прелоадер только в первый раз
         showLoader();
     }
     
@@ -428,6 +430,8 @@ async function openNotifications() {
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
+// Set filter select on load
+if(currentFilter !== 'all') { const _fr = document.getElementById('filter-row'); if(_fr) _fr.style.display = 'flex'; const _fa = document.getElementById('filter-assignee'); if(_fa) _fa.value = currentFilter; }
 function filterTasks() {
     currentFilter = document.getElementById('filter-assignee').value;
     renderNotifications();
