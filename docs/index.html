@@ -537,11 +537,13 @@ async function submitNote() {
     if(!noteText) { toast('Qeyd yaz\u0131n!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId);
     if(!task) return;
-    document.getElementById('note-panel').style.display = 'none';
-    await doFetch({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''}, null);
     document.getElementById('note-text-input').value = '';
-    toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
-
+    closeBottomBar();
+    showLoader();
+    await doFetch({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''}, null);
+    await openNotifications();
+    hideLoader();
+    alert('\u2705 Qeyd \u0259lav\u0259 edildi');
 }
 function showCompletePanel() {
     completeStageSelected = '';
