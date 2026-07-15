@@ -198,7 +198,7 @@
             <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('ugurlu',this)">Uğurlu</div>
             <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('imtina',this)">İmtina</div>
         </div>
-        <div id="complete-note-block" style="display:none;margin-bottom:10px;"><textarea id="complete-note-text" class="input-field" placeholder="Qeyd yazın..."></textarea></div>
+        <div id="complete-note-block" style="display:block;margin-bottom:10px;"><textarea id="complete-note-text" class="input-field" placeholder="Qeyd yazın..."></textarea></div>
         <button id="btn-confirm-complete" class="btn btn-submit" style="background:#ccc;pointer-events:none;" onclick="confirmComplete()">Təsdiqlə</button>
     </div>
 </div>
@@ -518,7 +518,7 @@ function showCompletePanel() {
     document.getElementById('complete-note-block').style.display = 'none';
     document.getElementById('complete-note-text').value = '';
     const btn = document.getElementById('btn-confirm-complete');
-    btn.style.background = '#ccc'; btn.style.pointerEvents = 'none';
+    btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
 }
 function selectCompleteStage(stage, el) {
     document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
@@ -529,7 +529,7 @@ function selectCompleteStage(stage, el) {
     btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
 }
 async function confirmComplete() {
-    if(!completeStageSelected) { toast('Mərhələ seçin!', true); return; }
+
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId);
