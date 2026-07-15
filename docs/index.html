@@ -476,13 +476,13 @@ function filterByDate(tasks) {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
     if(currentDateFilter === 'today') {
-        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayStart.getTime() && d < todayEnd.getTime(); });
+        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < todayEnd.getTime(); });
     } else if(currentDateFilter === 'tomorrow') {
         const tomorrowEnd = new Date(todayEnd); tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
-        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayEnd.getTime() && d < tomorrowEnd.getTime(); });
+        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d >= todayEnd.getTime() && d < tomorrowEnd.getTime(); });
     } else if(currentDateFilter === 'week') {
         const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7);
-        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayStart.getTime() && d < weekEnd.getTime(); });
+        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < weekEnd.getTime(); });
     }
     return tasks;
 }
