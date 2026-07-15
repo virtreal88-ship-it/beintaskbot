@@ -3039,8 +3039,20 @@ async def handle_api_action(request: web.Request) -> web.Response:
         elif action == "add_note":
             text = data.get("text", "")
             if not text:
-                return web.json_response({"success": False, "error": "Qeyd mətni boşdur."})
-            result = execute_tool_add_note(phone, text)
+                return web.json_response({"success": False, "error": "Qeyd m\u0259tni bo\u015fdur."})
+            task_id_note = data.get("task_id")
+            if task_id_note:
+                try:
+                    headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
+                    t_data = t_resp.json()
+                    entity_id = t_data.get("entity_id")
+                    entity_type = t_data.get("entity_type", "leads")
+                    if entity_id:
+                        note_payload = [{"note_type": "common", "params": {"text": text}}]
+                        requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
+                except: pass
+            result = execute_tool_add_note(phone, text) if phone else "OK"
             # Subtask
             if data.get("create_subtask") and data.get("subtask_text"):
                 st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
