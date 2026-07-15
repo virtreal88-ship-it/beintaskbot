@@ -2879,46 +2879,71 @@ async def _handle_kommo_task_webhook(data: dict):
         except:
             pass
     note_line = f"\n📝 Qeyd: {last_note_text}" if last_note_text else ""
+    logger.info(f"Task webhook notification check: is_add={is_add}, task_id={task_id_raw}, created_by={created_by}, responsible={responsible_id}")
     if is_add and responsible_id and responsible_id != 10932455:
-        assignee_chat = get_chat_id_for_kommo_user(responsible_id)
-        assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
-        creator_name = KOMMO_USERS.get(created_by, "Kommo") if created_by else "Kommo"
-        name_line = f"\n👤 {client_name}" if client_name else ""
-        phone_line = f"\n📞 {client_phone}" if client_phone else ""
-        deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
-        link_line = f"\n🔗 {link}" if link else ""
-        type_line = f"\n📌 {task_type_name}" if task_type_name else ""
-        if assignee_chat:
+        # Check if task is already completed before notifying
+        _task_completed = False
+        if task_id_raw:
             try:
-                sent = await _bot_app.bot.send_message(
-                    assignee_chat,
-                    f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{note_line}{link_line}",
-                    disable_web_page_preview=True
-                )
-                if sent and task_id_raw:
-                    store_message_task(assignee_chat, sent.message_id, int(task_id_raw), task_text,
-                                       entity_id=entity_id, entity_type=entity_type, phone=client_phone)
+                _tc = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=10)
+                if _tc.status_code == 200 and _tc.json().get("is_completed"):
+                    _task_completed = True
+                    logger.info(f"Assignee notification suppressed: task {task_id_raw} already completed")
             except:
                 pass
-    # Notify admin about new tasks (skip if bot/admin created it themselves)
+        if not _task_completed:
+            assignee_chat = get_chat_id_for_kommo_user(responsible_id)
+            assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
+            creator_name = KOMMO_USERS.get(created_by, "Kommo") if created_by else "Kommo"
+            name_line = f"\n👤 {client_name}" if client_name else ""
+            phone_line = f"\n📞 {client_phone}" if client_phone else ""
+            deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
+            link_line = f"\n🔗 {link}" if link else ""
+            type_line = f"\n📌 {task_type_name}" if task_type_name else ""
+            if assignee_chat:
+                try:
+                    sent = await _bot_app.bot.send_message(
+                        assignee_chat,
+                        f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{note_line}{link_line}",
+                        disable_web_page_preview=True
+                    )
+                    if sent and task_id_raw:
+                        store_message_task(assignee_chat, sent.message_id, int(task_id_raw), task_text,
+                                           entity_id=entity_id, entity_type=entity_type, phone=client_phone)
+                except:
+                    pass
+    # Notify admin about new tasks (skip if bot/admin created it or task already completed)
     if is_add and admin_chat and created_by != 10932455:
-        name_line = f"\n👤 {client_name}" if client_name else ""
-        phone_line = f"\n📞 {client_phone}" if client_phone else ""
-        deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
-        link_line = f"\n🔗 {link}" if link else ""
-        responsible_name = KOMMO_USERS.get(responsible_id, "") if responsible_id else ""
-        resp_line = f"\n👤 Məsul: {responsible_name}" if responsible_name else ""
-        type_line = f"\n📌 {task_type_name}" if task_type_name else ""
-        creator_name_wh = KOMMO_USERS.get(created_by, "") if created_by else ""
-        creator_line = f"\n👤 {creator_name_wh} → {responsible_name}" if creator_name_wh and responsible_name else resp_line
-        try:
-            await _bot_app.bot.send_message(
-                admin_chat,
-                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{creator_line}{note_line}{link_line}",
-                disable_web_page_preview=True
-            )
-        except:
-            pass
+        # Double-check: verify task is not already completed via API
+        _skip_notify = False
+        if task_id_raw:
+            try:
+                _t_check = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=10)
+                if _t_check.status_code == 200:
+                    _t_json = _t_check.json()
+                    if _t_json.get("is_completed"):
+                        logger.info(f"Webhook suppressed: task {task_id_raw} already completed")
+                        _skip_notify = True
+            except:
+                pass
+        if not _skip_notify:
+            name_line = f"\n👤 {client_name}" if client_name else ""
+            phone_line = f"\n📞 {client_phone}" if client_phone else ""
+            deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
+            link_line = f"\n🔗 {link}" if link else ""
+            responsible_name = KOMMO_USERS.get(responsible_id, "") if responsible_id else ""
+            resp_line = f"\n👤 Məsul: {responsible_name}" if responsible_name else ""
+            type_line = f"\n📌 {task_type_name}" if task_type_name else ""
+            creator_name_wh = KOMMO_USERS.get(created_by, "") if created_by else ""
+            creator_line = f"\n👤 {creator_name_wh} → {responsible_name}" if creator_name_wh and responsible_name else resp_line
+            try:
+                await _bot_app.bot.send_message(
+                    admin_chat,
+                    f"📋 Kommo-da yeni tap\u015f\u0131r\u0131q:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{creator_line}{note_line}{link_line}",
+                    disable_web_page_preview=True
+                )
+            except:
+                pass
 
 async def handle_kommo_webhook(request: web.Request) -> web.Response:
     """Handle incoming Kommo webhooks."""
