@@ -62,7 +62,7 @@
     </style>
 </head>
 <body>
-<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;height:3px;z-index:2000;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1.5s linear infinite;"></div>
+<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;height:4px;z-index:2000;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1s linear infinite;box-shadow:0 1px 4px rgba(36,129,204,0.4);"></div>
 <style>@keyframes syncAnim{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>
 <div id="toast"></div>
 
@@ -123,7 +123,7 @@
     <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
     <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
     <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
-    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div><div class="option-card" onclick="sel('deadline','week',this)">Bu həftə</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
+    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
     <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
 </div>
 <div id="screen-stage-select" class="screen">
@@ -339,7 +339,8 @@ function submitTask() {
         let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
         let payload = {action: 'update_task', task_id: editingTaskId, text: finalText};
         if(gd.deadline) payload.deadline = gd.deadline;
-        payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase() === 'nizami' ? 'admin' : 'sahe_meneceri';
+        payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
+        if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.task_type) payload.task_type = gd.task_type;
         doFetch(payload, 'task-submit-btn');
         editingTaskId = null;
@@ -384,45 +385,27 @@ async function refreshTasks() {
 }
 
 async function openNotifications() {
-    // 1. Show cached data instantly
     const cached = getCachedTasks();
     if(cached) {
         mockTasks = cached.tasks;
         if(cached.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
         renderNotifications();
-        nav('screen-notifications');
-        // 2. Sync fresh data in background
-        showSync();
-        try {
-            const r = await fetch(API_BASE + '/api/notifications', {
-                headers: {'X-TG-User-ID': CURRENT_USER_ID}
-            });
-            const j = await r.json();
-            if(j.success && j.tasks) {
-                mockTasks = j.tasks;
-                setCachedTasks(j.tasks, j.is_admin);
-                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
-                renderNotifications();
-            }
-        } catch(e) {}
-        hideSync();
-    } else {
-        // No cache — show loader
-        showLoader();
-        try {
-            const r = await fetch(API_BASE + '/api/notifications', {
-                headers: {'X-TG-User-ID': CURRENT_USER_ID}
-            });
-            const j = await r.json();
-            if(j.success && j.tasks) {
-                mockTasks = j.tasks;
-                setCachedTasks(j.tasks, j.is_admin);
-                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
-            }
-        } catch(e) { toast('Bildirişlər yüklənmədi', true); }
-        hideLoader();
-        renderNotifications(); nav('screen-notifications');
     }
+    nav('screen-notifications');
+    showSync();
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', {
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
+        const j = await r.json();
+        if(j.success && j.tasks) {
+            mockTasks = j.tasks;
+            setCachedTasks(j.tasks, j.is_admin);
+            if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+            renderNotifications();
+        }
+    } catch(e) { if(!cached) toast('Bildirişlər yüklənmədi', true); }
+    hideSync();
 }
 
 let currentFilter = 'all';

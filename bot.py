@@ -2870,10 +2870,12 @@ async def _handle_kommo_task_webhook(data: dict):
         responsible_name = KOMMO_USERS.get(responsible_id, "") if responsible_id else ""
         resp_line = f"\n👤 Məsul: {responsible_name}" if responsible_name else ""
         type_line = f"\n📌 {task_type_name}" if task_type_name else ""
+        creator_name_wh = KOMMO_USERS.get(created_by, "") if created_by else ""
+        creator_line = f"\n👤 {creator_name_wh} → {responsible_name}" if creator_name_wh and responsible_name else resp_line
         try:
             await _bot_app.bot.send_message(
                 admin_chat,
-                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{resp_line}{note_line}{link_line}",
+                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{creator_line}{note_line}{link_line}",
                 disable_web_page_preview=True
             )
         except:
@@ -3123,7 +3125,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
                 ])
                 try:
-                    await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 İcraçı: {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
+                    await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
                 except: pass
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
             # Admin creates directly
@@ -3209,6 +3211,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 update_data["text"] = data["text"]
             # Handle assignee change
             assignee = data.get("assignee")
+            assignee_name_raw = data.get("assigneeName", "")
             if assignee:
                 assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
                 assignee_id = assignee_map.get(assignee)
@@ -3236,18 +3239,39 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 else: new_dl = now + timedelta(hours=2)
                 update_data["complete_till"] = int(new_dl.timestamp())
             if not update_data:
-                return web.json_response({"success": False, "error": "Heç nə dəyişdirilmədi."})
+                return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
+            # Non-admin changing assignee → send to admin for confirmation
+            is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
+            creator_name = None
+            for _n, _cid in NAME_TO_CHAT.items():
+                if _cid == chat_id and len(_n) > 5:
+                    creator_name = _n
+                    break
+            if not is_admin_user and assignee_name_raw and assignee_name_raw != creator_name and _bot_app:
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+                display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
+                try:
+                    await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* tap\u015f\u0131r\u0131\u011f\u0131 d\u0259yi\u015fdi:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}", parse_mode="Markdown")
+                except: pass
             result = update_task_kommo(task_id, update_data)
             if result:
                 # Try to get lead link from task
                 try:
-                    headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers)
+                    headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
                     t_data = t_resp.json()
                     entity_id = t_data.get("entity_id", "")
                     link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
                 except:
                     link = ""
+                # Notify admin about update
+                if not is_admin_user and _bot_app and not assignee_name_raw:
+                    admin_chat = get_chat_id_for_kommo_user(10932455)
+                    sender_name = creator_name or "\u018fm\u0259kda\u015f"
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* tap\u015f\u0131r\u0131\u011f\u0131 yenil\u0259di (ID:{task_id})", parse_mode="Markdown")
+                    except: pass
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
