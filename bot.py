@@ -201,6 +201,8 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 
 # ─── Bot-created tasks (suppress webhook echo) ──────────────────────────────
 _bot_created_tasks: set = set()
+_bot_created_tasks_ts: dict = {}  # {task_id: timestamp} for time-based expiry
+_notified_task_webhooks: dict = {}  # {task_id: timestamp} - prevent duplicate webhook notifications
 # Bot-initiated lead stage changes (suppress webhook echo)
 _bot_updated_tasks: dict = {}  # {task_id: timestamp} - suppress update webhook echo
 _bot_changed_leads: dict = {}  # {lead_id: timestamp}
@@ -430,9 +432,13 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
             try:
                 created_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                 if created_id:
+                    import time as _time
                     _bot_created_tasks.add(int(created_id))
+                    _bot_created_tasks_ts[int(created_id)] = _time.time()
                     if len(_bot_created_tasks) > 500:
-                        _bot_created_tasks.discard(next(iter(_bot_created_tasks)))
+                        oldest = next(iter(_bot_created_tasks))
+                        _bot_created_tasks.discard(oldest)
+                        _bot_created_tasks_ts.pop(oldest, None)
             except Exception:
                 pass
             return result
@@ -2818,13 +2824,29 @@ async def _handle_kommo_task_webhook(data: dict):
         client_phone = get_phone_from_entity(entity_id, entity_type)
     admin_chat = get_chat_id_for_kommo_user(10932455)
     # Suppress bot-created task echo
+    import time as _time
     if is_add and task_id_raw:
         tid = int(task_id_raw)
+        # Suppress if bot created this task
         if tid in _bot_created_tasks:
-            _bot_created_tasks.discard(tid)
-            return
+            ts = _bot_created_tasks_ts.get(tid, 0)
+            if _time.time() - ts < 120:
+                logger.info(f"Webhook suppressed: bot-created task {tid}")
+                return
+            else:
+                _bot_created_tasks.discard(tid)
+                _bot_created_tasks_ts.pop(tid, None)
+        # Suppress duplicate webhook for same task_id (Kommo sends multiple)
+        if tid in _notified_task_webhooks:
+            if _time.time() - _notified_task_webhooks[tid] < 300:
+                logger.info(f"Webhook suppressed: duplicate add notification for task {tid}")
+                return
+        _notified_task_webhooks[tid] = _time.time()
+        # Cleanup old entries
+        if len(_notified_task_webhooks) > 200:
+            cutoff = _time.time() - 300
+            _notified_task_webhooks.clear()
     # Suppress bot-updated task echo
-    import time as _time
     if is_upd and task_id_raw:
         tid = int(task_id_raw)
         if tid in _bot_updated_tasks:
