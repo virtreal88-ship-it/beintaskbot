@@ -2827,6 +2827,19 @@ async def _handle_kommo_task_webhook(data: dict):
                 return
         except:
             pass
+    # Fetch last note for this entity
+    last_note_text = ""
+    if entity_id:
+        try:
+            _n_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
+            _n_resp = requests.get(_n_url, headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+            if _n_resp.status_code == 200:
+                _n_data = _n_resp.json().get("_embedded", {}).get("notes", [])
+                if _n_data:
+                    last_note_text = _n_data[0].get("params", {}).get("text", "")[:100]
+        except:
+            pass
+    note_line = f"\n📝 Qeyd: {last_note_text}" if last_note_text else ""
     if is_add and responsible_id and responsible_id != 10932455:
         assignee_chat = get_chat_id_for_kommo_user(responsible_id)
         assignee_name = KOMMO_USERS.get(responsible_id, "Əməkdaş")
@@ -2840,7 +2853,7 @@ async def _handle_kommo_task_webhook(data: dict):
             try:
                 sent = await _bot_app.bot.send_message(
                     assignee_chat,
-                    f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{link_line}",
+                    f"📋 Yeni tapşırıq ({creator_name}):\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{note_line}{link_line}",
                     disable_web_page_preview=True
                 )
                 if sent and task_id_raw:
@@ -2860,7 +2873,7 @@ async def _handle_kommo_task_webhook(data: dict):
         try:
             await _bot_app.bot.send_message(
                 admin_chat,
-                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{resp_line}{link_line}",
+                f"📋 Kommo-da yeni tapşırıq:\n\n📝 {task_text}{type_line}{name_line}{phone_line}{deadline_line}{resp_line}{note_line}{link_line}",
                 disable_web_page_preview=True
             )
         except:
