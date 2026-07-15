@@ -1777,6 +1777,23 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
             await context.bot.send_message(sender_chat_id, f"✅ Admin sorğunuzu təsdiqlədi! Mərhələ: {stage_display}")
         except:
             pass
+        # Auto-create task for new stage if applicable
+        if lead_id and stage in _STAGE_TASK_TEXTS:
+            _task_text = _STAGE_TASK_TEXTS[stage]
+            _now_dt = datetime.now(tz=BAKU_TZ)
+            _deadline_ts = int((_now_dt + timedelta(hours=2)).timestamp())
+            if stage == "qiymet_teklifi":
+                create_task(lead_id, _task_text, _deadline_ts, responsible_user_id=10932455, entity_type="leads")
+            else:
+                _marker = None
+                for _nm, _cid in NAME_TO_CHAT.items():
+                    if _cid == sender_chat_id and len(_nm) > 5:
+                        _marker = _nm
+                        break
+                if _marker:
+                    create_task(lead_id, f"[{_marker}] {_task_text}", _deadline_ts, responsible_user_id=15532668, entity_type="leads")
+                else:
+                    create_task(lead_id, _task_text, _deadline_ts, responsible_user_id=10932455, entity_type="leads")
     else:
         try:
             await query.edit_message_text(f"❌ Rədd edildi: {pending['phone']}")
@@ -3341,8 +3358,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         if eid2:
                             add_note(eid2, note_text, etype2)
                 except: pass
-            # Auto-create task for the new stage if applicable
-            if lead_id and new_stage in _STAGE_TASK_TEXTS:
+            # Auto-create task for the new stage if applicable (only if stage was actually changed, not pending confirmation)
+            stage_confirmed = stage_msg and "təsdiq" not in stage_msg
+            if lead_id and new_stage in _STAGE_TASK_TEXTS and stage_confirmed:
                 task_text = _STAGE_TASK_TEXTS[new_stage]
                 now_dt = datetime.now(tz=BAKU_TZ)
                 deadline_dt = now_dt + timedelta(hours=2)
@@ -3351,9 +3369,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if new_stage == "qiymet_teklifi":
                     create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 else:
-                    # Other stages: assign to whoever completed the task
-                    kommo_uid = get_kommo_user_id_for_chat(chat_id) or 10932455
-                    create_task(lead_id, task_text, deadline_ts, responsible_user_id=kommo_uid, entity_type="leads")
+                    # Other stages: assign to whoever completed the task with marker
+                    creator_marker = None
+                    for _nm, _cid in NAME_TO_CHAT.items():
+                        if _cid == chat_id and len(_nm) > 5:
+                            creator_marker = _nm
+                            break
+                    if creator_marker:
+                        task_text_with_marker = f"[{creator_marker}] {task_text}"
+                        create_task(lead_id, task_text_with_marker, deadline_ts, responsible_user_id=15532668, entity_type="leads")
+                    else:
+                        create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 stage_msg += f"\n\u2705 Yeni tap\u015f\u0131r\u0131q: {task_text}"
             if result:
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
@@ -3535,6 +3561,22 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
                     _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
+                    # Fetch last note for this entity
+                    last_note = ""
+                    _note_entity_id = entity_id
+                    _note_entity_type = entity_type
+                    if _note_entity_type == "contacts" and entity_id in contacts_cache:
+                        # Try to get lead for this contact to fetch lead notes
+                        pass
+                    try:
+                        _note_url = f"{KOMMO_BASE_URL}/api/v4/{_note_entity_type}/{_note_entity_id}/notes"
+                        _note_resp = requests.get(_note_url, headers=HEADERS, params={"limit": 1, "order[created_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                        if _note_resp.status_code == 200:
+                            _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
+                            if _notes_data:
+                                last_note = _notes_data[0].get("params", {}).get("text", "")[:100]
+                    except:
+                        pass
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
@@ -3550,7 +3592,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "kommo_link": kommo_link,
                         "complete_till": t.get("complete_till", 0),
                         "task_type_name": task_type_name,
-                        "task_type_id": t.get("task_type_id", 1)
+                        "task_type_id": t.get("task_type_id", 1),
+                        "last_note": last_note
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
