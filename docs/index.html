@@ -531,6 +531,9 @@ async function submitNote() {
     if(!task) return;
     document.getElementById('note-text-input').value = '';
     closeBottomBar();
+    // Disable only this task card
+    const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
+    if(taskEl) { taskEl.style.pointerEvents = 'none'; taskEl.style.animation = 'pulse 1s infinite'; }
     // Send note
     try {
         await fetch(API_BASE + '/api/action', {
@@ -539,8 +542,9 @@ async function submitNote() {
             body: JSON.stringify({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''})
         });
     } catch(e) {}
-    // Reload fresh list with preloader + disabled
-    await openNotifications();
+    // Update ONLY this task locally
+    task.last_note = noteText;
+    renderNotifications();
     toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
 }
 function showCompletePanel() {
