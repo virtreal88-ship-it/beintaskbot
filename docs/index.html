@@ -380,7 +380,7 @@ function submitClose() {
 
 /* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
 async function refreshTasks() {
-    showSync();
+    showLoader();
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': CURRENT_USER_ID}
@@ -388,7 +388,7 @@ async function refreshTasks() {
         const j = await r.json();
         if(j.success && j.tasks) { mockTasks = j.tasks; setCachedTasks(j.tasks, j.is_admin); }
     } catch(e) { toast('Yenilənmədi', true); }
-    hideSync();
+    hideLoader();
     renderNotifications();
 }
 
@@ -400,7 +400,7 @@ async function openNotifications() {
         renderNotifications();
     }
     nav('screen-notifications');
-    showSync();
+    showLoader();
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
             headers: {'X-TG-User-ID': CURRENT_USER_ID}
@@ -413,7 +413,7 @@ async function openNotifications() {
             renderNotifications();
         }
     } catch(e) { if(!cached) toast('Bildirişlər yüklənmədi', true); }
-    hideSync();
+    hideLoader();
 }
 
 let currentFilter = 'all';
