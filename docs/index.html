@@ -335,7 +335,7 @@ async function doFetch(payload, btnId) {
             body: JSON.stringify(payload)
         });
         const j = await r.json();
-        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info'); }
+        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info'); setTimeout(()=>openNotifications(), 1500); }
         else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) btn.disabled = false; }
 }

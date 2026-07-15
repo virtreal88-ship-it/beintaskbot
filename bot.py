@@ -3289,20 +3289,24 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not task_id or not note_text:
                 return web.json_response({"success": False, "error": "task_id v\u0259 ya qeyd yoxdur."})
             try:
-                headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
+                headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}
+                t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers={"Authorization": f"Bearer {KOMMO_TOKEN}"})
                 t_data = t_resp.json()
-                entity_id = t_data.get("entity_id", "")
+                entity_id = t_data.get("entity_id")
                 entity_type = t_data.get("entity_type", "leads")
-            except:
-                entity_id = ""
-                entity_type = "leads"
-            if entity_id:
-                try:
+                if entity_id:
                     note_payload = [{"note_type": "common", "params": {"text": note_text}}]
-                    requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
-                except: pass
-            return web.json_response({"success": True, "message": "\u2705 Qeyd \u0259lav\u0259 edildi!"})
+                    r = requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=headers_k, json=note_payload)
+                    logger.info(f"add_note: entity={entity_type}/{entity_id} status={r.status_code} resp={r.text[:200]}")
+                    if r.status_code in (200, 201):
+                        return web.json_response({"success": True, "message": "\u2705 Qeyd \u0259lav\u0259 edildi!"})
+                    else:
+                        return web.json_response({"success": False, "error": f"Kommo xəta: {r.status_code}"})
+                else:
+                    return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı."})
+            except Exception as e:
+                logger.error(f"add_note error: {e}")
+                return web.json_response({"success": False, "error": str(e)})
         elif action == "update_task_deadline":
             task_id = data.get("task_id")
             time_preset = data.get("time_preset", "+2h")
