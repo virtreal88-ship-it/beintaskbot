@@ -207,11 +207,15 @@ let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
 
-// PWA: get user ID from URL param or Telegram context
+// PWA: get user ID from URL param, localStorage, or Telegram context
 function getUserId() {
     const p = new URLSearchParams(window.location.search);
-    if(p.get('uid')) return p.get('uid');
-    return String(tg.initDataUnsafe?.user?.id || '');
+    if(p.get('uid')) { localStorage.setItem('pwa_uid', p.get('uid')); return p.get('uid'); }
+    const saved = localStorage.getItem('pwa_uid');
+    if(saved) return saved;
+    const tgId = String(tg.initDataUnsafe?.user?.id || '');
+    if(tgId) localStorage.setItem('pwa_uid', tgId);
+    return tgId;
 }
 const CURRENT_USER_ID = getUserId();
 
