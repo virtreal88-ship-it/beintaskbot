@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Bein Systems Pro</title>
+    <meta name="theme-color" content="#1a1a2e">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root{--bg-color:var(--tg-theme-bg-color,#fff);--text-color:var(--tg-theme-text-color,#000);--hint-color:var(--tg-theme-hint-color,#999);--link-color:var(--tg-theme-link-color,#2481cc);--button-color:var(--tg-theme-button-color,#2481cc);--button-text-color:var(--tg-theme-button-text-color,#fff);--secondary-bg-color:var(--tg-theme-secondary-bg-color,#f4f4f5)}
@@ -574,5 +577,6 @@ function switchTab(tab) {
 
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>
+<script>if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');</script>
 </body>
 </html>
