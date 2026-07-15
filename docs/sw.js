@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintask-v13';
+const CACHE_NAME = 'beintask-v14';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
