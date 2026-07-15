@@ -62,6 +62,8 @@
     </style>
 </head>
 <body>
+<div id="sync-bar" style="display:none;position:fixed;top:0;left:0;right:0;height:3px;z-index:2000;background:linear-gradient(90deg,#2481cc 0%,#4fc3f7 50%,#2481cc 100%);background-size:200% 100%;animation:syncAnim 1.5s linear infinite;"></div>
+<style>@keyframes syncAnim{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>
 <div id="toast"></div>
 
 <!-- Success Screen -->
@@ -205,6 +207,22 @@ let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
 
+// PWA: get user ID from URL param or Telegram context
+function getUserId() {
+    const p = new URLSearchParams(window.location.search);
+    if(p.get('uid')) return p.get('uid');
+    return String(tg.initDataUnsafe?.user?.id || '');
+}
+const CURRENT_USER_ID = getUserId();
+
+// Cache helpers
+function getCachedTasks() { try { const d = JSON.parse(localStorage.getItem('tasks_'+CURRENT_USER_ID)); if(d && d.tasks) return d; } catch(e){} return null; }
+function setCachedTasks(tasks, is_admin) { try { localStorage.setItem('tasks_'+CURRENT_USER_ID, JSON.stringify({tasks, is_admin, ts: Date.now()})); } catch(e){} }
+
+// Sync indicator
+function showSync() { const s = document.getElementById('sync-bar'); if(s) s.style.display = 'block'; }
+function hideSync() { const s = document.getElementById('sync-bar'); if(s) s.style.display = 'none'; }
+
 function initApp() {
     openNotifications();
 }
@@ -300,7 +318,7 @@ async function doFetch(payload, btnId) {
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')},
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
             body: JSON.stringify(payload)
         });
         const j = await r.json();
@@ -348,30 +366,58 @@ function submitClose() {
 
 /* ================= NOTIFICATIONS & BOTTOM SHEET ================= */
 async function refreshTasks() {
+    showSync();
     try {
         const r = await fetch(API_BASE + '/api/notifications', {
-            headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
         });
         const j = await r.json();
-        if(j.success && j.tasks) { mockTasks = j.tasks; }
+        if(j.success && j.tasks) { mockTasks = j.tasks; setCachedTasks(j.tasks, j.is_admin); }
     } catch(e) { toast('Yenilənmədi', true); }
+    hideSync();
     renderNotifications();
 }
 
 async function openNotifications() {
-    showLoader();
-    try {
-        const r = await fetch(API_BASE + '/api/notifications', {
-            headers: {'X-TG-User-ID': String(tg.initDataUnsafe?.user?.id || '')}
-        });
-        const j = await r.json();
-        if(j.success && j.tasks) {
-            mockTasks = j.tasks;
-            if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
-        }
-    } catch(e) { toast('Bildirişlər yüklənmədi', true); }
-    hideLoader();
-    renderNotifications(); nav('screen-notifications');
+    // 1. Show cached data instantly
+    const cached = getCachedTasks();
+    if(cached) {
+        mockTasks = cached.tasks;
+        if(cached.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+        renderNotifications();
+        nav('screen-notifications');
+        // 2. Sync fresh data in background
+        showSync();
+        try {
+            const r = await fetch(API_BASE + '/api/notifications', {
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            });
+            const j = await r.json();
+            if(j.success && j.tasks) {
+                mockTasks = j.tasks;
+                setCachedTasks(j.tasks, j.is_admin);
+                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+                renderNotifications();
+            }
+        } catch(e) {}
+        hideSync();
+    } else {
+        // No cache — show loader
+        showLoader();
+        try {
+            const r = await fetch(API_BASE + '/api/notifications', {
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            });
+            const j = await r.json();
+            if(j.success && j.tasks) {
+                mockTasks = j.tasks;
+                setCachedTasks(j.tasks, j.is_admin);
+                if(j.is_admin) { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'block'; }
+            }
+        } catch(e) { toast('Bildirişlər yüklənmədi', true); }
+        hideLoader();
+        renderNotifications(); nav('screen-notifications');
+    }
 }
 
 let currentFilter = 'all';
