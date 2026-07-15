@@ -3059,6 +3059,28 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not result.get("success"):
                 return web.json_response({"success": False, "error": result.get("message", "Xəta")})
             deadline_ts = int(deadline_dt.timestamp())
+            # If non-admin, send to admin for confirmation
+            is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
+            if not is_admin_user and _bot_app:
+                # Store pending task in bot_data
+                conf_key = str(uuid.uuid4())[:8]
+                pending = {
+                    "entity_id": result["entity_id"], "entity_type": result["entity_type"],
+                    "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
+                    "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
+                    "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
+                    "creator_chat_id": chat_id
+                }
+                _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Təsdiq et ✅", callback_data=f"cnftask-{conf_key}-yes"), InlineKeyboardButton("Rədd et ❌", callback_data=f"cnftask-{conf_key}-no")]])
+                try:
+                    await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 İcraçı: {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
+                except: pass
+                return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
+            # Admin creates directly
             res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], task_type_id=task_type_id)
             if res:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
@@ -3070,13 +3092,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             display_text = text.replace(f'[{assignee_name_raw}] ', '')
                             await _bot_app.bot.send_message(target_chat, f"📋 *Yeni tap\u015f\u0131r\u0131q!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
                         except: pass
-                # Notify admin
-                admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                if admin_chat and admin_chat != chat_id and _bot_app:
-                    try:
-                        await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n{msg}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
-                    except: pass
                 return web.json_response({"success": True, "message": msg, "link": result.get('link', '')})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
@@ -3720,6 +3735,71 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
+async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cnftask-{key}-yes/no for task creation confirmation."""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data
+    parts = data.split("-")
+    if len(parts) < 3:
+        return
+    conf_key = parts[1]
+    decision = parts[2]
+    pending_tasks = context.bot_data.get("pending_tasks", {})
+    pending = pending_tasks.pop(conf_key, None)
+    if not pending:
+        try:
+            await query.edit_message_text("⚠️ Bu təsdiq artıq keçərsizdir.")
+        except:
+            pass
+        return
+    if decision == "no":
+        try:
+            await query.edit_message_text("❌ Tapşırıq rədd edildi.")
+        except:
+            pass
+        creator_chat = pending.get("creator_chat_id")
+        if creator_chat and _bot_app:
+            try:
+                await _bot_app.bot.send_message(creator_chat, "❌ Tapşırığınız rədd edildi.")
+            except:
+                pass
+        return
+    # Approved - create the task
+    res = create_task(pending["entity_id"], pending["text"], pending["deadline_ts"],
+                      responsible_user_id=pending["assignee_id"], entity_type=pending["entity_type"],
+                      task_type_id=pending.get("task_type_id", 1))
+    if res:
+        deadline_str = datetime.fromtimestamp(pending["deadline_ts"], tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')
+        try:
+            await query.edit_message_text(f"✅ Tapşırıq təsdiq edildi və yaradıldı!\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n📝 {pending['text']}\n⏰ {deadline_str}")
+        except:
+            pass
+        assignee_name_raw = pending.get("assignee_name_raw", "")
+        if assignee_name_raw:
+            target_chat = get_chat_id_by_name(assignee_name_raw)
+            creator_chat = pending.get("creator_chat_id")
+            if target_chat and target_chat != creator_chat:
+                display_text = pending["text"].replace(f'[{assignee_name_raw}] ', '')
+                try:
+                    await _bot_app.bot.send_message(target_chat, f"📋 *Yeni tapşırıq!*\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n📝 {display_text}\n⏰ {deadline_str}\n🔗 {pending.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True)
+                except:
+                    pass
+        creator_chat = pending.get("creator_chat_id")
+        if creator_chat:
+            try:
+                await _bot_app.bot.send_message(creator_chat, "✅ Tapşırığınız təsdiq edildi!")
+            except:
+                pass
+    else:
+        try:
+            await query.edit_message_text("⚠️ Tapşırıq yaradılarkən xəta baş verdi.")
+        except:
+            pass
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 def main():
     global _bot_app
@@ -3743,6 +3823,7 @@ def main():
     app.add_handler(CallbackQueryHandler(ai_task_deadline_callback, pattern="^aitaskdl_"))
     app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
+    app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
