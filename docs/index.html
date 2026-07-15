@@ -112,7 +112,11 @@
         <span style="flex:1;"></span>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">+ Tapşırıq</button>
     </div>
-    <div class="form-group"><label>Sağa = Düzəliş | Sola = +2 saat</label></div>
+    <div id="date-filter-row" style="display:flex; gap:6px; margin-bottom:10px;">
+        <button class="date-filter-btn" onclick="setDateFilter('today',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Bu gün</button>
+        <button class="date-filter-btn" onclick="setDateFilter('tomorrow',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Sabah</button>
+        <button class="date-filter-btn" onclick="setDateFilter('week',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Bu həftə</button>
+    </div>
     <div id="filter-row" style="display:none; margin-bottom:10px; align-items:center; gap:8px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;flex:1;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select><button onclick="pinFilter()" style="padding:8px 12px;border-radius:8px;border:1px solid #ddd;background:#fff;font-size:16px;cursor:pointer;" title="Bərkitmək">📌</button></div>
     <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
     </div>
@@ -448,6 +452,7 @@ async function openNotifications() {
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
+let currentDateFilter = ''; // '', 'today', 'tomorrow', 'week'
 // Set filter select on load
 if(currentFilter !== 'all') { const _fr = document.getElementById('filter-row'); if(_fr) _fr.style.display = 'flex'; const _fa = document.getElementById('filter-assignee'); if(_fa) _fa.value = currentFilter; }
 function filterTasks() {
@@ -459,19 +464,44 @@ function pinFilter() {
     localStorage.setItem('pinned_filter', val);
     toast('\ud83d\udccc ' + (val === 'all' ? 'Filtr s\u0131f\u0131rland\u0131' : val + ' b\u0259rkidildi'), false);
 }
+function setDateFilter(val, btn) {
+    if(currentDateFilter === val) { currentDateFilter = ''; } else { currentDateFilter = val; }
+    document.querySelectorAll('.date-filter-btn').forEach(b => { b.style.background = 'transparent'; b.style.color = 'var(--text-color)'; b.style.border = '1px solid var(--hint-color)'; });
+    if(currentDateFilter) { btn.style.background = 'var(--button-color)'; btn.style.color = 'var(--button-text-color)'; btn.style.border = '1px solid var(--button-color)'; }
+    renderNotifications();
+}
+function filterByDate(tasks) {
+    if(!currentDateFilter) return tasks;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
+    if(currentDateFilter === 'today') {
+        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayStart.getTime() && d < todayEnd.getTime(); });
+    } else if(currentDateFilter === 'tomorrow') {
+        const tomorrowEnd = new Date(todayEnd); tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
+        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayEnd.getTime() && d < tomorrowEnd.getTime(); });
+    } else if(currentDateFilter === 'week') {
+        const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7);
+        return tasks.filter(t => { const d = t.deadline_ts * 1000; return d >= todayStart.getTime() && d < weekEnd.getTime(); });
+    }
+    return tasks;
+}
 
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
     container.innerHTML = ''; updateBadge();
     let filtered = mockTasks;
-    if(currentFilter !== 'all') filtered = mockTasks.filter(t => (t.assigneeName || '') === currentFilter);
+    if(currentFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || '') === currentFilter);
+    filtered = filterByDate(filtered);
     const overdueCount = filtered.filter(t => t.is_overdue).length;
     const oc = document.getElementById('overdue-count');
     if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
     const tc = document.getElementById('task-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
     if(filtered.length === 0) {
-        container.innerHTML = '<div style="text-align:center;padding:30px;color:var(--hint-color);">Aktiv tapşırıq yoxdur.</div>';
+        const labels = {today:'Bu gün', tomorrow:'Sabah', week:'Bu həftə'};
+        const msg = currentDateFilter ? `"${labels[currentDateFilter]}" üçün tapşırıq yoxdur.` : 'Aktiv tapşırıq yoxdur.';
+        container.innerHTML = `<div style="text-align:center;padding:30px;color:var(--hint-color);">${msg}</div>`;
         return;
     }
     filtered.forEach(t => {
