@@ -374,7 +374,12 @@ function submitTask() {
         editingTaskId = null;
     } else {
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
-        doFetch({action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: gd.task_type || '1'}, 'task-submit-btn');
+        const tsel = document.getElementById('task-type-select');
+        const taskType = gd.task_type || (tsel ? tsel.value : '1');
+        let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType};
+        const createNote = document.getElementById('task-note-edit');
+        if(createNote && createNote.value.trim()) newPayload.note = createNote.value.trim();
+        doFetch(newPayload, 'task-submit-btn');
     }
 }
 

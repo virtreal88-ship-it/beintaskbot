@@ -3188,7 +3188,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
                     "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
                     "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
-                    "creator_chat_id": chat_id
+                    "creator_chat_id": chat_id, "note": data.get("note", "").strip()
                 }
                 _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
@@ -3207,6 +3207,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # Admin creates directly
             res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], task_type_id=task_type_id)
             if res:
+                # Save note to entity if provided
+                note_text = data.get("note", "").strip()
+                if note_text and result.get("entity_id"):
+                    try:
+                        add_note(result["entity_id"], note_text, result["entity_type"])
+                    except: pass
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw and _bot_app:
@@ -4071,6 +4077,12 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
     res = create_task(pending["entity_id"], new_text, deadline_ts,
                       responsible_user_id=assignee_id, entity_type=pending["entity_type"],
                       task_type_id=pending.get("task_type_id", 1))
+    # Save note if provided
+    note_text = pending.get("note", "").strip()
+    if note_text and res:
+        try:
+            add_note(pending["entity_id"], note_text, pending["entity_type"])
+        except: pass
     if res:
         deadline_str = datetime.fromtimestamp(pending["deadline_ts"], tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')
         try:
