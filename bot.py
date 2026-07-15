@@ -3086,7 +3086,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                 display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
                 admin_chat = get_chat_id_for_kommo_user(10932455)
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Təsdiq et ✅", callback_data=f"cnftask-{conf_key}-yes"), InlineKeyboardButton("Rədd et ❌", callback_data=f"cnftask-{conf_key}-no")]])
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Şamil", callback_data=f"cnftask-{conf_key}-shamil"), InlineKeyboardButton("Soltan", callback_data=f"cnftask-{conf_key}-soltan")],
+                    [InlineKeyboardButton("Hüseyn", callback_data=f"cnftask-{conf_key}-huseyn"), InlineKeyboardButton("Rasim", callback_data=f"cnftask-{conf_key}-rasim")],
+                    [InlineKeyboardButton("Texniki", callback_data=f"cnftask-{conf_key}-texniki"), InlineKeyboardButton("Özüm", callback_data=f"cnftask-{conf_key}-admin")],
+                    [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
+                ])
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 İcraçı: {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
                 except: pass
@@ -3779,15 +3784,30 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
             except:
                 pass
         return
-    # Approved - create the task
+    # Admin selected an employee - resolve assignee
+    _CNFTASK_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
+    marker_name = _CNFTASK_MARKER.get(decision, "")
+    if decision == "admin":
+        assignee_id = 10932455
+    else:
+        assignee_id = 15532668
+    # Update text with new marker
+    old_text = pending["text"]
+    # Remove old marker if any
+    import re as _re
+    old_text = _re.sub(r'^\[.*?\]\s*', '', old_text)
+    if marker_name:
+        new_text = f"[{marker_name}] {old_text}"
+    else:
+        new_text = old_text
     # If deadline has passed, shift to now+2h
     deadline_ts = pending["deadline_ts"]
     now_ts = int(datetime.now(tz=BAKU_TZ).timestamp())
     if deadline_ts < now_ts:
         deadline_ts = now_ts + 7200
-    logger.info(f"confirm_task_callback: creating task entity_id={pending['entity_id']} assignee_id={pending['assignee_id']} deadline_ts={deadline_ts}")
-    res = create_task(pending["entity_id"], pending["text"], deadline_ts,
-                      responsible_user_id=pending["assignee_id"], entity_type=pending["entity_type"],
+    logger.info(f"confirm_task_callback: creating task entity_id={pending['entity_id']} assignee_id={assignee_id} marker={marker_name} deadline_ts={deadline_ts}")
+    res = create_task(pending["entity_id"], new_text, deadline_ts,
+                      responsible_user_id=assignee_id, entity_type=pending["entity_type"],
                       task_type_id=pending.get("task_type_id", 1))
     if res:
         deadline_str = datetime.fromtimestamp(pending["deadline_ts"], tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')
@@ -3795,12 +3815,12 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text(f"✅ Tapşırıq təsdiq edildi və yaradıldı!\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n📝 {pending['text']}\n⏰ {deadline_str}")
         except:
             pass
-        assignee_name_raw = pending.get("assignee_name_raw", "")
-        if assignee_name_raw:
-            target_chat = get_chat_id_by_name(assignee_name_raw)
+        notify_name = marker_name or pending.get("assignee_name_raw", "")
+        if notify_name:
+            target_chat = get_chat_id_by_name(notify_name)
             creator_chat = pending.get("creator_chat_id")
             if target_chat and target_chat != creator_chat:
-                display_text = pending["text"].replace(f'[{assignee_name_raw}] ', '')
+                display_text = old_text
                 try:
                     await _bot_app.bot.send_message(target_chat, f"📋 *Yeni tapşırıq!*\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n📝 {display_text}\n⏰ {deadline_str}\n🔗 {pending.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True)
                 except:
