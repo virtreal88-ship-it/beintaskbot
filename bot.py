@@ -2897,8 +2897,8 @@ async def _handle_kommo_task_webhook(data: dict):
                                        entity_id=entity_id, entity_type=entity_type, phone=client_phone)
             except:
                 pass
-    # Notify admin about new tasks
-    if is_add and admin_chat:
+    # Notify admin about new tasks (skip if bot/admin created it themselves)
+    if is_add and admin_chat and created_by != 10932455:
         name_line = f"\n👤 {client_name}" if client_name else ""
         phone_line = f"\n📞 {client_phone}" if client_phone else ""
         deadline_line = f"\n⏰ {deadline_str}" if deadline_str else ""
