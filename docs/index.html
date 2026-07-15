@@ -38,6 +38,24 @@
         .stage-name{flex:1;font-size:15px;margin-left:14px;font-weight:500}
         .stage-check{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:transparent;font-size:18px;font-weight:700}
         .stage-row.selected .stage-check{color:#333}
+        @media (min-width: 600px) {
+            body{max-width:600px;margin:0 auto;padding:24px;font-size:17px}
+            .btn{font-size:16px;padding:16px}
+            .btn-main-menu{height:120px}
+            .input-field{font-size:17px;padding:16px}
+            textarea.input-field{height:120px}
+            .option-card{font-size:15px;padding:14px}
+            .form-group label{font-size:15px}
+            #toast{font-size:15px;padding:14px 28px}
+        }
+        @media (min-width: 900px) {
+            body{max-width:700px;padding:32px}
+            .btn{font-size:17px;padding:18px}
+            .btn-main-menu{height:130px}
+            .input-field{font-size:18px;padding:18px}
+            textarea.input-field{height:140px}
+            .form-group label{font-size:16px}
+        }
     </style>
 </head>
 <body>
@@ -224,12 +242,14 @@ function nav(id) {
 function goBack(id) { nav(id); if(id === 'screen-notifications') openNotifications(); }
 
 function openFlow(f) {
-    flow = f; gd = {phone:'', deadline:'', stage:'', assignee:''};
+    flow = f; gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
     editingTaskId = null;
     const tbb = document.getElementById('task-back-btn'); if(tbb) tbb.setAttribute('onclick', "goBack('step-search')");
     document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
     document.getElementById('task-desc').value = '';
     const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
+    const asel = document.getElementById('task-assignee-select'); if(asel) asel.selectedIndex = 0;
+    const tsel = document.getElementById('task-type-select'); if(tsel) tsel.selectedIndex = 0;
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
     else { document.getElementById('search-phone').value = ''; nav('step-search'); }
     document.getElementById('tab-bar').style.display = 'none';

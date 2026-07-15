@@ -3063,9 +3063,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not result.get("success"):
                 return web.json_response({"success": False, "error": result.get("message", "Xəta")})
             deadline_ts = int(deadline_dt.timestamp())
-            # If non-admin, send to admin for confirmation
+            # If non-admin creating for OTHERS, send to admin for confirmation
+            # If creating for themselves, no confirmation needed
             is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
-            if not is_admin_user and _bot_app:
+            creator_name = None
+            for _n, _cid in NAME_TO_CHAT.items():
+                if _cid == chat_id and len(_n) > 5:
+                    creator_name = _n
+                    break
+            creates_for_self = (creator_name and assignee_name_raw == creator_name)
+            if not is_admin_user and not creates_for_self and _bot_app:
                 # Store pending task in bot_data
                 conf_key = str(uuid.uuid4())[:8]
                 pending = {
