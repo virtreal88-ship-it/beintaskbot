@@ -2776,6 +2776,7 @@ async def _handle_kommo_task_webhook(data: dict):
     possible_upd_prefixes = ["tasks[update][0]", "task[update][0]"]
     possible_gen_prefixes = ["task[0]", "tasks[0]"]
     is_add = any(k.startswith(p) for k in data for p in possible_add_prefixes)
+    logger.info(f"Task webhook: is_add={is_add}, keys_sample={[k for k in list(data.keys())[:15]]}")
     is_upd = any(k.startswith(p) for k in data for p in possible_upd_prefixes)
     def _get(key):
         for p in possible_add_prefixes + possible_upd_prefixes + possible_gen_prefixes:
@@ -2823,10 +2824,17 @@ async def _handle_kommo_task_webhook(data: dict):
         client_name = get_contact_name_from_entity(entity_id, entity_type)
         client_phone = get_phone_from_entity(entity_id, entity_type)
     admin_chat = get_chat_id_for_kommo_user(10932455)
-    # Suppress bot-created task echo
+    # Suppress any webhook for bot-touched tasks
     import time as _time
-    if is_add and task_id_raw:
+    if task_id_raw:
         tid = int(task_id_raw)
+        # Suppress if bot updated this task (complete, postpone, etc)
+        if tid in _bot_updated_tasks:
+            if _time.time() - _bot_updated_tasks[tid] < 120:
+                logger.info(f"Webhook suppressed: bot-updated task {tid}")
+                return
+            else:
+                del _bot_updated_tasks[tid]
         # Suppress if bot created this task
         if tid in _bot_created_tasks:
             ts = _bot_created_tasks_ts.get(tid, 0)
@@ -2836,7 +2844,9 @@ async def _handle_kommo_task_webhook(data: dict):
             else:
                 _bot_created_tasks.discard(tid)
                 _bot_created_tasks_ts.pop(tid, None)
-        # Suppress duplicate webhook for same task_id (Kommo sends multiple)
+    # Suppress duplicate webhook for same task_id (Kommo sends multiple add webhooks)
+    if is_add and task_id_raw:
+        tid = int(task_id_raw)
         if tid in _notified_task_webhooks:
             if _time.time() - _notified_task_webhooks[tid] < 300:
                 logger.info(f"Webhook suppressed: duplicate add notification for task {tid}")
@@ -2844,18 +2854,11 @@ async def _handle_kommo_task_webhook(data: dict):
         _notified_task_webhooks[tid] = _time.time()
         # Cleanup old entries
         if len(_notified_task_webhooks) > 200:
-            cutoff = _time.time() - 300
             _notified_task_webhooks.clear()
-    # Suppress bot-updated task echo
-    if is_upd and task_id_raw:
-        tid = int(task_id_raw)
-        if tid in _bot_updated_tasks:
-            if _time.time() - _bot_updated_tasks[tid] < 60:
-                logger.info(f"Webhook suppressed: bot-initiated task update for task {tid}")
-                del _bot_updated_tasks[tid]
-                return
-            else:
-                del _bot_updated_tasks[tid]
+    # If not add and not update — ignore (generic task event, no notification needed)
+    if not is_add and not is_upd:
+        logger.info(f"Webhook ignored: neither add nor update, task_id={task_id_raw}")
+        return
     # Suppress "Cavab gözlənilir" task type - no notifications
     if task_type_id_raw:
         try:
