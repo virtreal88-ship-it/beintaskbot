@@ -2850,7 +2850,7 @@ async def _handle_kommo_task_webhook(data: dict):
             if _n_resp.status_code == 200:
                 _n_data = _n_resp.json().get("_embedded", {}).get("notes", [])
                 if _n_data:
-                    last_note_text = _n_data[0].get("params", {}).get("text", "")[:100]
+                    last_note_text = _n_data[0].get("params", {}).get("text", "")
         except:
             pass
     note_line = f"\n📝 Qeyd: {last_note_text}" if last_note_text else ""
@@ -3670,7 +3670,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         if _note_resp.status_code == 200:
                             _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
                             if _notes_data:
-                                last_note = _notes_data[0].get("params", {}).get("text", "")[:100]
+                                last_note = _notes_data[0].get("params", {}).get("text", "")
                     except:
                         pass
                     tasks_list.append({
@@ -3776,7 +3776,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 if _nr.status_code == 200:
                     _nd = _nr.json().get("_embedded", {}).get("notes", [])
                     if _nd:
-                        _note_15 = _nd[0].get("params", {}).get("text", "")[:100]
+                        _note_15 = _nd[0].get("params", {}).get("text", "")
             except:
                 pass
         note_line = f"\n📝 Qeyd: {_note_15}" if _note_15 else ""
