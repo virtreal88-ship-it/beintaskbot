@@ -202,6 +202,7 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 # ─── Bot-created tasks (suppress webhook echo) ──────────────────────────────
 _bot_created_tasks: set = set()
 # Bot-initiated lead stage changes (suppress webhook echo)
+_bot_updated_tasks: dict = {}  # {task_id: timestamp} - suppress update webhook echo
 _bot_changed_leads: dict = {}  # {lead_id: timestamp}
 
 # ─── Pending registrations ───────────────────────────────────────────────────
@@ -471,6 +472,8 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
 
 def update_task_kommo(task_id, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}"
+    import time as _time
+    _bot_updated_tasks[int(task_id)] = _time.time()
     try:
         resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
         logger.info(f"update_task_kommo {task_id}: status={resp.status_code}")
@@ -2820,6 +2823,17 @@ async def _handle_kommo_task_webhook(data: dict):
         if tid in _bot_created_tasks:
             _bot_created_tasks.discard(tid)
             return
+    # Suppress bot-updated task echo
+    import time as _time
+    if is_upd and task_id_raw:
+        tid = int(task_id_raw)
+        if tid in _bot_updated_tasks:
+            if _time.time() - _bot_updated_tasks[tid] < 60:
+                logger.info(f"Webhook suppressed: bot-initiated task update for task {tid}")
+                del _bot_updated_tasks[tid]
+                return
+            else:
+                del _bot_updated_tasks[tid]
     # Suppress "Cavab gözlənilir" task type - no notifications
     if task_type_id_raw:
         try:
