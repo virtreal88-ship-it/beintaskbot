@@ -106,11 +106,12 @@
 
 <!-- Notifications/Tasks Screen (now main) -->
 <div id="screen-notifications" class="screen active">
-    <div class="nav-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size:16px; font-weight:700;">Aktiv tapşırıqlar <span id="task-total-count" style="font-size:13px;font-weight:600;color:var(--hint-color);"></span></span>
-        <span id="overdue-count" style="font-size:12px; color:#ef4444; font-weight:600;"></span>
-        <button onclick="openNotifications()" style="background:transparent; border:1px solid var(--button-color); color:var(--button-color); border-radius:8px; padding:6px 10px; font-size:13px; font-weight:600; cursor:pointer;">🔄</button>
-        <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:6px 12px; font-size:13px; font-weight:600; cursor:pointer;">+ Tapşırıq</button>
+    <div class="nav-bar" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:nowrap;">
+        <span style="font-size:16px; font-weight:700; white-space:nowrap;">Aktiv tapşırıqlar<span id="task-total-count" style="font-size:13px;font-weight:600;color:var(--hint-color);margin-left:4px;"></span></span>
+        <span id="overdue-count" style="font-size:11px; color:#ef4444; font-weight:600; white-space:nowrap;"></span>
+        <span style="flex:1;"></span>
+        <button onclick="openNotifications()" style="background:transparent; border:1px solid var(--button-color); color:var(--button-color); border-radius:8px; padding:5px 8px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">🔄</button>
+        <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">+ Tapşırıq</button>
     </div>
     <div class="form-group"><label>Sağa = Düzəliş | Sola = +2 saat</label></div>
     <div id="filter-row" style="display:none; margin-bottom:10px; align-items:center; gap:8px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;flex:1;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select><button onclick="pinFilter()" style="padding:8px 12px;border-radius:8px;border:1px solid #ddd;background:#fff;font-size:16px;cursor:pointer;" title="Bərkitmək">📌</button></div>
