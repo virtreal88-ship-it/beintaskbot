@@ -3773,7 +3773,13 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 pass
         return
     # Approved - create the task
-    res = create_task(pending["entity_id"], pending["text"], pending["deadline_ts"],
+    # If deadline has passed, shift to now+2h
+    deadline_ts = pending["deadline_ts"]
+    now_ts = int(datetime.now(tz=BAKU_TZ).timestamp())
+    if deadline_ts < now_ts:
+        deadline_ts = now_ts + 7200
+    logger.info(f"confirm_task_callback: creating task entity_id={pending['entity_id']} assignee_id={pending['assignee_id']} deadline_ts={deadline_ts}")
+    res = create_task(pending["entity_id"], pending["text"], deadline_ts,
                       responsible_user_id=pending["assignee_id"], entity_type=pending["entity_type"],
                       task_type_id=pending.get("task_type_id", 1))
     if res:
@@ -3799,6 +3805,7 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
             except:
                 pass
     else:
+        logger.error(f"confirm_task_callback: create_task FAILED for entity_id={pending['entity_id']}")
         try:
             await query.edit_message_text("⚠️ Tapşırıq yaradılarkən xəta baş verdi.")
         except:
