@@ -3346,6 +3346,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
             link = ""
+            lead_id = None
             stage_msg = ""
             # Also change stage if requested
             new_stage = data.get("new_stage")
