@@ -455,7 +455,7 @@ function renderNotifications() {
         swipeWrapper.appendChild(bgAction);
         const item = document.createElement('div');
         const isUrgent = t.title.includes('Gecikmiş');
-        item.style.cssText = `position: relative; background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; z-index: 2; transition: transform 0.1s ease-out, border 0.2s;`;
+        item.dataset.taskId = t.id; item.style.cssText = `position: relative; background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; z-index: 2; transition: transform 0.1s ease-out, border 0.2s;`;
         if(selectedTaskId === t.id) item.style.border = '2px solid var(--button-color)';
         const displayDesc = (t.desc || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)\]\s*/i, '');
         const assigneeName = t.assigneeName || t.responsible || '';
@@ -539,11 +539,23 @@ async function submitNote() {
     if(!task) return;
     document.getElementById('note-text-input').value = '';
     closeBottomBar();
-    showLoader();
-    await doFetch({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''}, null);
-    await openNotifications();
-    hideLoader();
-    alert('\u2705 Qeyd \u0259lav\u0259 edildi');
+    // Show spinner on that task card
+    const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
+    if(taskEl) { taskEl.style.opacity = '0.5'; taskEl.insertAdjacentHTML('beforeend', '<div class="task-spinner" style="text-align:center;padding:4px;font-size:11px;color:#3b82f6;">Y\u00fckl\u0259nir...</div>'); }
+    // Send note
+    try {
+        await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''})
+        });
+    } catch(e) {}
+    // Update just this task's note locally
+    task.last_note = noteText;
+    setCachedTasks(mockTasks, document.getElementById('filter-row')?.style.display === 'block');
+    if(taskEl) { taskEl.style.opacity = '1'; const sp = taskEl.querySelector('.task-spinner'); if(sp) sp.remove(); }
+    renderNotifications();
+    toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
 }
 function showCompletePanel() {
     completeStageSelected = '';
