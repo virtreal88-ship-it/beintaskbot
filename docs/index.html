@@ -334,7 +334,7 @@ async function doFetch(payload, btnId) {
             body: JSON.stringify(payload)
         });
         const j = await r.json();
-        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info'); setTimeout(()=>openNotifications(), 1500); }
+        if(r.ok && j.success) { showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info'); }
         else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) btn.disabled = false; }
 }
@@ -541,7 +541,7 @@ async function submitNote() {
     await doFetch({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''}, null);
     document.getElementById('note-text-input').value = '';
     toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
-    openNotifications();
+
 }
 function showCompletePanel() {
     completeStageSelected = '';
