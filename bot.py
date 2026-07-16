@@ -3187,10 +3187,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             direct_entity_id = data.get("entity_id")
             direct_entity_type = data.get("entity_type", "leads")
             if direct_entity_id:
-                assignee_map_direct = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
-                assignee_id_direct = assignee_map_direct.get(assignee, 10932455)
+                assignee_map_direct = {"shamil": 15532668, "soltan": 15531960, "huseyn": 15532668, "rasim": 15532668, "texniki": 15532668, "admin": 10932455, "sahe_meneceri": 15532668}
+                assignee_id_direct = assignee_map_direct.get(assignee, 15532668)
                 link_direct = f"{KOMMO_BASE_URL}/{direct_entity_type}/detail/{direct_entity_id}"
-                result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone}
+                result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
             else:
                 result = execute_tool_create_task(phone, text, None, None, assignee)
             if isinstance(result, str):
