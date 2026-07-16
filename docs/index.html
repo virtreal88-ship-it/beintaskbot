@@ -394,6 +394,7 @@ function submitTask() {
         editingTaskId = null;
     } else {
         const phone = document.getElementById('search-phone').value.trim();
+        if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
         gd.phone = phone;
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
         const tsel = document.getElementById('task-type-select');
