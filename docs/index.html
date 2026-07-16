@@ -409,6 +409,7 @@ function submitTask() {
         if(gd.deadline) payload.deadline = gd.deadline;
         payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
+        if(gd.originalAssignee) payload.originalAssignee = gd.originalAssignee;
         if(gd.task_type) payload.task_type = gd.task_type;
         const editNote = document.getElementById('edit-task-note');
         if(editNote && editNote.value.trim()) payload.note = editNote.value.trim();
@@ -566,11 +567,15 @@ function renderNotifications() {
             else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
             currentX = 0;
         });
-        wrapper.appendChild(card);
+                wrapper.appendChild(card);
         container.appendChild(wrapper);
     });
+    // Restore active timers from localStorage
+    mockTasks.forEach(t => {
+        const saved = localStorage.getItem('timer_'+t.id);
+        if(saved) _startTimerDisplay(t.id, parseInt(saved));
+    });
 }
-
 function clickNotification(id, desc, metaText) {
     selectedTaskId = id;
     const task = mockTasks.find(t => t.id === id);
@@ -661,6 +666,7 @@ async function confirmComplete() {
     } catch(e) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast('Xəta! Tapşırıq bağlanmadı', true); return; }
     if(btn) { btn.disabled = false; btn.innerHTML = origText; }
     _completedTaskIds[completedId] = Date.now();
+    localStorage.removeItem('timer_'+completedId); if(_taskTimers[completedId]) { clearInterval(_taskTimers[completedId]); delete _taskTimers[completedId]; }
     mockTasks = mockTasks.filter(t => t.id !== completedId); setCachedTasks(mockTasks); closeBottomBar(); renderNotifications(); toast('✓ Tapşırıq bağlandı', false);
     setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
     if(employeeType === 'salary') loadKpi();
@@ -689,6 +695,7 @@ function handleBarAction(actionType) {
         const epf = document.getElementById('edit-task-price'); if(epf) epf.value = editPrice;
         const _shortToFull = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'};
         if(gd.assigneeName && _shortToFull[gd.assigneeName]) gd.assigneeName = _shortToFull[gd.assigneeName];
+        gd.originalAssignee = gd.assigneeName || '';
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
         const dp = document.getElementById('edit-deadline-custom');
@@ -749,11 +756,25 @@ function loadKpiHistory() {
         return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ⏱ ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
     }).join('');
 }
+const _taskTimers = {};
+function _startTimerDisplay(taskId, startTime) {
+    const btn = document.getElementById('kpi-start-'+taskId);
+    if(!btn) return;
+    btn.disabled = true; btn.className = btn.className.replace('bg-blue-600','bg-green-600');
+    if(_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
+    _taskTimers[taskId] = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const h = String(Math.floor(elapsed/3600)).padStart(2,'0');
+        const m = String(Math.floor((elapsed%3600)/60)).padStart(2,'0');
+        const s = String(elapsed%60).padStart(2,'0');
+        btn.textContent = `⏱️ ${h}:${m}:${s}`;
+    }, 1000);
+}
 async function startTaskKpi(taskId) {
     const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
     const j = await r.json();
     toast(j.message || 'Başladı!', !j.success);
-    if(j.success) { const btn = document.getElementById('kpi-start-'+taskId); if(btn) { btn.textContent = '⏱️ Davam edir...'; btn.disabled = true; btn.className = btn.className.replace('bg-blue-600','bg-gray-400'); } }
+    if(j.success) { _startTimerDisplay(taskId, Date.now()); localStorage.setItem('timer_'+taskId, Date.now()); }
 }
 async function finishTaskKpi(taskId) {
     const task = mockTasks.find(t => t.id === taskId);

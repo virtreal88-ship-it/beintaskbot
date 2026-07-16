@@ -3335,7 +3335,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if _cid == chat_id and len(_n) > 5:
                     creator_name = _n
                     break
-            if not is_admin_user and assignee_name_raw and _bot_app:
+            # Check if assignee actually changed (compare with original)
+            original_assignee = data.get("originalAssignee", "")
+            assignee_actually_changed = assignee_name_raw and original_assignee and assignee_name_raw != original_assignee
+            if not is_admin_user and assignee_actually_changed and _bot_app:
                 # Non-admin changing assignee -> confirmation required
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
@@ -3594,8 +3597,30 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 except Exception as _bal_err:
                     logger.error(f"Balance crediting error: {_bal_err}")
                 # --- End balance crediting ---
+                # --- Notify admin + AI KPI evaluation ---
+                _compl_note = note_text or ''
+                _compl_sender = ''
+                for _nm, _cid in NAME_TO_CHAT.items():
+                    if _cid == chat_id and len(_nm) > 5:
+                        _compl_sender = _nm
+                        break
+                if not _compl_sender:
+                    _compl_sender = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
+                if _compl_note and _bot_app:
+                    admin_chat_c = get_chat_id_for_kommo_user(10932455)
+                    if admin_chat_c:
+                        _kpi_info = ''
+                        if kpi_result:
+                            _kpi_info = f"\n⏱ {kpi_result['actual_minutes']:.0f}/{kpi_result['target_minutes']} dəq | KPI: {kpi_result['kpi_score']}/100"
+                            if kpi_result.get('needs_reason') and delay_reason:
+                                _kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
+                        _compl_msg = f"✅ {_compl_sender} tapşırığı tamamladı:\n\n📝 {_compl_note}{_kpi_info}\n🆔 Task: {task_id}"
+                        try:
+                            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat_c, "text": _compl_msg}, timeout=10)
+                        except: pass
+                localStorage_key = f'timer_{task_id}'
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-                return web.json_response({"success": True, "message": msg, "link": link})
+                return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
             else:
                 return web.json_response({"success": False, "error": "Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131."})
         elif action == "update_task_deadline":
