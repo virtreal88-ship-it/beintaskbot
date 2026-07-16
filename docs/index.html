@@ -829,12 +829,17 @@ function openSubtask(taskId) {
 async function submitSubtask(parentTaskId) {
     const phone = document.getElementById('sub-phone').value;
     const desc = document.getElementById('sub-desc').value.trim();
-    if(!desc) { toast('Təsvir yazın!', true); return; }
     const assignee = document.getElementById('sub-assignee').value;
     const taskType = document.getElementById('sub-type').value;
     const dl = document.getElementById('sub-deadline').value;
-    const deadline = dl ? 'custom:'+dl : '2h';
-    const payload = {action:'create_task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assignee.toLowerCase().includes('nizami')?'admin':'sahe_meneceri', assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId};
+    if(!desc) { toast('Təsvir yazın!', true); return; }
+    if(!assignee) { toast('İcraçı seçin!', true); return; }
+    if(!dl) { toast('Deadline seçin!', true); return; }
+    const deadline = 'custom:'+dl;
+    const task = mockTasks.find(t => t.id === parentTaskId);
+    const entityId = task ? task.entity_id : null;
+    const entityType = task ? (task.entity_type || 'leads') : 'leads';
+    const payload = {action:'create_task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assignee.toLowerCase().includes('nizami')?'admin':'sahe_meneceri', assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId, entity_id:entityId, entity_type:entityType};
     try {
         const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const j = await r.json();

@@ -3183,7 +3183,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
             elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
             else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
             task_type_id = int(data.get("task_type", "1") or "1")
-            result = execute_tool_create_task(phone, text, None, None, assignee)
+            # If entity_id passed directly (from subtask), use it instead of phone search
+            direct_entity_id = data.get("entity_id")
+            direct_entity_type = data.get("entity_type", "leads")
+            if direct_entity_id:
+                assignee_map_direct = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
+                assignee_id_direct = assignee_map_direct.get(assignee, 10932455)
+                link_direct = f"{KOMMO_BASE_URL}/{direct_entity_type}/detail/{direct_entity_id}"
+                result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone}
+            else:
+                result = execute_tool_create_task(phone, text, None, None, assignee)
             if isinstance(result, str):
                 return web.json_response({"success": False, "error": result})
             if not result.get("success"):
@@ -3957,6 +3966,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "time": time_str,
                         "is_overdue": is_overdue,
                         "entity_id": entity_id,
+                        "entity_type": entity_type,
                         "task_id": t.get("id"),
                         "contact_name": contact_name,
                         "phone": phone,
