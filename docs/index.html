@@ -636,27 +636,30 @@ async function confirmComplete() {
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
     const completedId = task.id;
-    // First attempt without delay_reason
+    const btn = document.getElementById('btn-confirm-complete');
+    const origText = btn ? btn.innerHTML : '';
+    if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Yüklənir...'; }
     const payload = {action:'complete_task', task_id:completedId, new_stage:completeStageSelected, phone:task.phone||'', note:noteText};
     try {
         const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
         const j = await r.json();
         if(!j.success && j.needs_delay_reason) {
-            // Show delay reason modal
+            if(btn) { btn.disabled = false; btn.innerHTML = origText; }
             const reason = prompt(`⚠️ Gecikmə aşkar edildi!\n⏱ ${j.actual_minutes} dəq / ${j.target_minutes} dəq (KPI: ${j.kpi_score}/100)\n\nGecikmənin səbəbini yazın:`);
             if(!reason || !reason.trim()) { toast('Səbəb yazılmalıdır!', true); return; }
             payload.delay_reason = reason.trim();
+            if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Yüklənir...'; }
             const r2 = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
             const j2 = await r2.json();
-            if(!j2.success && j2.need_start) { alert(j2.error); return; }
-            if(!j2.success) { toast(j2.error || 'Xəta!', true); return; }
+            if(!j2.success && j2.need_start) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return; }
+            if(!j2.success) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast(j2.error || 'Xəta!', true); return; }
         } else if(!j.success && j.need_start) {
-            alert(j.error); return;
+            if(btn) { btn.disabled = false; btn.innerHTML = origText; } alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return;
         } else if(!j.success) {
-            toast(j.error || 'Xəta!', true); return;
+            if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast(j.error || 'Xəta!', true); return;
         }
-    } catch(e) { toast('Xəta! Tapşırıq bağlanmadı', true); return; }
-    // Success path
+    } catch(e) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast('Xəta! Tapşırıq bağlanmadı', true); return; }
+    if(btn) { btn.disabled = false; btn.innerHTML = origText; }
     _completedTaskIds[completedId] = Date.now();
     mockTasks = mockTasks.filter(t => t.id !== completedId); setCachedTasks(mockTasks); closeBottomBar(); renderNotifications(); toast('✓ Tapşırıq bağlandı', false);
     setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
@@ -684,8 +687,10 @@ function handleBarAction(actionType) {
         else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
         else { document.getElementById('edit-task-desc').value = rawDesc; }
         const epf = document.getElementById('edit-task-price'); if(epf) epf.value = editPrice;
+        const _shortToFull = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'};
+        if(gd.assigneeName && _shortToFull[gd.assigneeName]) gd.assigneeName = _shortToFull[gd.assigneeName];
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
-        const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = task.task_type_id; gd.task_type = String(task.task_type_id); }
+        const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
         const noteField = document.getElementById('edit-task-note'); if(noteField) noteField.value = task.last_note || '';
@@ -793,7 +798,7 @@ function loadBalanceHistory() {
     let ptrStart = 0, ptrDist = 0, ptrActive = false;
     ca.addEventListener('touchstart', e => { if(ca.scrollTop <= 0) { ptrStart = e.touches[0].clientY; ptrActive = true; } }, {passive:true});
     ca.addEventListener('touchmove', e => { if(!ptrActive) return; ptrDist = e.touches[0].clientY - ptrStart; }, {passive:true});
-    ca.addEventListener('touchend', () => { if(ptrActive && ptrDist > 80) { openNotifications(); } ptrActive = false; ptrDist = 0; });
+    ca.addEventListener('touchend', () => { if(ptrActive && ptrDist > 80) { showSyncIndicator(); fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} }).then(r=>r.json()).then(j=>{ if(j.success && j.tasks) { let ft = j.tasks; if(Object.keys(_completedTaskIds).length > 0) ft = j.tasks.filter(t=>!_completedTaskIds[t.id]); mockTasks = ft; setCachedTasks(ft); renderNotifications(); } }).catch(()=>{}).finally(()=>hideSyncIndicator()); } ptrActive = false; ptrDist = 0; });
 })();
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>

@@ -3792,6 +3792,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     task_text = t.get("text", "")
                     _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
+                    _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'}
+                    if assignee_name_from_marker in _SHORT_TO_FULL:
+                        assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
                     _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki Dəstək", 4232108: "Import"}
