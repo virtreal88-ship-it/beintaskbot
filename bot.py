@@ -3892,49 +3892,45 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(tz=BAKU_TZ)
     today_start = now.replace(hour=0, minute=0, second=0)
     today_end = now.replace(hour=23, minute=59, second=59)
-    users = load_users()
-    for chat_id_str, info in users.items():
-        chat_id = int(chat_id_str)
-        kommo_uid = info.get("kommo_user_id")
-        if not kommo_uid:
-            continue
-        if kommo_uid == 10932455:
-            # Admin: all tasks today
-            tasks = get_tasks(today_start, today_end)
-            tasks = [t for t in tasks if t.get('task_type_id') != 4229224]
-            if tasks:
-                msg = f"☀️ *Səhər hesabatı* — bugünkü tapşırıqlar ({len(tasks)}):\n\n"
-                for i, t in enumerate(tasks, 1):
-                    dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-                    responsible = KOMMO_USERS.get(t.get("responsible_user_id"), "")
-                    entity_id = t.get("entity_id")
-                    entity_type = t.get("entity_type", "leads")
-                    client_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
-                    client_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
-                    name_line = f" ({client_name})" if client_name else ""
-                    phone_line = f"\n   📞 {client_phone}" if client_phone else ""
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t.get('text', '')[:50]}{name_line}{phone_line}\n   👤 {responsible}\n"
-            else:
-                msg = "☀️ *Səhər hesabatı*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
+    # Get all tasks for today (both admin's and Sahə Meneceri's)
+    all_tasks = get_tasks(today_start, today_end)
+    all_tasks = [t for t in all_tasks if t.get('task_type_id') != 4229224]
+    # Employee name -> chat_id mapping
+    _EMPLOYEE_NAMES = {
+        7962757442: "\u015eamil \u018fliyev",
+        7262243946: "Soltan Abbasov",
+        7329891614: "H\u00fcseyn S\u0259f\u0259rov",
+        7920785774: "Rasim \u018fsg\u0259rov",
+    }
+    # Send to each employee their tasks (by marker in text)
+    for emp_chat_id, emp_name in _EMPLOYEE_NAMES.items():
+        # Filter tasks by marker [Name] in text
+        first_name = emp_name.split()[0]
+        emp_tasks = [t for t in all_tasks if f"[{emp_name}]" in t.get("text", "") or f"[{first_name}]" in t.get("text", "")]
+        if emp_tasks:
+            msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131* \u2014 bug\u00fcnk\u00fc tap\u015f\u0131r\u0131qlar ({len(emp_tasks)}):\n\n"
+            for i, t in enumerate(emp_tasks, 1):
+                dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
+                task_text = re.sub(r'^\[.*?\]\s*', '', t.get('text', ''))
+                msg += f"{i}. \u23f0 {dt.strftime('%H:%M')} \u2014 {task_text[:50]}\n"
+            msg += f"\n\ud83d\udcca C\u0259mi: {len(emp_tasks)}"
         else:
-            tasks = get_tasks(today_start, today_end, responsible_id=kommo_uid)
-            tasks = [t for t in tasks if t.get('task_type_id') != 4229224]
-            if tasks:
-                msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})* — bugünkü tapşırıqlar:\n\n"
-                for i, t in enumerate(tasks, 1):
-                    dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-                    msg += f"{i}. ⏰ {dt.strftime('%H:%M')} — {t.get('text', '')[:50]}\n"
-                msg += f"\n📊 Cəmi: {len(tasks)}"
-            else:
-                msg = f"☀️ *Səhər hesabatı ({info.get('name', '')})*\n\n✨ Bu gün üçün tapşırıq yoxdur!"
+            msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131*\n\n\u2728 Bu g\u00fcn \u00fc\u00e7\u00fcn tap\u015f\u0131r\u0131q yoxdur!"
         try:
-            await context.bot.send_message(chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
+            await context.bot.send_message(emp_chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
         except:
             pass
+    # Admin does NOT receive morning digest
+
+_qiymet_reminded_today: dict = {}  # lead_id -> date string
 
 async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
-    """Alert admin if a deal is stuck on 'Qiymət təklifi' for more than 1 hour."""
+    """Alert admin once per day if a deal is stuck on 'Qiymət təklifi'."""
+    global _qiymet_reminded_today
     now = datetime.now(tz=BAKU_TZ)
+    today_str = now.strftime("%Y-%m-%d")
+    # Clean old entries
+    _qiymet_reminded_today = {k: v for k, v in _qiymet_reminded_today.items() if v == today_str}
     if not (10 <= now.hour < 19):
         return
     leads = get_leads_by_status(STAGES["qiymet_teklifi"])
@@ -3945,21 +3941,25 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
         lead_id = lead.get("id")
         if not lead_id:
             continue
+        # Only remind once per day per lead
+        if _qiymet_reminded_today.get(lead_id) == today_str:
+            continue
         updated_at = lead.get("updated_at", 0)
         if updated_at:
             lead_dt = datetime.fromtimestamp(updated_at, tz=BAKU_TZ)
             if (now - lead_dt).total_seconds() > 3600:
-                lead_name = lead.get("name", "Adsız")
+                _qiymet_reminded_today[lead_id] = today_str
+                lead_name = lead.get("name", "Ads\u0131z")
                 stuck_phone = get_phone_from_entity(lead_id, "leads")
                 stuck_name = get_contact_name_from_entity(lead_id, "leads")
-                name_line = f"\n👤 {stuck_name}" if stuck_name else ""
-                phone_line = f"\n📞 {stuck_phone}" if stuck_phone else ""
+                name_line = f"\n\ud83d\udc64 {stuck_name}" if stuck_name else ""
+                phone_line = f"\n\ud83d\udcde {stuck_phone}" if stuck_phone else ""
                 try:
                     sent = await context.bot.send_message(
                         admin_chat_id,
-                        f"⚠️ *Diqqet!* 1 saatdan çox 'Qiymət təklifi' mərhələsində:\n\n"
-                        f"📋 {lead_name}{name_line}{phone_line}\n"
-                        f"🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                        f"\u26a0\ufe0f *Diqqet!* 'Qiym\u0259t t\u0259klifi' m\u0259rh\u0259l\u0259sind\u0259:\n\n"
+                        f"\ud83d\udccb {lead_name}{name_line}{phone_line}\n"
+                        f"\ud83d\udd17 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
                         parse_mode="Markdown", disable_web_page_preview=True
                     )
                     if sent:
