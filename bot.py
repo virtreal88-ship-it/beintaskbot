@@ -3593,6 +3593,34 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi (bağlandı)!"})
             else:
                 return web.json_response({"success": False, "error": "Silinmədi."})
+        elif action == "start_task":
+            task_id = data.get('task_id')
+            if not task_id:
+                return web.json_response({'success': False, 'error': 'task_id lazımdır.'})
+            ok = start_task_session(chat_id, int(task_id))
+            if ok:
+                return web.json_response({'success': True, 'message': '▶️ Başladı! Vaxt sayılır.'})
+            else:
+                return web.json_response({'success': True, 'message': '⏱️ Artıq başlayıb.'})
+        elif action == "finish_task":
+            task_id = data.get('task_id')
+            task_type_id = data.get('task_type_id', 1)
+            task_text = data.get('task_text', '')
+            delay_reason = data.get('delay_reason', '')
+            if not task_id:
+                return web.json_response({'success': False, 'error': 'task_id lazımdır.'})
+            result = finish_task_session(chat_id, int(task_id), int(task_type_id), delay_reason)
+            if not result:
+                return web.json_response({'success': False, 'error': 'Əvvəlcə "Başla" basın.'})
+            ai_feedback = await evaluate_kpi_with_ai(task_text, result['actual_minutes'], result['target_minutes'], result['kpi_score'])
+            try:
+                conn = sqlite3.connect(_balance_db_path())
+                c = conn.cursor()
+                c.execute('UPDATE task_sessions SET ai_feedback=? WHERE telegram_id=? AND task_id=? AND end_time IS NOT NULL ORDER BY id DESC LIMIT 1', (ai_feedback, chat_id, int(task_id)))
+                conn.commit()
+                conn.close()
+            except: pass
+            return web.json_response({'success': True, 'message': f'✅ Bitdi! KPI: {result["kpi_score"]}/100', 'kpi_score': result['kpi_score'], 'actual_minutes': result['actual_minutes'], 'target_minutes': result['target_minutes'], 'ai_feedback': ai_feedback, 'needs_reason': result['needs_reason']})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:
@@ -3816,6 +3844,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
     app_web.router.add_get("/api/balance", handle_api_balance)
+    app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
+    app_web.router.add_get("/api/kpi", handle_api_kpi)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
@@ -4186,6 +4216,108 @@ async def handle_api_balance(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "balance": balance, "transactions": transactions})
 
 init_balance_db()
+
+# ─── KPI System (Salary employees) ─────────────────────────────────────────
+_KPI_TARGET_TIMES = {
+    1: 30, 2: 30, 4232112: 60, 3263995: 45, 3263999: 120, 4232108: 30, 4229224: 60,
+}
+_EMPLOYEE_TYPES = {
+    7962757442: 'piecework', 7262243946: 'piecework',
+    7329891614: 'salary', 7920785774: 'salary',
+}
+
+def init_kpi_db():
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS task_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER NOT NULL,
+        task_id INTEGER NOT NULL,
+        start_time TEXT,
+        end_time TEXT,
+        actual_minutes REAL,
+        target_minutes REAL,
+        kpi_score REAL,
+        ai_feedback TEXT,
+        delay_reason TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )''')
+    conn.commit()
+    conn.close()
+
+init_kpi_db()
+
+def start_task_session(telegram_id, task_id):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (telegram_id, task_id))
+    if c.fetchone():
+        conn.close()
+        return False
+    c.execute('INSERT INTO task_sessions (telegram_id, task_id, start_time) VALUES (?, ?, datetime("now"))', (telegram_id, task_id))
+    conn.commit()
+    conn.close()
+    return True
+
+def finish_task_session(telegram_id, task_id, task_type_id, delay_reason=''):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT id, start_time FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL ORDER BY id DESC LIMIT 1', (telegram_id, task_id))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    session_id, start_time = row
+    from datetime import datetime as dt2
+    start_dt = dt2.fromisoformat(start_time)
+    end_dt = dt2.utcnow()
+    actual_minutes = (end_dt - start_dt).total_seconds() / 60.0
+    target_minutes = _KPI_TARGET_TIMES.get(task_type_id, 60)
+    if actual_minutes <= target_minutes:
+        kpi_score = min(100, (target_minutes / max(actual_minutes, 1)) * 80)
+    else:
+        kpi_score = max(0, 80 - ((actual_minutes - target_minutes) / target_minutes) * 60)
+    kpi_score = round(kpi_score, 1)
+    c.execute('UPDATE task_sessions SET end_time=datetime("now"), actual_minutes=?, target_minutes=?, kpi_score=?, delay_reason=? WHERE id=?',
+             (round(actual_minutes, 1), target_minutes, kpi_score, delay_reason, session_id))
+    conn.commit()
+    conn.close()
+    return {'kpi_score': kpi_score, 'actual_minutes': round(actual_minutes, 1), 'target_minutes': target_minutes, 'needs_reason': actual_minutes > target_minutes * 1.5}
+
+def get_kpi_summary(telegram_id):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT COALESCE(AVG(kpi_score), 0), COUNT(*) FROM task_sessions WHERE telegram_id=? AND kpi_score IS NOT NULL', (telegram_id,))
+    avg_kpi, total = c.fetchone()
+    c.execute('SELECT task_id, kpi_score, actual_minutes, target_minutes, created_at FROM task_sessions WHERE telegram_id=? AND kpi_score IS NOT NULL ORDER BY id DESC LIMIT 20', (telegram_id,))
+    rows = c.fetchall()
+    conn.close()
+    return {'avg_kpi': round(avg_kpi, 1), 'total_tasks': total, 'history': [{'task_id': r[0], 'kpi_score': r[1], 'actual': r[2], 'target': r[3], 'date': r[4]} for r in rows]}
+
+def get_employee_type(telegram_id):
+    return _EMPLOYEE_TYPES.get(telegram_id, 'piecework')
+
+async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_score):
+    try:
+        prompt = f"S\u0259n i\u015f performans\u0131n\u0131 qiym\u0259tl\u0259ndir\u0259n k\u00f6m\u0259k\u00e7is\u0259n. Az\u0259rbaycan dilind\u0259 cavab ver.\nTap\u015f\u0131r\u0131q: {task_text}\nH\u0259d\u0259f vaxt: {target_minutes} d\u0259qiq\u0259\nFaktiki vaxt: {actual_minutes} d\u0259qiq\u0259\nKPI bal: {kpi_score}/100\n\nQ\u0131sa (1-2 c\u00fcml\u0259) r\u0259y yaz."
+        resp = llm_client.chat.completions.create(
+            model='anthropic/claude-sonnet-4-20250514',
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=100
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f'KPI AI eval error: {e}')
+        return '\u018fla n\u0259tic\u0259!' if kpi_score >= 70 else 'Gecikm\u0259 var.'
+
+async def handle_api_kpi(request: web.Request) -> web.Response:
+    tg_user_id = request.headers.get('X-TG-User-ID', '')
+    chat_id = int(tg_user_id) if tg_user_id else None
+    if not chat_id:
+        return web.json_response({'success': False}, status=401)
+    emp_type = get_employee_type(chat_id)
+    summary = get_kpi_summary(chat_id)
+    return web.json_response({'success': True, 'employee_type': emp_type, **summary})
 
 def main():
     global _bot_app

@@ -63,6 +63,15 @@
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
+        <!-- KPI Widget (salary only) -->
+        <div id="kpi-widget" style="display:none;" class="bg-gradient-to-br from-[#3b82f6] to-[#1d4ed8] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center mb-3">
+            <div>
+                <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI Balınız</div>
+                <div class="text-2xl font-black mt-1" id="kpi-avg-score">0/100</div>
+                <div class="text-[10px] opacity-75 mt-0.5" id="kpi-total-count">0 tapşırıq</div>
+            </div>
+            <span class="text-3xl">🎯</span>
+        </div>
         <!-- Balance Widget (non-admin only) -->
         <div id="balance-widget" style="display:none;" class="bg-gradient-to-br from-[#10b981] to-[#059669] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center">
             <div>
@@ -280,6 +289,10 @@ function getUserId() {
 const CURRENT_USER_ID = getUserId();
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 let isAdmin = false;
+let employeeType = 'piecework'; // will be set from /api/kpi
+let kpiData = null;
+const SALARY_IDS = ['7329891614','7920785774'];
+if(SALARY_IDS.includes(CURRENT_USER_ID)) employeeType = 'salary';
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
@@ -447,7 +460,7 @@ async function openNotifications() {
             if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) { mockTasks = filteredTasks; setCachedTasks(filteredTasks); renderNotifications(); }
         }
     } catch(e) { if(!cachedData || cachedData.length === 0) toast('Bildirişlər yüklənmədi', true); }
-    hideLoader(); hideSyncIndicator(); loadBalance();
+    hideLoader(); hideSyncIndicator(); loadBalance(); loadKpi();
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
@@ -523,7 +536,8 @@ function renderNotifications() {
             <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
-            </div>`;
+            </div>
+            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ Başla</button><button onclick="finishTaskKpi(${t.id})" class="flex-1 bg-emerald-600 text-white py-2 rounded-xl text-[11px] font-bold">✅ Bitdi</button></div>` : ''}`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -662,6 +676,39 @@ function switchTab(tabId) {
         document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
         nav('screen-balance-history'); loadBalanceHistory();
     }
+}
+
+// KPI System (salary employees)
+async function loadKpi() {
+    if(employeeType !== 'salary') return;
+    try {
+        const r = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(j.success) {
+            kpiData = j;
+            const w = document.getElementById('kpi-widget'); if(w) w.style.display = 'flex';
+            const s = document.getElementById('kpi-avg-score'); if(s) s.textContent = j.avg_kpi + '/100';
+            const c = document.getElementById('kpi-total-count'); if(c) c.textContent = j.total_tasks + ' tapşırıq';
+        }
+    } catch(e) {}
+}
+async function startTaskKpi(taskId) {
+    const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
+    const j = await r.json();
+    toast(j.message || 'Başladı!', !j.success);
+    if(j.success) { const btn = document.getElementById('kpi-start-'+taskId); if(btn) { btn.textContent = '⏱️ Davam edir...'; btn.disabled = true; btn.className = btn.className.replace('bg-blue-600','bg-gray-400'); } }
+}
+async function finishTaskKpi(taskId) {
+    const task = mockTasks.find(t => t.id === taskId);
+    const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'finish_task', task_id:taskId, task_type_id: task?.task_type_id||1, task_text: task?.desc||task?.text||''}) });
+    const j = await r.json();
+    if(j.success) {
+        let msg = `KPI: ${j.kpi_score}/100\n⏱ ${j.actual_minutes} dəq / ${j.target_minutes} dəq`;
+        if(j.ai_feedback) msg += `\n💬 ${j.ai_feedback}`;
+        if(j.needs_reason) msg += `\n⚠️ Gecikməni izah edin!`;
+        alert(msg);
+        loadKpi();
+    } else { toast(j.error || 'Xəta!', true); }
 }
 
 // Balance System
