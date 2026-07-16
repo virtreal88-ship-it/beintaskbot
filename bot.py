@@ -3661,6 +3661,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({'success': True, 'message': '▶️ Başladı! Vaxt sayılır.'})
             else:
                 return web.json_response({'success': True, 'message': '⏱️ Artıq başlayıb.'})
+        elif action == "pause_task":
+            task_id = data.get('task_id')
+            elapsed_seconds = data.get('elapsed_seconds', 0)
+            if task_id:
+                # End current session so a new one can be started later
+                try:
+                    conn = sqlite3.connect(_balance_db_path())
+                    c = conn.cursor()
+                    c.execute('UPDATE task_sessions SET end_time=datetime("now"), paused=1 WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (chat_id, int(task_id)))
+                    conn.commit()
+                    conn.close()
+                except: pass
+            return web.json_response({'success': True, 'message': 'Dayandırıldı.'})
         elif action == "finish_task":
             task_id = data.get('task_id')
             task_type_id = data.get('task_type_id', 1)
@@ -4302,8 +4315,12 @@ def init_kpi_db():
         kpi_score REAL,
         ai_feedback TEXT,
         delay_reason TEXT,
+        paused INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now'))
     )''')
+    try:
+        c.execute('ALTER TABLE task_sessions ADD COLUMN paused INTEGER DEFAULT 0')
+    except: pass
     conn.commit()
     conn.close()
 
@@ -4312,7 +4329,8 @@ init_kpi_db()
 def has_active_session(telegram_id, task_id):
     conn = sqlite3.connect(_balance_db_path())
     c = conn.cursor()
-    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (telegram_id, task_id))
+    # Active if there's a running session OR any paused session for this task
+    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=?', (telegram_id, task_id))
     row = c.fetchone()
     conn.close()
     return row is not None
@@ -4332,24 +4350,33 @@ def start_task_session(telegram_id, task_id):
 def finish_task_session(telegram_id, task_id, task_type_id, delay_reason=''):
     conn = sqlite3.connect(_balance_db_path())
     c = conn.cursor()
+    from datetime import datetime as dt2
+    # Close any active session first
     c.execute('SELECT id, start_time FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL ORDER BY id DESC LIMIT 1', (telegram_id, task_id))
     row = c.fetchone()
-    if not row:
+    if row:
+        session_id, start_time = row
+        start_dt = dt2.fromisoformat(start_time)
+        end_dt = dt2.utcnow()
+        seg_minutes = (end_dt - start_dt).total_seconds() / 60.0
+        c.execute('UPDATE task_sessions SET end_time=datetime("now"), actual_minutes=? WHERE id=?', (round(seg_minutes, 1), session_id))
+        conn.commit()
+    # Sum ALL sessions for this task (including paused ones)
+    c.execute('SELECT COALESCE(SUM(actual_minutes), 0) FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NOT NULL', (telegram_id, task_id))
+    total_row = c.fetchone()
+    actual_minutes = total_row[0] if total_row else 0
+    if actual_minutes == 0:
         conn.close()
         return None
-    session_id, start_time = row
-    from datetime import datetime as dt2
-    start_dt = dt2.fromisoformat(start_time)
-    end_dt = dt2.utcnow()
-    actual_minutes = (end_dt - start_dt).total_seconds() / 60.0
     target_minutes = _KPI_TARGET_TIMES.get(task_type_id, 60)
     if actual_minutes <= target_minutes:
         kpi_score = min(100, (target_minutes / max(actual_minutes, 1)) * 80)
     else:
         kpi_score = max(0, 80 - ((actual_minutes - target_minutes) / target_minutes) * 60)
     kpi_score = round(kpi_score, 1)
-    c.execute('UPDATE task_sessions SET end_time=datetime("now"), actual_minutes=?, target_minutes=?, kpi_score=?, delay_reason=? WHERE id=?',
-             (round(actual_minutes, 1), target_minutes, kpi_score, delay_reason, session_id))
+    # Update the last session with final KPI
+    c.execute('UPDATE task_sessions SET kpi_score=?, target_minutes=?, delay_reason=? WHERE telegram_id=? AND task_id=? ORDER BY id DESC LIMIT 1',
+             (kpi_score, target_minutes, delay_reason, telegram_id, task_id))
     conn.commit()
     conn.close()
     return {'kpi_score': kpi_score, 'actual_minutes': round(actual_minutes, 1), 'target_minutes': target_minutes, 'needs_reason': actual_minutes > target_minutes * 1.2}

@@ -545,7 +545,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="toggleTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 bg-purple-600 text-white py-2 rounded-xl text-[11px] font-bold">➕ Əlavə</button></div>` : ''}`;
+            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 bg-purple-600 text-white py-2 rounded-xl text-[11px] font-bold">Alt tapşırıq</button></div>` : ''}`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -573,7 +573,7 @@ function renderNotifications() {
     // Restore active timers from localStorage
     mockTasks.forEach(t => {
         const saved = localStorage.getItem('timer_'+t.id);
-        if(saved) _startTimerDisplay(t.id, parseInt(saved));
+        if(saved) { const acc = parseInt(localStorage.getItem('timer_acc_'+t.id)||'0'); _startTimerDisplay(t.id, parseInt(saved), acc); }
     });
 }
 function clickNotification(id, desc, metaText) {
@@ -758,53 +758,85 @@ function loadKpiHistory() {
     }).join('');
 }
 const _taskTimers = {};
-const _taskPaused = {};
-function _startTimerDisplay(taskId, startTime) {
+function _startTimerDisplay(taskId, startTime, accumulated) {
     const btn = document.getElementById('kpi-start-'+taskId);
     if(!btn) return;
     btn.disabled = false;
-    btn.className = btn.className.replace('bg-blue-600','bg-green-600').replace('bg-yellow-500','bg-green-600');
+    btn.className = btn.className.replace('bg-blue-600','bg-green-600');
+    btn.onclick = function(e) { e.stopPropagation(); stopTaskKpi(taskId); };
+    btn.textContent = '⏱️ 00:00:00';
     if(_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
-    _taskPaused[taskId] = false;
+    const acc = accumulated || 0;
     _taskTimers[taskId] = setInterval(() => {
-        if(_taskPaused[taskId]) return;
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const elapsed = acc + Math.floor((Date.now() - startTime) / 1000);
         const h = String(Math.floor(elapsed/3600)).padStart(2,'0');
         const m = String(Math.floor((elapsed%3600)/60)).padStart(2,'0');
         const s = String(elapsed%60).padStart(2,'0');
         btn.textContent = `⏱️ ${h}:${m}:${s}`;
     }, 1000);
 }
-async function toggleTaskKpi(taskId) {
+async function startTaskKpi(taskId) {
     const btn = document.getElementById('kpi-start-'+taskId);
-    const saved = localStorage.getItem('timer_'+taskId);
-    if(saved && !_taskPaused[taskId]) {
-        // Pause
-        _taskPaused[taskId] = true;
-        if(btn) { btn.className = btn.className.replace('bg-green-600','bg-yellow-500'); btn.textContent = '⏸️ Pauza'; }
-        return;
-    }
-    if(saved && _taskPaused[taskId]) {
-        // Resume
-        _taskPaused[taskId] = false;
-        if(btn) { btn.className = btn.className.replace('bg-yellow-500','bg-green-600'); }
-        return;
-    }
-    // First start
     if(btn) { btn.disabled = true; btn.innerHTML = '⏳'; }
     const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
     const j = await r.json();
-    if(j.success) { _startTimerDisplay(taskId, Date.now()); localStorage.setItem('timer_'+taskId, Date.now()); toast('▶️ Başladı!'); }
-    else { if(btn) { btn.disabled = false; btn.innerHTML = '▶️ İşə başla'; } toast(j.message||'Xəta', true); }
+    if(j.success) {
+        const acc = parseInt(localStorage.getItem('timer_acc_'+taskId)||'0');
+        const now = Date.now();
+        localStorage.setItem('timer_'+taskId, now);
+        _startTimerDisplay(taskId, now, acc);
+        toast('▶️ Başladı!');
+    } else { if(btn) { btn.disabled = false; btn.innerHTML = '▶️ İşə başla'; } toast(j.message||'Xəta', true); }
+}
+async function stopTaskKpi(taskId) {
+    const btn = document.getElementById('kpi-start-'+taskId);
+    const startTime = parseInt(localStorage.getItem('timer_'+taskId)||'0');
+    const elapsed = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+    const prevAcc = parseInt(localStorage.getItem('timer_acc_'+taskId)||'0');
+    const totalAcc = prevAcc + elapsed;
+    localStorage.setItem('timer_acc_'+taskId, totalAcc);
+    localStorage.removeItem('timer_'+taskId);
+    if(_taskTimers[taskId]) { clearInterval(_taskTimers[taskId]); delete _taskTimers[taskId]; }
+    // Notify backend about pause
+    try { await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'pause_task', task_id:taskId, elapsed_seconds:elapsed}) }); } catch(e){}
+    if(btn) { btn.className = btn.className.replace('bg-green-600','bg-blue-600'); btn.textContent = '▶️ İşə başla'; btn.onclick = function(e){ e.stopPropagation(); startTaskKpi(taskId); }; }
+    toast(`⏹ Dayandırıldı (${Math.floor(totalAcc/60)} dəq)`);
 }
 function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
-    editingTaskId = null;
-    gd = {phone: task.phone||'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type: task.task_type_id ? String(task.task_type_id) : ''};
-    document.getElementById('search-phone').value = task.phone||'';
-    document.getElementById('task-desc').value = '';
-    const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value='';
-    nav('screen-create'); document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+    const phone = task.phone||'';
+    const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
+        <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
+        <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
+        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="1">Zəng</option><option value="2">Görüş</option><option value="3">Quraşdırma</option></select>
+        <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
+        <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Nizami Qasımov">Nizami Qasımov</option></select>
+        <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
+        <textarea id="sub-desc" placeholder="Alt tapşırığı yazın..." style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;"></textarea>
+        <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
+        <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button onclick="submitSubtask(${taskId})" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+async function submitSubtask(parentTaskId) {
+    const phone = document.getElementById('sub-phone').value;
+    const desc = document.getElementById('sub-desc').value.trim();
+    if(!desc) { toast('Təsvir yazın!', true); return; }
+    const assignee = document.getElementById('sub-assignee').value;
+    const taskType = document.getElementById('sub-type').value;
+    const dl = document.getElementById('sub-deadline').value;
+    const deadline = dl ? 'custom:'+dl : '2h';
+    const payload = {action:'create_task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assignee.toLowerCase().includes('nizami')?'admin':'sahe_meneceri', assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId};
+    try {
+        const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
+        const j = await r.json();
+        toast(j.message||'Yaradıldı!', !j.success);
+    } catch(e) { toast('Xəta!', true); }
+    document.getElementById('subtask-modal').remove();
 }
 async function finishTaskKpi(taskId) {
     const task = mockTasks.find(t => t.id === taskId);
