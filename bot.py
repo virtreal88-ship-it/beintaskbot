@@ -3354,8 +3354,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     [InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"updtask-{conf_key}-no")],
                 ])
                 try:
-                    await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f *{sender_name}* icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}", parse_mode="Markdown", reply_markup=kb)
-                except: pass
+                    msg_text = f"\u270f\ufe0f {sender_name} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}"
+                    await _bot_app.bot.send_message(admin_chat, msg_text, reply_markup=kb)
+                except Exception as e:
+                    logger.error(f"update_task confirmation send failed: {e}")
+                    # Fallback: try without markup
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f {sender_name} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir: {assignee_name_raw} (Task {task_id})")
+                    except Exception as e2:
+                        logger.error(f"update_task confirmation fallback also failed: {e2}")
                 return web.json_response({"success": True, "message": "\u23f3 D\u0259yi\u015fiklik t\u0259sdiq \u00fc\u00e7\u00fcn g\u00f6nd\u0259rildi."})
             # Admin updates directly
             result = update_task_kommo(task_id, update_data)
