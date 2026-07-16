@@ -3606,7 +3606,58 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         break
                 if not _compl_sender:
                     _compl_sender = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
-                if _compl_note and _bot_app:
+                # Get task details from Kommo for rich notification
+                _task_text_full = ''
+                _task_type_name = ''
+                _contact_name_c = ''
+                _phone_c = phone or ''
+                _link_c = link or ''
+                try:
+                    _t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                    if _t_resp.status_code == 200:
+                        _t_data = _t_resp.json()
+                        _task_text_full = _t_data.get('text', '').strip()
+                        _task_type_id_c = _t_data.get('task_type_id', 1)
+                        _type_names = {1: 'Zəng', 2: 'Görüş', 3: 'Quraşdırma', 4229224: 'Cavab gözlənilir'}
+                        _task_type_name = _type_names.get(_task_type_id_c, f'Tip {_task_type_id_c}')
+                        # Get contact/lead info
+                        _eid = _t_data.get('entity_id')
+                        _etype = _t_data.get('entity_type', 'contacts')
+                        if _eid and _etype == 'leads' and not _link_c:
+                            _link_c = f"{KOMMO_BASE_URL}/leads/detail/{_eid}"
+                        if _eid and _etype == 'contacts':
+                            _fc = get_contact_details(_eid)
+                            if _fc:
+                                _contact_name_c = _fc.get('name', '')
+                                _cfields = _fc.get('custom_fields_values', []) or []
+                                for _cf in _cfields:
+                                    if _cf.get('field_code') == 'PHONE':
+                                        _vals = _cf.get('values', [])
+                                        if _vals: _phone_c = _vals[0].get('value', _phone_c)
+                                _leads_c = _fc.get('_embedded', {}).get('leads', [])
+                                if _leads_c and not _link_c:
+                                    _link_c = f"{KOMMO_BASE_URL}/leads/detail/{_leads_c[0]['id']}"
+                        elif _eid and _etype == 'leads':
+                            try:
+                                _lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{_eid}?with=contacts", headers=HEADERS, timeout=10)
+                                if _lr.status_code == 200:
+                                    _ld = _lr.json()
+                                    _lcontacts = _ld.get('_embedded', {}).get('contacts', [])
+                                    if _lcontacts:
+                                        _fc2 = get_contact_details(_lcontacts[0]['id'])
+                                        if _fc2:
+                                            _contact_name_c = _fc2.get('name', '')
+                                            _cfields2 = _fc2.get('custom_fields_values', []) or []
+                                            for _cf2 in _cfields2:
+                                                if _cf2.get('field_code') == 'PHONE':
+                                                    _vals2 = _cf2.get('values', [])
+                                                    if _vals2: _phone_c = _vals2[0].get('value', _phone_c)
+                            except: pass
+                except: pass
+                # Remove marker from task text for display
+                import re as _re_c
+                _task_desc_display = _re_c.sub(r'^\[[^\]]+\]\s*', '', _task_text_full)
+                if _bot_app:
                     admin_chat_c = get_chat_id_for_kommo_user(10932455)
                     if admin_chat_c:
                         _kpi_info = ''
@@ -3614,9 +3665,27 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             _kpi_info = f"\n⏱ {kpi_result['actual_minutes']:.0f}/{kpi_result['target_minutes']} dəq | KPI: {kpi_result['kpi_score']}/100"
                             if kpi_result.get('needs_reason') and delay_reason:
                                 _kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
-                        _compl_msg = f"✅ {_compl_sender} tapşırığı tamamladı:\n\n📝 {_compl_note}{_kpi_info}\n🆔 Task: {task_id}"
+                        # AI evaluation
+                        _ai_score_text = ''
                         try:
-                            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat_c, "text": _compl_msg}, timeout=10)
+                            _ai_eval = await evaluate_kpi_with_ai(_task_text_full, kpi_result['actual_minutes'] if kpi_result else 0, kpi_result['target_minutes'] if kpi_result else 60, kpi_result['kpi_score'] if kpi_result else 50)
+                            if _ai_eval:
+                                _ai_score_text = f"\n🤖 İİ qiymət: {_ai_eval}"
+                        except: pass
+                        _compl_msg = f"✅ {_compl_sender} tapşırığı tamamladı:\n\n📋 {_task_type_name}\n📝 {_task_desc_display}\n👤 {_contact_name_c}\n📞 {_phone_c}"
+                        if _compl_note:
+                            _compl_msg += f"\n\n💬 İcraçı qeydi: {_compl_note}"
+                        _compl_msg += f"{_kpi_info}{_ai_score_text}"
+                        if _link_c:
+                            _compl_msg += f"\n🔗 {_link_c}"
+                        # Admin rating buttons
+                        _rate_key = str(uuid.uuid4())[:8]
+                        _bot_app.bot_data.setdefault('pending_rates', {})[_rate_key] = {'task_id': task_id, 'employee': _compl_sender, 'ai_eval': _ai_score_text}
+                        _rate_kb = {"inline_keyboard": [
+                            [{"text": "⭐ Əla", "callback_data": f"rate-{_rate_key}-5"}, {"text": "👍 Yaxşı", "callback_data": f"rate-{_rate_key}-4"}, {"text": "👎 Pis", "callback_data": f"rate-{_rate_key}-2"}]
+                        ]}
+                        try:
+                            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat_c, "text": _compl_msg, "reply_markup": _rate_kb, "disable_web_page_preview": True}, timeout=10)
                         except: pass
                 localStorage_key = f'timer_{task_id}'
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
@@ -4093,6 +4162,31 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
+async def admin_rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split('-')  # rate-{key}-{score}
+    if len(parts) < 3:
+        return
+    rate_key = parts[1]
+    score = parts[2]
+    score_labels = {'5': '⭐ Əla', '4': '👍 Yaxşı', '2': '👎 Pis'}
+    label = score_labels.get(score, score)
+    pending = context.bot_data.get('pending_rates', {}).get(rate_key, {})
+    task_id = pending.get('task_id', '?')
+    employee = pending.get('employee', '?')
+    # Save rating to DB
+    try:
+        conn = sqlite3.connect(_balance_db_path())
+        c = conn.cursor()
+        c.execute('CREATE TABLE IF NOT EXISTS admin_ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, employee TEXT, score INTEGER, created_at TEXT DEFAULT (datetime("now")))')
+        c.execute('INSERT INTO admin_ratings (task_id, employee, score) VALUES (?, ?, ?)', (str(task_id), employee, int(score)))
+        conn.commit()
+        conn.close()
+    except: pass
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(f"✅ Qiymətiniz: {label}")
+
 async def update_task_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle updtask-{key}-yes/no/employee for update_task confirmation."""
     query = update.callback_query
@@ -4440,6 +4534,7 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
     app.add_handler(CallbackQueryHandler(update_task_confirm_callback, pattern="^updtask-"))
+    app.add_handler(CallbackQueryHandler(admin_rate_callback, pattern="^rate-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
