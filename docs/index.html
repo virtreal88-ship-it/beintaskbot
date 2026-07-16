@@ -297,7 +297,7 @@ function getUserId() {
 }
 const CURRENT_USER_ID = getUserId();
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
-let isAdmin = false;
+let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['7962757442','7262243946','7329891614'];
@@ -464,7 +464,7 @@ async function openNotifications() {
         const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(j.success && j.tasks) {
-            if(j.is_admin) { isAdmin = true; document.getElementById('filter-row').style.display = 'flex'; if(fa && currentFilter !== 'all') fa.value = currentFilter; }
+            if(j.is_admin) { isAdmin = true; localStorage.setItem('is_admin','true'); document.getElementById('filter-row').style.display = 'flex'; if(fa && currentFilter !== 'all') fa.value = currentFilter; }
             let filteredTasks = j.tasks;
             if(Object.keys(_completedTaskIds).length > 0) { filteredTasks = j.tasks.filter(t => !_completedTaskIds[t.id]); }
             if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) { mockTasks = filteredTasks; setCachedTasks(filteredTasks); renderNotifications(); }
@@ -807,15 +807,17 @@ async function stopTaskKpi(taskId) {
 function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
     const phone = task.phone||'';
+    const parentAssignee = task.assigneeName || '';
+    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
-        <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;">
+        <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
         <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="1">Zəng</option><option value="2">Görüş</option><option value="3">Quraşdırma</option></select>
         <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
-        <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Nizami Qasımov">Nizami Qasımov</option></select>
+        <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${assigneeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
         <textarea id="sub-desc" placeholder="Alt tapşırığı yazın..." style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;"></textarea>
         <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
