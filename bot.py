@@ -3742,6 +3742,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({'success': True, 'message': '▶️ Başladı! Vaxt sayılır.'})
             else:
                 return web.json_response({'success': True, 'message': '⏱️ Artıq başlayıb.'})
+        elif action == "payout":
+            # Admin pays an employee - deduct from their balance
+            if get_kommo_user_id_for_chat(chat_id) != 10932455:
+                return web.json_response({'success': False, 'error': 'İcazə yoxdur.'})
+            emp_id = int(data.get('employee_id', 0))
+            amount = float(data.get('amount', 0))
+            note = data.get('note', 'Ödəniş')
+            if not emp_id or amount <= 0:
+                return web.json_response({'success': False, 'error': 'Məbləğ və əməkdaş seçin.'})
+            add_balance_transaction(emp_id, 0, -amount, f'💸 {note}')
+            return web.json_response({'success': True, 'message': f'✅ {amount:.0f} AZN ödənildi.'})
         elif action == "pause_task":
             task_id = data.get('task_id')
             elapsed_seconds = data.get('elapsed_seconds', 0)
@@ -4002,6 +4013,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/balance", handle_api_balance)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
+    app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
+    app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
@@ -4347,6 +4360,9 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ─── Main ────────────────────────────────────────────────────────────────────
 # ─── Balance System (SQLite) ────────────────────────────────────────────────
 def _balance_db_path():
+    # Use Railway volume /data if available for persistence across deploys
+    if os.path.isdir('/data'):
+        return '/data/balance.db'
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balance.db')
 
 def init_balance_db():
@@ -4397,6 +4413,32 @@ async def handle_api_balance(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "balance": balance, "transactions": transactions})
 
 init_balance_db()
+
+_EMPLOYEE_NAMES_BY_TG = {
+    7920785774: 'Rasim Əsgərov',
+    7962757442: 'Şamil Əliyev',
+    7262243946: 'Soltan Abbasov',
+    7329891614: 'Hüseyn Səfərov',
+}
+
+async def handle_api_admin_balances(request: web.Request) -> web.Response:
+    tg_user_id = request.headers.get('X-TG-User-ID', '')
+    chat_id = int(tg_user_id) if tg_user_id else None
+    if not chat_id or get_kommo_user_id_for_chat(chat_id) != 10932455:
+        return web.json_response({'success': False}, status=403)
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    employees = []
+    for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
+        c.execute('SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE telegram_id = ?', (tg_id,))
+        bal = c.fetchone()[0]
+        employees.append({'name': name, 'tg_id': tg_id, 'balance': bal})
+    # Recent transactions across all employees
+    c.execute('SELECT telegram_id, task_id, amount, task_text, created_at FROM transactions ORDER BY id DESC LIMIT 30')
+    rows = c.fetchall()
+    conn.close()
+    recent = [{'employee': _EMPLOYEE_NAMES_BY_TG.get(r[0], str(r[0])), 'task_id': r[1], 'amount': r[2], 'task_text': r[3], 'date': r[4]} for r in rows]
+    return web.json_response({'success': True, 'employees': employees, 'recent': recent})
 
 # ─── KPI System (Salary employees) ─────────────────────────────────────────
 _KPI_TARGET_TIMES = {

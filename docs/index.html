@@ -137,8 +137,9 @@
 
     <!-- SCREEN: BALANCE HISTORY -->
     <div id="screen-balance-history" class="screen space-y-4">
-        <div class="border-b border-gray-200 pb-2 mb-3">
+        <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
+            <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">💸 Məxaric</button>
         </div>
         <div id="balance-history-container" class="space-y-3"></div>
     </div>
@@ -545,7 +546,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 bg-purple-600 text-white py-2 rounded-xl text-[11px] font-bold">Alt tapşırıq</button></div>` : ''}`;
+            ${(!isAdmin) ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 bg-purple-600 text-white py-2 rounded-xl text-[11px] font-bold">Alt tapşırıq</button></div>` : ''}`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -853,7 +854,8 @@ async function finishTaskKpi(taskId) {
 
 // Balance System
 async function loadBalance() {
-    if(isAdmin || employeeType === 'salary') return;
+    if(isAdmin) return;
+    if(employeeType === 'salary') return;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
@@ -861,10 +863,22 @@ async function loadBalance() {
             const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
             const a = document.getElementById('balance-amount'); if(a) a.textContent = parseFloat(j.balance).toFixed(2) + ' AZN';
             window._balanceData = j.transactions || [];
+            // Show expected earnings from pending tasks
+            let expected = 0;
+            (mockTasks||[]).forEach(t => {
+                const pm = (t.desc||t.text||'').match(/:([\d.]+)\]/);
+                if(pm) expected += parseFloat(pm[1]);
+            });
+            let expEl = document.getElementById('balance-expected');
+            if(!expEl && expected > 0) {
+                const w2 = document.getElementById('balance-widget');
+                if(w2) { w2.insertAdjacentHTML('beforeend', `<div id="balance-expected" class="text-[10px] opacity-80 mt-1">Gözlənilən: <b>${expected.toFixed(0)} AZN</b></div>`); }
+            } else if(expEl) { expEl.innerHTML = `Gözlənilən: <b>${expected.toFixed(0)} AZN</b>`; }
         }
     } catch(e) {}
 }
 function loadBalanceHistory() {
+    if(isAdmin) { document.getElementById('btn-mexaric').style.display = 'inline-block'; loadAdminBalances(); return; }
     loadBalance();
     const container = document.getElementById('balance-history-container');
     const txs = window._balanceData || [];
@@ -873,6 +887,57 @@ function loadBalanceHistory() {
         const d = t.date ? new Date(t.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
         return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">${t.task_text || 'Tapşırıq'}</strong><span class="text-[9px] text-gray-400 font-bold">${d}</span></div><span class="text-xs font-black text-emerald-600">+${parseFloat(t.amount).toFixed(0)} AZN</span></div>`;
     }).join('');
+}
+
+// Admin balance management
+async function loadAdminBalances() {
+    const container = document.getElementById('balance-history-container');
+    try {
+        const r = await fetch(API_BASE + '/api/admin_balances', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(j.success) {
+            let html = j.employees.map(e => {
+                return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800">${e.name}</strong></div><span class="text-xs font-black ${e.balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${parseFloat(e.balance).toFixed(0)} AZN</span></div>`;
+            }).join('');
+            if(j.recent && j.recent.length) {
+                html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
+                html += j.recent.map(t => {
+                    const d = t.date ? new Date(t.date+'Z').toLocaleDateString('az-AZ',{day:'2-digit',month:'short'}) : '';
+                    const color = t.amount < 0 ? 'text-red-600' : 'text-emerald-600';
+                    const sign = t.amount < 0 ? '' : '+';
+                    return `<div class="flex justify-between items-center p-2 bg-gray-50 rounded-lg mt-1"><div><span class="text-[10px] text-gray-700">${t.employee} - ${t.task_text||'Məxaric'}</span><br><span class="text-[9px] text-gray-400">${d}</span></div><span class="text-[10px] font-bold ${color}">${sign}${parseFloat(t.amount).toFixed(0)} AZN</span></div>`;
+                }).join('');
+            }
+            container.innerHTML = html || '<div class="text-center py-10 text-gray-400 text-xs">Məlumat yoxdur</div>';
+        }
+    } catch(e) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs">Xəta</div>'; }
+}
+function openMexaric() {
+    const html = `<div id="mexaric-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">💸 Məxaric (Ödəniş)</h3>
+        <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
+        <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="7920785774">Rasim Əsgərov</option><option value="7962757442">Şamil Əliyev</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option></select>
+        <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
+        <input type="number" id="mex-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Qeyd:</label>
+        <input type="text" id="mex-note" placeholder="Aylıq ödəniş" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button onclick="submitMexaric()" style="flex:1;background:#ef4444;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ödə</button><button onclick="document.getElementById('mexaric-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+async function submitMexaric() {
+    const empId = document.getElementById('mex-employee').value;
+    const amount = parseFloat(document.getElementById('mex-amount').value);
+    const note = document.getElementById('mex-note').value || 'Ödəniş';
+    if(!amount || amount <= 0) { toast('Məbləğ daxil edin!', true); return; }
+    try {
+        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'payout', employee_id:empId, amount:amount, note:note}) });
+        const j = await r.json();
+        toast(j.message || 'Ödənildi!', !j.success);
+    } catch(e) { toast('Xəta!', true); }
+    document.getElementById('mexaric-modal').remove();
+    loadAdminBalances();
 }
 
 // Pull-to-refresh
