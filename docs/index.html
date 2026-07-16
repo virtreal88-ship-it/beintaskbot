@@ -112,6 +112,7 @@
         <span style="flex:1;"></span>
         <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">+ Tapşırıq</button>
     </div>
+    <div id="balance-widget" style="display:none; background:linear-gradient(135deg,#10b981,#059669); color:white; padding:14px 16px; border-radius:14px; margin-bottom:12px; box-shadow:0 4px 12px rgba(16,185,129,0.2); align-items:center; justify-content:space-between;"><div><div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; opacity:0.85; font-weight:700;">Şəxsi Balansınız</div><div id="balance-amount" style="font-size:22px; font-weight:800; margin-top:4px;">0.00 AZN</div></div><button onclick="showBalanceHistory()" style="background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.1); color:white; padding:6px 12px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer;">📊 Tarixçə</button></div>
     <div id="date-filter-row" style="display:flex; gap:6px; margin-bottom:10px;">
         <button class="date-filter-btn" onclick="setDateFilter('today',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Bu gün</button>
         <button class="date-filter-btn" onclick="setDateFilter('tomorrow',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Sabah</button>
@@ -122,6 +123,10 @@
     </div>
 </div>
 
+<div id="screen-balance-history" class="screen" style="padding:16px;">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;"><button onclick="nav('screen-notifications');openNotifications();" style="background:none; border:none; font-size:14px; cursor:pointer; color:var(--text-color);">← Geri</button><span style="font-weight:700; font-size:15px;">Maliyyə Tarixçəsi</span></div>
+    <div id="balance-history-container" style="display:flex; flex-direction:column; gap:10px;"></div>
+</div>
 <div id="step-search" class="screen">
     <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-notifications')">← Geri</button></div>
     <div class="form-group"><label>Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone" class="input-field" placeholder="0505232933"><div id="search-error" class="error-msg">Min 7 rəqəm daxil edin.</div></div>
@@ -131,6 +136,7 @@
     <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
     <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
     <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+    <div class="form-group"><label>İşin qiyməti (AZN):</label><input type="number" id="task-price-input" class="input-field" placeholder="Boş qalsa 0 AZN" style="padding:12px;border-radius:10px;"></div>
     <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
     <div class="form-group"><label>Son qeyd:</label><textarea id="task-note-edit" class="input-field" placeholder="Qeyd..."></textarea></div>
     <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
@@ -381,6 +387,8 @@ function submitTask() {
         const tsel = document.getElementById('task-type-select');
         const taskType = gd.task_type || (tsel ? tsel.value : '1');
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType};
+        const priceInput = document.getElementById('task-price-input');
+        if(priceInput && priceInput.value) newPayload.price = priceInput.value;
         const createNote = document.getElementById('task-note-edit');
         if(createNote && createNote.value.trim()) newPayload.note = createNote.value.trim();
         doFetch(newPayload, 'task-submit-btn');
@@ -449,6 +457,7 @@ async function openNotifications() {
     }
     hideLoader();
     hideSyncIndicator();
+    loadBalance();
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
@@ -772,6 +781,33 @@ function switchTab(tab) {
         tabTasks.querySelector('span:last-child').style.fontWeight = '500';
         nav('main-screen');
     }
+}
+
+// ─── Balance System ───────────────────────────────────────────────
+async function loadBalance() {
+    if(isAdmin) return; // Admin doesn't see balance
+    try {
+        const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(j.success) {
+            const w = document.getElementById('balance-widget');
+            if(w) { w.style.display = 'flex'; }
+            const a = document.getElementById('balance-amount');
+            if(a) a.textContent = parseFloat(j.balance).toFixed(2) + ' AZN';
+            window._balanceData = j.transactions || [];
+        }
+    } catch(e) { console.log('Balance load error', e); }
+}
+
+function showBalanceHistory() {
+    nav('screen-balance-history');
+    const container = document.getElementById('balance-history-container');
+    const txs = window._balanceData || [];
+    if(!txs.length) { container.innerHTML = '<p style="color:var(--hint-color); text-align:center; margin-top:40px;">Hələ əməliyyat yoxdur.</p>'; return; }
+    container.innerHTML = txs.map(t => {
+        const d = t.date ? new Date(t.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
+        return `<div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--secondary-bg-color); border-radius:10px;"><div><div style="font-size:13px; font-weight:600;">${t.task_text || 'Tapşırıq'}</div><div style="font-size:11px; color:var(--hint-color); margin-top:2px;">${d}</div></div><div style="font-size:15px; font-weight:700; color:#10b981;">+${parseFloat(t.amount).toFixed(0)} AZN</div></div>`;
+    }).join('');
 }
 
 document.addEventListener("DOMContentLoaded", () => { initApp(); });

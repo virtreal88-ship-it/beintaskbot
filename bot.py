@@ -34,6 +34,7 @@ from telegram.ext import (
     filters,
 )
 from aiohttp import web
+import sqlite3
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8770145286:AAHB60HD8L1bvMaWVys2OPduPrp_ppkxTXA")
@@ -3146,9 +3147,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 assignee = "admin"
             else:
                 assignee = "sahe_meneceri"
-            # Prepend marker to text
+            # Prepend marker to text (with optional price)
+            price_val = data.get("price", "").strip()
             if assignee_name_raw:
-                text = f"[{assignee_name_raw}] {text}"
+                if price_val:
+                    text = f"[{assignee_name_raw}:{price_val}] {text}"
+                else:
+                    text = f"[{assignee_name_raw}] {text}"
             deadline_key = data.get("deadline", "today")
             now = datetime.now(tz=BAKU_TZ)
             if deadline_key.startswith('custom:'):
@@ -3541,6 +3546,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 stage_msg += f"\n\u2705 Yeni tap\u015f\u0131r\u0131q: {task_text}"
             if result:
+                # --- Balance crediting: parse [Name:Price] marker ---
+                try:
+                    _task_resp_bal = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                    if _task_resp_bal.status_code == 200:
+                        _task_text_bal = _task_resp_bal.json().get("text", "")
+                        _price_match_bal = re.match(r'^\[([^:\]]+)(?::(\d+))?\]\s*(.*)', _task_text_bal)
+                        if _price_match_bal and _price_match_bal.group(2):
+                            _bal_amount = float(_price_match_bal.group(2))
+                            if _bal_amount > 0:
+                                add_balance_transaction(chat_id, int(task_id), _bal_amount, _price_match_bal.group(3))
+                except Exception as _bal_err:
+                    logger.error(f"Balance crediting error: {_bal_err}")
+                # --- End balance crediting ---
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
                 return web.json_response({"success": True, "message": msg, "link": link})
             else:
@@ -3795,6 +3813,8 @@ async def start_webhook_server():
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
+    app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
+    app_web.router.add_get("/api/balance", handle_api_balance)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
@@ -4113,6 +4133,59 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
             pass
 
 # ─── Main ────────────────────────────────────────────────────────────────────
+# ─── Balance System (SQLite) ────────────────────────────────────────────────
+def _balance_db_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balance.db')
+
+def init_balance_db():
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER NOT NULL,
+        task_id INTEGER,
+        amount REAL NOT NULL,
+        task_text TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    )''')
+    conn.commit()
+    conn.close()
+
+def add_balance_transaction(telegram_id, task_id, amount, task_text):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('INSERT INTO transactions (telegram_id, task_id, amount, task_text) VALUES (?, ?, ?, ?)',
+              (telegram_id, task_id, amount, task_text))
+    conn.commit()
+    conn.close()
+
+def get_balance(telegram_id):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE telegram_id = ?', (telegram_id,))
+    bal = c.fetchone()[0]
+    conn.close()
+    return bal
+
+def get_balance_transactions(telegram_id, limit=50):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT task_id, amount, task_text, created_at FROM transactions WHERE telegram_id = ? ORDER BY id DESC LIMIT ?', (telegram_id, limit))
+    rows = c.fetchall()
+    conn.close()
+    return [{"task_id": r[0], "amount": r[1], "task_text": r[2], "date": r[3]} for r in rows]
+
+async def handle_api_balance(request: web.Request) -> web.Response:
+    tg_user_id = request.headers.get("X-TG-User-ID", "")
+    chat_id = int(tg_user_id) if tg_user_id else None
+    if not chat_id:
+        return web.json_response({"success": False}, status=401)
+    balance = get_balance(chat_id)
+    transactions = get_balance_transactions(chat_id)
+    return web.json_response({"success": True, "balance": balance, "transactions": transactions})
+
+init_balance_db()
+
 def main():
     global _bot_app
     async def post_init(application: Application) -> None:
