@@ -545,7 +545,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button></div>` : ''}`;
+            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="toggleTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 bg-purple-600 text-white py-2 rounded-xl text-[11px] font-bold">➕ Əlavə</button></div>` : ''}`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -583,12 +583,13 @@ function clickNotification(id, desc, metaText) {
     document.getElementById('bottom-bar-title').textContent = displayDesc;
     document.getElementById('bottom-bar-meta').textContent = metaText;
     const bar = document.getElementById('bottom-action-bar');
+    document.removeEventListener('click', closeBottomBarOutside);
     bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
-    setTimeout(() => { document.addEventListener('click', closeBottomBarOutside); }, 300);
+    setTimeout(() => { document.addEventListener('click', closeBottomBarOutside); }, 500);
 }
 function closeBottomBarOutside(e) {
     const bar = document.getElementById('bottom-action-bar');
-    if(bar && !bar.contains(e.target)) closeBottomBar();
+    if(bar && !bar.contains(e.target) && !e.target.closest('.task-card')) closeBottomBar();
 }
 function closeBottomBar() {
     const bar = document.getElementById('bottom-action-bar'); if(!bar || bar.style.display === 'none') return;
@@ -757,12 +758,16 @@ function loadKpiHistory() {
     }).join('');
 }
 const _taskTimers = {};
+const _taskPaused = {};
 function _startTimerDisplay(taskId, startTime) {
     const btn = document.getElementById('kpi-start-'+taskId);
     if(!btn) return;
-    btn.disabled = true; btn.className = btn.className.replace('bg-blue-600','bg-green-600');
+    btn.disabled = false;
+    btn.className = btn.className.replace('bg-blue-600','bg-green-600').replace('bg-yellow-500','bg-green-600');
     if(_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
+    _taskPaused[taskId] = false;
     _taskTimers[taskId] = setInterval(() => {
+        if(_taskPaused[taskId]) return;
         const elapsed = Math.floor((Date.now() - startTime) / 1000);
         const h = String(Math.floor(elapsed/3600)).padStart(2,'0');
         const m = String(Math.floor((elapsed%3600)/60)).padStart(2,'0');
@@ -770,11 +775,36 @@ function _startTimerDisplay(taskId, startTime) {
         btn.textContent = `⏱️ ${h}:${m}:${s}`;
     }, 1000);
 }
-async function startTaskKpi(taskId) {
+async function toggleTaskKpi(taskId) {
+    const btn = document.getElementById('kpi-start-'+taskId);
+    const saved = localStorage.getItem('timer_'+taskId);
+    if(saved && !_taskPaused[taskId]) {
+        // Pause
+        _taskPaused[taskId] = true;
+        if(btn) { btn.className = btn.className.replace('bg-green-600','bg-yellow-500'); btn.textContent = '⏸️ Pauza'; }
+        return;
+    }
+    if(saved && _taskPaused[taskId]) {
+        // Resume
+        _taskPaused[taskId] = false;
+        if(btn) { btn.className = btn.className.replace('bg-yellow-500','bg-green-600'); }
+        return;
+    }
+    // First start
+    if(btn) { btn.disabled = true; btn.innerHTML = '⏳'; }
     const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
     const j = await r.json();
-    toast(j.message || 'Başladı!', !j.success);
-    if(j.success) { _startTimerDisplay(taskId, Date.now()); localStorage.setItem('timer_'+taskId, Date.now()); }
+    if(j.success) { _startTimerDisplay(taskId, Date.now()); localStorage.setItem('timer_'+taskId, Date.now()); toast('▶️ Başladı!'); }
+    else { if(btn) { btn.disabled = false; btn.innerHTML = '▶️ İşə başla'; } toast(j.message||'Xəta', true); }
+}
+function openSubtask(taskId) {
+    const task = mockTasks.find(t => t.id === taskId); if(!task) return;
+    editingTaskId = null;
+    gd = {phone: task.phone||'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type: task.task_type_id ? String(task.task_type_id) : ''};
+    document.getElementById('search-phone').value = task.phone||'';
+    document.getElementById('task-desc').value = '';
+    const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value='';
+    nav('screen-create'); document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
 }
 async function finishTaskKpi(taskId) {
     const task = mockTasks.find(t => t.id === taskId);
