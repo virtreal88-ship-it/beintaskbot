@@ -34,7 +34,7 @@ from telegram.ext import (
     filters,
 )
 from aiohttp import web
-import sqlite3
+# import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8770145286:AAHB60HD8L1bvMaWVys2OPduPrp_ppkxTXA")
@@ -3766,14 +3766,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get('task_id')
             elapsed_seconds = data.get('elapsed_seconds', 0)
             if task_id:
-                # End current session so a new one can be started later
-                try:
-                    conn = sqlite3.connect(_balance_db_path())
-                    c = conn.cursor()
-                    c.execute('UPDATE task_sessions SET end_time=datetime("now"), paused=1 WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (chat_id, int(task_id)))
-                    conn.commit()
-                    conn.close()
-                except: pass
+                pause_task_session(chat_id, int(task_id), int(elapsed_seconds))
             return web.json_response({'success': True, 'message': 'Dayandırıldı.'})
         elif action == "finish_task":
             task_id = data.get('task_id')
@@ -3786,13 +3779,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not result:
                 return web.json_response({'success': False, 'error': 'Əvvəlcə "Başla" basın.'})
             ai_feedback = await evaluate_kpi_with_ai(task_text, result['actual_minutes'], result['target_minutes'], result['kpi_score'])
-            try:
-                conn = sqlite3.connect(_balance_db_path())
-                c = conn.cursor()
-                c.execute('UPDATE task_sessions SET ai_feedback=? WHERE telegram_id=? AND task_id=? AND end_time IS NOT NULL ORDER BY id DESC LIMIT 1', (ai_feedback, chat_id, int(task_id)))
-                conn.commit()
-                conn.close()
-            except: pass
             return web.json_response({'success': True, 'message': f'✅ Bitdi! KPI: {result["kpi_score"]}/100', 'kpi_score': result['kpi_score'], 'actual_minutes': result['actual_minutes'], 'target_minutes': result['target_minutes'], 'ai_feedback': ai_feedback, 'needs_reason': result['needs_reason']})
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
@@ -4210,14 +4196,14 @@ async def admin_rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending = context.bot_data.get('pending_rates', {}).get(rate_key, {})
     task_id = pending.get('task_id', '?')
     employee = pending.get('employee', '?')
-    # Save rating to DB
+    # Save rating (stored as note in balance transaction with 0 amount)
     try:
-        conn = sqlite3.connect(_balance_db_path())
-        c = conn.cursor()
-        c.execute('CREATE TABLE IF NOT EXISTS admin_ratings (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, employee TEXT, score INTEGER, created_at TEXT DEFAULT (datetime("now")))')
-        c.execute('INSERT INTO admin_ratings (task_id, employee, score) VALUES (?, ?, ?)', (str(task_id), employee, int(score)))
-        conn.commit()
-        conn.close()
+        from gh_storage import _load_file, _save_file, _cache, _lock
+        _load_file("ratings.json")
+        with _lock:
+            data = _cache.setdefault("ratings.json", {"ratings": []})
+            data.setdefault("ratings", []).append({"task_id": str(task_id), "employee": employee, "score": int(score), "date": datetime.now(tz=BAKU_TZ).strftime("%Y-%m-%d %H:%M")})
+        _save_file("ratings.json")
     except: pass
     await query.edit_message_reply_markup(reply_markup=None)
     await query.message.reply_text(f"✅ Qiymətiniz: {label}")
@@ -4369,60 +4355,21 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 # ─── Balance System (SQLite) ────────────────────────────────────────────────
-def _balance_db_path():
-    # Use Railway volume /data if available for persistence across deploys
-    if os.path.isdir('/data'):
-        return '/data/balance.db'
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'balance.db')
+# ─── GitHub-based Storage (replaces SQLite) ─────────────────────────────────
+from gh_storage import (
+    init_storage as _init_gh_storage,
+    add_balance_transaction, get_balance, get_balance_transactions,
+    get_all_balances, get_all_recent_transactions,
+    has_active_session, start_task_session, pause_task_session,
+    finish_task_session, get_kpi_summary
+)
 
-def init_balance_db():
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telegram_id INTEGER NOT NULL,
-        task_id INTEGER,
-        amount REAL NOT NULL,
-        task_text TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-    )''')
-    conn.commit()
-    conn.close()
-
-def add_balance_transaction(telegram_id, task_id, amount, task_text):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('INSERT INTO transactions (telegram_id, task_id, amount, task_text) VALUES (?, ?, ?, ?)',
-              (telegram_id, task_id, amount, task_text))
-    conn.commit()
-    conn.close()
-
-def get_balance(telegram_id):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE telegram_id = ?', (telegram_id,))
-    bal = c.fetchone()[0]
-    conn.close()
-    return bal
-
-def get_balance_transactions(telegram_id, limit=50):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('SELECT task_id, amount, task_text, created_at FROM transactions WHERE telegram_id = ? ORDER BY id DESC LIMIT ?', (telegram_id, limit))
-    rows = c.fetchall()
-    conn.close()
-    return [{"task_id": r[0], "amount": r[1], "task_text": r[2], "date": r[3]} for r in rows]
-
-async def handle_api_balance(request: web.Request) -> web.Response:
-    tg_user_id = request.headers.get("X-TG-User-ID", "")
-    chat_id = int(tg_user_id) if tg_user_id else None
-    if not chat_id:
-        return web.json_response({"success": False}, status=401)
-    balance = get_balance(chat_id)
-    transactions = get_balance_transactions(chat_id)
-    return web.json_response({"success": True, "balance": balance, "transactions": transactions})
-
-init_balance_db()
+# Initialize GitHub storage with token from git remote
+import subprocess as _sp
+_gh_token_match = _sp.run(['git', 'config', '--get', 'remote.origin.url'], capture_output=True, text=True)
+_gh_token_url = _gh_token_match.stdout.strip()
+_gh_token = _gh_token_url.split('//')[1].split('@')[0] if '@' in _gh_token_url else os.environ.get('GH_TOKEN', '')
+_init_gh_storage(_gh_token)
 
 _EMPLOYEE_NAMES_BY_TG = {
     7920785774: 'Rasim Əsgərov',
@@ -4432,123 +4379,14 @@ _EMPLOYEE_NAMES_BY_TG = {
     8835096199: 'Texniki Dəstək',
 }
 
-async def handle_api_admin_balances(request: web.Request) -> web.Response:
-    tg_user_id = request.headers.get('X-TG-User-ID', '')
-    chat_id = int(tg_user_id) if tg_user_id else None
-    if not chat_id or get_kommo_user_id_for_chat(chat_id) != 10932455:
-        return web.json_response({'success': False}, status=403)
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    employees = []
-    for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
-        c.execute('SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE telegram_id = ?', (tg_id,))
-        bal = c.fetchone()[0]
-        employees.append({'name': name, 'tg_id': tg_id, 'balance': bal})
-    # Recent transactions across all employees
-    c.execute('SELECT telegram_id, task_id, amount, task_text, created_at FROM transactions ORDER BY id DESC LIMIT 30')
-    rows = c.fetchall()
-    conn.close()
-    recent = [{'employee': _EMPLOYEE_NAMES_BY_TG.get(r[0], str(r[0])), 'task_id': r[1], 'amount': r[2], 'task_text': r[3], 'date': r[4]} for r in rows]
-    return web.json_response({'success': True, 'employees': employees, 'recent': recent})
-
-# ─── KPI System (Salary employees) ─────────────────────────────────────────
 _KPI_TARGET_TIMES = {
     1: 30, 2: 30, 4232112: 60, 3263995: 45, 3263999: 120, 4232108: 30, 4229224: 60,
 }
+
 _EMPLOYEE_TYPES = {
     7962757442: 'salary', 7262243946: 'salary',
     7329891614: 'salary', 7920785774: 'piecework',
 }
-
-def init_kpi_db():
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS task_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telegram_id INTEGER NOT NULL,
-        task_id INTEGER NOT NULL,
-        start_time TEXT,
-        end_time TEXT,
-        actual_minutes REAL,
-        target_minutes REAL,
-        kpi_score REAL,
-        ai_feedback TEXT,
-        delay_reason TEXT,
-        paused INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-    )''')
-    try:
-        c.execute('ALTER TABLE task_sessions ADD COLUMN paused INTEGER DEFAULT 0')
-    except: pass
-    conn.commit()
-    conn.close()
-
-init_kpi_db()
-
-def has_active_session(telegram_id, task_id):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    # Active if there's a running session OR any paused session for this task
-    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=?', (telegram_id, task_id))
-    row = c.fetchone()
-    conn.close()
-    return row is not None
-
-def start_task_session(telegram_id, task_id):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (telegram_id, task_id))
-    if c.fetchone():
-        conn.close()
-        return False
-    c.execute('INSERT INTO task_sessions (telegram_id, task_id, start_time) VALUES (?, ?, datetime("now"))', (telegram_id, task_id))
-    conn.commit()
-    conn.close()
-    return True
-
-def finish_task_session(telegram_id, task_id, task_type_id, delay_reason=''):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    from datetime import datetime as dt2
-    # Close any active session first
-    c.execute('SELECT id, start_time FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL ORDER BY id DESC LIMIT 1', (telegram_id, task_id))
-    row = c.fetchone()
-    if row:
-        session_id, start_time = row
-        start_dt = dt2.fromisoformat(start_time)
-        end_dt = dt2.utcnow()
-        seg_minutes = (end_dt - start_dt).total_seconds() / 60.0
-        c.execute('UPDATE task_sessions SET end_time=datetime("now"), actual_minutes=? WHERE id=?', (round(seg_minutes, 1), session_id))
-        conn.commit()
-    # Sum ALL sessions for this task (including paused ones)
-    c.execute('SELECT COALESCE(SUM(actual_minutes), 0) FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NOT NULL', (telegram_id, task_id))
-    total_row = c.fetchone()
-    actual_minutes = total_row[0] if total_row else 0
-    if actual_minutes == 0:
-        conn.close()
-        return None
-    target_minutes = _KPI_TARGET_TIMES.get(task_type_id, 60)
-    if actual_minutes <= target_minutes:
-        kpi_score = min(100, (target_minutes / max(actual_minutes, 1)) * 80)
-    else:
-        kpi_score = max(0, 80 - ((actual_minutes - target_minutes) / target_minutes) * 60)
-    kpi_score = round(kpi_score, 1)
-    # Update the last session with final KPI
-    c.execute('UPDATE task_sessions SET kpi_score=?, target_minutes=?, delay_reason=? WHERE telegram_id=? AND task_id=? ORDER BY id DESC LIMIT 1',
-             (kpi_score, target_minutes, delay_reason, telegram_id, task_id))
-    conn.commit()
-    conn.close()
-    return {'kpi_score': kpi_score, 'actual_minutes': round(actual_minutes, 1), 'target_minutes': target_minutes, 'needs_reason': actual_minutes > target_minutes * 1.2}
-
-def get_kpi_summary(telegram_id):
-    conn = sqlite3.connect(_balance_db_path())
-    c = conn.cursor()
-    c.execute('SELECT COALESCE(AVG(kpi_score), 0), COUNT(*) FROM task_sessions WHERE telegram_id=? AND kpi_score IS NOT NULL', (telegram_id,))
-    avg_kpi, total = c.fetchone()
-    c.execute('SELECT task_id, kpi_score, actual_minutes, target_minutes, created_at FROM task_sessions WHERE telegram_id=? AND kpi_score IS NOT NULL ORDER BY id DESC LIMIT 20', (telegram_id,))
-    rows = c.fetchall()
-    conn.close()
-    return {'avg_kpi': round(avg_kpi, 1), 'total_tasks': total, 'history': [{'task_id': r[0], 'kpi_score': r[1], 'actual': r[2], 'target': r[3], 'date': r[4]} for r in rows]}
 
 def get_employee_type(telegram_id):
     return _EMPLOYEE_TYPES.get(telegram_id, 'piecework')
@@ -4565,6 +4403,28 @@ async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_sc
     except Exception as e:
         logger.error(f'KPI AI eval error: {e}')
         return '\u018fla n\u0259tic\u0259!' if kpi_score >= 70 else 'Gecikm\u0259 var.'
+
+async def handle_api_balance(request: web.Request) -> web.Response:
+    tg_user_id = request.headers.get("X-TG-User-ID", "")
+    chat_id = int(tg_user_id) if tg_user_id else None
+    if not chat_id:
+        return web.json_response({"success": False}, status=401)
+    balance = get_balance(chat_id)
+    transactions = get_balance_transactions(chat_id)
+    return web.json_response({"success": True, "balance": balance, "transactions": transactions})
+
+async def handle_api_admin_balances(request: web.Request) -> web.Response:
+    tg_user_id = request.headers.get('X-TG-User-ID', '')
+    chat_id = int(tg_user_id) if tg_user_id else None
+    if not chat_id or get_kommo_user_id_for_chat(chat_id) != 10932455:
+        return web.json_response({'success': False}, status=403)
+    all_bals = get_all_balances()
+    employees = []
+    for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
+        employees.append({'name': name, 'tg_id': tg_id, 'balance': all_bals.get(tg_id, 0)})
+    recent = get_all_recent_transactions(30)
+    recent_fmt = [{'employee': _EMPLOYEE_NAMES_BY_TG.get(r.get('telegram_id', 0), str(r.get('telegram_id', ''))), 'task_id': r.get('task_id', ''), 'amount': r.get('amount', 0), 'task_text': r.get('task_text', ''), 'date': r.get('date', '')} for r in recent]
+    return web.json_response({'success': True, 'employees': employees, 'recent': recent_fmt})
 
 async def handle_api_kpi(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get('X-TG-User-ID', '')
