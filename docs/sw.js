@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintask-v22';
+const CACHE_NAME = 'beintask-v23';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -10,7 +10,6 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Network-first: always try fresh, fallback to cache
   e.respondWith(
     fetch(e.request).then(r => {
       if(r.ok && e.request.method === 'GET') {

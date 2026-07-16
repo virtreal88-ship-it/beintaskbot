@@ -4,220 +4,259 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Bein Systems Pro</title>
-    <meta name="theme-color" content="#1a1a2e">
+    <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        :root{--bg-color:var(--tg-theme-bg-color,#fff);--text-color:var(--tg-theme-text-color,#000);--hint-color:var(--tg-theme-hint-color,#999);--link-color:var(--tg-theme-link-color,#2481cc);--button-color:var(--tg-theme-button-color,#2481cc);--button-text-color:var(--tg-theme-button-text-color,#fff);--secondary-bg-color:var(--tg-theme-secondary-bg-color,#f4f4f5)}
-        *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
-        body{background:var(--bg-color);color:var(--text-color);padding:16px;display:flex;flex-direction:column;min-height:100vh;font-size:16px}
-        .spinner{width:32px;height:32px;border:3px solid var(--hint-color);border-top-color:var(--button-color);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto}
-        @keyframes spin{to{transform:rotate(360deg)}} @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
-        #toast{position:fixed;top:-60px;left:50%;transform:translateX(-50%);background:#10b981;color:#fff;padding:12px 24px;border-radius:30px;font-size:14px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:top .3s;z-index:1000}
-        #toast.error{background:#ef4444}
-        .screen{display:none;flex-direction:column;gap:16px;animation:fadeIn .2s}.screen.active{display:flex}
-        @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-        .main-menu{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-        .btn{background:var(--button-color);color:var(--button-text-color);border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:600;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center}
-        .btn:disabled{opacity:.6}.btn-main-menu{height:105px;background:var(--secondary-bg-color);color:var(--text-color)}.btn-main-menu .icon{font-size:24px}
-        .btn-submit{margin-top:20px;padding:16px;width:100%}
-        .form-group{display:flex;flex-direction:column;gap:8px}.form-group label{font-size:14px;font-weight:500;color:var(--hint-color)}
-        .input-field{background:var(--secondary-bg-color);color:var(--text-color);border:2px solid transparent;border-radius:12px;padding:14px;font-size:16px;outline:none;width:100%}.input-field:focus{border-color:var(--button-color)}
-        textarea.input-field{height:100px;resize:none}
-        .options-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
-        .options-list{display:flex;flex-direction:column;gap:8px}
-        .option-card{background:var(--secondary-bg-color);color:var(--text-color);border:2px solid transparent;border-radius:12px;padding:12px;font-size:14px;text-align:center;cursor:pointer}
-        .option-card.selected{background:var(--button-color);color:var(--button-text-color)}
-        .nav-bar{display:flex;align-items:center;margin-bottom:4px}.btn-back{background:none;border:none;color:var(--link-color);font-size:15px;cursor:pointer}
-        .checkbox-container{display:flex;align-items:center;gap:12px;background:var(--secondary-bg-color);padding:14px;border-radius:12px;cursor:pointer}.checkbox-container input{width:18px;height:18px}
-        .subtask-block{border-left:3px solid var(--button-color);padding-left:12px;margin-top:10px;display:none;flex-direction:column;gap:12px}
-        .error-msg{color:#ff4d4d;font-size:13px;display:none}
-        .stage-row{display:flex;align-items:center;padding:14px 12px;border-bottom:1px solid #eee;cursor:pointer;transition:background .15s}
-        .stage-row:last-child{border-bottom:none}
-        .stage-row:active{background:var(--secondary-bg-color)}
-        .stage-row.selected{background:var(--secondary-bg-color)}
-        .stage-dot{width:28px;height:28px;border-radius:50%;flex-shrink:0}
-        .stage-name{flex:1;font-size:15px;margin-left:14px;font-weight:500}
-        .stage-check{width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:transparent;font-size:18px;font-weight:700}
-        .stage-row.selected .stage-check{color:#333}
-        @media (min-width: 600px) {
-            body{max-width:600px;margin:0 auto;padding:24px;font-size:17px}
-            .btn{font-size:16px;padding:16px}
-            .btn-main-menu{height:120px}
-            .input-field{font-size:17px;padding:16px}
-            textarea.input-field{height:120px}
-            .option-card{font-size:15px;padding:14px}
-            .form-group label{font-size:15px}
-            #toast{font-size:15px;padding:14px 28px}
-        }
-        @media (min-width: 900px) {
-            body{max-width:700px;padding:32px}
-            .btn{font-size:17px;padding:18px}
-            .btn-main-menu{height:130px}
-            .input-field{font-size:18px;padding:18px}
-            textarea.input-field{height:140px}
-            .form-group label{font-size:16px}
-        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8f9fa; margin:0; padding:0; }
+        .filter-pill { border:1px solid #cbd5e1; background:#fff; color:#1e293b; transition:all 0.2s ease; }
+        .filter-pill.active { border-color:#1a252f; background-color:#1a252f; color:#fff; }
+        .custom-scroll::-webkit-scrollbar { width:4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .sync-spinner { width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite; }
+        #toast { position:fixed; top:-60px; left:50%; transform:translateX(-50%); background:#10b981; color:#fff; padding:12px 24px; border-radius:30px; font-size:13px; font-weight:600; box-shadow:0 4px 12px rgba(0,0,0,.15); transition:top .3s; z-index:9999; }
+        #toast.error { background:#ef4444; }
+        .screen { display:none; } .screen.active { display:block; }
+        .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
+        .option-card.selected { background:#2481cc; color:#fff; }
+        .stage-row.selected { background:#2481cc !important; color:#fff !important; }
     </style>
 </head>
-<body>
-<div id="sync-indicator" style="display:none;position:fixed;top:8px;right:12px;z-index:2000;align-items:center;gap:6px;background:rgba(255,255,255,0.95);padding:4px 10px;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,0.1);transition:opacity 0.3s;">
-<span class="sync-spinner"></span><span style="font-size:11px;color:var(--hint-color);font-weight:500;">Sinxronizasiya...</span>
-</div>
-<style>
-.sync-spinner{width:12px;height:12px;border:2px solid var(--hint-color);border-top-color:transparent;border-radius:50%;display:inline-block;animation:spin 0.8s linear infinite;}
-</style>
+<body class="flex flex-col h-screen overflow-hidden">
+
 <div id="toast"></div>
 
-<!-- Success Screen -->
-<div id="screen-success" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-color); z-index: 1500; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center;">
-    <div style="font-size: 64px; color: #10b981; margin-bottom: 16px;">✓</div>
-    <div style="font-size: 22px; font-weight: 700; margin-bottom: 8px;">Uğurla yaradıldı!</div>
-    <div id="success-msg" style="font-size: 15px; color: var(--hint-color); margin-bottom: 32px;">Məlumatlar uğurla yadda saxlanıldı.</div>
-    <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 300px;">
-        <button class="btn" style="background: var(--secondary-bg-color); color: var(--text-color); justify-content: center;" onclick="resumeEdit()">✏️ Düzəliş et</button>
-        <button class="btn btn-submit" style="margin: 0; justify-content: center;" onclick="switchTab('tasks')">Tapşırıqlara qayıt</button>
-    </div>
-</div>
-
-<!-- Header with bell -->
-<div class="header" style="position: relative; display: flex; justify-content: center; align-items: center; padding: 0 40px; margin-bottom: 20px;">
-    <div style="text-align:center;">
-        <h1 style="font-size:20px;font-weight:700;">Bein Systems</h1>
-        <p style="font-size:13px;color:var(--hint-color);">CRM Smart Assistant</p>
-    </div>
-
-</div>
-
-<div id="main-screen" class="screen">
-    <div class="main-menu">
-        <button class="btn btn-main-menu" onclick="openFlow('task')"><span class="icon">📋</span><span>Yeni tapşırıq</span></button>
-        <button class="btn btn-main-menu" onclick="openFlow('stage')"><span class="icon">🔄</span><span>Mərhələ dəyiş</span></button>
-        <button class="btn btn-main-menu" onclick="openFlow('deal')"><span class="icon">🤝</span><span>Yeni sifariş</span></button>
-        <button class="btn btn-main-menu" onclick="openFlow('note')"><span class="icon">📝</span><span>Qeyd & Alt-tapşırıq</span></button>
-        <button class="btn btn-main-menu" onclick="openFlow('info')"><span class="icon">ℹ️</span><span>Müştəri info</span></button>
-    </div>
-</div>
-
 <!-- Preloader -->
-<div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg-color);z-index:9999;align-items:center;justify-content:center;"><div style="width:36px;height:36px;border:4px solid var(--hint-color);border-top-color:var(--button-color);border-radius:50%;animation:spin 0.8s linear infinite;"></div></div>
-<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+<div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#f8f9fa;z-index:9999;display:flex;align-items:center;justify-content:center;"><div class="sync-spinner" style="width:36px;height:36px;border-width:4px;"></div></div>
 
-<!-- Notifications/Tasks Screen (now main) -->
-<div id="screen-notifications" class="screen active">
-    <div class="nav-bar" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:nowrap;">
-        <span style="font-size:16px; font-weight:700; white-space:nowrap;">Aktiv tapşırıqlar<span id="task-total-count" style="font-size:13px;font-weight:600;color:var(--hint-color);margin-left:4px;"></span></span>
-        <span id="overdue-count" style="font-size:11px; color:#ef4444; font-weight:600; white-space:nowrap;"></span>
-        <span style="flex:1;"></span>
-        <button onclick="openFlow('task')" style="background:var(--button-color); color:var(--button-text-color); border:none; border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap;">+ Tapşırıq</button>
-    </div>
-    <div id="balance-widget" style="display:none; background:linear-gradient(135deg,#10b981,#059669); color:white; padding:14px 16px; border-radius:14px; margin-bottom:12px; box-shadow:0 4px 12px rgba(16,185,129,0.2); align-items:center; justify-content:space-between;"><div><div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; opacity:0.85; font-weight:700;">Şəxsi Balansınız</div><div id="balance-amount" style="font-size:22px; font-weight:800; margin-top:4px;">0.00 AZN</div></div><button onclick="showBalanceHistory()" style="background:rgba(255,255,255,0.25); border:1px solid rgba(255,255,255,0.1); color:white; padding:6px 12px; border-radius:8px; font-size:11px; font-weight:700; cursor:pointer;">📊 Tarixçə</button></div>
-    <div id="date-filter-row" style="display:flex; gap:6px; margin-bottom:10px;">
-        <button class="date-filter-btn" onclick="setDateFilter('today',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Bu gün</button>
-        <button class="date-filter-btn" onclick="setDateFilter('tomorrow',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Sabah</button>
-        <button class="date-filter-btn" onclick="setDateFilter('week',this)" style="flex:1;padding:6px 0;border-radius:8px;border:1px solid var(--hint-color);background:transparent;color:var(--text-color);font-size:13px;font-weight:500;cursor:pointer;">Bu həftə</button>
-    </div>
-    <div id="filter-row" style="display:none; margin-bottom:10px; align-items:center; gap:8px;"><select id="filter-assignee" class="input-field" onchange="filterTasks()" style="padding:10px;border-radius:8px;font-size:13px;flex:1;"><option value="all">Hamısı</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select><button onclick="pinFilter()" style="padding:8px 12px;border-radius:8px;border:1px solid #ddd;background:#fff;font-size:16px;cursor:pointer;" title="Bərkitmək">📌</button></div>
-    <div id="notifications-container" style="display: flex; flex-direction: column; gap: 10px; padding-bottom: 120px; user-select: none; -webkit-user-select: none; overflow-x: hidden;">
+<!-- Success Screen -->
+<div id="screen-success" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:#f8f9fa; z-index:1500; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center;">
+    <div style="font-size:64px; color:#10b981; margin-bottom:16px;">✓</div>
+    <div style="font-size:22px; font-weight:700; margin-bottom:8px;">Uğurla yaradıldı!</div>
+    <div id="success-msg" style="font-size:14px; color:#64748b; margin-bottom:32px;"></div>
+    <div style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:300px;">
+        <button onclick="resumeEdit()" class="w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-sm">✏️ Düzəliş et</button>
+        <button onclick="switchTab('tab-tasks')" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-sm">Tapşırıqlara qayıt</button>
     </div>
 </div>
 
-<div id="screen-balance-history" class="screen" style="padding:16px;">
-    <div style="display:flex; align-items:center; gap:8px; margin-bottom:16px;"><button onclick="nav('screen-notifications');openNotifications();" style="background:none; border:none; font-size:14px; cursor:pointer; color:var(--text-color);">← Geri</button><span style="font-weight:700; font-size:15px;">Maliyyə Tarixçəsi</span></div>
-    <div id="balance-history-container" style="display:flex; flex-direction:column; gap:10px;"></div>
-</div>
-<div id="step-search" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-notifications')">← Geri</button></div>
-    <div class="form-group"><label>Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone" class="input-field" placeholder="0505232933"><div id="search-error" class="error-msg">Min 7 rəqəm daxil edin.</div></div>
-    <button class="btn btn-submit" id="search-submit-btn" onclick="handleSearchProceed()">Davam et</button>
-</div>
-<div id="screen-task-details" class="screen" style="padding-bottom:30px;">
-    <div class="nav-bar"><button class="btn-back" id="task-back-btn" onclick="goBack('step-search')">← Geri</button></div>
-    <div class="form-group"><label>Tapşırıq növü:</label><select id="task-type-select" class="input-field" onchange="gd.task_type=this.value" style="padding:12px;border-radius:10px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
-    <div class="form-group"><label>İcraçı:</label><select id="task-assignee-select" class="input-field" onchange="gd.assigneeName=this.value" style="padding:12px;border-radius:10px;"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
-    <div class="form-group"><label>İşin qiyməti (AZN):</label><input type="number" id="task-price-input" class="input-field" placeholder="Boş qalsa 0 AZN" style="padding:12px;border-radius:10px;"></div>
-    <div class="form-group"><label>Tapşırığın mətni:</label><textarea id="task-desc" class="input-field" placeholder="Tapşırığı bura yazın..."></textarea></div>
-    <div class="form-group"><label>Son qeyd:</label><textarea id="task-note-edit" class="input-field" placeholder="Qeyd..."></textarea></div>
-    <div class="form-group"><label>Deadline:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div></div><div style="margin-top:10px;"><label style="font-size:13px; color:var(--hint-color); margin-bottom:6px; display:block;">Və ya dəqiq tarix seçin:</label><input type="datetime-local" id="task-deadline-custom" style="width:100%; padding:12px; border-radius:10px; border:1px solid var(--hint-color); background:var(--secondary-bg-color); color:var(--text-color); font-size:15px; box-sizing:border-box;" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));"></div></div>
-    <button class="btn btn-submit" id="task-submit-btn" onclick="submitTask()">Tapşırığı təsdiqlə</button>
-</div>
-<div id="screen-stage-select" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
-    <div class="form-group"><label>Yeni mərhələni seçin:</label><div class="options-list"><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div><div class="option-card" onclick="sel('stage','qiymet_teklifi',this)">Qiymət təklifi</div><div class="option-card" onclick="sel('stage','teqdimat',this)">Təqdimat</div><div class="option-card" onclick="sel('stage','teqdimat_olundu',this)">Təqdimat olundu</div><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','gorus',this)">Görüş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','ugurlu',this)">Uğurlu sifariş</div></div></div>
-    <button class="btn btn-submit" onclick="stageNextStep1()">Davam et</button>
-</div>
-<div id="screen-stage-assignee" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-stage-select')">← Geri</button></div>
-    <div class="form-group"><label>İcraçı seçin:</label><div class="options-grid"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil Əliyev</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div></div>
-    <button class="btn btn-submit" onclick="stageNextStep2()">Davam et</button>
-</div>
-<div id="screen-stage-deadline" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('screen-stage-assignee')">← Geri</button></div>
-    <div class="form-group"><label>Deadline seçin:</label><div class="options-grid"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div></div></div>
-    <button class="btn btn-submit" id="stage-submit-btn" onclick="submitStage()">Təsdiqlə və Göndər</button>
-</div>
-<div id="screen-deal-create" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
-    <div class="form-group"><label>Müştərinin Adı:</label><input type="text" id="deal-customer-name" class="input-field" placeholder="Ad Soyad"></div>
-    <div class="form-group"><label>Mərhələ:</label><div class="options-list"><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div></div></div>
-    <label class="checkbox-container"><input type="checkbox" id="deal-subtask-toggle" onchange="tog('deal-subtask-block',this)"><span>Alt-tapşırıq əlavə edilsin?</span></label>
-    <div id="deal-subtask-block" class="subtask-block"><input type="text" id="deal-subtask-text" class="input-field" placeholder="Alt-tapşırıq mətni"></div>
-    <button class="btn btn-submit" id="deal-submit-btn" onclick="submitDeal()">Sifarişi Yarat</button>
-</div>
-<div id="screen-note-add" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('step-search')">← Geri</button></div>
-    <div class="form-group"><label>Qeyd:</label><textarea id="note-text" class="input-field" placeholder="Qeydinizi yazın..."></textarea></div>
-    <label class="checkbox-container"><input type="checkbox" id="note-subtask-toggle" onchange="tog('note-subtask-block',this)"><span>Alt-tapşırıq yaradılsın?</span></label>
-    <div id="note-subtask-block" class="subtask-block"><input type="text" id="note-subtask-text" class="input-field" placeholder="Tapşırıq mətni"></div>
-    <button class="btn btn-submit" id="note-submit-btn" onclick="submitNote()">Qeydi Əlavə Et</button>
-</div>
-<div id="screen-close-job" class="screen">
-    <div class="nav-bar"><button class="btn-back" onclick="goBack('main-screen')">← Baş menyu</button></div>
-    <div class="form-group"><label>Yekun hesabat:</label><textarea id="job-comment" class="input-field" placeholder="Görülən işlər..."></textarea><div id="job-comment-error" class="error-msg">Hesabat yazın.</div></div>
-    <button class="btn btn-submit" style="background:#0284c7" id="job-submit-btn" onclick="submitClose()">Tapşırığı tamamla</button>
-</div>
-
-<!-- Tab Bar -->
-<div id="tab-bar" style="position:fixed; bottom:0; left:0; right:0; background:var(--bg-color); border-top:1px solid var(--secondary-bg-color); display:flex; z-index:1000; padding:8px 0 env(safe-area-inset-bottom, 8px) 0;">
-    <button id="tab-tasks" onclick="switchTab('tasks')" style="flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; padding:6px 0;">
-        <span style="font-size:20px;">📋</span>
-        <span style="font-size:11px; font-weight:600; color:var(--button-color);">Tapşırıqlar</span>
-    </button>
-    <button id="tab-menu" onclick="switchTab('menu')" style="flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; padding:6px 0;">
-        <span style="font-size:20px;">⚙️</span>
-        <span style="font-size:11px; font-weight:500; color:var(--hint-color);">Menyu</span>
-    </button>
-</div>
-
-<!-- Bottom Action Bar -->
-<div id="bottom-action-bar" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: var(--bg-color); box-shadow: 0 -4px 20px rgba(0,0,0,0.15); border-radius: 20px 20px 0 0; padding: 20px; z-index: 1100; transform: translateY(100%); transition: transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1);" onclick="event.stopPropagation();">
-    <div style="width: 40px; height: 5px; background: #ccc; border-radius: 3px; margin: 0 auto 15px auto; cursor: pointer;" onclick="closeBottomBar(); event.stopPropagation();"></div>
-    <div id="bottom-bar-title" style="font-weight: 700; margin-bottom: 5px; font-size: 15px;">Seçilmiş tapşırıq</div>
-    <div id="bottom-bar-meta" style="font-size: 13px; color: var(--hint-color); margin-bottom: 15px;"></div>
-    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-        <button class="btn" style="flex: 1; background: #10b981; color: white; justify-content: center; font-size: 14px;" onclick="showCompletePanel()">✓ İcra olundu</button>
-        <button class="btn" style="flex: 1; background: #3b82f6; color: white; justify-content: center; font-size: 14px;" onclick="showNotePanel()">📝 Yeni qeyd</button>
+<!-- HEADER -->
+<div class="bg-[#1a252f] text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
+    <div>
+        <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
+        <span class="text-[10px] text-gray-400">CRM Smart Assistant</span>
     </div>
-    <div id="note-panel" style="display:none;margin-bottom:10px;">
-        <textarea id="note-text-input" class="input-field" placeholder="Qeyd yazın..."></textarea>
-        <button class="btn btn-submit" style="margin-top:8px;background:#3b82f6;" onclick="submitNote()">Göndər</button>
+    <div class="text-right flex flex-col items-end">
+        <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
+        <div id="sync-indicator" style="display:none;" class="flex items-center gap-1.5 text-[9px] text-gray-400 bg-gray-800/50 px-2 py-0.5 rounded-full border border-gray-700/30 mt-1">
+            <span class="sync-spinner"></span><span>Yenilənir...</span>
+        </div>
+    </div>
+</div>
+
+<!-- MAIN CONTENT AREA -->
+<div class="flex-1 overflow-y-auto px-4 py-3 custom-scroll pb-20" id="content-area">
+
+    <!-- SCREEN: TASKS (main) -->
+    <div id="screen-notifications" class="screen active space-y-3">
+        <!-- Balance Widget (non-admin only) -->
+        <div id="balance-widget" style="display:none;" class="bg-gradient-to-br from-[#10b981] to-[#059669] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center">
+            <div>
+                <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Şəxsi Balansınız</div>
+                <div class="text-2xl font-black mt-1" id="balance-amount">0.00 AZN</div>
+            </div>
+            <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">📊 Tarixçə</button>
+        </div>
+
+        <!-- Task count + overdue -->
+        <div class="flex justify-between items-center">
+            <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
+        </div>
+
+        <!-- Date filters -->
+        <div class="grid grid-cols-3 gap-2">
+            <button id="filter-today" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('today',this)">Bu gün</button>
+            <button id="filter-tomorrow" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('tomorrow',this)">Sabah</button>
+            <button id="filter-week" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('week',this)">Bu həftə</button>
+        </div>
+
+        <!-- Employee filter (admin) + pin -->
+        <div id="filter-row" style="display:none;" class="flex gap-2">
+            <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
+                <option value="all">Hamısı</option>
+                <option value="Şamil Əliyev">Şamil Əliyev</option>
+                <option value="Soltan Abbasov">Soltan Abbasov</option>
+                <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
+                <option value="Nizami Qasımov">Nizami Qasımov</option>
+                <option value="Rasim Əsgərov">Rasim Əsgərov</option>
+                <option value="Texniki Dəstək">Texniki Dəstək</option>
+            </select>
+            <button onclick="pinFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
+        </div>
+
+        <!-- Tasks container -->
+        <div id="notifications-container" class="space-y-3" style="padding-bottom:20px;"></div>
+    </div>
+
+    <!-- SCREEN: CREATE TASK -->
+    <div id="screen-create" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2">
+            <button class="text-xs font-bold text-blue-500" onclick="switchTab('tab-tasks')">← Geri</button>
+        </div>
+        <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
+            <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Son qeyd:</label><textarea id="task-note-edit" placeholder="Qeyd..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
+                    <button type="button" class="option-card" onclick="sel('deadline','1h',this)">1 saat</button>
+                </div>
+                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-create .option-card').forEach(c=>c.classList.remove('selected'));">
+            </div>
+            <button id="task-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">🚀 Tapşırığı CRM-ə Göndər</button>
+        </div>
+    </div>
+
+    <!-- SCREEN: BALANCE HISTORY -->
+    <div id="screen-balance-history" class="screen space-y-4">
+        <div class="border-b border-gray-200 pb-2 mb-3">
+            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
+        </div>
+        <div id="balance-history-container" class="space-y-3"></div>
+    </div>
+
+    <!-- SCREEN: EDIT TASK (reused for edit flow) -->
+    <div id="screen-task-details" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2">
+            <button class="text-xs font-bold text-blue-500" id="task-back-btn" onclick="goBack('screen-notifications')">← Geri</button>
+        </div>
+        <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Son qeyd:</label><textarea id="edit-task-note" placeholder="Qeyd..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
+                <div class="grid grid-cols-2 gap-2 mb-2">
+                    <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
+                    <button type="button" class="option-card" onclick="sel('deadline','1h',this)">1 saat</button>
+                </div>
+                <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));">
+            </div>
+            <button id="edit-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">💾 Yadda saxla</button>
+        </div>
+    </div>
+
+    <!-- Hidden screens for stage/deal/note flows (kept for compatibility) -->
+    <div id="main-screen" class="screen"></div>
+    <div id="step-search" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-notifications')">← Geri</button></div>
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştərinin telefon nömrəsi:</label><input type="tel" id="search-phone-flow" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="0505232933"></div>
+            <button onclick="handleSearchProceed()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Davam et</button>
+        </div>
+    </div>
+    <div id="screen-stage-select" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('step-search')">← Geri</button></div>
+        <div class="space-y-2"><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div><div class="option-card" onclick="sel('stage','qiymet_teklifi',this)">Qiymət təklifi</div><div class="option-card" onclick="sel('stage','teqdimat',this)">Təqdimat</div><div class="option-card" onclick="sel('stage','teqdimat_olundu',this)">Təqdimat olundu</div><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','gorus',this)">Görüş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','ugurlu',this)">Uğurlu sifariş</div></div>
+        <button onclick="stageNextStep1()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Davam et</button>
+    </div>
+    <div id="screen-stage-assignee" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-stage-select')">← Geri</button></div>
+        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil Əliyev</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div>
+        <button onclick="stageNextStep2()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Davam et</button>
+    </div>
+    <div id="screen-stage-deadline" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-stage-assignee')">← Geri</button></div>
+        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('deadline','15m',this)">15 dəq</div><div class="option-card" onclick="sel('deadline','1h',this)">1 saat</div><div class="option-card" onclick="sel('deadline','today',this)">Bu gün</div><div class="option-card" onclick="sel('deadline','tomorrow',this)">Sabah</div></div>
+        <button id="stage-submit-btn" onclick="submitStage()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Təsdiqlə və Göndər</button>
+    </div>
+    <div id="screen-deal-create" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('step-search')">← Geri</button></div>
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştərinin Adı:</label><input type="text" id="deal-customer-name" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ad Soyad"></div>
+            <div class="space-y-2"><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div></div>
+            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="deal-subtask-toggle" onchange="tog('deal-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Alt-tapşırıq əlavə edilsin?</span></label>
+            <div id="deal-subtask-block" style="display:none;"><input type="text" id="deal-subtask-text" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Alt-tapşırıq mətni"></div>
+            <button id="deal-submit-btn" onclick="submitDeal()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Sifarişi Yarat</button>
+        </div>
+    </div>
+    <div id="screen-note-add" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('step-search')">← Geri</button></div>
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Qeyd:</label><textarea id="note-text" placeholder="Qeydinizi yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-20 resize-none"></textarea></div>
+            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="note-subtask-toggle" onchange="tog('note-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Alt-tapşırıq yaradılsın?</span></label>
+            <div id="note-subtask-block" style="display:none;"><input type="text" id="note-subtask-text" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Tapşırıq mətni"></div>
+            <button id="note-submit-btn" onclick="submitNoteFlow()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Qeydi Əlavə Et</button>
+        </div>
+    </div>
+    <div id="screen-close-job" class="screen space-y-4">
+        <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-notifications')">← Geri</button></div>
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Yekun hesabat:</label><textarea id="job-comment" placeholder="Görülən işlər..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-20 resize-none"></textarea><div id="job-comment-error" style="display:none;" class="text-red-500 text-[11px] font-bold mt-1">Hesabat yazın.</div></div>
+            <button id="job-submit-btn" onclick="submitClose()" class="w-full bg-[#0284c7] text-white font-bold py-3 rounded-xl text-xs">Tapşırığı tamamla</button>
+        </div>
+    </div>
+</div>
+
+<!-- BOTTOM SHEET (for completing task) -->
+<div id="bottom-action-bar" style="display:none; transform:translateY(100%);" class="fixed bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl z-50 p-5 transition-transform duration-300 border-t border-gray-100" onclick="event.stopPropagation();">
+    <div class="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 cursor-pointer" onclick="closeBottomBar(); event.stopPropagation();"></div>
+    <h3 class="text-xs font-extrabold text-gray-800" id="bottom-bar-title">Seçilmiş tapşırıq</h3>
+    <div class="text-[10px] text-gray-400 mt-1 mb-3" id="bottom-bar-meta"></div>
+    <div class="flex gap-2 mb-3">
+        <button onclick="showCompletePanel()" class="flex-1 bg-[#10b981] text-white font-bold py-2.5 rounded-xl text-xs">✓ İcra olundu</button>
+        <button onclick="showNotePanel()" class="flex-1 bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs">📝 Yeni qeyd</button>
+    </div>
+    <div id="note-panel" style="display:none;" class="mb-3">
+        <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea>
+        <button onclick="submitNoteInline()" class="w-full bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs mt-2">Göndər</button>
     </div>
     <div id="complete-panel" style="display:none;">
-        <div style="font-weight:600;font-size:14px;margin-bottom:8px;">Mərhələ seçin:</div>
-        <div id="stage-list" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('danisiqlar',this)">Danışıqlar</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('qiymet_teklifi',this)">Qiymət təklifi</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('teqdimat',this)">Təqdimat</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('yeni_sifaris',this)">Yeni sifariş</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('gorus',this)">Görüş</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('qurashdirma',this)">Quraşdırma</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('ugurlu',this)">Uğurlu</div>
-            <div class="option-card stage-row" style="padding:10px;font-size:13px;" onclick="selectCompleteStage('imtina',this)">İmtina</div>
+        <div class="text-[10px] font-bold text-gray-500 mb-2">Mərhələ seçin:</div>
+        <div id="stage-list" class="grid grid-cols-2 gap-2 mb-3">
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('danisiqlar',this)">Danışıqlar</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('qiymet_teklifi',this)">Qiymət təklifi</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('teqdimat',this)">Təqdimat</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('yeni_sifaris',this)">Yeni sifariş</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('gorus',this)">Görüş</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('qurashdirma',this)">Quraşdırma</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('ugurlu',this)">Uğurlu</div>
+            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('imtina',this)">İmtina</div>
         </div>
-        <div id="complete-note-block" style="display:block;margin-bottom:10px;"><textarea id="complete-note-text" class="input-field" placeholder="Qeyd yazın..."></textarea></div>
-        <button id="btn-confirm-complete" class="btn btn-submit" style="background:#ccc;pointer-events:none;" onclick="confirmComplete()">Təsdiqlə</button>
+        <div id="complete-note-block" class="mb-3"><textarea id="complete-note-text" placeholder="Sifariş üçün qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-14 resize-none"></textarea></div>
+        <div class="flex gap-2">
+            <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-2.5 rounded-xl text-xs">✅ Təsdiqlə</button>
+            <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-2.5 rounded-xl text-xs">Ləğv et</button>
+        </div>
     </div>
+    <div id="postpone-fast-menu" style="display:none;" class="grid grid-cols-2 gap-2 mt-2">
+        <button onclick="handlePostponeTime('+30m')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+30 dəq</button>
+        <button onclick="handlePostponeTime('+1h')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+1 saat</button>
+        <button onclick="handlePostponeTime('+2h')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+2 saat</button>
+        <button onclick="handlePostponeTime('+1d')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+1 gün</button>
+    </div>
+</div>
+
+<!-- BOTTOM NAVIGATION -->
+<div id="tab-bar" class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 h-[64px] flex justify-around items-center px-2 z-40 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
+    <button id="tab-tasks" onclick="switchTab('tab-tasks')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]">
+        <span class="text-lg">📋</span><span class="mt-0.5">Tapşırıqlar</span>
+    </button>
+    <button id="tab-create" onclick="switchTab('tab-create')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">➕</span><span class="mt-0.5">Yeni Tapşırıq</span>
+    </button>
+    <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">📊</span><span class="mt-0.5">Balans</span>
+    </button>
 </div>
 
 <script>
@@ -228,7 +267,6 @@ let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
 
-// PWA: get user ID from URL param, localStorage, or Telegram context
 function getUserId() {
     const p = new URLSearchParams(window.location.search);
     if(p.get('uid')) { localStorage.setItem('pwa_uid', p.get('uid')); return p.get('uid'); }
@@ -239,35 +277,16 @@ function getUserId() {
     return tgId;
 }
 const CURRENT_USER_ID = getUserId();
-
-// SWR Cache
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 let isAdmin = false;
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
 
-// Sync indicator
 function showSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.display = 'flex'; s.style.opacity = '1'; } }
 function hideSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.opacity = '0'; setTimeout(() => { s.style.display = 'none'; }, 300); } }
-
-function initApp() {
-    openNotifications();
-}
-
-// Preloader (only for first load when no cache)
 function showLoader() { document.getElementById('preloader').style.display = 'flex'; }
 function hideLoader() { document.getElementById('preloader').style.display = 'none'; }
-
-// Re-render on page visibility (SWR revalidate)
-document.addEventListener('visibilitychange', () => {
-    if(!document.hidden) openNotifications();
-});
-
-function updateBadge() {
-    const b = document.getElementById('noti-badge');
-    if(b) { b.textContent = mockTasks.length; b.style.display = mockTasks.length > 0 ? 'inline-block' : 'none'; }
-}
 
 function toast(m, err) {
     const t = document.getElementById('toast');
@@ -275,70 +294,61 @@ function toast(m, err) {
     t.style.top = '20px'; setTimeout(() => t.style.top = '-60px', 3000);
 }
 
+function initApp() {
+    // Show user name in header
+    const name = tg.initDataUnsafe?.user?.first_name || '';
+    if(name) document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
+    openNotifications();
+}
+
+document.addEventListener('visibilitychange', () => { if(!document.hidden) openNotifications(); });
+
 function nav(id) {
     closeBottomBar();
     document.getElementById('screen-success').style.display = 'none';
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-    window.scrollTo(0, 0);
-    // Show/hide tab bar
-    if(id === 'screen-notifications' || id === 'main-screen') {
-        document.getElementById('tab-bar').style.display = 'flex';
-    } else {
-        document.getElementById('tab-bar').style.display = 'none';
-    }
+    const el = document.getElementById(id);
+    if(el) el.classList.add('active');
+    document.getElementById('content-area').scrollTop = 0;
 }
 function goBack(id) { nav(id); if(id === 'screen-notifications') openNotifications(); }
 
 function openFlow(f) {
     flow = f; gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
     editingTaskId = null;
-    const tbb = document.getElementById('task-back-btn'); if(tbb) tbb.setAttribute('onclick', "goBack('step-search')");
     document.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected'));
     document.getElementById('task-desc').value = '';
     const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
     const asel = document.getElementById('task-assignee-select'); if(asel) asel.selectedIndex = 0;
     const tsel = document.getElementById('task-type-select'); if(tsel) tsel.selectedIndex = 0;
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
-    else { document.getElementById('search-phone').value = ''; nav('step-search'); }
-    document.getElementById('tab-bar').style.display = 'none';
+    else if(f === 'task') { switchTab('tab-create'); }
+    else { document.getElementById('search-phone-flow').value = ''; nav('step-search'); }
 }
 
 function handleSearchProceed() {
-    const p = document.getElementById('search-phone').value.trim();
+    const phoneEl = document.getElementById('search-phone-flow') || document.getElementById('search-phone');
+    const p = phoneEl.value.trim();
     if(p.replace(/\D/g,'').length < 7) { document.getElementById('search-error').style.display = 'block'; return; }
     document.getElementById('search-error').style.display = 'none'; gd.phone = p;
     if(flow === 'task') { gd.task_type = ''; currentEditScreen = 'screen-task-details'; nav('screen-task-details'); }
     else if(flow === 'stage') { currentEditScreen = 'screen-stage-select'; nav('screen-stage-select'); }
     else if(flow === 'deal') { currentEditScreen = 'screen-deal-create'; nav('screen-deal-create'); }
     else if(flow === 'note') { currentEditScreen = 'screen-note-add'; nav('screen-note-add'); }
-    else if(flow === 'info') doFetch({action: 'info', phone: p}, 'search-submit-btn');
+    else if(flow === 'info') doFetch({action: 'info', phone: p}, 'task-submit-btn');
 }
 
-function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; if(k==='deadline'){const dp=document.getElementById('task-deadline-custom'); if(dp) dp.value='';} }
-function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'flex' : 'none'; }
+function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; }
+function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'block' : 'none'; }
 
 function showSuccessScreen(msg, link, isInfo) {
     let html = msg.replace(/\n/g, '<br>');
-    if(link) html += '<br><a href="' + link + '" target="_blank" style="color:var(--link-color);font-size:14px;">🔗 Kommo-da bax</a>';
+    if(link) html += '<br><a href="' + link + '" target="_blank" style="color:#2481cc;font-size:13px;">🔗 Kommo-da bax</a>';
     document.getElementById('success-msg').innerHTML = html;
     const ss = document.getElementById('screen-success');
     ss.style.display = 'flex';
-    if(isInfo) {
-        ss.style.justifyContent = 'flex-start';
-        ss.style.overflowY = 'auto';
-        document.getElementById('success-msg').style.textAlign = 'left';
-    } else {
-        ss.style.justifyContent = 'center';
-        ss.style.overflowY = 'hidden';
-        document.getElementById('success-msg').style.textAlign = 'center';
-    }
 }
-
-function resumeEdit() {
-    document.getElementById('screen-success').style.display = 'none';
-    if(currentEditScreen) nav(currentEditScreen);
-}
+function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
 
 async function doFetch(payload, btnId) {
     const btn = document.getElementById(btnId); if(btn) btn.disabled = true;
@@ -351,24 +361,23 @@ async function doFetch(payload, btnId) {
         });
         const j = await r.json();
         if(r.ok && j.success) {
-            showSuccessScreen(j.message || 'U\u011furla tamamland\u0131!', j.link || '', payload.action === 'info');
-            // Background SWR revalidate (update cache silently)
+            showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info');
             try {
                 const r2 = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
                 const j2 = await r2.json();
                 if(j2.success && j2.tasks) {
                     let ft = j2.tasks;
-                    if(typeof _completedTaskIds !== 'undefined' && Object.keys(_completedTaskIds).length > 0) { ft = j2.tasks.filter(t => !_completedTaskIds[t.id]); }
+                    if(Object.keys(_completedTaskIds).length > 0) { ft = j2.tasks.filter(t => !_completedTaskIds[t.id]); }
                     mockTasks = ft; setCachedTasks(ft);
                 }
             } catch(e2) {}
-        }
-        else { toast(j.error || 'X\u0259ta!', true); }
-    } catch(e) { toast('Sistem x\u0259tas\u0131!', true); } finally { if(btn) btn.disabled = false; }
+        } else { toast(j.error || 'Xəta!', true); }
+    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) btn.disabled = false; }
 }
 
 function submitTask() {
-    const textInput = document.getElementById('task-desc').value.trim();
+    const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
+    const textInput = textEl.value.trim();
     if(editingTaskId) {
         if(!textInput) { toast('Mətni daxil edin!', true); return; }
         let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
@@ -377,12 +386,13 @@ function submitTask() {
         payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.task_type) payload.task_type = gd.task_type;
-        // Include note from edit screen
-        const editNote = document.getElementById('task-note-edit');
+        const editNote = document.getElementById('edit-task-note');
         if(editNote && editNote.value.trim()) payload.note = editNote.value.trim();
-        doFetch(payload, 'task-submit-btn');
+        doFetch(payload, 'edit-submit-btn');
         editingTaskId = null;
     } else {
+        const phone = document.getElementById('search-phone').value.trim();
+        gd.phone = phone;
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
         const tsel = document.getElementById('task-type-select');
         const taskType = gd.task_type || (tsel ? tsel.value : '1');
@@ -399,106 +409,71 @@ function submitDeal() {
     const hs = document.getElementById('deal-subtask-toggle').checked;
     doFetch({action: 'create_deal', phone: gd.phone, customer_name: document.getElementById('deal-customer-name').value.trim(), stage: gd.stage || 'yeni_sifaris', create_subtask: hs, subtask_text: hs ? document.getElementById('deal-subtask-text').value.trim() : ''}, 'deal-submit-btn');
 }
-
-function submitNote() {
+function submitNoteFlow() {
     const hs = document.getElementById('note-subtask-toggle').checked;
     doFetch({action: 'add_note', phone: gd.phone, text: document.getElementById('note-text').value.trim(), create_subtask: hs, subtask_text: hs ? document.getElementById('note-subtask-text').value.trim() : ''}, 'note-submit-btn');
 }
-
 function stageNextStep1() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } nav('screen-stage-assignee'); }
 function stageNextStep2() { if(!gd.assignee) { toast('İcraçı seçin!', true); return; } nav('screen-stage-deadline'); }
 function submitStage() { if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
-
 function submitClose() {
     const c = document.getElementById('job-comment').value.trim();
     if(!c) { document.getElementById('job-comment-error').style.display = 'block'; return; }
     doFetch({action: 'close_job_report', master_comment: c}, 'job-submit-btn');
 }
 
-/* ================= NOTIFICATIONS & BOTTOM SHEET (SWR) ================= */
+/* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications() {
     nav('screen-notifications');
-    // Установить фильтр из localStorage
     const fa = document.getElementById('filter-assignee');
     if(fa && currentFilter !== 'all') { fa.value = currentFilter; }
-    if(isAdmin || currentFilter !== 'all') { const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'flex'; }
-    // Шаг A: Мгновенно рендерим кэш (Stale)
+    if(isAdmin || currentFilter !== 'all') { document.getElementById('filter-row').style.display = 'flex'; }
     const cachedData = getCachedTasks();
-    if (cachedData && cachedData.length > 0) {
-        mockTasks = cachedData;
-        renderNotifications();
-    } else if (mockTasks.length === 0) {
-        showLoader();
-    }
-    
-    // Шаг B: Фоновая ревалидация (Revalidate)
+    if (cachedData && cachedData.length > 0) { mockTasks = cachedData; renderNotifications(); }
+    else if (mockTasks.length === 0) { showLoader(); }
     showSyncIndicator();
     try {
-        const r = await fetch(API_BASE + '/api/notifications', {
-            headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        });
+        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(j.success && j.tasks) {
-            if(j.is_admin) { isAdmin = true; const fr = document.getElementById('filter-row'); if(fr) fr.style.display = 'flex'; const fa = document.getElementById('filter-assignee'); if(fa && currentFilter !== 'all') fa.value = currentFilter; }
-            // Filter out recently completed tasks that server hasn't processed yet
+            if(j.is_admin) { isAdmin = true; document.getElementById('filter-row').style.display = 'flex'; if(fa && currentFilter !== 'all') fa.value = currentFilter; }
             let filteredTasks = j.tasks;
-            if(typeof _completedTaskIds !== 'undefined' && Object.keys(_completedTaskIds).length > 0) {
-                filteredTasks = j.tasks.filter(t => !_completedTaskIds[t.id]);
-            }
-            // Сравниваем — если данные изменились, мягко обновляем UI
-            if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) {
-                mockTasks = filteredTasks;
-                setCachedTasks(filteredTasks);
-                renderNotifications();
-            }
+            if(Object.keys(_completedTaskIds).length > 0) { filteredTasks = j.tasks.filter(t => !_completedTaskIds[t.id]); }
+            if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) { mockTasks = filteredTasks; setCachedTasks(filteredTasks); renderNotifications(); }
         }
-    } catch(e) {
-        if(!cachedData || cachedData.length === 0) toast('Bildiri\u015fl\u0259r y\u00fckl\u0259nm\u0259di', true);
-    }
-    hideLoader();
-    hideSyncIndicator();
-    loadBalance();
+    } catch(e) { if(!cachedData || cachedData.length === 0) toast('Bildirişlər yüklənmədi', true); }
+    hideLoader(); hideSyncIndicator(); loadBalance();
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
-let currentDateFilter = ''; // '', 'today', 'tomorrow', 'week'
-// Set filter select on load
-if(currentFilter !== 'all') { const _fr = document.getElementById('filter-row'); if(_fr) _fr.style.display = 'flex'; const _fa = document.getElementById('filter-assignee'); if(_fa) _fa.value = currentFilter; }
-function filterTasks() {
-    currentFilter = document.getElementById('filter-assignee').value;
-    renderNotifications();
-}
-function pinFilter() {
-    const val = document.getElementById('filter-assignee').value;
-    localStorage.setItem('pinned_filter', val);
-    toast('\ud83d\udccc ' + (val === 'all' ? 'Filtr s\u0131f\u0131rland\u0131' : val + ' b\u0259rkidildi'), false);
-}
+let currentDateFilter = '';
+function filterTasks() { currentFilter = document.getElementById('filter-assignee').value; renderNotifications(); }
+function pinFilter() { const val = document.getElementById('filter-assignee').value; localStorage.setItem('pinned_filter', val); toast('📌 ' + (val === 'all' ? 'Filtr sıfırlandı' : val + ' bərkidildi'), false); }
+
 function setDateFilter(val, btn) {
     if(currentDateFilter === val) { currentDateFilter = ''; } else { currentDateFilter = val; }
-    document.querySelectorAll('.date-filter-btn').forEach(b => { b.style.background = 'transparent'; b.style.color = 'var(--text-color)'; b.style.border = '1px solid var(--hint-color)'; });
-    if(currentDateFilter) { btn.style.background = 'var(--button-color)'; btn.style.color = 'var(--button-text-color)'; btn.style.border = '1px solid var(--button-color)'; }
+    document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
+    if(currentDateFilter) {
+        const id = currentDateFilter === 'today' ? 'filter-today' : currentDateFilter === 'tomorrow' ? 'filter-tomorrow' : 'filter-week';
+        document.getElementById(id).classList.add('active');
+    }
     renderNotifications();
 }
+
 function filterByDate(tasks) {
     if(!currentDateFilter) return tasks;
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
-    if(currentDateFilter === 'today') {
-        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < todayEnd.getTime(); });
-    } else if(currentDateFilter === 'tomorrow') {
-        const tomorrowEnd = new Date(todayEnd); tomorrowEnd.setDate(tomorrowEnd.getDate() + 1);
-        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d >= todayEnd.getTime() && d < tomorrowEnd.getTime(); });
-    } else if(currentDateFilter === 'week') {
-        const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7);
-        return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < weekEnd.getTime(); });
-    }
+    if(currentDateFilter === 'today') { return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < todayEnd.getTime(); }); }
+    else if(currentDateFilter === 'tomorrow') { const te = new Date(todayEnd); te.setDate(te.getDate() + 1); return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d >= todayEnd.getTime() && d < te.getTime(); }); }
+    else if(currentDateFilter === 'week') { const we = new Date(todayStart); we.setDate(we.getDate() + 7); return tasks.filter(t => { const d = (t.complete_till || 0) * 1000; return d > 0 && d < we.getTime(); }); }
     return tasks;
 }
 
 function renderNotifications() {
     const container = document.getElementById('notifications-container');
-    container.innerHTML = ''; updateBadge();
+    container.innerHTML = '';
     let filtered = mockTasks;
     if(currentFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || '') === currentFilter);
     filtered = filterByDate(filtered);
@@ -510,126 +485,99 @@ function renderNotifications() {
     if(filtered.length === 0) {
         const labels = {today:'Bu gün', tomorrow:'Sabah', week:'Bu həftə'};
         const msg = currentDateFilter ? `"${labels[currentDateFilter]}" üçün tapşırıq yoxdur.` : 'Aktiv tapşırıq yoxdur.';
-        container.innerHTML = `<div style="text-align:center;padding:30px;color:var(--hint-color);">${msg}</div>`;
+        container.innerHTML = `<div class="text-center py-10 text-gray-400 text-xs font-semibold">${msg}</div>`;
         return;
     }
     filtered.forEach(t => {
-        const swipeWrapper = document.createElement('div');
-        swipeWrapper.style.cssText = "position: relative; border-radius: 12px; overflow: hidden; background: #e5e7eb;";
+        const wrapper = document.createElement('div');
+        wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
         const bgAction = document.createElement('div');
-        bgAction.style.cssText = "position: absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:space-between; padding: 0 20px; font-weight:bold; color:white; font-size:14px; border-radius:12px; transition: background 0.2s;";
+        bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
         bgAction.innerHTML = `<span style="opacity:0;">✏️ Düzəliş</span><span style="opacity:0;">🕒 +2 saat</span>`;
-        swipeWrapper.appendChild(bgAction);
-        const item = document.createElement('div');
-        const isUrgent = t.title.includes('Gecikmiş');
-        item.dataset.taskId = t.id; item.style.cssText = `position: relative; background: var(--secondary-bg-color); padding: 14px; border-radius: 12px; cursor: pointer; border-left: 4px solid ${isUrgent ? '#ef4444' : '#2481cc'}; display: flex; flex-direction: column; gap: 6px; z-index: 2; transition: transform 0.1s ease-out, border 0.2s;`;
-        if(selectedTaskId === t.id) item.style.border = '2px solid var(--button-color)';
-        const displayDesc = (t.desc || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)\]\s*/i, '');
-        const assigneeName = t.assigneeName || t.responsible || '';
-        item.innerHTML = `
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="font-weight:700; font-size:14px; color:${isUrgent ? '#ef4444' : 'inherit'};">${t.title}</span>
-                <span style="font-size:11px; color:var(--hint-color);">${t.time}</span>
+        wrapper.appendChild(bgAction);
+        const card = document.createElement('div');
+        const isOverdue = t.is_overdue;
+        card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-blue-500'}`;
+        card.style.position = 'relative';
+        const displayDesc = (t.desc || t.text || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/i, '');
+        const assigneeName = t.assigneeName || t.responsible_user_name || '';
+        let header = '';
+        if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || ''}</span></div>`; }
+        else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
+        const priceMatch = (t.desc || t.text || '').match(/\[[^:\]]+:(\d+)\]/);
+        const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
+        card.innerHTML = `
+            ${header}
+            <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
+            <div class="space-y-1 text-[11px] text-gray-700">
+                <div>👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
+                <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
+                ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
+                ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
             </div>
-            <div style="font-size:14px; font-weight:700; color: var(--text-color);">${displayDesc}</div>
-            <div style="font-size:13px; color: var(--text-color); margin-top: 2px;">
-                👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}<br>
-                👤 <b>İcraçı:</b> ${assigneeName}${t.task_type_name ? '<br>📌 <b>Növ:</b> '+t.task_type_name : ''}${t.last_note ? '<br>📝 <b>Qeyd:</b> '+t.last_note : ''}
-            </div>
-            <div style="margin-top: 4px; font-size: 12px;">
-                ${t.kommo_link ? `🔗 <a href="${t.kommo_link}" target="_blank" style="color: var(--link-color); font-weight: bold; text-decoration: underline;" onclick="event.stopPropagation();">Kommo CRM Kartı</a>` : ''}
+            <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
+                ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
+                ${priceTag}
             </div>`;
-        item.onclick = (e) => { e.stopPropagation(); clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
+        card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
+        // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
-        item.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; item.style.transition = 'none'; }, {passive: true});
-        item.addEventListener('touchmove', (e) => {
-            if (!isSwiping) return;
+        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
+        card.addEventListener('touchmove', (e) => {
+            if(!isSwiping) return;
             currentX = e.touches[0].clientX - startX;
-            if (currentX > 120) currentX = 120 + (currentX - 120) * 0.2;
-            if (currentX < -120) currentX = -120 + (currentX + 120) * 0.2;
-            item.style.transform = `translateX(${currentX}px)`;
-            const textLeft = bgAction.children[0]; const textRight = bgAction.children[1];
-            if (currentX > 20) { bgAction.style.background = '#3b82f6'; textLeft.style.opacity = '1'; textRight.style.opacity = '0'; }
-            else if (currentX < -20) { bgAction.style.background = '#f59e0b'; textLeft.style.opacity = '0'; textRight.style.opacity = '1'; }
-            else { bgAction.style.background = 'transparent'; textLeft.style.opacity = '0'; textRight.style.opacity = '0'; }
-        }, {passive: true});
-        item.addEventListener('touchend', () => {
-            isSwiping = false; item.style.transition = 'transform 0.2s cubic-bezier(0.1, 0.5, 0.1, 1)';
-            if (currentX > 130) { item.style.transform = 'translateX(100%)'; setTimeout(() => { selectedTaskId = t.id; clickNotification(t.id, '', ''); handleBarAction('edit'); }, 200); }
-            else if (currentX < -130) { item.style.transform = 'translateX(-100%)'; setTimeout(() => { selectedTaskId = t.id; handlePostponeTime('+2h'); }, 200); }
-            else { item.style.transform = 'translateX(0)'; bgAction.style.background = 'transparent'; }
+            if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
+            if(currentX < -120) currentX = -120 + (currentX+120)*0.2;
+            card.style.transform = `translateX(${currentX}px)`;
+            if(currentX > 20) { bgAction.style.background='#3b82f6'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
+            else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
+            else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
+        }, {passive:true});
+        card.addEventListener('touchend', () => {
+            isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
+            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { selectedTaskId=t.id; clickNotification(t.id,'',''); handleBarAction('edit'); }, 200); }
+            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; handlePostponeTime('+2h'); }, 200); }
+            else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
             currentX = 0;
         });
-        swipeWrapper.appendChild(item); container.appendChild(swipeWrapper);
+        wrapper.appendChild(card);
+        container.appendChild(wrapper);
     });
 }
 
 function clickNotification(id, desc, metaText) {
-    selectedTaskId = id; renderNotifications();
-    document.getElementById('bottom-bar-title').textContent = desc;
+    selectedTaskId = id;
+    const task = mockTasks.find(t => t.id === id);
+    const displayDesc = desc || (task ? (task.desc || task.text || '').replace(/^\[[^\]]+\]\s*/, '') : '');
+    document.getElementById('bottom-bar-title').textContent = displayDesc;
     document.getElementById('bottom-bar-meta').textContent = metaText;
-
     const bar = document.getElementById('bottom-action-bar');
     bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
     setTimeout(() => { document.addEventListener('click', closeBottomBar); }, 50);
 }
-
 function closeBottomBar() {
-    const bar = document.getElementById('bottom-action-bar'); if (!bar || bar.style.display === 'none') return;
-    bar.style.transform = 'translateY(100%)';
-    setTimeout(() => { bar.style.display = 'none'; }, 300);
-    selectedTaskId = null;
-    document.removeEventListener('click', closeBottomBar);
-    const container = document.getElementById('notifications-container');
-    if (container) renderNotifications();
-}
-
-
-
-
-
-function markAllAsRead() { mockTasks = []; renderNotifications(); toast("B\u00fct\u00fcn bildiri\u015fl\u0259r t\u0259mizl\u0259ndi", false); }
-
-let editingTaskId = null;
-
-let completeStageSelected = '';
-
-function showNotePanel() {
-    document.getElementById('note-panel').style.display = 'block';
+    const bar = document.getElementById('bottom-action-bar'); if(!bar || bar.style.display === 'none') return;
+    bar.style.transform = 'translateY(100%)'; setTimeout(() => { bar.style.display = 'none'; }, 300);
+    selectedTaskId = null; document.removeEventListener('click', closeBottomBar);
+    document.getElementById('note-panel').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'none';
     document.getElementById('postpone-fast-menu').style.display = 'none';
 }
-async function submitNote() {
+
+let editingTaskId = null;
+let completeStageSelected = '';
+
+function showNotePanel() { document.getElementById('note-panel').style.display = 'block'; document.getElementById('complete-panel').style.display = 'none'; document.getElementById('postpone-fast-menu').style.display = 'none'; }
+async function submitNoteInline() {
     const noteText = document.getElementById('note-text-input').value.trim();
-    if(!noteText) { toast('Qeyd yaz\u0131n!', true); return; }
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
-    document.getElementById('note-text-input').value = '';
-    closeBottomBar();
-    
-    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e
-    const oldNote = task.last_note;
-    task.last_note = noteText;
-    setCachedTasks(mockTasks);
-    renderNotifications();
-    toast('\u2705 Qeyd \u0259lav\u0259 edildi', false);
-    
-    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430 \u043d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440
-    try {
-        const r = await fetch(API_BASE + '/api/action', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action: 'add_note', task_id: task.id, text: noteText, phone: task.phone || ''})
-        });
-        if(!r.ok) throw new Error('server error');
-    } catch(e) {
-        // ROLLBACK: \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u043c \u0441\u0442\u0430\u0440\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435
-        task.last_note = oldNote;
-        setCachedTasks(mockTasks);
-        renderNotifications();
-        toast('X\u0259ta! Qeyd g\u00f6nd\u0259rilm\u0259di', true);
-    }
+    if(!noteText) { toast('Qeyd yazın!', true); return; }
+    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
+    document.getElementById('note-text-input').value = ''; closeBottomBar();
+    const oldNote = task.last_note; task.last_note = noteText; setCachedTasks(mockTasks); renderNotifications(); toast('✅ Qeyd əlavə edildi', false);
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:task.id, text:noteText, phone:task.phone||''}) }); if(!r.ok) throw new Error(); }
+    catch(e) { task.last_note = oldNote; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Qeyd göndərilmədi', true); }
 }
+
 function showCompletePanel() {
     completeStageSelected = '';
     document.getElementById('note-panel').style.display = 'none';
@@ -638,175 +586,98 @@ function showCompletePanel() {
     document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
     document.getElementById('complete-note-block').style.display = 'block';
     document.getElementById('complete-note-text').value = '';
-    const btn = document.getElementById('btn-confirm-complete');
-    btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
 }
 function selectCompleteStage(stage, el) {
     document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    el.classList.add('selected');
-    completeStageSelected = stage;
-    document.getElementById('complete-note-block').style.display = 'block';
-    const btn = document.getElementById('btn-confirm-complete');
-    btn.style.background = '#10b981'; btn.style.pointerEvents = 'auto';
+    el.classList.add('selected'); completeStageSelected = stage;
 }
-// Track recently completed task IDs to prevent SWR from restoring them
+
 let _completedTaskIds = {};
 async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
-    if(!noteText) { toast('Qeyd yaz\u0131n!', true); return; }
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
-    
-    // OPTIMISTIC UI: мгновенно убираем задачу
-    const backupTasks = [...mockTasks];
-    const completedId = task.id;
+    if(!noteText) { toast('Qeyd yazın!', true); return; }
+    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
+    const backupTasks = [...mockTasks]; const completedId = task.id;
     _completedTaskIds[completedId] = Date.now();
-    mockTasks = mockTasks.filter(t => t.id !== completedId);
-    setCachedTasks(mockTasks);
-    closeBottomBar();
-    renderNotifications();
-    toast('\u2713 Tap\u015f\u0131r\u0131q ba\u011fland\u0131', false);
-    
-    // Фоновая отправка
-    try {
-        const r = await fetch(API_BASE + '/api/action', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action: 'complete_task', task_id: completedId, new_stage: completeStageSelected, phone: task.phone || '', note: noteText})
-        });
-        if(!r.ok) throw new Error('server error');
-        // Keep blocking this task from SWR for 60 seconds
-        setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
-    } catch(e) {
-        // ROLLBACK
-        delete _completedTaskIds[completedId];
-        mockTasks = backupTasks;
-        setCachedTasks(mockTasks);
-        renderNotifications();
-        toast('X\u0259ta! Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131', true);
-    }
+    mockTasks = mockTasks.filter(t => t.id !== completedId); setCachedTasks(mockTasks); closeBottomBar(); renderNotifications(); toast('✓ Tapşırıq bağlandı', false);
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'complete_task', task_id:completedId, new_stage:completeStageSelected, phone:task.phone||'', note:noteText}) }); if(!r.ok) throw new Error(); setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000); }
+    catch(e) { delete _completedTaskIds[completedId]; mockTasks = backupTasks; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Tapşırıq bağlanmadı', true); }
 }
-function togglePostponeMenu() {
-    const menu = document.getElementById('postpone-fast-menu');
-    menu.style.display = menu.style.display === 'grid' ? 'none' : 'grid';
-    document.getElementById('complete-panel').style.display = 'none';
-}
+
+function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
 async function handlePostponeTime(preset) {
     if(!selectedTaskId) return;
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
-    closeBottomBar();
-    
-    // OPTIMISTIC UI: \u043c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u043e \u043e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c \u0432\u0440\u0435\u043c\u044f
-    const oldTime = task.time;
-    task.time = preset === '+2h' ? '+2 saat' : preset;
-    task.is_overdue = false;
-    task.title = 'Aktiv tap\u015f\u0131r\u0131q';
-    setCachedTasks(mockTasks);
-    renderNotifications();
-    toast('\uD83D\uDD52 Vaxt d\u0259yi\u015fdirildi', false);
-    
-    // \u0424\u043e\u043d\u043e\u0432\u0430\u044f \u043e\u0442\u043f\u0440\u0430\u0432\u043a\u0430
-    try {
-        const r = await fetch(API_BASE + '/api/action', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action: 'update_task_deadline', task_id: task.id, time_preset: preset})
-        });
-        if(!r.ok) throw new Error('server error');
-    } catch(e) {
-        task.time = oldTime;
-        setCachedTasks(mockTasks);
-        renderNotifications();
-        toast('X\u0259ta! Vaxt d\u0259yi\u015fm\u0259di', true);
-    }
+    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return; closeBottomBar();
+    const oldTime = task.time; task.time = preset; task.is_overdue = false; setCachedTasks(mockTasks); renderNotifications(); toast('🕒 Vaxt dəyişdirildi', false);
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'update_task_deadline', task_id:task.id, time_preset:preset}) }); if(!r.ok) throw new Error(); }
+    catch(e) { task.time = oldTime; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Vaxt dəyişmədi', true); }
 }
 
-async function handleBarAction(actionType) {
-    const task = mockTasks.find(t => t.id === selectedTaskId);
-    if(!task) return;
+function handleBarAction(actionType) {
+    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
     if(actionType === 'edit') {
         editingTaskId = task.id;
-        flow = 'task'; gd = {phone: task.phone || '', deadline: '', stage: '', assignee: '', assigneeName: '', task_type: ''};
-        const rawDesc = task.desc || '';
-        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)\]\s*/);
-        if(markerMatch) {
-            gd.assigneeName = markerMatch[1];
-            document.getElementById('task-desc').value = rawDesc.replace(markerMatch[0], '');
-        } else if(task.assigneeName) {
-            gd.assigneeName = task.assigneeName;
-            document.getElementById('task-desc').value = rawDesc;
-        } else {
-            document.getElementById('task-desc').value = rawDesc;
-        }
-        document.getElementById('search-phone').value = task.phone || '';
-        document.querySelectorAll('#screen-task-details .option-card').forEach(c => c.classList.remove('selected'));
-        const asel = document.getElementById('task-assignee-select');
-        if(asel) asel.value = gd.assigneeName || '';
-        // Set task type from task data
-        const tsel = document.getElementById('task-type-select');
-        if(tsel && task.task_type_id) { tsel.value = task.task_type_id; gd.task_type = String(task.task_type_id); }
-        const dp = document.getElementById('task-deadline-custom');
-        if(dp && task.complete_till) {
-            const d = new Date(task.complete_till * 1000);
-            const pad = n => String(n).padStart(2,'0');
-            dp.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-            gd.deadline = 'custom:' + dp.value;
-        } else if(dp) { dp.value = ''; }
-        // Pre-fill last note in edit screen
-        const noteEditField = document.getElementById('task-note-edit');
-        if(noteEditField) noteEditField.value = task.last_note || '';
-        currentEditScreen = 'screen-task-details';
-        document.getElementById('task-back-btn').setAttribute('onclick', "goBack('screen-notifications')");
-        closeBottomBar(); nav('screen-task-details');
+        flow = 'task'; gd = {phone: task.phone || '', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
+        const rawDesc = task.desc || task.text || '';
+        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/);
+        if(markerMatch) { gd.assigneeName = markerMatch[1]; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
+        else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
+        else { document.getElementById('edit-task-desc').value = rawDesc; }
+        const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
+        const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = task.task_type_id; gd.task_type = String(task.task_type_id); }
+        const dp = document.getElementById('edit-deadline-custom');
+        if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
+        const noteField = document.getElementById('edit-task-note'); if(noteField) noteField.value = task.last_note || '';
+        currentEditScreen = 'screen-task-details'; closeBottomBar(); nav('screen-task-details');
     }
 }
 
-
-
-function switchTab(tab) {
-    const tabTasks = document.getElementById('tab-tasks');
-    const tabMenu = document.getElementById('tab-menu');
-    if(tab === 'tasks') {
-        tabTasks.querySelector('span:last-child').style.color = 'var(--button-color)';
-        tabTasks.querySelector('span:last-child').style.fontWeight = '600';
-        tabMenu.querySelector('span:last-child').style.color = 'var(--hint-color)';
-        tabMenu.querySelector('span:last-child').style.fontWeight = '500';
-        nav('screen-notifications');
-        openNotifications();
-    } else {
-        tabMenu.querySelector('span:last-child').style.color = 'var(--button-color)';
-        tabMenu.querySelector('span:last-child').style.fontWeight = '600';
-        tabTasks.querySelector('span:last-child').style.color = 'var(--hint-color)';
-        tabTasks.querySelector('span:last-child').style.fontWeight = '500';
-        nav('main-screen');
+function switchTab(tabId) {
+    document.getElementById('tab-tasks').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
+    document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
+    document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
+    if(tabId === 'tab-tasks') {
+        document.getElementById('tab-tasks').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+        nav('screen-notifications'); openNotifications();
+    } else if(tabId === 'tab-create') {
+        document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+        editingTaskId = null; gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
+        document.getElementById('task-desc').value = '';
+        document.getElementById('search-phone').value = '';
+        const pi = document.getElementById('task-price-input'); if(pi) pi.value = '';
+        const tn = document.getElementById('task-note-edit'); if(tn) tn.value = '';
+        const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
+        const asel = document.getElementById('task-assignee-select'); if(asel) asel.selectedIndex = 0;
+        const tsel = document.getElementById('task-type-select'); if(tsel) tsel.selectedIndex = 0;
+        document.querySelectorAll('#screen-create .option-card').forEach(c => c.classList.remove('selected'));
+        nav('screen-create');
+    } else if(tabId === 'tab-history') {
+        document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+        nav('screen-balance-history'); loadBalanceHistory();
     }
 }
 
-// ─── Balance System ───────────────────────────────────────────────
+// Balance System
 async function loadBalance() {
-    if(isAdmin) return; // Admin doesn't see balance
+    if(isAdmin) return;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(j.success) {
-            const w = document.getElementById('balance-widget');
-            if(w) { w.style.display = 'flex'; }
-            const a = document.getElementById('balance-amount');
-            if(a) a.textContent = parseFloat(j.balance).toFixed(2) + ' AZN';
+            const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
+            const a = document.getElementById('balance-amount'); if(a) a.textContent = parseFloat(j.balance).toFixed(2) + ' AZN';
             window._balanceData = j.transactions || [];
         }
-    } catch(e) { console.log('Balance load error', e); }
+    } catch(e) {}
 }
-
-function showBalanceHistory() {
-    nav('screen-balance-history');
+function loadBalanceHistory() {
+    loadBalance();
     const container = document.getElementById('balance-history-container');
     const txs = window._balanceData || [];
-    if(!txs.length) { container.innerHTML = '<p style="color:var(--hint-color); text-align:center; margin-top:40px;">Hələ əməliyyat yoxdur.</p>'; return; }
+    if(!txs.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ əməliyyat yoxdur.</div>'; return; }
     container.innerHTML = txs.map(t => {
         const d = t.date ? new Date(t.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
-        return `<div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--secondary-bg-color); border-radius:10px;"><div><div style="font-size:13px; font-weight:600;">${t.task_text || 'Tapşırıq'}</div><div style="font-size:11px; color:var(--hint-color); margin-top:2px;">${d}</div></div><div style="font-size:15px; font-weight:700; color:#10b981;">+${parseFloat(t.amount).toFixed(0)} AZN</div></div>`;
+        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">${t.task_text || 'Tapşırıq'}</strong><span class="text-[9px] text-gray-400 font-bold">${d}</span></div><span class="text-xs font-black text-emerald-600">+${parseFloat(t.amount).toFixed(0)} AZN</span></div>`;
     }).join('');
 }
 
