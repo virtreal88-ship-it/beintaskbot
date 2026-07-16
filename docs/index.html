@@ -142,6 +142,7 @@
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Son qeyd:</label><textarea id="edit-task-note" placeholder="Qeyd..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
@@ -380,7 +381,8 @@ function submitTask() {
     const textInput = textEl.value.trim();
     if(editingTaskId) {
         if(!textInput) { toast('Mətni daxil edin!', true); return; }
-        let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
+        const editPriceVal = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value.trim() : '';
+        let finalText = gd.assigneeName ? (editPriceVal ? `[${gd.assigneeName}:${editPriceVal}] ${textInput}` : `[${gd.assigneeName}] ${textInput}`) : textInput;
         let payload = {action: 'update_task', task_id: editingTaskId, text: finalText};
         if(gd.deadline) payload.deadline = gd.deadline;
         payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
@@ -619,10 +621,12 @@ function handleBarAction(actionType) {
         editingTaskId = task.id;
         flow = 'task'; gd = {phone: task.phone || '', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
         const rawDesc = task.desc || task.text || '';
-        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/);
-        if(markerMatch) { gd.assigneeName = markerMatch[1]; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
+        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+))?\]\s*/);
+        let editPrice = '';
+        if(markerMatch) { gd.assigneeName = markerMatch[1]; editPrice = markerMatch[2] || ''; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
         else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
         else { document.getElementById('edit-task-desc').value = rawDesc; }
+        const epf = document.getElementById('edit-task-price'); if(epf) epf.value = editPrice;
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = task.task_type_id; gd.task_type = String(task.task_type_id); }
         const dp = document.getElementById('edit-deadline-custom');
@@ -681,6 +685,14 @@ function loadBalanceHistory() {
     }).join('');
 }
 
+// Pull-to-refresh
+(function(){
+    const ca = document.getElementById('content-area');
+    let ptrStart = 0, ptrDist = 0, ptrActive = false;
+    ca.addEventListener('touchstart', e => { if(ca.scrollTop <= 0) { ptrStart = e.touches[0].clientY; ptrActive = true; } }, {passive:true});
+    ca.addEventListener('touchmove', e => { if(!ptrActive) return; ptrDist = e.touches[0].clientY - ptrStart; }, {passive:true});
+    ca.addEventListener('touchend', () => { if(ptrActive && ptrDist > 80) { openNotifications(); } ptrActive = false; ptrDist = 0; });
+})();
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>
 <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');</script>

@@ -3732,7 +3732,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
@@ -3926,7 +3926,7 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
     for emp_chat_id, emp_name in _EMPLOYEE_NAMES.items():
         # Filter tasks by marker [Name] in text
         first_name = emp_name.split()[0]
-        emp_tasks = [t for t in all_tasks if f"[{emp_name}]" in t.get("text", "") or f"[{first_name}]" in t.get("text", "")]
+        emp_tasks = [t for t in all_tasks if re.search(rf'\[{re.escape(emp_name)}(?::\d+)?\]', t.get('text', '')) or re.search(rf'\[{re.escape(first_name)}(?::\d+)?\]', t.get('text', ''))]
         if emp_tasks:
             msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131* \u2014 bug\u00fcnk\u00fc tap\u015f\u0131r\u0131qlar ({len(emp_tasks)}):\n\n"
             for i, t in enumerate(emp_tasks, 1):
