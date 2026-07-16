@@ -291,7 +291,7 @@ const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 let isAdmin = false;
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
-const SALARY_IDS = ['7329891614','7920785774'];
+const SALARY_IDS = ['7962757442','7262243946','7329891614'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) employeeType = 'salary';
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }

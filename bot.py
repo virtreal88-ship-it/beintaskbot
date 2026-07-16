@@ -4222,8 +4222,8 @@ _KPI_TARGET_TIMES = {
     1: 30, 2: 30, 4232112: 60, 3263995: 45, 3263999: 120, 4232108: 30, 4229224: 60,
 }
 _EMPLOYEE_TYPES = {
-    7962757442: 'piecework', 7262243946: 'piecework',
-    7329891614: 'salary', 7920785774: 'salary',
+    7962757442: 'salary', 7262243946: 'salary',
+    7329891614: 'salary', 7920785774: 'piecework',
 }
 
 def init_kpi_db():
