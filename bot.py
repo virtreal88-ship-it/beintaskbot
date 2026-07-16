@@ -3423,10 +3423,39 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "Vaxt dəyişdirildi."})
             else:
                 return web.json_response({"success": False, "error": "Yeniləmə uğursuz."})
+        elif action == "check_started":
+            task_id = data.get("task_id")
+            if not task_id:
+                return web.json_response({"success": True, "started": False})
+            started = has_active_session(chat_id, int(task_id))
+            return web.json_response({"success": True, "started": started})
         elif action == "complete_task":
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
+            # For salary employees: check if started, finish KPI session, notify admin on delay
+            emp_type = get_employee_type(chat_id)
+            delay_reason = data.get("delay_reason", "")
+            kpi_result = None
+            if emp_type == 'salary':
+                if not has_active_session(chat_id, int(task_id)):
+                    return web.json_response({"success": False, "error": "Əvvəlcə 'İşə başla' basın!", "need_start": True})
+                # Get task type
+                try:
+                    _tr = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                    _task_type_id = _tr.json().get('task_type_id', 1) if _tr.status_code == 200 else 1
+                    _task_text_kpi = _tr.json().get('text', '') if _tr.status_code == 200 else ''
+                except: _task_type_id = 1; _task_text_kpi = ''
+                kpi_result = finish_task_session(chat_id, int(task_id), _task_type_id, delay_reason)
+                if kpi_result and kpi_result['needs_reason'] and not delay_reason:
+                    return web.json_response({"success": False, "error": "delay_needed", "needs_delay_reason": True, "kpi_score": kpi_result['kpi_score'], "actual_minutes": kpi_result['actual_minutes'], "target_minutes": kpi_result['target_minutes']})
+                # Notify admin about delay
+                if kpi_result and kpi_result['needs_reason'] and delay_reason and _bot_app:
+                    admin_chat = get_chat_id_for_kommo_user(10932455)
+                    if admin_chat:
+                        try:
+                            await _bot_app.bot.send_message(admin_chat, f"⚠️ *Gecikmiş tapşırıq tamamlandı*\n\n📝 {_task_text_kpi}\n⏱ {kpi_result['actual_minutes']} dəq / {kpi_result['target_minutes']} dəq\nKPI: {kpi_result['kpi_score']}/100\n💬 Səbəb: {delay_reason}", parse_mode='Markdown')
+                        except: pass
             result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
             link = ""
             lead_id = None
@@ -4247,6 +4276,14 @@ def init_kpi_db():
 
 init_kpi_db()
 
+def has_active_session(telegram_id, task_id):
+    conn = sqlite3.connect(_balance_db_path())
+    c = conn.cursor()
+    c.execute('SELECT id FROM task_sessions WHERE telegram_id=? AND task_id=? AND end_time IS NULL', (telegram_id, task_id))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
+
 def start_task_session(telegram_id, task_id):
     conn = sqlite3.connect(_balance_db_path())
     c = conn.cursor()
@@ -4282,7 +4319,7 @@ def finish_task_session(telegram_id, task_id, task_type_id, delay_reason=''):
              (round(actual_minutes, 1), target_minutes, kpi_score, delay_reason, session_id))
     conn.commit()
     conn.close()
-    return {'kpi_score': kpi_score, 'actual_minutes': round(actual_minutes, 1), 'target_minutes': target_minutes, 'needs_reason': actual_minutes > target_minutes * 1.5}
+    return {'kpi_score': kpi_score, 'actual_minutes': round(actual_minutes, 1), 'target_minutes': target_minutes, 'needs_reason': actual_minutes > target_minutes * 1.2}
 
 def get_kpi_summary(telegram_id):
     conn = sqlite3.connect(_balance_db_path())

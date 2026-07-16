@@ -143,6 +143,13 @@
         <div id="balance-history-container" class="space-y-3"></div>
     </div>
 
+    <div id="screen-kpi-history" class="screen space-y-4">
+        <div class="border-b border-gray-200 pb-2 mb-3">
+            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">KPI Tarixçəsi</span>
+        </div>
+        <div id="kpi-history-container" class="space-y-3"></div>
+    </div>
+
     <!-- SCREEN: EDIT TASK (reused for edit flow) -->
     <div id="screen-task-details" class="screen space-y-4">
         <div class="flex items-center gap-1 mb-2">
@@ -265,7 +272,7 @@
         <span class="text-lg">➕</span><span class="mt-0.5">Yeni Tapşırıq</span>
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">📊</span><span class="mt-0.5">Balans</span>
+        <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Balans</span>
     </button>
 </div>
 
@@ -292,7 +299,7 @@ let isAdmin = false;
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['7962757442','7262243946','7329891614'];
-if(SALARY_IDS.includes(CURRENT_USER_ID)) employeeType = 'salary';
+if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'KPI'; }); }
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
@@ -537,7 +544,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ Başla</button><button onclick="finishTaskKpi(${t.id})" class="flex-1 bg-emerald-600 text-white py-2 rounded-xl text-[11px] font-bold">✅ Bitdi</button></div>` : ''}`;
+            ${employeeType === 'salary' ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-xl text-[11px] font-bold">▶️ İşə başla</button></div>` : ''}`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -572,12 +579,16 @@ function clickNotification(id, desc, metaText) {
     document.getElementById('bottom-bar-meta').textContent = metaText;
     const bar = document.getElementById('bottom-action-bar');
     bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
-    setTimeout(() => { document.addEventListener('click', closeBottomBar); }, 50);
+    setTimeout(() => { document.addEventListener('click', closeBottomBarOutside); }, 300);
+}
+function closeBottomBarOutside(e) {
+    const bar = document.getElementById('bottom-action-bar');
+    if(bar && !bar.contains(e.target)) closeBottomBar();
 }
 function closeBottomBar() {
     const bar = document.getElementById('bottom-action-bar'); if(!bar || bar.style.display === 'none') return;
     bar.style.transform = 'translateY(100%)'; setTimeout(() => { bar.style.display = 'none'; }, 300);
-    selectedTaskId = null; document.removeEventListener('click', closeBottomBar);
+    selectedTaskId = null; document.removeEventListener('click', closeBottomBarOutside);
     document.getElementById('note-panel').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'none';
     document.getElementById('postpone-fast-menu').style.display = 'none';
@@ -597,7 +608,15 @@ async function submitNoteInline() {
     catch(e) { task.last_note = oldNote; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Qeyd göndərilmədi', true); }
 }
 
-function showCompletePanel() {
+async function showCompletePanel() {
+    // For salary employees: check if task was started
+    if(employeeType === 'salary' && selectedTaskId) {
+        try {
+            const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'check_started', task_id:selectedTaskId}) });
+            const j = await r.json();
+            if(!j.started) { alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return; }
+        } catch(e) {}
+    }
     completeStageSelected = '';
     document.getElementById('note-panel').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'block';
@@ -616,11 +635,32 @@ async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    const backupTasks = [...mockTasks]; const completedId = task.id;
+    const completedId = task.id;
+    // First attempt without delay_reason
+    const payload = {action:'complete_task', task_id:completedId, new_stage:completeStageSelected, phone:task.phone||'', note:noteText};
+    try {
+        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
+        const j = await r.json();
+        if(!j.success && j.needs_delay_reason) {
+            // Show delay reason modal
+            const reason = prompt(`⚠️ Gecikmə aşkar edildi!\n⏱ ${j.actual_minutes} dəq / ${j.target_minutes} dəq (KPI: ${j.kpi_score}/100)\n\nGecikmənin səbəbini yazın:`);
+            if(!reason || !reason.trim()) { toast('Səbəb yazılmalıdır!', true); return; }
+            payload.delay_reason = reason.trim();
+            const r2 = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
+            const j2 = await r2.json();
+            if(!j2.success && j2.need_start) { alert(j2.error); return; }
+            if(!j2.success) { toast(j2.error || 'Xəta!', true); return; }
+        } else if(!j.success && j.need_start) {
+            alert(j.error); return;
+        } else if(!j.success) {
+            toast(j.error || 'Xəta!', true); return;
+        }
+    } catch(e) { toast('Xəta! Tapşırıq bağlanmadı', true); return; }
+    // Success path
     _completedTaskIds[completedId] = Date.now();
     mockTasks = mockTasks.filter(t => t.id !== completedId); setCachedTasks(mockTasks); closeBottomBar(); renderNotifications(); toast('✓ Tapşırıq bağlandı', false);
-    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'complete_task', task_id:completedId, new_stage:completeStageSelected, phone:task.phone||'', note:noteText}) }); if(!r.ok) throw new Error(); setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000); }
-    catch(e) { delete _completedTaskIds[completedId]; mockTasks = backupTasks; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Tapşırıq bağlanmadı', true); }
+    setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
+    if(employeeType === 'salary') loadKpi();
 }
 
 function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
@@ -674,7 +714,8 @@ function switchTab(tabId) {
         nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-        nav('screen-balance-history'); loadBalanceHistory();
+        if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
+        else { nav('screen-balance-history'); loadBalanceHistory(); }
     }
 }
 
@@ -691,6 +732,17 @@ async function loadKpi() {
             const c = document.getElementById('kpi-total-count'); if(c) c.textContent = j.total_tasks + ' tapşırıq';
         }
     } catch(e) {}
+}
+function loadKpiHistory() {
+    loadKpi();
+    const container = document.getElementById('kpi-history-container');
+    const hist = kpiData?.history || [];
+    if(!hist.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ KPI məlumatı yoxdur.</div>'; return; }
+    container.innerHTML = hist.map(h => {
+        const d = h.date ? new Date(h.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
+        const color = h.kpi_score >= 70 ? 'text-emerald-600' : h.kpi_score >= 40 ? 'text-amber-600' : 'text-red-600';
+        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ⏱ ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
+    }).join('');
 }
 async function startTaskKpi(taskId) {
     const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
@@ -713,7 +765,7 @@ async function finishTaskKpi(taskId) {
 
 // Balance System
 async function loadBalance() {
-    if(isAdmin) return;
+    if(isAdmin || employeeType === 'salary') return;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
