@@ -2724,6 +2724,26 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user_text = update.message.text.strip()
     chat_id = update.message.chat_id
+    # Handle AI feedback from admin
+    pending_fb = context.user_data.get('pending_ai_feedback')
+    if pending_fb and chat_id == get_chat_id_for_kommo_user(10932455):
+        # Save admin's feedback as AI rule
+        rule_text = user_text
+        try:
+            from gh_storage import _load_file, _save_file, _cache, _lock
+            _load_file("ratings.json")
+            with _lock:
+                data = _cache.setdefault("ratings.json", {"ratings": [], "ai_rules": []})
+                data.setdefault("ai_rules", []).append({
+                    "rule": rule_text,
+                    "context": f"Task: {pending_fb.get('task_id')}, Employee: {pending_fb.get('employee')}, AI said: {pending_fb.get('ai_eval', '')}, Admin gave: {pending_fb.get('admin_score')}",
+                    "date": datetime.now(tz=BAKU_TZ).strftime("%Y-%m-%d %H:%M")
+                })
+            _save_file("ratings.json")
+        except: pass
+        del context.user_data['pending_ai_feedback']
+        await update.message.reply_text("✅ Qeyd olundu! İİ bundan sonra bunu nəzərə alacaq.")
+        return
     # Handle group mentions
     if update.message.chat.type in ("group", "supergroup"):
         bot_username = context.bot.username
@@ -4203,17 +4223,27 @@ async def admin_rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending = context.bot_data.get('pending_rates', {}).get(rate_key, {})
     task_id = pending.get('task_id', '?')
     employee = pending.get('employee', '?')
-    # Save rating (stored as note in balance transaction with 0 amount)
+    ai_eval = pending.get('ai_eval', '')
+    # Determine if admin disagrees with AI
+    ai_was_good = any(w in ai_eval.lower() for w in ['əla', 'yaxşı', 'mükəmməl']) if ai_eval else True
+    admin_is_good = score in ('5', '4')
+    disagrees = (ai_was_good and not admin_is_good) or (not ai_was_good and admin_is_good)
+    # Save rating
     try:
         from gh_storage import _load_file, _save_file, _cache, _lock
         _load_file("ratings.json")
         with _lock:
-            data = _cache.setdefault("ratings.json", {"ratings": []})
+            data = _cache.setdefault("ratings.json", {"ratings": [], "ai_rules": []})
             data.setdefault("ratings", []).append({"task_id": str(task_id), "employee": employee, "score": int(score), "date": datetime.now(tz=BAKU_TZ).strftime("%Y-%m-%d %H:%M")})
         _save_file("ratings.json")
     except: pass
     await query.edit_message_reply_markup(reply_markup=None)
-    await query.message.reply_text(f"✅ Qiymətiniz: {label}")
+    if disagrees:
+        # Ask admin why they disagree
+        context.user_data['pending_ai_feedback'] = {'rate_key': rate_key, 'task_id': task_id, 'employee': employee, 'admin_score': score, 'ai_eval': ai_eval}
+        await query.message.reply_text(f"✅ Qiymətiniz: {label}\n\nİİ başqa fikirdə idi. Niyə belə qiymət verdiniz? (1 cümlə yazın, İİ öyrənəcək)")
+    else:
+        await query.message.reply_text(f"✅ Qiymətiniz: {label}")
 
 async def update_task_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle updtask-{key}-yes/no/employee for update_task confirmation."""
@@ -4399,6 +4429,17 @@ def get_employee_type(telegram_id):
     return _EMPLOYEE_TYPES.get(telegram_id, 'piecework')
 
 async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_score):
+    # Load admin's rules/feedback
+    rules_text = ''
+    try:
+        from gh_storage import _load_file, _cache
+        _load_file("ratings.json")
+        rules = _cache.get("ratings.json", {}).get("ai_rules", [])
+        if rules:
+            # Use last 10 rules
+            recent_rules = rules[-10:]
+            rules_text = "\nRəhbərin qaydaları (MÜTLƏQ nəzərə al):\n" + "\n".join(f"- {r['rule']}" for r in recent_rules)
+    except: pass
     try:
         if kpi_score == -1:
             # No timer data - evaluate based on task note quality only
@@ -4407,6 +4448,7 @@ async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_sc
                       f"Taymer istifadə olunmayıb (vaxt məlumatı yoxdur).\n\n"
                       f"Yalnız tapşırığın məzmununa görə qısa rəy yaz (1-2 cümlə). "
                       f"Vaxt haqqında heç nə yazma - məlumat yoxdur.")
+            prompt += rules_text
         else:
             prompt = (f"Sən iş performansını qiymətləndirən köməkçisən. Azərbaycan dilində cavab ver.\n"
                       f"Tapşırıq: {task_text}\n"
@@ -4416,6 +4458,7 @@ async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_sc
                       f"Qısa qiymətləndirmə ver (2-3 cümlə). Əvvəlcə nəticəni yaz (Əla/Yaxşı/Orta/Pis), "
                       f"sonra SƏBƏB yaz - nəyə əsasən belə qiymət verdin.\n"
                       f"Əgər faktiki vaxt hədəfdən azdırsa - bu yaxşıdır. Əgər çoxdursa - gecikmə var.")
+            prompt += rules_text
         resp = llm_client.chat.completions.create(
             model='anthropic/claude-sonnet-4-20250514',
             messages=[{'role': 'user', 'content': prompt}],
