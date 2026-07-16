@@ -25,9 +25,9 @@ _lock = threading.Lock()
 def init_storage(token: str):
     global _GH_TOKEN
     _GH_TOKEN = token
-    # Load all data files into memory
-    _load_file("balance.json")
-    _load_file("kpi.json")
+    # Always refresh persisted data on startup, even if the cache was populated earlier.
+    _load_file("balance.json", force=True)
+    _load_file("kpi.json", force=True)
 
 
 def _headers():
@@ -37,10 +37,10 @@ def _headers():
     return headers
 
 
-def _load_file(filename: str) -> dict:
+def _load_file(filename: str, force: bool = False) -> dict:
     """Load a JSON file from GitHub data branch into cache."""
     with _lock:
-        if filename in _cache:
+        if not force and filename in _cache:
             return _cache[filename]
     try:
         r = requests.get(
@@ -55,22 +55,22 @@ def _load_file(filename: str) -> dict:
                 _cache_sha[filename] = r.json()["sha"]
             return data
         else:
-            # File doesn't exist yet
             with _lock:
-                _cache[filename] = {}
+                if filename not in _cache:
+                    _cache[filename] = {}
                 _cache_sha[filename] = None
-            return {}
+            return _cache.get(filename, {})
     except Exception as e:
         logger.error(f"gh_storage load {filename}: {e}")
         with _lock:
             if filename not in _cache:
                 _cache[filename] = {}
                 _cache_sha[filename] = None
-        return {}
+        return _cache.get(filename, {})
 
 
 def _save_file(filename: str):
-    """Save cached data to GitHub."""
+    """Save cached data to GitHub with retry on SHA conflict."""
     with _lock:
         data = _cache.get(filename, {})
         sha = _cache_sha.get(filename)
@@ -82,21 +82,47 @@ def _save_file(filename: str):
     }
     if sha:
         payload["sha"] = sha
-    try:
-        r = requests.put(
-            f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}",
-            headers=_headers(), json=payload, timeout=15
-        )
-        if r.status_code in (200, 201):
-            with _lock:
-                _cache_sha[filename] = r.json()["content"]["sha"]
-            return True
-        else:
-            logger.error(f"gh_storage save {filename}: {r.status_code} {r.text[:200]}")
+
+    for attempt in range(3):
+        try:
+            r = requests.put(
+                f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}",
+                headers=_headers(), json=payload, timeout=15
+            )
+            if r.status_code in (200, 201):
+                with _lock:
+                    _cache_sha[filename] = r.json()["content"]["sha"]
+                return True
+            elif r.status_code in (409, 422):
+                # SHA conflict or file exists without sha: refetch and retry.
+                logger.warning(
+                    f"gh_storage save {filename}: {r.status_code}, "
+                    f"refetching SHA (attempt {attempt + 1})"
+                )
+                try:
+                    r2 = requests.get(
+                        f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}",
+                        headers=_headers(), timeout=15
+                    )
+                    if r2.status_code == 200:
+                        new_sha = r2.json()["sha"]
+                        with _lock:
+                            _cache_sha[filename] = new_sha
+                        payload["sha"] = new_sha
+                    else:
+                        payload.pop("sha", None)
+                        with _lock:
+                            _cache_sha[filename] = None
+                except Exception as e2:
+                    logger.error(f"gh_storage refetch SHA error: {e2}")
+                continue
+            else:
+                logger.error(f"gh_storage save {filename}: {r.status_code} {r.text[:200]}")
+                return False
+        except Exception as e:
+            logger.error(f"gh_storage save {filename} error: {e}")
             return False
-    except Exception as e:
-        logger.error(f"gh_storage save {filename} error: {e}")
-        return False
+    return False
 
 
 # ─── Balance Functions ────────────────────────────────────────────────────────
