@@ -77,6 +77,7 @@
             <div>
                 <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Şəxsi Balansınız</div>
                 <div class="text-2xl font-black mt-1" id="balance-amount">0.00 AZN</div>
+                <div id="balance-expected" class="text-[10px] opacity-80 mt-1" style="display:none;"></div>
             </div>
             <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">📊 Tarixçə</button>
         </div>
@@ -869,11 +870,11 @@ async function loadBalance() {
                 const pm = (t.desc||t.text||'').match(/:([\d.]+)\]/);
                 if(pm) expected += parseFloat(pm[1]);
             });
-            let expEl = document.getElementById('balance-expected');
-            if(!expEl && expected > 0) {
-                const w2 = document.getElementById('balance-widget');
-                if(w2) { w2.insertAdjacentHTML('beforeend', `<div id="balance-expected" class="text-[10px] opacity-80 mt-1">Gözlənilən: <b>${expected.toFixed(0)} AZN</b></div>`); }
-            } else if(expEl) { expEl.innerHTML = `Gözlənilən: <b>${expected.toFixed(0)} AZN</b>`; }
+            const expEl = document.getElementById('balance-expected');
+            if(expEl) {
+                if(expected > 0) { expEl.style.display='block'; expEl.innerHTML = `Gözlənilən: <b>${expected.toFixed(0)} AZN</b>`; }
+                else { expEl.style.display='none'; }
+            }
         }
     } catch(e) {}
 }
