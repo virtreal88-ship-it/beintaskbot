@@ -31,7 +31,10 @@ def init_storage(token: str):
 
 
 def _headers():
-    return {"Authorization": f"token {_GH_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    if _GH_TOKEN:
+        headers["Authorization"] = f"token {_GH_TOKEN}"
+    return headers
 
 
 def _load_file(filename: str) -> dict:

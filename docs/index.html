@@ -72,7 +72,7 @@
             </div>
             <span class="text-3xl">🎯</span>
         </div>
-        <!-- Balance Widget -->
+        <!-- Balance Widget (non-admin only) -->
         <div id="balance-widget" style="display:none;" class="bg-gradient-to-br from-[#10b981] to-[#059669] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center">
             <div>
                 <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Şəxsi Balansınız</div>
@@ -865,7 +865,7 @@ async function finishTaskKpi(taskId) {
 
 // Balance System
 async function loadBalance() {
-    if(isAdmin) { loadAdminBalanceWidget(); return; }
+    if(isAdmin) return;
     if(employeeType === 'salary') return;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
@@ -884,30 +884,6 @@ async function loadBalance() {
             if(expEl) {
                 if(expected > 0) { expEl.style.display='block'; expEl.innerHTML = `Gözlənilən: <b>${expected.toFixed(0)} AZN</b>`; }
                 else { expEl.style.display='none'; }
-            }
-        }
-    } catch(e) {}
-}
-async function loadAdminBalanceWidget() {
-    try {
-        const r = await fetch(API_BASE + '/api/admin_balances', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
-        const j = await r.json();
-        if(j.success) {
-            const employees = j.employees || [];
-            const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
-            const total = employees.reduce((sum, employee) => sum + (parseFloat(employee.balance) || 0), 0);
-            const a = document.getElementById('balance-amount'); if(a) a.textContent = total.toFixed(0) + ' AZN';
-            const lbl = w ? w.querySelector('.text-\\[10px\\]') : null; if(lbl) lbl.textContent = 'Ümumi Balans';
-            const expEl = document.getElementById('balance-expected');
-            const nonZeroBalances = employees.filter(employee => (parseFloat(employee.balance) || 0) !== 0);
-            if(expEl) {
-                if(nonZeroBalances.length) {
-                    expEl.style.display = 'block';
-                    expEl.innerHTML = nonZeroBalances.map(employee => `${employee.name}: <b>${(parseFloat(employee.balance) || 0).toFixed(0)} AZN</b>`).join(' | ');
-                } else {
-                    expEl.style.display = 'none';
-                    expEl.innerHTML = '';
-                }
             }
         }
     } catch(e) {}
