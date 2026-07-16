@@ -2631,7 +2631,13 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(result, disable_web_page_preview=True)
         # Admin notification
         admin_chat = get_chat_id_for_kommo_user(10932455)
-        sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+        sender_name = None
+        for _nm, _cid in NAME_TO_CHAT.items():
+            if _cid == chat_id and len(_nm) > 5:
+                sender_name = _nm
+                break
+        if not sender_name:
+            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
         if admin_chat and admin_chat != chat_id:
             try:
                 await context.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
@@ -3128,7 +3134,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
             # Admin notify
             admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+            sender_name = None
+            for _nm, _cid in NAME_TO_CHAT.items():
+                if _cid == chat_id and len(_nm) > 5:
+                    sender_name = _nm
+                    break
+            if not sender_name:
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
             if admin_chat and admin_chat != chat_id and _bot_app:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
