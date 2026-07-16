@@ -842,7 +842,7 @@ async function submitSubtask(parentTaskId) {
     let assigneeKey = 'sahe_meneceri';
     if(assignee.toLowerCase().includes('nizami')) assigneeKey = 'admin';
     else if(assignee.toLowerCase().includes('soltan')) assigneeKey = 'soltan';
-    const payload = {action:'create_task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assigneeKey, assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId, entity_id:entityId, entity_type:entityType};
+    const payload = {action:'task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assigneeKey, assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId, entity_id:entityId, entity_type:entityType};
     try {
         const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const j = await r.json();
