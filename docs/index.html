@@ -807,7 +807,7 @@ async function stopTaskKpi(taskId) {
 function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
     const phone = task.phone||'';
-    const parentAssignee = task.assigneeName || '';
+    const parentAssignee = task.assigneeName || task.responsible || '';
     const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
@@ -815,7 +815,7 @@ function openSubtask(taskId) {
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
-        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option><option value="4232112">Texniki Dəstək</option><option value="4232108">Import</option></select>
+        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki Dəstək</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select>
         <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
         <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${assigneeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>

@@ -3187,9 +3187,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
             direct_entity_id = data.get("entity_id")
             direct_entity_type = data.get("entity_type", "leads")
             if direct_entity_id:
+                direct_entity_id = int(direct_entity_id)
                 assignee_map_direct = {"shamil": 15532668, "soltan": 15531960, "huseyn": 15532668, "rasim": 15532668, "texniki": 15532668, "admin": 10932455, "sahe_meneceri": 15532668}
                 assignee_id_direct = assignee_map_direct.get(assignee, 15532668)
                 link_direct = f"{KOMMO_BASE_URL}/{direct_entity_type}/detail/{direct_entity_id}"
+                logger.info(f"Subtask create: entity_id={direct_entity_id}, entity_type={direct_entity_type}, assignee={assignee}, assignee_id={assignee_id_direct}")
                 result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
             else:
                 result = execute_tool_create_task(phone, text, None, None, assignee)
@@ -3232,7 +3234,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 except: pass
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
             # Admin creates directly
-            res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], task_type_id=task_type_id)
+            logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
+            res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id)
+            logger.info(f"Create task result: {res}")
             if res:
                 # Save note to entity if provided
                 note_text = data.get("note", "").strip()
