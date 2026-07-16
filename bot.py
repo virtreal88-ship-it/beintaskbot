@@ -3643,7 +3643,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         _t_data = _t_resp.json()
                         _task_text_full = _t_data.get('text', '').strip()
                         _task_type_id_c = _t_data.get('task_type_id', 1)
-                        _type_names = {1: 'Zəng', 2: 'Görüş', 3: 'Quraşdırma', 4229224: 'Cavab gözlənilir'}
+                        _type_names = {1: 'Əlaqə saxla', 2: 'Görüş', 3263995: 'Təqdimat', 3263999: 'Quraşdırma', 3267595: 'Zəng et', 4232112: 'Texniki Dəstək', 4232108: 'Import', 4229224: 'Cavab gözlənilir'}
                         _task_type_name = _type_names.get(_task_type_id_c, f'Tip {_task_type_id_c}')
                         # Get contact/lead info
                         _eid = _t_data.get('entity_id')
@@ -3693,7 +3693,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         # AI evaluation
                         _ai_score_text = ''
                         try:
-                            _ai_eval = await evaluate_kpi_with_ai(_task_text_full, kpi_result['actual_minutes'] if kpi_result else 0, kpi_result['target_minutes'] if kpi_result else 60, kpi_result['kpi_score'] if kpi_result else 50)
+                            if kpi_result:
+                                _ai_eval = await evaluate_kpi_with_ai(_task_text_full, kpi_result['actual_minutes'], kpi_result['target_minutes'], kpi_result['kpi_score'])
+                            else:
+                                _ai_eval = await evaluate_kpi_with_ai(_task_text_full, 0, 0, -1)
                             if _ai_eval:
                                 _ai_score_text = f"\n🤖 İİ qiymət: {_ai_eval}"
                         except: pass
@@ -4397,16 +4400,38 @@ def get_employee_type(telegram_id):
 
 async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_score):
     try:
-        prompt = f"S\u0259n i\u015f performans\u0131n\u0131 qiym\u0259tl\u0259ndir\u0259n k\u00f6m\u0259k\u00e7is\u0259n. Az\u0259rbaycan dilind\u0259 cavab ver.\nTap\u015f\u0131r\u0131q: {task_text}\nH\u0259d\u0259f vaxt: {target_minutes} d\u0259qiq\u0259\nFaktiki vaxt: {actual_minutes} d\u0259qiq\u0259\nKPI bal: {kpi_score}/100\n\nQ\u0131sa (1-2 c\u00fcml\u0259) r\u0259y yaz."
+        if kpi_score == -1:
+            # No timer data - evaluate based on task note quality only
+            prompt = (f"Sən iş performansını qiymətləndirən köməkçisən. Azərbaycan dilində cavab ver.\n"
+                      f"Tapşırıq: {task_text}\n"
+                      f"Taymer istifadə olunmayıb (vaxt məlumatı yoxdur).\n\n"
+                      f"Yalnız tapşırığın məzmununa görə qısa rəy yaz (1-2 cümlə). "
+                      f"Vaxt haqqında heç nə yazma - məlumat yoxdur.")
+        else:
+            prompt = (f"Sən iş performansını qiymətləndirən köməkçisən. Azərbaycan dilində cavab ver.\n"
+                      f"Tapşırıq: {task_text}\n"
+                      f"Hədəf vaxt: {target_minutes} dəqiqə\n"
+                      f"Faktiki vaxt: {actual_minutes:.0f} dəqiqə\n"
+                      f"KPI bal: {kpi_score}/100\n\n"
+                      f"Qısa qiymətləndirmə ver (2-3 cümlə). Əvvəlcə nəticəni yaz (Əla/Yaxşı/Orta/Pis), "
+                      f"sonra SƏBƏB yaz - nəyə əsasən belə qiymət verdin.\n"
+                      f"Əgər faktiki vaxt hədəfdən azdırsa - bu yaxşıdır. Əgər çoxdursa - gecikmə var.")
         resp = llm_client.chat.completions.create(
             model='anthropic/claude-sonnet-4-20250514',
             messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=100
+            max_tokens=150
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f'KPI AI eval error: {e}')
-        return '\u018fla n\u0259tic\u0259!' if kpi_score >= 70 else 'Gecikm\u0259 var.'
+        if kpi_score == -1:
+            return 'Tamamlandı.'
+        elif kpi_score >= 80:
+            return f'Əla nəticə! {actual_minutes:.0f}/{target_minutes} dəq.'
+        elif kpi_score >= 60:
+            return f'Yaxşı. {actual_minutes:.0f}/{target_minutes} dəq.'
+        else:
+            return f'Gecikmə var. {actual_minutes:.0f}/{target_minutes} dəq.'
 
 async def handle_api_balance(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get("X-TG-User-ID", "")
