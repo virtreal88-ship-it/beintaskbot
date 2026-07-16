@@ -3355,14 +3355,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 ])
                 try:
                     msg_text = f"\u270f\ufe0f {sender_name} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}"
-                    await _bot_app.bot.send_message(admin_chat, msg_text, reply_markup=kb)
+                    kb_json = {"inline_keyboard": [[{"text": b.text, "callback_data": b.callback_data} for b in row] for row in kb.inline_keyboard]}
+                    _tg_resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
+                    if not _tg_resp.json().get("ok"):
+                        logger.error(f"update_task confirmation send failed: {_tg_resp.text[:200]}")
                 except Exception as e:
-                    logger.error(f"update_task confirmation send failed: {e}")
-                    # Fallback: try without markup
-                    try:
-                        await _bot_app.bot.send_message(admin_chat, f"\u270f\ufe0f {sender_name} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir: {assignee_name_raw} (Task {task_id})")
-                    except Exception as e2:
-                        logger.error(f"update_task confirmation fallback also failed: {e2}")
+                    logger.error(f"update_task confirmation send exception: {e}")
                 return web.json_response({"success": True, "message": "\u23f3 D\u0259yi\u015fiklik t\u0259sdiq \u00fc\u00e7\u00fcn g\u00f6nd\u0259rildi."})
             # Admin updates directly
             result = update_task_kommo(task_id, update_data)
