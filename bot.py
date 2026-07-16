@@ -4419,6 +4419,7 @@ _EMPLOYEE_NAMES_BY_TG = {
     7962757442: 'Şamil Əliyev',
     7262243946: 'Soltan Abbasov',
     7329891614: 'Hüseyn Səfərov',
+    8835096199: 'Texniki Dəstək',
 }
 
 async def handle_api_admin_balances(request: web.Request) -> web.Response:
