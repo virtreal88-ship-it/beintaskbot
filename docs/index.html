@@ -110,7 +110,7 @@
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki Dəstək</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
@@ -140,7 +140,7 @@
             <button class="text-xs font-bold text-blue-500" id="task-back-btn" onclick="goBack('screen-notifications')">← Geri</button>
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="3267595">Zəng et</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki Dəstək</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
@@ -352,7 +352,9 @@ function showSuccessScreen(msg, link, isInfo) {
 function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
 
 async function doFetch(payload, btnId) {
-    const btn = document.getElementById(btnId); if(btn) btn.disabled = true;
+    const btn = document.getElementById(btnId);
+    let origText = '';
+    if(btn) { origText = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> Yüklənir...'; }
     lastPayload = payload;
     try {
         const r = await fetch(API_BASE + '/api/action', {
@@ -373,7 +375,7 @@ async function doFetch(payload, btnId) {
                 }
             } catch(e2) {}
         } else { toast(j.error || 'Xəta!', true); }
-    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) btn.disabled = false; }
+    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
 
 function submitTask() {

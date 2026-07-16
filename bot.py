@@ -2797,7 +2797,8 @@ async def _handle_kommo_task_webhook(data: dict):
     _TASK_TYPE_NAMES = {
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
-        3267595: "Zəng et", 4229224: "Cavab gözlənilir"
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir",
+        4232112: "Texniki Dəstək", 4232108: "Import"
     }
     task_type_name = ""
     if task_type_id_raw:
@@ -3736,7 +3737,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir"}
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki Dəstək", 4232108: "Import"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
