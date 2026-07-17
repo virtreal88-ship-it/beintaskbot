@@ -1,9 +1,10 @@
 {
   "1628569350": {
-    "endpoint": "https://test.example.com",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/cgEnXxVPYc0:APA91bGMyaoIchvbcp1u78GGTZOWMi-2EsuSShyDllT864XRN_Yz-rfCSi8a--yVbPxKuvfACKx3K-jZ7jTkPtR6tehsRSctFZOcfkKW_E3QoQ-CpOhyB_0f81cCyBHLcBfT1WIVY8ls",
+    "expirationTime": null,
     "keys": {
-      "p256dh": "test",
-      "auth": "test"
+      "p256dh": "BNvxHOmXLZhkfnfducvUKBcy40cRe2qd1KRLxfAYwCEoOTwXqu8ZHztDOh8ImMuzAK_J24dGpg0ub2TK_PjC1iQ",
+      "auth": "GNOwsE9lImk31eM4jIM-BQ"
     }
   }
 }
