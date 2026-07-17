@@ -878,7 +878,8 @@ function openSubtaskFromPending(action) {
     const data = action.data || {};
     const phone = data.phone || '';
     const contactName = data.contact_name || '';
-    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}">${n}</option>`).join('');
+    const parentAssignee = data.sender_name || '';
+    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const desc = '';
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
