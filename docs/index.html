@@ -504,6 +504,7 @@ async function doFetch(payload, btnId) {
         } else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
+let _pendingConfKey = null;
 async function doFetchSilent(payload) {
     try {
         const r = await fetch(API_BASE + '/api/action', {
@@ -512,7 +513,10 @@ async function doFetchSilent(payload) {
             body: JSON.stringify(payload)
         });
         const j = await r.json();
-        if(r.ok && j.success) { await syncNotifications(); }
+        if(r.ok && j.success) {
+            if(j.conf_key) _pendingConfKey = j.conf_key;
+            await syncNotifications();
+        }
     } catch(e) { }
 }
 let _pendingNoteTaskId = null;
@@ -535,11 +539,13 @@ function showEditNoteModal(taskId) {
 async function submitEditNote() {
     const text = document.getElementById('edit-note-modal-text').value.trim();
     if(!text) { toast('Qeyd yazın!', true); return; }
+    const payload = {action:'add_note', task_id: _pendingNoteTaskId, text:text};
+    if(_pendingConfKey) { payload.conf_key = _pendingConfKey; _pendingConfKey = null; }
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method:'POST',
             headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
-            body:JSON.stringify({action:'add_note', task_id: _pendingNoteTaskId, text:text})
+            body:JSON.stringify(payload)
         });
         const j = await r.json();
         if(r.ok && j.success) { toast('Qeyd əlavə olundu', false); }

@@ -3211,7 +3211,28 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     break
             if not sender_name:
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
-            if admin_chat and admin_chat != chat_id and _bot_app:
+            # Check if there's a pending assignee change waiting for this note
+            conf_key = data.get("conf_key", "")
+            pending = None
+            if conf_key and _bot_app:
+                pending = _bot_app.bot_data.get("pending_updates", {}).get(conf_key)
+            if pending and admin_chat and _bot_app:
+                # Send confirmation to admin WITH the note text
+                try:
+                    pending["note_text"] = text  # store note in pending for later
+                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {pending.get('display_text', '')}\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}\n\ud83d\udcac Qeyd: {text}\n\ud83c\udd94 Task: {pending['task_id']}"
+                    kb_json = {"inline_keyboard": [
+                        [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{conf_key}-yes"}],
+                        [{"text": "\u015eamil", "callback_data": f"updtask-{conf_key}-shamil"}, {"text": "Soltan", "callback_data": f"updtask-{conf_key}-soltan"}],
+                        [{"text": "H\u00fcseyn", "callback_data": f"updtask-{conf_key}-huseyn"}, {"text": "Rasim", "callback_data": f"updtask-{conf_key}-rasim"}],
+                        [{"text": "Texniki", "callback_data": f"updtask-{conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{conf_key}-admin"}],
+                        [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{conf_key}-no"}]
+                    ]}
+                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
+                except Exception as e:
+                    logger.error(f"add_note conf notification error: {e}")
+            elif admin_chat and admin_chat != chat_id and _bot_app:
+                # Regular note notification (no pending assignee change)
                 try:
                     note_msg = f"\ud83d\udcdd *{sender_name}* qeyd \u0259lav\u0259 etdi:\n\n\ud83d\udcac {text}"
                     if task_id_note:
@@ -3443,32 +3464,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
             original_assignee = data.get("originalAssignee", "")
             assignee_actually_changed = assignee_name_raw and original_assignee and assignee_name_raw != original_assignee
             if not is_admin_user and assignee_actually_changed and _bot_app:
-                # Non-admin changing assignee -> confirmation required
-                admin_chat = get_chat_id_for_kommo_user(10932455)
+                # Non-admin changing assignee -> save pending, DON'T notify yet (wait for note)
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
                 display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
                 conf_key = str(uuid.uuid4())[:8]
                 _bot_app.bot_data.setdefault("pending_updates", {})[conf_key] = {
                     "task_id": task_id, "update_data": update_data,
                     "assignee_name_raw": assignee_name_raw, "sender_name": sender_name,
-                    "creator_chat_id": chat_id
+                    "creator_chat_id": chat_id, "display_text": display_text
                 }
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"updtask-{conf_key}-yes")],
-                    [InlineKeyboardButton("\u015eamil", callback_data=f"updtask-{conf_key}-shamil"), InlineKeyboardButton("Soltan", callback_data=f"updtask-{conf_key}-soltan")],
-                    [InlineKeyboardButton("H\u00fcseyn", callback_data=f"updtask-{conf_key}-huseyn"), InlineKeyboardButton("Rasim", callback_data=f"updtask-{conf_key}-rasim")],
-                    [InlineKeyboardButton("Texniki", callback_data=f"updtask-{conf_key}-texniki"), InlineKeyboardButton("\u00d6z\u00fcm", callback_data=f"updtask-{conf_key}-admin")],
-                    [InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"updtask-{conf_key}-no")],
-                ])
-                try:
-                    msg_text = f"\u270f\ufe0f {sender_name} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {display_text}\n\ud83d\udc64 {sender_name} \u2192 {assignee_name_raw}\n\ud83c\udd94 Task: {task_id}"
-                    kb_json = {"inline_keyboard": [[{"text": b.text, "callback_data": b.callback_data} for b in row] for row in kb.inline_keyboard]}
-                    _tg_resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
-                    if not _tg_resp.json().get("ok"):
-                        logger.error(f"update_task confirmation send failed: {_tg_resp.text[:200]}")
-                except Exception as e:
-                    logger.error(f"update_task confirmation send exception: {e}")
-                return web.json_response({"success": True, "message": "\u23f3 D\u0259yi\u015fiklik t\u0259sdiq \u00fc\u00e7\u00fcn g\u00f6nd\u0259rildi."})
+                # Return conf_key so frontend can attach note to this pending update
+                return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
             # Admin updates directly
             result = update_task_kommo(task_id, update_data)
             if result:
