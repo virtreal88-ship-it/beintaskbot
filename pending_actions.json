@@ -3,7 +3,7 @@
     "id": "2b731e4c",
     "type": "change_stage",
     "created_at": "2026-07-18T02:24:04.575292+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Tural Ismayilov",
       "phone": "—",
@@ -29,7 +29,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:24:19.772234+04:00",
+    "resolved_choice": "Arxiv"
   },
   {
     "id": "0a107549",
