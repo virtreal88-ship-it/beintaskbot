@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintask-v82';
+const CACHE_NAME = 'beintask-v83';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -39,10 +39,22 @@ self.addEventListener('push', e => {
 // Click on notification -> open app
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const target = String(e.notification.data || '');
+  const pwaBaseUrl = 'https://virtreal88-ship-it.github.io/beintaskbot/';
+  const hashIndex = target.indexOf('#');
+  const hash = hashIndex >= 0 ? target.slice(hashIndex) : '';
+  const destination = hash ? pwaBaseUrl + hash : (target || pwaBaseUrl);
   e.waitUntil(
     clients.matchAll({type: 'window'}).then(list => {
-      for(const c of list) { if(c.url.includes('beintaskbot') && 'focus' in c) return c.focus(); }
-      return clients.openWindow(e.notification.data || '/');
+      for(const client of list) {
+        if(client.url.includes('beintaskbot') && 'focus' in client) {
+          if(hash && client.url !== destination && 'navigate' in client) {
+            return client.navigate(destination).then(() => client.focus());
+          }
+          return client.focus();
+        }
+      }
+      return clients.openWindow(destination);
     })
   );
 });

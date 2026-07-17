@@ -35,6 +35,7 @@ from telegram.ext import (
 )
 from aiohttp import web
 from pywebpush import webpush, WebPushException
+from gh_storage import read_json, write_json
 # import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -144,6 +145,266 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
 
 def is_admin(chat_id: int) -> bool:
     return get_kommo_user_id_for_chat(chat_id) == 10932455
+
+
+_PENDING_ACTIONS_FILE = "pending_actions.json"
+_PENDING_EXECUTOR_NAMES = {
+    "Şamil": "Şamil Əliyev",
+    "Soltan": "Soltan Abbasov",
+    "Hüseyn": "Hüseyn Səfərov",
+    "Rasim": "Rasim Əsgərov",
+    "Texniki": "Texniki tapşırıq",
+}
+
+
+def get_pending_actions() -> list:
+    """Return persisted pending actions, tolerating an empty legacy document."""
+    actions = read_json(_PENDING_ACTIONS_FILE) or []
+    if not isinstance(actions, list):
+        logger.warning("pending_actions.json is not a list; ignoring invalid content")
+        return []
+    return actions
+
+
+def save_pending_action(action_type: str, data: dict, options: list) -> dict:
+    """Persist a new admin action and return its public representation."""
+    actions = get_pending_actions()
+    action = {
+        "id": str(uuid.uuid4())[:8],
+        "type": action_type,
+        "created_at": datetime.now(tz=BAKU_TZ).isoformat(),
+        "resolved": False,
+        "data": data,
+        "options": options,
+    }
+    actions.insert(0, action)
+    if not write_json(_PENDING_ACTIONS_FILE, actions[:500]):
+        logger.error("Failed to persist pending action %s", action["id"])
+    return action
+
+
+def mark_pending_action_resolved(
+    action_id: str = None,
+    action_type: str = None,
+    choice: str = None,
+    **data_matches,
+) -> bool:
+    """Resolve the newest matching persisted action without running it again."""
+    actions = get_pending_actions()
+    for action in actions:
+        if action.get("resolved"):
+            continue
+        if action_id and action.get("id") != action_id:
+            continue
+        if action_type and action.get("type") != action_type:
+            continue
+        action_data = action.get("data") or {}
+        if any(
+            expected is not None and str(action_data.get(key)) != str(expected)
+            for key, expected in data_matches.items()
+        ):
+            continue
+        action["resolved"] = True
+        action["resolved_at"] = datetime.now(tz=BAKU_TZ).isoformat()
+        if choice:
+            action["resolved_choice"] = choice
+        if not write_json(_PENDING_ACTIONS_FILE, actions):
+            logger.error("Failed to mark pending action %s as resolved", action.get("id"))
+            return False
+        return True
+    return False
+
+
+def _stage_key_for_status(status_id: int) -> str | None:
+    for stage_key, configured_status_id in STAGES.items():
+        if configured_status_id == status_id:
+            return stage_key
+    return None
+
+
+def _stage_key_for_name(stage_name: str) -> str | None:
+    normalized_name = str(stage_name or "").strip().casefold()
+    if normalized_name in STAGES:
+        return normalized_name
+    for status_id, display_name in STAGE_NAMES.items():
+        if display_name.casefold() == normalized_name:
+            return _stage_key_for_status(status_id)
+    return None
+
+
+def _send_telegram_text(chat_id, text: str):
+    """Best-effort Telegram notification usable from synchronous API handlers."""
+    if not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": int(chat_id), "text": text, "disable_web_page_preview": True},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Pending action Telegram notification failed: %s", exc)
+
+
+def _close_pending_telegram_message(action: dict, result_text: str):
+    """Remove stale inline buttons when an action is resolved in the PWA."""
+    action_data = action.get("data") or {}
+    chat_id = action_data.get("telegram_chat_id")
+    message_id = action_data.get("telegram_message_id")
+    if not chat_id or not message_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
+            json={
+                "chat_id": int(chat_id),
+                "message_id": int(message_id),
+                "text": result_text,
+                "disable_web_page_preview": True,
+            },
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Pending action Telegram cleanup failed: %s", exc)
+
+
+def _clear_runtime_pending_action(action: dict):
+    """Remove volatile Telegram callback state after a PWA resolution."""
+    if not _bot_app:
+        return
+    action_data = action.get("data") or {}
+    conf_key = action_data.get("conf_key")
+    callback_key = action_data.get("callback_key")
+    if conf_key:
+        _bot_app.bot_data.pop(f"confirm_{conf_key}", None)
+    if callback_key:
+        _bot_app.bot_data.get("pending_stage_change", {}).pop(callback_key, None)
+        _bot_app.bot_data.get("pending_next_stages", {}).pop(callback_key, None)
+
+
+def _create_stage_task(lead_id: int, stage_key: str, sender_name: str = "") -> bool:
+    """Create the standard two-hour task associated with a pipeline stage."""
+    task_text = _STAGE_TASK_TEXTS.get(stage_key)
+    if not task_text:
+        return True
+    deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+    if stage_key == "qiymet_teklifi" or sender_name in ("", "Webhook", "Nizami Qasımov", "Admin"):
+        responsible_user_id = 10932455
+    else:
+        task_text = f"[{sender_name}] {task_text}"
+        responsible_user_id = 15532668
+    return bool(create_task(
+        int(lead_id),
+        task_text,
+        deadline_ts,
+        responsible_user_id=responsible_user_id,
+        entity_type="leads",
+    ))
+
+
+def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
+    """Execute one persisted admin action and resolve it only after success."""
+    actions = get_pending_actions()
+    action = next((item for item in actions if item.get("id") == action_id), None)
+    if not action:
+        return False, "Sorğu tapılmadı."
+    if action.get("resolved"):
+        return False, "Sorğu artıq həll edilib."
+    if choice not in (action.get("options") or []):
+        return False, "Yanlış seçim."
+
+    action_type = action.get("type")
+    action_data = action.get("data") or {}
+    lead_id = action_data.get("lead_id")
+    contact_name = action_data.get("contact_name") or "—"
+    phone = action_data.get("phone") or "—"
+    stage_name = action_data.get("stage_name") or "—"
+    link = action_data.get("link") or (f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else "")
+
+    if action_type == "assign_executor":
+        if choice != "Ləğv et":
+            stage_key = action_data.get("stage_key") or _stage_key_for_name(stage_name)
+            task_text = _STAGE_TASK_TEXTS.get(stage_key)
+            if not lead_id or not task_text:
+                return False, "Mərhələ tapşırığı müəyyən edilmədi."
+            if choice == "Özüm":
+                responsible_user_id = 10932455
+            else:
+                full_name = _PENDING_EXECUTOR_NAMES.get(choice)
+                if not full_name:
+                    return False, "İcraçı tanınmadı."
+                task_text = f"[{full_name}] {task_text}"
+                responsible_user_id = 15532668
+            deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            if not create_task(
+                int(lead_id),
+                task_text,
+                deadline_ts,
+                responsible_user_id=responsible_user_id,
+                entity_type="leads",
+            ):
+                return False, "Kommo-da tapşırıq yaradılmadı."
+        result_message = "Sorğu ləğv edildi." if choice == "Ləğv et" else f"Tapşırıq {choice} üçün yaradıldı."
+
+    elif action_type == "confirm_stage":
+        if choice == "Təsdiq et":
+            status_id = action_data.get("status_id")
+            if not lead_id or not status_id:
+                return False, "Mərhələ məlumatı natamamdır."
+            if not update_lead_kommo(
+                int(lead_id),
+                {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+            ):
+                return False, "Kommo mərhələsi dəyişdirilmədi."
+            stage_key = action_data.get("stage_key") or _stage_key_for_status(int(status_id))
+            sender_name = action_data.get("sender_name", "")
+            if sender_name not in NAME_TO_CHAT:
+                sender_name = get_employee_name_by_chat_id(action_data.get("sender_chat_id"), "")
+            if stage_key in _STAGE_TASK_TEXTS and not _create_stage_task(
+                int(lead_id), stage_key, sender_name
+            ):
+                return False, "Mərhələ təsdiqləndi, lakin avtomatik tapşırıq yaradılmadı."
+            result_message = f"Mərhələ təsdiqləndi: {stage_name}."
+            sender_text = "✅ Admin sorğunuzu təsdiqlədi."
+        elif choice == "Rədd et":
+            result_message = "Mərhələ dəyişikliyi rədd edildi."
+            sender_text = "❌ Admin sorğunuzu rədd etdi."
+        else:
+            return False, "Yanlış seçim."
+        _send_telegram_text(
+            action_data.get("sender_chat_id"),
+            f"{sender_text}\n👤 {contact_name}\n📝 Mərhələ: {stage_name}\n"
+            f"📞 {phone}\n⏰ {datetime.now(tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+        )
+
+    elif action_type == "change_stage":
+        status_id = next(
+            (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
+            None,
+        )
+        if not lead_id or not status_id:
+            return False, "Seçilmiş mərhələ tapılmadı."
+        if not update_lead_kommo(
+            int(lead_id),
+            {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+        ):
+            return False, "Kommo mərhələsi dəyişdirilmədi."
+        stage_name = STAGE_NAMES.get(int(status_id), choice)
+        result_message = f"Mərhələ dəyişdirildi: {stage_name}."
+
+    else:
+        return False, "Naməlum sorğu növü."
+
+    if not mark_pending_action_resolved(action_id=action_id, choice=choice):
+        return False, "Əməliyyat icra olundu, lakin sorğu bağlanmadı."
+    _clear_runtime_pending_action(action)
+    _close_pending_telegram_message(
+        action,
+        f"✅ PWA-dan həll edildi: {choice}\n👤 {contact_name}\n📝 {result_message}\n"
+        f"📞 {phone}\n⏰ {datetime.now(tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+    )
+    return True, result_message
+
 
 # Telegram identities are the source of truth for real employee names because
 # several employees share the Sahə Meneceri Kommo user.
@@ -1208,6 +1469,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
             stage_display = STAGE_NAMES.get(result["status_id"], result["stage"])
             admin_chat = get_chat_id_for_kommo_user(10932455)
+            sent = None
             if admin_chat:
                 keyboard = [
                     [
@@ -1216,7 +1478,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                     ]
                 ]
                 try:
-                    await context.bot.send_message(
+                    sent = await context.bot.send_message(
                         admin_chat,
                         f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
                         f"👤 {result['contact_name']}\n📞 {result['phone']}\n"
@@ -1227,6 +1489,25 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                     )
                 except Exception as e:
                     logger.error(f"Failed to send confirmation: {e}")
+            save_pending_action("confirm_stage", {
+                "contact_name": result["contact_name"],
+                "phone": result["phone"],
+                "lead_id": result["lead_id"],
+                "status_id": result["status_id"],
+                "stage_name": stage_display,
+                "stage_key": result["stage"],
+                "sender_name": sender_name,
+                "sender_chat_id": chat_id,
+                "conf_key": conf_key,
+                "link": f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}",
+                "telegram_chat_id": admin_chat,
+                "telegram_message_id": sent.message_id if sent else None,
+            }, ["Təsdiq et", "Rədd et"])
+            send_push_to_admin(
+                f"{sender_name}: {result['contact_name']} → {stage_display}",
+                title="🔄 Mərhələ təsdiqi",
+                url="#pending",
+            )
             return f"⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.\n👤 {result['contact_name']} → {stage_display}"
         else:
             # Admin: execute immediately
@@ -1886,6 +2167,11 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
             await context.bot.send_message(sender_chat_id, "❌ Admin sorğunuzu rədd etdi.")
         except:
             pass
+    mark_pending_action_resolved(
+        action_type="confirm_stage",
+        conf_key=conf_key,
+        choice="Təsdiq et" if decision == "yes" else "Rədd et",
+    )
 
 # ─── Stage Task Assign/Deadline Callbacks (from webhook) ────────────────────
 async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1908,6 +2194,12 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
             await query.edit_message_text("❌ Ləğv edildi.")
         except:
             pass
+        mark_pending_action_resolved(
+            action_type="assign_executor",
+            lead_id=lead_id,
+            stage_key=stage_key,
+            choice="Ləğv et",
+        )
         return
     # All employees go to Sahə Meneceri with marker; admin goes to admin
     _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
@@ -1940,6 +2232,16 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         )
     except:
         pass
+    _pending_choice_by_assignee = {
+        "shamil": "Şamil", "soltan": "Soltan", "huseyn": "Hüseyn",
+        "rasim": "Rasim", "texniki": "Texniki", "admin": "Özüm",
+    }
+    mark_pending_action_resolved(
+        action_type="assign_executor",
+        lead_id=lead_id,
+        stage_key=stage_key,
+        choice=_pending_choice_by_assignee.get(assignee_key, assignee_name),
+    )
 
 async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle deadline for webhook-triggered stage tasks.
@@ -2733,13 +3035,17 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
             stage_display = STAGE_NAMES.get(result["status_id"], stage)
             admin_chat = get_chat_id_for_kommo_user(10932455)
+            sent = None
             if admin_chat:
                 keyboard = [[InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no")]]
                 try:
-                    await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-                    send_push_to_admin(f"{sender_name} mərhələ dəyişikliyi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
+                    sent = await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
                 except:
                     pass
+            send_push_to_admin(
+                f"{sender_name} mərhələ dəyişikliyi: {result['contact_name']} → {stage_display}",
+                title="🔄 Mərhələ",
+            )
             await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
         else:
             # Admin: execute
@@ -3142,6 +3448,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     InlineKeyboardButton("❌ Ləğv", callback_data=f"stgtask-{lead_id}-{stage_key}-cancel"),
                 ],
             ]
+            sent = None
             try:
                 sent = await _bot_app.bot.send_message(
                     admin_chat, msg, parse_mode="Markdown",
@@ -3149,9 +3456,24 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 )
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-                send_push_to_admin(f"Mərhələ: {stage_display} - {contact_name}", title="📋 İcraçı seç")
             except Exception as e:
                 logger.error(f"Webhook stage-task error: {e}")
+            save_pending_action("assign_executor", {
+                "contact_name": contact_name,
+                "phone": contact_phone,
+                "lead_id": lead_id,
+                "stage_name": stage_display,
+                "stage_key": stage_key,
+                "sender_name": "Webhook",
+                "link": link,
+                "telegram_chat_id": admin_chat,
+                "telegram_message_id": sent.message_id if sent else None,
+            }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Ləğv et"])
+            send_push_to_admin(
+                f"Mərhələ: {stage_display} - {contact_name}",
+                title="📋 İcraçı seç",
+                url="#pending",
+            )
         else:
             # Plain notification
             msg = (f"🔄 *Mərhələ dəyişikliyi:*\n\n👤 {contact_name}\n📞 {contact_phone}\n"
@@ -3170,6 +3492,31 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
 
 async def health_check(request: web.Request) -> web.Response:
     return web.Response(status=200, text="Bot is running")
+
+
+async def handle_get_pending_actions(request: web.Request) -> web.Response:
+    chat_id = request.rel_url.query.get("chat_id") or request.headers.get("X-TG-User-ID", "")
+    if not is_admin(chat_id):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    actions = [action for action in get_pending_actions() if not action.get("resolved")]
+    return web.json_response(actions)
+
+
+async def handle_resolve_action(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "message": "Invalid JSON"}, status=400)
+    chat_id = data.get("chat_id") or request.headers.get("X-TG-User-ID", "")
+    if not is_admin(chat_id):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    action_id = data.get("id")
+    choice = data.get("choice")
+    if not action_id or not choice:
+        return web.json_response({"success": False, "message": "Sorğu və seçim tələb olunur."}, status=400)
+    success, message = resolve_pending_action(str(action_id), str(choice))
+    return web.json_response({"success": success, "message": message})
+
 
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
@@ -3436,15 +3783,38 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not result.get("success"):
                 return web.json_response({"success": False, "error": result.get("message", "Xəta")})
             if result.get("needs_confirmation"):
-                # Non-admin needs confirmation - notify admin
+                # Non-admin needs confirmation in both Telegram and the PWA.
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                 stage_display = STAGE_NAMES.get(result["status_id"], stage)
+                conf_key = str(uuid.uuid4())[:8]
+                if _bot_app:
+                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                        "phone": result["phone"], "stage": stage,
+                        "lead_id": result["lead_id"], "status_id": result["status_id"],
+                        "sender_chat_id": chat_id,
+                        "sender_kommo_id": get_kommo_user_id_for_chat(chat_id),
+                    }
+                sent = None
                 if admin_chat and _bot_app:
+                    keyboard = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"),
+                        InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
+                    ]])
                     try:
-                        await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
-                        send_push_to_admin(f"{sender_name}: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
-                    except: pass
+                        sent = await _bot_app.bot.send_message(
+                            admin_chat,
+                            f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
+                            f"👤 {result['contact_name']}\n📞 {result['phone']}\n📌 {stage_display}",
+                            parse_mode="Markdown",
+                            reply_markup=keyboard,
+                        )
+                    except Exception as exc:
+                        logger.error(f"PWA stage confirmation send error: {exc}")
+                send_push_to_admin(
+                    f"{sender_name}: {result['contact_name']} → {stage_display}",
+                    title="🔄 Mərhələ",
+                )
                 return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
             update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
             stage_display = STAGE_NAMES.get(result["status_id"], stage)
@@ -3668,19 +4038,24 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             admin_chat = get_chat_id_for_kommo_user(10932455)
                             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
                             stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                            conf_key = str(uuid.uuid4())[:8]
+                            if _bot_app:
+                                _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                                    "phone": phone, "stage": new_stage,
+                                    "lead_id": lead_id, "status_id": stage_result["status_id"],
+                                    "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
+                                }
+                            sent = None
                             if admin_chat and _bot_app:
                                 try:
-                                    conf_key = str(uuid.uuid4())[:8]
-                                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                                        "phone": phone, "stage": new_stage,
-                                        "lead_id": lead_id, "status_id": stage_result["status_id"],
-                                        "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
-                                    }
                                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
-                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
-                                    send_push_to_admin(f"{sender_name}: {contact_name} → {stage_display}", title="🔄 Mərhələ təsdiqi")
+                                    sent = await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
                                 except Exception as e:
                                     logger.error(f"complete_task confirmation send error: {e}")
+                            send_push_to_admin(
+                                f"{sender_name}: {contact_name} → {stage_display}",
+                                title="🔄 Mərhələ təsdiqi",
+                            )
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         else:
                             update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
@@ -3713,19 +4088,24 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             admin_chat = get_chat_id_for_kommo_user(10932455)
                             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
                             stage_display = STAGE_NAMES.get(status_id, new_stage)
+                            conf_key = str(uuid.uuid4())[:8]
+                            if _bot_app:
+                                _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                                    "phone": phone, "stage": new_stage,
+                                    "lead_id": lead_id, "status_id": status_id,
+                                    "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
+                                }
+                            sent = None
                             if admin_chat and _bot_app:
                                 try:
-                                    conf_key = str(uuid.uuid4())[:8]
-                                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                                        "phone": phone, "stage": new_stage,
-                                        "lead_id": lead_id, "status_id": status_id,
-                                        "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
-                                    }
                                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
-                                    await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
-                                    send_push_to_admin(f"{sender_name}: {stage_display}", title="🔄 Mərhələ təsdiqi")
+                                    sent = await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
                                 except Exception as e:
                                     logger.error(f"complete_task confirmation (no phone) error: {e}")
+                            send_push_to_admin(
+                                f"{sender_name}: {stage_display}",
+                                title="🔄 Mərhələ təsdiqi",
+                            )
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
             # The employee note is both the task result (set above) and a
@@ -4207,9 +4587,13 @@ async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
+    app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
+    app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
     app_web.router.add_get("/api/balance", handle_api_balance)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
@@ -4415,6 +4799,21 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
     keyboard_rows = [stage_buttons[i:i+2] for i in range(0, len(stage_buttons), 2)]
     # Copy pending data to pending_next_stages for nstg handler
     context.bot_data.setdefault("pending_next_stages", {})[callback_key] = pending
+    lead_id = int(pending["lead_id"])
+    contact_name = get_contact_name_from_entity(lead_id, "leads") or "—"
+    phone = get_phone_from_entity(lead_id, "leads") or "—"
+    save_pending_action("change_stage", {
+        "contact_name": contact_name,
+        "phone": phone,
+        "lead_id": lead_id,
+        "task_id": pending.get("task_id"),
+        "sender_name": get_employee_name_by_chat_id(pending.get("employee_tg_id"), ""),
+        "description": "Tapşırıq tamamlandıqdan sonra yeni mərhələni seçin.",
+        "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+        "callback_key": callback_key,
+        "telegram_chat_id": query.message.chat_id,
+        "telegram_message_id": query.message.message_id,
+    }, [STAGE_NAMES.get(status_id, stage_key) for stage_key, status_id in STAGES.items()])
     try:
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard_rows))
     except Exception:
@@ -4451,6 +4850,11 @@ async def next_stage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.bot_data.get("pending_next_stages", {}).pop(callback_key, None)
     context.bot_data.get("pending_stage_change", {}).pop(callback_key, None)
     stage_name = STAGE_NAMES.get(status_id, stage_key)
+    mark_pending_action_resolved(
+        action_type="change_stage",
+        callback_key=callback_key,
+        choice=stage_name,
+    )
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:

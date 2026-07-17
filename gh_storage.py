@@ -142,6 +142,22 @@ def _save_file(filename: str):
     return False
 
 
+def read_json(filename: str):
+    """Read an arbitrary JSON document from the GitHub-backed data branch."""
+    data = _load_file(filename)
+    # Return a detached value so callers cannot mutate the shared cache without
+    # going through write_json().
+    return json.loads(json.dumps(data, ensure_ascii=False))
+
+
+def write_json(filename: str, data) -> bool:
+    """Persist an arbitrary JSON-serializable document to the data branch."""
+    detached = json.loads(json.dumps(data, ensure_ascii=False))
+    with _lock:
+        _cache[filename] = detached
+    return _save_file(filename)
+
+
 # ─── Balance Functions ────────────────────────────────────────────────────────
 
 def add_balance_transaction(

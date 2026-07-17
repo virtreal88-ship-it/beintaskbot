@@ -258,6 +258,18 @@
             <button id="job-submit-btn" onclick="submitClose()" class="w-full bg-[#0284c7] text-white font-bold py-3 rounded-xl text-xs">Tapşırığı tamamla</button>
         </div>
     </div>
+
+    <!-- SCREEN: PENDING ACTIONS (admin only) -->
+    <div id="screen-pending" class="screen space-y-3">
+        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div>
+                <div class="text-sm font-extrabold text-gray-800">Gözləyən sorğular</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Telegram və webhook sorğularını idarə edin</div>
+            </div>
+            <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+        </div>
+        <div id="pending-actions-container" class="space-y-3"></div>
+    </div>
 </div>
 
 <!-- BOTTOM SHEET (for completing task) -->
@@ -303,6 +315,9 @@
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Balans</span>
     </button>
+    <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span>
+    </button>
 </div>
 
 <script>
@@ -312,6 +327,8 @@ const API_BASE = 'https://worker-production-3e3e.up.railway.app';
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
+let pendingActions = [];
+let pendingActionsTimer = null;
 
 function getUserId() {
     const p = new URLSearchParams(window.location.search);
@@ -352,18 +369,36 @@ function toast(m, err) {
     t.style.top = '20px'; setTimeout(() => t.style.top = '-60px', 3000);
 }
 
-function initApp() {
+function setPendingTabVisible() {
+    const tab = document.getElementById('tab-pending');
+    if(tab) tab.style.display = isAdmin ? 'flex' : 'none';
+}
+
+function applyHashRoute() {
+    if(window.location.hash === '#pending' && isAdmin) switchTab('tab-pending', false);
+}
+
+async function initApp() {
     // Show user name in header
     const name = tg.initDataUnsafe?.user?.first_name || '';
     if(name) document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
     initSessionPersistence();
     restoreSessionForms();
-    openNotifications();
+    setPendingTabVisible();
+    await openNotifications();
+    applyHashRoute();
 }
 
-document.addEventListener('visibilitychange', () => { if(!document.hidden) syncNotifications(); });
+document.addEventListener('visibilitychange', () => {
+    if(!document.hidden) {
+        syncNotifications();
+        if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+    }
+});
+window.addEventListener('hashchange', applyHashRoute);
 
 function nav(id) {
+    if(id !== 'screen-pending') stopPendingActionPolling();
     closeBottomBar();
     document.getElementById('screen-success').style.display = 'none';
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -471,9 +506,14 @@ async function syncNotifications(showError = false) {
         if(j.is_admin) {
             isAdmin = true;
             localStorage.setItem('is_admin','true');
+            setPendingTabVisible();
             const filterRow = document.getElementById('filter-row'); if(filterRow) filterRow.style.display = 'flex';
             const pf1 = document.getElementById('price-field-create'); if(pf1) pf1.style.display='';
             const pf2 = document.getElementById('price-field-edit'); if(pf2) pf2.style.display='';
+        } else {
+            isAdmin = false;
+            localStorage.removeItem('is_admin');
+            setPendingTabVisible();
         }
         let tasks = j.tasks;
         if(Object.keys(_completedTaskIds).length > 0) tasks = tasks.filter(t => !_completedTaskIds[t.id]);
@@ -639,6 +679,167 @@ async function openNotifications() {
     hideSyncIndicator();
     loadBalance();
     loadKpi();
+}
+
+function pendingActionTitle(type) {
+    return {
+        assign_executor: 'İcraçı seçimi',
+        confirm_stage: 'Mərhələ təsdiqi',
+        change_stage: 'Mərhələ seçimi',
+    }[type] || 'Admin sorğusu';
+}
+
+function formatPendingDate(value) {
+    if(!value) return '—';
+    const date = new Date(value);
+    if(Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString('az-AZ', {
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+}
+
+function appendPendingDetail(container, icon, label, value) {
+    const row = document.createElement('div');
+    row.className = 'text-[11px] text-gray-700 leading-relaxed';
+    const strong = document.createElement('span');
+    strong.className = 'font-bold';
+    strong.textContent = `${icon} ${label}: `;
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(value || '—'));
+    container.appendChild(row);
+}
+
+function renderPendingActions() {
+    const container = document.getElementById('pending-actions-container');
+    if(!container) return;
+    container.innerHTML = '';
+    if(!pendingActions.length) {
+        const empty = document.createElement('div');
+        empty.className = 'text-center py-12 text-gray-400 text-xs font-semibold';
+        empty.textContent = 'Hazırda gözləyən sorğu yoxdur.';
+        container.appendChild(empty);
+        return;
+    }
+
+    pendingActions.forEach(action => {
+        const data = action.data || {};
+        const card = document.createElement('section');
+        card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3';
+
+        const header = document.createElement('div');
+        header.className = 'flex items-start justify-between gap-3';
+        const title = document.createElement('div');
+        title.className = 'text-sm font-extrabold text-gray-800';
+        title.textContent = pendingActionTitle(action.type);
+        const created = document.createElement('div');
+        created.className = 'text-[10px] text-gray-400 font-medium text-right';
+        created.textContent = formatPendingDate(action.created_at);
+        header.append(title, created);
+        card.appendChild(header);
+
+        const details = document.createElement('div');
+        details.className = 'space-y-1.5 bg-slate-50 rounded-xl p-3';
+        const description = data.task_text || data.description ||
+            (data.stage_name ? `Mərhələ: ${data.stage_name}` : 'Sorğu üçün seçim gözlənilir.');
+        appendPendingDetail(details, '👤', 'Müştəri', data.contact_name || data.client_name);
+        appendPendingDetail(details, '📝', 'Təsvir', description);
+        appendPendingDetail(details, '📞', 'Telefon', data.phone);
+        appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));
+        if(data.link) {
+            const linkRow = document.createElement('a');
+            linkRow.href = data.link;
+            linkRow.target = '_blank';
+            linkRow.rel = 'noopener noreferrer';
+            linkRow.className = 'block text-[11px] font-bold text-blue-600 underline';
+            linkRow.textContent = '🔗 Kommo-da aç';
+            details.appendChild(linkRow);
+        }
+        card.appendChild(details);
+
+        const options = Array.isArray(action.options) ? action.options : [];
+        const controls = document.createElement('div');
+        controls.className = 'grid grid-cols-2 gap-2';
+        options.forEach(choice => {
+            const button = document.createElement('button');
+            const isReject = choice === 'Rədd et' || choice === 'Ləğv et';
+            const isApprove = choice === 'Təsdiq et';
+            button.className = isReject
+                ? 'bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-2 rounded-xl text-[11px]'
+                : isApprove
+                    ? 'bg-emerald-500 text-white font-bold py-2.5 px-2 rounded-xl text-[11px]'
+                    : 'bg-[#2481cc] text-white font-bold py-2.5 px-2 rounded-xl text-[11px]';
+            button.textContent = choice;
+            button.addEventListener('click', () => resolvePendingAction(action.id, choice, button));
+            controls.appendChild(button);
+        });
+        if(options.length) card.appendChild(controls);
+        container.appendChild(card);
+    });
+}
+
+async function loadPendingActions(showFeedback = false) {
+    if(!isAdmin) return false;
+    const container = document.getElementById('pending-actions-container');
+    if(showFeedback && container) {
+        container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Yenilənir...</div>';
+    }
+    try {
+        const url = `${API_BASE}/api/pending_actions?chat_id=${encodeURIComponent(CURRENT_USER_ID)}`;
+        const response = await fetch(url, {headers: {'X-TG-User-ID': CURRENT_USER_ID}});
+        const payload = await response.json();
+        if(!response.ok || !Array.isArray(payload)) throw new Error(payload.error || 'Pending actions unavailable');
+        pendingActions = payload;
+        renderPendingActions();
+        return true;
+    } catch(error) {
+        if(container) {
+            container.innerHTML = '<div class="text-center py-10 text-red-500 text-xs font-semibold">Sorğular yüklənmədi.</div>';
+        }
+        if(showFeedback) toast('Gözləyən sorğular yüklənmədi', true);
+        return false;
+    }
+}
+
+async function resolvePendingAction(actionId, choice, button) {
+    if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
+    const card = button?.closest('section');
+    const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
+    buttons.forEach(item => { item.disabled = true; });
+    try {
+        const response = await fetch(API_BASE + '/api/pending_actions/resolve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice}),
+        });
+        const payload = await response.json();
+        if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
+        toast(payload.message || 'Sorğu həll edildi.', false);
+        await Promise.all([loadPendingActions(), syncNotifications()]);
+    } catch(error) {
+        toast(error.message || 'Sorğu həll edilmədi', true);
+        buttons.forEach(item => { item.disabled = false; });
+    }
+}
+
+function startPendingActionPolling() {
+    stopPendingActionPolling();
+    pendingActionsTimer = setInterval(() => {
+        if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+    }, 30000);
+}
+
+function stopPendingActionPolling() {
+    if(pendingActionsTimer) {
+        clearInterval(pendingActionsTimer);
+        pendingActionsTimer = null;
+    }
+}
+
+async function openPendingActions() {
+    if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+    nav('screen-pending');
+    startPendingActionPolling();
+    await loadPendingActions();
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
@@ -909,22 +1110,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
 });
 
-function switchTab(tabId) {
-    document.getElementById('tab-tasks').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
-    document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
-    document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
+function switchTab(tabId, updateHash = true) {
+    const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
+    const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+    ['tab-tasks', 'tab-create', 'tab-history', 'tab-pending'].forEach(id => {
+        const tab = document.getElementById(id);
+        if(tab) tab.className = inactiveClass;
+    });
     if(tabId === 'tab-tasks') {
-        document.getElementById('tab-tasks').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-        nav('screen-notifications'); openNotifications();
+        document.getElementById('tab-tasks').className = activeClass;
+        nav('screen-notifications');
+        openNotifications();
     } else if(tabId === 'tab-create') {
-        document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+        document.getElementById('tab-create').className = activeClass;
         editingTaskId = null;
         restoreSessionForms();
         nav('screen-create');
     } else if(tabId === 'tab-history') {
-        document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
+        document.getElementById('tab-history').className = activeClass;
         if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
         else { nav('screen-balance-history'); loadBalanceHistory(); }
+    } else if(tabId === 'tab-pending') {
+        if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+        const pendingTab = document.getElementById('tab-pending');
+        if(pendingTab) pendingTab.className = activeClass;
+        openPendingActions();
+    }
+    if(updateHash) {
+        const nextHash = tabId === 'tab-pending' ? '#pending' : '';
+        if(window.location.hash !== nextHash) {
+            history.replaceState(null, '', window.location.pathname + window.location.search + nextHash);
+        }
     }
 }
 
@@ -1105,7 +1321,16 @@ async function submitMexaric() {
     let ptrStart = 0, ptrDist = 0, ptrActive = false;
     ca.addEventListener('touchstart', e => { if(ca.scrollTop <= 0) { ptrStart = e.touches[0].clientY; ptrActive = true; } }, {passive:true});
     ca.addEventListener('touchmove', e => { if(!ptrActive) return; ptrDist = e.touches[0].clientY - ptrStart; }, {passive:true});
-    ca.addEventListener('touchend', async () => { if(ptrActive && ptrDist > 80) { showSyncIndicator(); await syncNotifications(); hideSyncIndicator(); } ptrActive = false; ptrDist = 0; });
+    ca.addEventListener('touchend', async () => {
+        if(ptrActive && ptrDist > 80) {
+            showSyncIndicator();
+            if(document.getElementById('screen-pending')?.classList.contains('active')) await loadPendingActions();
+            else await syncNotifications();
+            hideSyncIndicator();
+        }
+        ptrActive = false;
+        ptrDist = 0;
+    });
 })();
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>
