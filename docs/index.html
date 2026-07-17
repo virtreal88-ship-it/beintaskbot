@@ -264,7 +264,7 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləyən sorğular</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Sola sürüşdür — rədd et • Sağa sürüşdür — təsdiq et</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Telegram və webhook sorğularını idarə edin</div>
             </div>
             <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
@@ -730,12 +730,12 @@ function renderPendingActions() {
         // Swipe handling
         let startX = 0, currentX = 0, swiping = false;
         card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; swiping = true; currentX = 0; });
-        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; card.style.opacity = Math.max(0.4, 1 - Math.abs(currentX)/300); });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#d1fae5'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
             swiping = false;
-            if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,'Rədd et',card);},300); }
-            else if(currentX > 100) { const opts = Array.isArray(action.options)?action.options:[]; const approve = opts.find(o=>o==='Təsdiq et')||opts[0]||'Təsdiq et'; card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,approve,card);},300); }
-            else { card.style.transform='translateX(0)'; card.style.opacity='1'; }
+            if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; const rej = (Array.isArray(action.options)?action.options:[]).find(o=>o==='Rədd et'||o==='Ləğv et')||'Rədd et'; setTimeout(()=>{resolvePendingAction(action.id,rej,card);},300); }
+            else if(currentX < -100) { const opts = Array.isArray(action.options)?action.options:[]; const approve = opts.find(o=>o==='Təsdiq et')||opts[0]||'Təsdiq et'; card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,approve,card);},300); }
+            else { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
         });
 
         const header = document.createElement('div');

@@ -3682,6 +3682,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         "phone": client_phone,
                         "lead_id": None,
                         "task_id": pending.get('task_id'),
+                        "task_text": pending.get('display_text', ''),
                         "stage_name": f"İcraçı: {pending['sender_name']} → {pending['assignee_name_raw']}",
                         "sender_name": pending['sender_name'],
                         "assignee_name_raw": pending['assignee_name_raw'],
@@ -4185,7 +4186,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
 
-            if result:
+            if True:  # Always notify admin even if task was already completed
               try:
                 task_text_full = task_data.get("text", "").strip()
                 task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
@@ -4275,8 +4276,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
               localStorage_key = f'timer_{task_id}'
               msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
               return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
-            else:
-                return web.json_response({"success": False, "error": "Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131."})
         elif action == "update_task_deadline":
             task_id = data.get("task_id")
             time_preset = data.get("time_preset", "+2h")
