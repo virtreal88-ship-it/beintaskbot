@@ -4287,6 +4287,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "sender_name": completion_sender,
+                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", task_data.get("text", "").strip()) or "—",
+                            "note": note_text or "",
                             "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
                             "link": link,
                             "callback_key": callback_key,
