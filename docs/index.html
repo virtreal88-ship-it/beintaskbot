@@ -758,20 +758,59 @@ function renderPendingActions() {
 
         const options = Array.isArray(action.options) ? action.options : [];
         const controls = document.createElement('div');
-        controls.className = 'grid grid-cols-2 gap-2';
-        options.forEach(choice => {
-            const button = document.createElement('button');
-            const isReject = choice === 'Rədd et' || choice === 'Ləğv et';
-            const isApprove = choice === 'Təsdiq et';
-            button.className = isReject
-                ? 'bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-2 rounded-xl text-[11px]'
-                : isApprove
-                    ? 'bg-emerald-500 text-white font-bold py-2.5 px-2 rounded-xl text-[11px]'
-                    : 'bg-[#2481cc] text-white font-bold py-2.5 px-2 rounded-xl text-[11px]';
-            button.textContent = choice;
-            button.addEventListener('click', () => resolvePendingAction(action.id, choice, button));
-            controls.appendChild(button);
-        });
+        controls.className = 'space-y-2';
+        const rejectOption = options.find(o => o === 'R\u0259dd et' || o === 'L\u0259\u011fv et');
+        const approveOption = options.find(o => o === 'T\u0259sdiq et');
+        const executorOptions = options.filter(o => o !== 'R\u0259dd et' && o !== 'L\u0259\u011fv et' && o !== 'T\u0259sdiq et');
+        if(executorOptions.length > 0 || approveOption) {
+            const select = document.createElement('select');
+            select.className = 'w-full bg-slate-50 border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300';
+            select.id = 'pending-select-' + action.id;
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Se\u00e7im edin...';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            select.appendChild(placeholder);
+            if(approveOption) {
+                const opt = document.createElement('option');
+                opt.value = approveOption;
+                opt.textContent = '\u2705 ' + approveOption;
+                select.appendChild(opt);
+            }
+            executorOptions.forEach(choice => {
+                const opt = document.createElement('option');
+                opt.value = choice;
+                opt.textContent = choice;
+                select.appendChild(opt);
+            });
+            controls.appendChild(select);
+            const btnRow = document.createElement('div');
+            btnRow.className = 'flex gap-2';
+            const confirmBtn = document.createElement('button');
+            confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+            confirmBtn.textContent = 'T\u0259sdiq et';
+            confirmBtn.addEventListener('click', () => {
+                const selected = select.value;
+                if(!selected) { toast('Se\u00e7im edin!', true); return; }
+                resolvePendingAction(action.id, selected, confirmBtn);
+            });
+            btnRow.appendChild(confirmBtn);
+            if(rejectOption) {
+                const rejectBtn = document.createElement('button');
+                rejectBtn.className = 'flex-1 bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-3 rounded-xl text-[12px]';
+                rejectBtn.textContent = rejectOption;
+                rejectBtn.addEventListener('click', () => resolvePendingAction(action.id, rejectOption, rejectBtn));
+                btnRow.appendChild(rejectBtn);
+            }
+            controls.appendChild(btnRow);
+        } else if(rejectOption) {
+            const rejectBtn = document.createElement('button');
+            rejectBtn.className = 'w-full bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-3 rounded-xl text-[12px]';
+            rejectBtn.textContent = rejectOption;
+            rejectBtn.addEventListener('click', () => resolvePendingAction(action.id, rejectOption, rejectBtn));
+            controls.appendChild(rejectBtn);
+        }
         if(options.length) card.appendChild(controls);
         container.appendChild(card);
     });
