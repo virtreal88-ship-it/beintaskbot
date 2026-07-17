@@ -73,6 +73,21 @@ def _save_file(filename: str):
     """Save cached data to GitHub with retry on SHA conflict."""
     with _lock:
         data = _cache.get(filename, {})
+    # Always fetch fresh SHA before saving to avoid conflicts after redeploy
+    try:
+        r_sha = requests.get(
+            f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}",
+            headers=_headers(), timeout=15
+        )
+        if r_sha.status_code == 200:
+            sha = r_sha.json()["sha"]
+            with _lock:
+                _cache_sha[filename] = sha
+        else:
+            sha = None
+            with _lock:
+                _cache_sha[filename] = None
+    except:
         sha = _cache_sha.get(filename)
     content = base64.b64encode(json.dumps(data, ensure_ascii=False, indent=2).encode()).decode()
     payload = {
@@ -130,7 +145,7 @@ def _save_file(filename: str):
 def add_balance_transaction(telegram_id: int, task_id: int, amount: float, task_text: str):
     """Add a transaction and save to GitHub."""
     filename = "balance.json"
-    _load_file(filename)
+    _load_file(filename, force=True)
     with _lock:
         data = _cache.setdefault(filename, {})
         key = str(telegram_id)
