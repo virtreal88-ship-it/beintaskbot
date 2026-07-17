@@ -4405,8 +4405,9 @@ from gh_storage import (
 import subprocess as _sp
 _gh_token_match = _sp.run(['git', 'config', '--get', 'remote.origin.url'], capture_output=True, text=True)
 _gh_token_url = _gh_token_match.stdout.strip()
-_gh_token = _gh_token_url.split('//')[1].split('@')[0] if '@' in _gh_token_url else os.environ.get('GH_TOKEN', '')
+_gh_token = _gh_token_url.split('//')[1].split('@')[0] if '@' in _gh_token_url else os.environ.get('GH_TOKEN', os.environ.get('GH_STORAGE_TOKEN', ''))
 _init_gh_storage(_gh_token)
+logger.info(f"GH Storage initialized, token length: {len(_gh_token)}, starts with: {_gh_token[:10] if _gh_token else 'EMPTY'}")
 
 _EMPLOYEE_NAMES_BY_TG = {
     7920785774: 'Rasim Əsgərov',

@@ -74,6 +74,7 @@ def _save_file(filename: str):
     with _lock:
         data = _cache.get(filename, {})
     # Always fetch fresh SHA before saving to avoid conflicts after redeploy
+    logger.info(f"gh_storage _save_file({filename}): starting save...")
     try:
         r_sha = requests.get(
             f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}",
@@ -105,6 +106,7 @@ def _save_file(filename: str):
                 headers=_headers(), json=payload, timeout=15
             )
             if r.status_code in (200, 201):
+                logger.info(f"gh_storage _save_file({filename}): SUCCESS")
                 with _lock:
                     _cache_sha[filename] = r.json()["content"]["sha"]
                 return True
