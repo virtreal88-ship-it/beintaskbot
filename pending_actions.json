@@ -1,5 +1,37 @@
 [
   {
+    "id": "aa51967b",
+    "type": "change_stage",
+    "created_at": "2026-07-18T02:08:40.529088+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "—",
+      "phone": "—",
+      "lead_id": 76925149,
+      "task_id": 93544301,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Подзадача",
+      "note": "Тест",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76925149",
+      "callback_key": "20333e09"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "cavab gözlənilir",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "424c1876",
     "type": "change_stage",
     "created_at": "2026-07-18T02:06:53.759556+04:00",
