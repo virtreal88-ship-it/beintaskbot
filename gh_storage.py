@@ -7,7 +7,7 @@ import base64
 import logging
 import threading
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +144,16 @@ def _save_file(filename: str):
 
 # ─── Balance Functions ────────────────────────────────────────────────────────
 
-def add_balance_transaction(telegram_id: int, task_id: int, amount: float, task_text: str):
-    """Add a transaction to local cache and persist to GitHub."""
+def add_balance_transaction(
+    telegram_id: int,
+    task_id: int,
+    amount: float,
+    task_text: str,
+    executor_name: str = "",
+    client: str = "",
+    task_type: str = "",
+):
+    """Add a transaction with complete business context and persist it."""
     filename = "balance.json"
     with _lock:
         data = _cache.setdefault(filename, {})
@@ -154,6 +162,9 @@ def add_balance_transaction(telegram_id: int, task_id: int, amount: float, task_
             data[key] = {"transactions": []}
         data[key]["transactions"].append({
             "task_id": task_id,
+            "executor": executor_name,
+            "client": client,
+            "task_type": task_type,
             "amount": amount,
             "task_text": task_text,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -270,8 +281,14 @@ def pause_task_session(telegram_id: int, task_id: int, elapsed_seconds: int) -> 
     return True
 
 
-def finish_task_session(telegram_id: int, task_id: int, task_type_id: int, delay_reason: str = ''):
-    """Finish all sessions for a task and calculate KPI."""
+def finish_task_session(
+    telegram_id: int,
+    task_id: int,
+    task_type_id: int,
+    delay_reason: str = '',
+    deadline_ts: int | None = None,
+):
+    """Finish all sessions and score 100 before/on deadline, otherwise 0."""
     from datetime import datetime as dt2
     filename = "kpi.json"
     _load_file(filename)
@@ -295,17 +312,15 @@ def finish_task_session(telegram_id: int, task_id: int, task_type_id: int, delay
                 s["actual_minutes"] = round((end_dt - start_dt).total_seconds() / 60.0, 1)
         # Sum all sessions
         actual_minutes = sum(s.get("actual_minutes", 0) or 0 for s in sessions)
-        if actual_minutes == 0:
-            return None
         target_minutes = _KPI_TARGET_TIMES.get(task_type_id, 60)
-        if actual_minutes <= target_minutes:
-            kpi_score = min(100, (target_minutes / max(actual_minutes, 1)) * 80)
-        else:
-            kpi_score = max(0, 80 - ((actual_minutes - target_minutes) / target_minutes) * 60)
-        kpi_score = round(kpi_score, 1)
+        completed_at_ts = int(datetime.now(timezone.utc).timestamp())
+        completed_before_deadline = bool(deadline_ts and completed_at_ts <= int(deadline_ts))
+        kpi_score = 100 if completed_before_deadline else 0
         data[key]["kpi_score"] = kpi_score
         data[key]["target_minutes"] = target_minutes
         data[key]["actual_minutes"] = round(actual_minutes, 1)
+        data[key]["deadline_ts"] = int(deadline_ts) if deadline_ts else None
+        data[key]["completed_before_deadline"] = completed_before_deadline
         data[key]["delay_reason"] = delay_reason
         data[key]["completed_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -314,8 +329,27 @@ def finish_task_session(telegram_id: int, task_id: int, task_type_id: int, delay
         'kpi_score': kpi_score,
         'actual_minutes': round(actual_minutes, 1),
         'target_minutes': target_minutes,
-        'needs_reason': actual_minutes > target_minutes * 1.2
+        'deadline_ts': int(deadline_ts) if deadline_ts else None,
+        'completed_before_deadline': completed_before_deadline,
+        'needs_reason': not completed_before_deadline
     }
+
+
+def set_kpi_score(telegram_id: int, task_id: int, score: int, corrected_by: int | None = None) -> bool:
+    """Apply an admin correction to a stored KPI score."""
+    filename = "kpi.json"
+    _load_file(filename)
+    normalized_score = max(0, min(100, int(score)))
+    with _lock:
+        data = _cache.get(filename, {})
+        key = f"{telegram_id}_{task_id}"
+        if key not in data:
+            return False
+        data[key]["kpi_score"] = normalized_score
+        data[key]["manual_correction"] = True
+        data[key]["corrected_by"] = corrected_by
+        data[key]["corrected_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return _save_file(filename)
 
 
 def get_kpi_summary(telegram_id: int) -> dict:

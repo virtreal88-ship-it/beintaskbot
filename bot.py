@@ -93,6 +93,16 @@ _STAGE_TASK_TEXTS = {
     "gorus": "Müştəri ilə görüş keçirmək",
     "qurashdirma": "Quraşdırmanı həyata keçirmək",
 }
+TASK_TYPE_NAMES = {
+    1: "Əlaqə saxla",
+    2: "Görüş",
+    3263995: "Təqdimat",
+    3263999: "Quraşdırma",
+    3267595: "Zəng et",
+    4229224: "Cavab gözlənilir",
+    4232112: "Texniki tapşırıq",
+    4232108: "Import",
+}
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -128,6 +138,25 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
 def is_admin(chat_id: int) -> bool:
     return get_kommo_user_id_for_chat(chat_id) == 10932455
 
+# Telegram identities are the source of truth for real employee names because
+# several employees share the Sahə Meneceri Kommo user.
+TG_CHAT_TO_EMPLOYEE = {
+    1628569350: "Nizami Qasımov",
+    7962757442: "Şamil Əliyev",
+    7262243946: "Soltan Abbasov",
+    7329891614: "Hüseyn Səfərov",
+    7920785774: "Rasim Əsgərov",
+    8835096199: "Texniki tapşırıq",
+}
+
+def get_employee_name_by_chat_id(chat_id: int, default: str = "Əməkdaş") -> str:
+    """Return the real employee name for a Telegram private-chat ID."""
+    try:
+        normalized_chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        return default
+    return TG_CHAT_TO_EMPLOYEE.get(normalized_chat_id, default)
+
 # Name-to-chat mapping for marker-based notifications
 NAME_TO_CHAT = {
     "Şamil Əliyev": 7962757442,
@@ -135,7 +164,7 @@ NAME_TO_CHAT = {
     "Hüseyn Səfərov": 7329891614,
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
-    "Texniki Dəstək": 8835096199,
+    "Texniki tapşırıq": 8835096199,
     "Şamil": 7962757442,
     "Soltan": 7262243946,
     "Hüseyn": 7329891614,
@@ -321,6 +350,40 @@ def get_lead_details(lead_id: int) -> dict | None:
     except Exception as e:
         logger.error(f"Lead details error: {e}")
     return None
+
+def get_task_deal_context(task_data: dict) -> dict:
+    """Resolve a Kommo task to its deal and primary client details."""
+    entity_id = task_data.get("entity_id")
+    entity_type = task_data.get("entity_type", "contacts")
+    lead_id = entity_id if entity_type == "leads" else None
+    contact = None
+
+    if entity_id and entity_type == "contacts":
+        contact = get_contact_details(int(entity_id))
+        leads = (contact or {}).get("_embedded", {}).get("leads", [])
+        if leads:
+            lead_id = leads[0].get("id")
+    elif lead_id:
+        lead = get_lead_details(int(lead_id))
+        contacts = (lead or {}).get("_embedded", {}).get("contacts", [])
+        if contacts:
+            contact = get_contact_details(int(contacts[0]["id"]))
+
+    client_name = (contact or {}).get("name", "")
+    phone = ""
+    for custom_field in (contact or {}).get("custom_fields_values", []) or []:
+        if custom_field.get("field_code") == "PHONE":
+            values = custom_field.get("values", [])
+            if values:
+                phone = values[0].get("value", "")
+                break
+
+    return {
+        "lead_id": int(lead_id) if lead_id else None,
+        "client_name": client_name,
+        "phone": phone,
+        "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else "",
+    }
 
 def get_phone_from_entity(entity_id: int, entity_type: str) -> str:
     try:
@@ -1837,7 +1900,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
             pass
         return
     # All employees go to Sahə Meneceri with marker; admin goes to admin
-    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
+    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -1884,7 +1947,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
+    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -2675,6 +2738,10 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif action == "task":
         text = data.get("text", "")
         assignee = data.get("assignee", "admin")
+        creator_name = get_employee_name_by_chat_id(chat_id, "")
+        if assignee != "admin" and creator_name:
+            text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+            text = f"[{creator_name}] {text}"
         deadline_key = data.get("deadline", "tomorrow")
         # Resolve deadline
         now = datetime.now(tz=BAKU_TZ)
@@ -2711,7 +2778,10 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Notify admin
             admin_chat = get_chat_id_for_kommo_user(10932455)
             if admin_chat and admin_chat != chat_id:
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                sender_name = get_employee_name_by_chat_id(
+                    chat_id,
+                    KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
+                )
                 try:
                     await context.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
                 except: pass
@@ -2724,26 +2794,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user_text = update.message.text.strip()
     chat_id = update.message.chat_id
-    # Handle AI feedback from admin
-    pending_fb = context.user_data.get('pending_ai_feedback')
-    if pending_fb and chat_id == get_chat_id_for_kommo_user(10932455):
-        # Save admin's feedback as AI rule
-        rule_text = user_text
-        try:
-            from gh_storage import _load_file, _save_file, _cache, _lock
-            _load_file("ratings.json")
-            with _lock:
-                data = _cache.setdefault("ratings.json", {"ratings": [], "ai_rules": []})
-                data.setdefault("ai_rules", []).append({
-                    "rule": rule_text,
-                    "context": f"Task: {pending_fb.get('task_id')}, Employee: {pending_fb.get('employee')}, AI said: {pending_fb.get('ai_eval', '')}, Admin gave: {pending_fb.get('admin_score')}",
-                    "date": datetime.now(tz=BAKU_TZ).strftime("%Y-%m-%d %H:%M")
-                })
-            _save_file("ratings.json")
-        except: pass
-        del context.user_data['pending_ai_feedback']
-        await update.message.reply_text("✅ Qeyd olundu! İİ bundan sonra bunu nəzərə alacaq.")
-        return
     # Handle group mentions
     if update.message.chat.type in ("group", "supergroup"):
         bot_username = context.bot.username
@@ -2824,7 +2874,7 @@ async def _handle_kommo_task_webhook(data: dict):
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
         3267595: "Zəng et", 4229224: "Cavab gözlənilir",
-        4232112: "Texniki Dəstək", 4232108: "Import"
+        4232112: "Texniki tapşırıq", 4232108: "Import"
     }
     task_type_name = ""
     if task_type_id_raw:
@@ -3174,13 +3224,18 @@ async def handle_api_action(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "message": result, "link": link})
         elif action == "task":
             text = data.get("text", "")
-            assignee_name_raw = data.get("assigneeName", "")
+            assignee_name_raw = data.get("assigneeName", "").strip()
+            creator_name = get_employee_name_by_chat_id(chat_id, "")
+            # A shared Sahə Meneceri Kommo identity must never hide the real
+            # employee in the marker or the admin confirmation.
+            if not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
+                assignee_name_raw = creator_name or KOMMO_USERS.get(15532668, "Əməkdaş")
             # Routing: Nizami = admin's own tasks, everyone else = Sahə Meneceri
             if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
                 assignee = "admin"
             else:
                 assignee = "sahe_meneceri"
-            # Prepend marker to text (with optional price)
+            # Prepend the real employee marker to the task text (with optional price).
             price_val = data.get("price", "").strip()
             if assignee_name_raw:
                 if price_val:
@@ -3223,11 +3278,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # If non-admin creating for OTHERS, send to admin for confirmation
             # If creating for themselves, no confirmation needed
             is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
-            creator_name = None
-            for _n, _cid in NAME_TO_CHAT.items():
-                if _cid == chat_id and len(_n) > 5:
-                    creator_name = _n
-                    break
+            creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
             creates_for_self = False  # Always require admin confirmation
             if not is_admin_user and not creates_for_self and _bot_app:
                 # Store pending task in bot_data
@@ -3237,7 +3288,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
                     "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
                     "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
-                    "creator_chat_id": chat_id, "note": data.get("note", "").strip()
+                    "creator_chat_id": chat_id
                 }
                 _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
@@ -3258,12 +3309,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
             res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id)
             logger.info(f"Create task result: {res}")
             if res:
-                # Save note to entity if provided
-                note_text = data.get("note", "").strip()
-                if note_text and result.get("entity_id"):
-                    try:
-                        add_note(result["entity_id"], note_text, result["entity_type"])
-                    except: pass
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw and _bot_app:
@@ -3486,42 +3531,61 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            # For salary employees: check if started, finish KPI session, notify admin on delay
-            emp_type = get_employee_type(chat_id)
+            try:
+                task_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                if task_resp.status_code != 200:
+                    return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
+                task_data = task_resp.json()
+            except Exception as exc:
+                logger.error(f"complete_task task lookup error: {exc}")
+                return web.json_response({"success": False, "error": "Tapşırıq məlumatı alınmadı."})
+
+            task_context = get_task_deal_context(task_data)
+            lead_id = task_context["lead_id"]
+            link = task_context["link"]
+            phone = data.get("phone", "") or task_context["phone"]
+            contact_name = task_context["client_name"]
+            note_text = data.get("note", "").strip()
+            task_result_text = note_text or "Tamamlandı"
             delay_reason = data.get("delay_reason", "")
+            task_type_id = int(task_data.get("task_type_id", 1) or 1)
+            task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
+
+            # Salary KPI is deterministic: on/before the Kommo deadline = 100,
+            # after the deadline = 0. Admin can correct it afterward.
+            emp_type = get_employee_type(chat_id)
             kpi_result = None
-            if emp_type == 'salary':
+            if emp_type == "salary":
                 if not has_active_session(chat_id, int(task_id)):
                     return web.json_response({"success": False, "error": "Əvvəlcə 'İşə başla' basın!", "need_start": True})
-                # Get task type
-                try:
-                    _tr = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
-                    _task_type_id = _tr.json().get('task_type_id', 1) if _tr.status_code == 200 else 1
-                    _task_text_kpi = _tr.json().get('text', '') if _tr.status_code == 200 else ''
-                except: _task_type_id = 1; _task_text_kpi = ''
-                kpi_result = finish_task_session(chat_id, int(task_id), _task_type_id, delay_reason)
-                if kpi_result and kpi_result['needs_reason'] and not delay_reason:
-                    return web.json_response({"success": False, "error": "delay_needed", "needs_delay_reason": True, "kpi_score": kpi_result['kpi_score'], "actual_minutes": kpi_result['actual_minutes'], "target_minutes": kpi_result['target_minutes']})
-                # Notify admin about delay
-                if kpi_result and kpi_result['needs_reason'] and delay_reason and _bot_app:
-                    admin_chat = get_chat_id_for_kommo_user(10932455)
-                    if admin_chat:
-                        try:
-                            await _bot_app.bot.send_message(admin_chat, f"⚠️ *Gecikmiş tapşırıq tamamlandı*\n\n📝 {_task_text_kpi}\n⏱ {kpi_result['actual_minutes']} dəq / {kpi_result['target_minutes']} dəq\nKPI: {kpi_result['kpi_score']}/100\n💬 Səbəb: {delay_reason}", parse_mode='Markdown')
-                        except: pass
-            result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
-            link = ""
-            lead_id = None
+                kpi_result = finish_task_session(
+                    chat_id,
+                    int(task_id),
+                    task_type_id,
+                    delay_reason,
+                    deadline_ts=task_deadline_ts,
+                )
+                if kpi_result and kpi_result["needs_reason"] and not delay_reason:
+                    return web.json_response({
+                        "success": False,
+                        "error": "delay_needed",
+                        "needs_delay_reason": True,
+                        "kpi_score": kpi_result["kpi_score"],
+                        "actual_minutes": kpi_result["actual_minutes"],
+                        "target_minutes": kpi_result["target_minutes"],
+                    })
+
+            result = update_task_kommo(
+                task_id,
+                {"is_completed": True, "result": {"text": task_result_text}},
+            )
             stage_msg = ""
-            # Also change stage if requested
+            # Also change stage if requested by legacy clients.
             new_stage = data.get("new_stage")
-            phone = data.get("phone", "")
             logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={phone}, result={bool(result)}")
             if new_stage:
                 # Try to find lead: by phone or by task entity
-                lead_id = None
                 status_id = STAGES.get(new_stage)
-                contact_name = ""
                 if phone:
                     stage_result = execute_tool_change_stage(phone, new_stage, chat_id)
                     logger.info(f"complete_task stage_result: {stage_result}")
@@ -3590,151 +3654,123 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     logger.error(f"complete_task confirmation (no phone) error: {e}")
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-            # Save note to lead/contact if provided
-            note_text = data.get("note", "").strip()
-            if note_text and lead_id:
-                add_note(lead_id, note_text, "leads")
-            elif note_text and not lead_id:
-                # Try to find contact to add note
-                try:
-                    task_resp2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=15)
-                    if task_resp2.status_code == 200:
-                        td2 = task_resp2.json()
-                        eid2 = td2.get("entity_id")
-                        etype2 = td2.get("entity_type", "contacts")
-                        if eid2:
-                            add_note(eid2, note_text, etype2)
-                except: pass
-            # Auto-create task for the new stage if applicable (only if stage was actually changed, not pending confirmation)
+            # The employee note is both the task result (set above) and a
+            # common note on the related deal.
+            if note_text:
+                if lead_id:
+                    if not add_note(lead_id, note_text, "leads"):
+                        logger.error(f"complete_task: failed to add deal note for lead {lead_id}")
+                else:
+                    logger.warning(f"complete_task: task {task_id} has no related deal for note")
+
+            # Auto-create a task for legacy clients that explicitly submitted a
+            # stage with completion. The new admin stage buttons only move the deal.
             stage_confirmed = stage_msg and "təsdiq" not in stage_msg
             if lead_id and new_stage in _STAGE_TASK_TEXTS and stage_confirmed:
-                task_text = _STAGE_TASK_TEXTS[new_stage]
-                now_dt = datetime.now(tz=BAKU_TZ)
-                deadline_dt = now_dt + timedelta(hours=2)
+                followup_text = _STAGE_TASK_TEXTS[new_stage]
+                deadline_dt = datetime.now(tz=BAKU_TZ) + timedelta(hours=2)
                 deadline_ts = int(deadline_dt.timestamp())
-                # qiymet_teklifi always goes to admin
                 if new_stage == "qiymet_teklifi":
-                    create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+                    create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 else:
-                    # Other stages: assign to whoever completed the task with marker
-                    creator_marker = None
-                    for _nm, _cid in NAME_TO_CHAT.items():
-                        if _cid == chat_id and len(_nm) > 5:
-                            creator_marker = _nm
-                            break
+                    creator_marker = get_employee_name_by_chat_id(chat_id, "")
                     if creator_marker:
-                        task_text_with_marker = f"[{creator_marker}] {task_text}"
-                        create_task(lead_id, task_text_with_marker, deadline_ts, responsible_user_id=15532668, entity_type="leads")
+                        followup_text = f"[{creator_marker}] {followup_text}"
+                        create_task(lead_id, followup_text, deadline_ts, responsible_user_id=15532668, entity_type="leads")
                     else:
-                        create_task(lead_id, task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
-                stage_msg += f"\n\u2705 Yeni tap\u015f\u0131r\u0131q: {task_text}"
+                        create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+                stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
+
             if result:
-                # --- Balance crediting: parse [Name:Price] marker ---
+                task_text_full = task_data.get("text", "").strip()
+                task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
+                task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
+                completion_sender = get_employee_name_by_chat_id(
+                    chat_id,
+                    KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
+                )
+                client_display = " ".join(part for part in [contact_name, phone] if part).strip()
+
+                # Credit piecework and persist the full transaction context.
                 try:
-                    _task_resp_bal = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
-                    if _task_resp_bal.status_code == 200:
-                        _task_text_bal = _task_resp_bal.json().get("text", "")
-                        _price_match_bal = re.match(r'^\[([^:\]]+)(?::(\d+))?\]\s*(.*)', _task_text_bal)
-                        if _price_match_bal and _price_match_bal.group(2):
-                            _bal_amount = float(_price_match_bal.group(2))
-                            if _bal_amount > 0:
-                                add_balance_transaction(chat_id, int(task_id), _bal_amount, _price_match_bal.group(3))
-                except Exception as _bal_err:
-                    logger.error(f"Balance crediting error: {_bal_err}")
-                # --- End balance crediting ---
-                # --- Notify admin + AI KPI evaluation ---
-                _compl_note = note_text or ''
-                _compl_sender = ''
-                for _nm, _cid in NAME_TO_CHAT.items():
-                    if _cid == chat_id and len(_nm) > 5:
-                        _compl_sender = _nm
-                        break
-                if not _compl_sender:
-                    _compl_sender = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
-                # Get task details from Kommo for rich notification
-                _task_text_full = ''
-                _task_type_name = ''
-                _contact_name_c = ''
-                _phone_c = phone or ''
-                _link_c = link or ''
-                try:
-                    _t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
-                    if _t_resp.status_code == 200:
-                        _t_data = _t_resp.json()
-                        _task_text_full = _t_data.get('text', '').strip()
-                        _task_type_id_c = _t_data.get('task_type_id', 1)
-                        _type_names = {1: 'Əlaqə saxla', 2: 'Görüş', 3263995: 'Təqdimat', 3263999: 'Quraşdırma', 3267595: 'Zəng et', 4232112: 'Texniki Dəstək', 4232108: 'Import', 4229224: 'Cavab gözlənilir'}
-                        _task_type_name = _type_names.get(_task_type_id_c, f'Tip {_task_type_id_c}')
-                        # Get contact/lead info
-                        _eid = _t_data.get('entity_id')
-                        _etype = _t_data.get('entity_type', 'contacts')
-                        if _eid and _etype == 'leads' and not _link_c:
-                            _link_c = f"{KOMMO_BASE_URL}/leads/detail/{_eid}"
-                        if _eid and _etype == 'contacts':
-                            _fc = get_contact_details(_eid)
-                            if _fc:
-                                _contact_name_c = _fc.get('name', '')
-                                _cfields = _fc.get('custom_fields_values', []) or []
-                                for _cf in _cfields:
-                                    if _cf.get('field_code') == 'PHONE':
-                                        _vals = _cf.get('values', [])
-                                        if _vals: _phone_c = _vals[0].get('value', _phone_c)
-                                _leads_c = _fc.get('_embedded', {}).get('leads', [])
-                                if _leads_c and not _link_c:
-                                    _link_c = f"{KOMMO_BASE_URL}/leads/detail/{_leads_c[0]['id']}"
-                        elif _eid and _etype == 'leads':
-                            try:
-                                _lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{_eid}?with=contacts", headers=HEADERS, timeout=10)
-                                if _lr.status_code == 200:
-                                    _ld = _lr.json()
-                                    _lcontacts = _ld.get('_embedded', {}).get('contacts', [])
-                                    if _lcontacts:
-                                        _fc2 = get_contact_details(_lcontacts[0]['id'])
-                                        if _fc2:
-                                            _contact_name_c = _fc2.get('name', '')
-                                            _cfields2 = _fc2.get('custom_fields_values', []) or []
-                                            for _cf2 in _cfields2:
-                                                if _cf2.get('field_code') == 'PHONE':
-                                                    _vals2 = _cf2.get('values', [])
-                                                    if _vals2: _phone_c = _vals2[0].get('value', _phone_c)
-                            except: pass
-                except: pass
-                # Remove marker from task text for display
-                import re as _re_c
-                _task_desc_display = _re_c.sub(r'^\[[^\]]+\]\s*', '', _task_text_full)
+                    price_match = re.match(r"^\[([^:\]]+)(?::(\d+(?:\.\d+)?))?\]\s*(.*)", task_text_full)
+                    if price_match and price_match.group(2):
+                        amount = float(price_match.group(2))
+                        if amount > 0:
+                            add_balance_transaction(
+                                chat_id,
+                                int(task_id),
+                                amount,
+                                price_match.group(3),
+                                executor_name=completion_sender,
+                                client=client_display,
+                                task_type=task_type_name,
+                            )
+                except Exception as balance_error:
+                    logger.error(f"Balance crediting error: {balance_error}")
+
                 if _bot_app:
-                    admin_chat_c = get_chat_id_for_kommo_user(10932455)
-                    if admin_chat_c:
-                        _kpi_info = ''
+                    admin_chat = get_chat_id_for_kommo_user(10932455)
+                    if admin_chat:
+                        deadline_display = (
+                            datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                            if task_deadline_ts else "—"
+                        )
+                        kpi_info = ""
                         if kpi_result:
-                            _kpi_info = f"\n⏱ {kpi_result['actual_minutes']:.0f}/{kpi_result['target_minutes']} dəq | KPI: {kpi_result['kpi_score']}/100"
-                            if kpi_result.get('needs_reason') and delay_reason:
-                                _kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
-                        # AI evaluation
-                        _ai_score_text = ''
+                            timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
+                            kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
+                            if delay_reason:
+                                kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
+
+                        completion_message = (
+                            f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
+                            f"👤 {contact_name or '—'}\n"
+                            f"📝 {task_desc_display or '—'}\n"
+                            f"📞 {phone or '—'}\n"
+                            f"⏰ {deadline_display}\n"
+                            f"📋 {task_type_name}"
+                        )
+                        if note_text:
+                            completion_message += f"\n💬 İcraçı qeydi: {note_text}"
+                        completion_message += kpi_info
+                        if link:
+                            completion_message += f"\n🔗 {link}"
+
+                        callback_key = str(uuid.uuid4())[:8]
+                        _bot_app.bot_data.setdefault("pending_next_stages", {})[callback_key] = {
+                            "lead_id": lead_id,
+                            "task_id": int(task_id),
+                            "employee_tg_id": int(chat_id),
+                        }
+                        if kpi_result:
+                            _bot_app.bot_data.setdefault("pending_kpi_corrections", {})[callback_key] = {
+                                "task_id": int(task_id),
+                                "employee_tg_id": int(chat_id),
+                            }
+                        stage_buttons = [
+                            InlineKeyboardButton(
+                                STAGE_NAMES.get(status_id, stage_key),
+                                callback_data=f"nstg-{callback_key}-{stage_key}",
+                            )
+                            for stage_key, status_id in STAGES.items()
+                        ]
+                        keyboard_rows = [stage_buttons[index:index + 2] for index in range(0, len(stage_buttons), 2)]
+                        if kpi_result:
+                            keyboard_rows.append([
+                                InlineKeyboardButton("KPI 100", callback_data=f"kpicorr-{callback_key}-100"),
+                                InlineKeyboardButton("KPI 50", callback_data=f"kpicorr-{callback_key}-50"),
+                                InlineKeyboardButton("KPI 0", callback_data=f"kpicorr-{callback_key}-0"),
+                            ])
                         try:
-                            if kpi_result:
-                                _ai_eval = await evaluate_kpi_with_ai(_task_text_full, kpi_result['actual_minutes'], kpi_result['target_minutes'], kpi_result['kpi_score'])
-                            else:
-                                _ai_eval = await evaluate_kpi_with_ai(_task_text_full, 0, 0, -1)
-                            if _ai_eval:
-                                _ai_score_text = f"\n🤖 İİ qiymət: {_ai_eval}"
-                        except: pass
-                        _compl_msg = f"✅ {_compl_sender} tapşırığı tamamladı:\n\n📋 {_task_type_name}\n📝 {_task_desc_display}\n👤 {_contact_name_c}\n📞 {_phone_c}"
-                        if _compl_note:
-                            _compl_msg += f"\n\n💬 İcraçı qeydi: {_compl_note}"
-                        _compl_msg += f"{_kpi_info}{_ai_score_text}"
-                        if _link_c:
-                            _compl_msg += f"\n🔗 {_link_c}"
-                        # Admin rating buttons
-                        _rate_key = str(uuid.uuid4())[:8]
-                        _bot_app.bot_data.setdefault('pending_rates', {})[_rate_key] = {'task_id': task_id, 'employee': _compl_sender, 'ai_eval': _ai_score_text}
-                        _rate_kb = {"inline_keyboard": [
-                            [{"text": "⭐ Əla", "callback_data": f"rate-{_rate_key}-5"}, {"text": "👍 Yaxşı", "callback_data": f"rate-{_rate_key}-4"}, {"text": "👎 Pis", "callback_data": f"rate-{_rate_key}-2"}]
-                        ]}
-                        try:
-                            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat_c, "text": _compl_msg, "reply_markup": _rate_kb, "disable_web_page_preview": True}, timeout=10)
-                        except: pass
+                            await _bot_app.bot.send_message(
+                                admin_chat,
+                                completion_message,
+                                reply_markup=InlineKeyboardMarkup(keyboard_rows),
+                                disable_web_page_preview=True,
+                            )
+                        except Exception as notify_error:
+                            logger.error(f"Completion notification error: {notify_error}")
                 localStorage_key = f'timer_{task_id}'
                 msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
                 return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
@@ -3787,7 +3823,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
             note = data.get('note', 'Ödəniş')
             if not emp_id or amount <= 0:
                 return web.json_response({'success': False, 'error': 'Məbləğ və əməkdaş seçin.'})
-            add_balance_transaction(emp_id, 0, -amount, f'💸 {note}')
+            add_balance_transaction(
+                emp_id,
+                0,
+                -amount,
+                f"💸 {note}",
+                executor_name=get_employee_name_by_chat_id(emp_id, str(emp_id)),
+                client="—",
+                task_type="Ödəniş",
+            )
             return web.json_response({'success': True, 'message': f'✅ {amount:.0f} AZN ödənildi.'})
         elif action == "pause_task":
             task_id = data.get('task_id')
@@ -3796,17 +3840,41 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 pause_task_session(chat_id, int(task_id), int(elapsed_seconds))
             return web.json_response({'success': True, 'message': 'Dayandırıldı.'})
         elif action == "finish_task":
-            task_id = data.get('task_id')
-            task_type_id = data.get('task_type_id', 1)
-            task_text = data.get('task_text', '')
-            delay_reason = data.get('delay_reason', '')
+            task_id = data.get("task_id")
+            task_type_id = int(data.get("task_type_id", 1) or 1)
+            delay_reason = data.get("delay_reason", "")
             if not task_id:
-                return web.json_response({'success': False, 'error': 'task_id lazımdır.'})
-            result = finish_task_session(chat_id, int(task_id), int(task_type_id), delay_reason)
+                return web.json_response({"success": False, "error": "task_id lazımdır."})
+            deadline_ts = 0
+            try:
+                task_response = requests.get(
+                    f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}",
+                    headers=HEADERS,
+                    timeout=10,
+                )
+                if task_response.status_code == 200:
+                    task_payload = task_response.json()
+                    task_type_id = int(task_payload.get("task_type_id", task_type_id) or task_type_id)
+                    deadline_ts = int(task_payload.get("complete_till", 0) or 0)
+            except Exception as exc:
+                logger.error(f"finish_task deadline lookup error: {exc}")
+            result = finish_task_session(
+                chat_id,
+                int(task_id),
+                task_type_id,
+                delay_reason,
+                deadline_ts=deadline_ts,
+            )
             if not result:
-                return web.json_response({'success': False, 'error': 'Əvvəlcə "Başla" basın.'})
-            ai_feedback = await evaluate_kpi_with_ai(task_text, result['actual_minutes'], result['target_minutes'], result['kpi_score'])
-            return web.json_response({'success': True, 'message': f'✅ Bitdi! KPI: {result["kpi_score"]}/100', 'kpi_score': result['kpi_score'], 'actual_minutes': result['actual_minutes'], 'target_minutes': result['target_minutes'], 'ai_feedback': ai_feedback, 'needs_reason': result['needs_reason']})
+                return web.json_response({"success": False, "error": "Əvvəlcə 'Başla' basın."})
+            return web.json_response({
+                "success": True,
+                "message": f"✅ Bitdi! KPI: {result['kpi_score']}/100",
+                "kpi_score": result["kpi_score"],
+                "actual_minutes": result["actual_minutes"],
+                "target_minutes": result["target_minutes"],
+                "needs_reason": result["needs_reason"],
+            })
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:
@@ -3947,14 +4015,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki tapşırıq|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
-                    _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'}
+                    _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki tapşırıq'}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki Dəstək", 4232108: "Import"}
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq", 4232108: "Import"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
@@ -4210,40 +4278,101 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
-async def admin_rate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def next_stage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Move a completed task's deal to the stage selected by Admin."""
     query = update.callback_query
-    await query.answer()
-    parts = query.data.split('-')  # rate-{key}-{score}
-    if len(parts) < 3:
+    if not is_admin(query.from_user.id):
+        await query.answer("Yalnız Admin istifadə edə bilər.", show_alert=True)
         return
-    rate_key = parts[1]
-    score = parts[2]
-    score_labels = {'5': '⭐ Əla', '4': '👍 Yaxşı', '2': '👎 Pis'}
-    label = score_labels.get(score, score)
-    pending = context.bot_data.get('pending_rates', {}).get(rate_key, {})
-    task_id = pending.get('task_id', '?')
-    employee = pending.get('employee', '?')
-    ai_eval = pending.get('ai_eval', '')
-    # Determine if admin disagrees with AI
-    ai_was_good = any(w in ai_eval.lower() for w in ['əla', 'yaxşı', 'mükəmməl']) if ai_eval else True
-    admin_is_good = score in ('5', '4')
-    disagrees = (ai_was_good and not admin_is_good) or (not ai_was_good and admin_is_good)
-    # Save rating
+    parts = query.data.split("-", 2)
+    if len(parts) != 3:
+        await query.answer("Yanlış mərhələ əmri.", show_alert=True)
+        return
+    callback_key, stage_key = parts[1], parts[2]
+    pending = context.bot_data.get("pending_next_stages", {}).get(callback_key)
+    status_id = STAGES.get(stage_key)
+    if not pending or not pending.get("lead_id") or not status_id:
+        await query.answer("Bu mərhələ seçimi artıq keçərsizdir.", show_alert=True)
+        return
+
+    lead_id = int(pending["lead_id"])
+    result = update_lead_kommo(
+        lead_id,
+        {"pipeline_id": PIPELINE_ID, "status_id": status_id},
+    )
+    if not result:
+        await query.answer("Kommo mərhələsi dəyişdirilmədi.", show_alert=True)
+        return
+
+    context.bot_data.get("pending_next_stages", {}).pop(callback_key, None)
+    kpi_pending = context.bot_data.get("pending_kpi_corrections", {}).get(callback_key)
+    remaining_markup = None
+    if kpi_pending:
+        remaining_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("KPI 100", callback_data=f"kpicorr-{callback_key}-100"),
+            InlineKeyboardButton("KPI 50", callback_data=f"kpicorr-{callback_key}-50"),
+            InlineKeyboardButton("KPI 0", callback_data=f"kpicorr-{callback_key}-0"),
+        ]])
     try:
-        from gh_storage import _load_file, _save_file, _cache, _lock
-        _load_file("ratings.json")
-        with _lock:
-            data = _cache.setdefault("ratings.json", {"ratings": [], "ai_rules": []})
-            data.setdefault("ratings", []).append({"task_id": str(task_id), "employee": employee, "score": int(score), "date": datetime.now(tz=BAKU_TZ).strftime("%Y-%m-%d %H:%M")})
-        _save_file("ratings.json")
-    except: pass
-    await query.edit_message_reply_markup(reply_markup=None)
-    if disagrees:
-        # Ask admin why they disagree
-        context.user_data['pending_ai_feedback'] = {'rate_key': rate_key, 'task_id': task_id, 'employee': employee, 'admin_score': score, 'ai_eval': ai_eval}
-        await query.message.reply_text(f"✅ Qiymətiniz: {label}\n\nİİ başqa fikirdə idi. Niyə belə qiymət verdiniz? (1 cümlə yazın, İİ öyrənəcək)")
-    else:
-        await query.message.reply_text(f"✅ Qiymətiniz: {label}")
+        await query.edit_message_reply_markup(reply_markup=remaining_markup)
+    except Exception:
+        pass
+    stage_name = STAGE_NAMES.get(status_id, stage_key)
+    await query.answer(f"Mərhələ dəyişdirildi: {stage_name}", show_alert=True)
+
+
+async def admin_kpi_correction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Apply an explicit Admin correction to a completed task KPI score."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("Yalnız Admin istifadə edə bilər.", show_alert=True)
+        return
+    parts = query.data.split("-")
+    if len(parts) != 3:
+        await query.answer("Yanlış KPI əmri.", show_alert=True)
+        return
+    callback_key = parts[1]
+    try:
+        score = int(parts[2])
+    except ValueError:
+        await query.answer("Yanlış KPI balı.", show_alert=True)
+        return
+    pending = context.bot_data.get("pending_kpi_corrections", {}).get(callback_key)
+    if not pending:
+        await query.answer("Bu KPI düzəlişi artıq keçərsizdir.", show_alert=True)
+        return
+
+    saved = set_kpi_score(
+        int(pending["employee_tg_id"]),
+        int(pending["task_id"]),
+        score,
+        corrected_by=query.from_user.id,
+    )
+    if not saved:
+        await query.answer("KPI qeydi tapılmadı.", show_alert=True)
+        return
+
+    context.bot_data.get("pending_kpi_corrections", {}).pop(callback_key, None)
+    stage_pending = context.bot_data.get("pending_next_stages", {}).get(callback_key)
+    remaining_markup = None
+    if stage_pending:
+        stage_buttons = [
+            InlineKeyboardButton(
+                STAGE_NAMES.get(status_id, stage_key),
+                callback_data=f"nstg-{callback_key}-{stage_key}",
+            )
+            for stage_key, status_id in STAGES.items()
+        ]
+        remaining_markup = InlineKeyboardMarkup([
+            stage_buttons[index:index + 2]
+            for index in range(0, len(stage_buttons), 2)
+        ])
+    try:
+        await query.edit_message_reply_markup(reply_markup=remaining_markup)
+    except Exception:
+        pass
+    await query.answer(f"KPI {score}/100 olaraq saxlanıldı.", show_alert=True)
+
 
 async def update_task_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle updtask-{key}-yes/no/employee for update_task confirmation."""
@@ -4270,7 +4399,7 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
             except: pass
         return
     # Resolve assignee
-    _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": ("Texniki Dəstək", 15532668), "admin": ("Nizami Qasımov", 10932455)}
+    _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": ("Texniki tapşırıq", 15532668), "admin": ("Nizami Qasımov", 10932455)}
     update_data = pending["update_data"]
     if decision != "yes":
         marker_info = _UPD_MARKER.get(decision)
@@ -4331,7 +4460,7 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 pass
         return
     # Admin selected an employee - resolve assignee
-    _CNFTASK_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki Dəstək", "admin": ""}
+    _CNFTASK_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
     marker_name = _CNFTASK_MARKER.get(decision, "")
     if decision == "admin":
         assignee_id = 10932455
@@ -4355,12 +4484,6 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
     res = create_task(pending["entity_id"], new_text, deadline_ts,
                       responsible_user_id=assignee_id, entity_type=pending["entity_type"],
                       task_type_id=pending.get("task_type_id", 1))
-    # Save note if provided
-    note_text = pending.get("note", "").strip()
-    if note_text and res:
-        try:
-            add_note(pending["entity_id"], note_text, pending["entity_type"])
-        except: pass
     if res:
         deadline_str = datetime.fromtimestamp(pending["deadline_ts"], tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')
         try:
@@ -4398,7 +4521,7 @@ from gh_storage import (
     add_balance_transaction, get_balance, get_balance_transactions,
     get_all_balances, get_all_recent_transactions,
     has_active_session, start_task_session, pause_task_session,
-    finish_task_session, get_kpi_summary
+    finish_task_session, get_kpi_summary, set_kpi_score
 )
 
 # Initialize GitHub storage with token from git remote
@@ -4410,11 +4533,8 @@ _init_gh_storage(_gh_token)
 logger.info(f"GH Storage initialized, token length: {len(_gh_token)}, starts with: {_gh_token[:10] if _gh_token else 'EMPTY'}")
 
 _EMPLOYEE_NAMES_BY_TG = {
-    7920785774: 'Rasim Əsgərov',
-    7962757442: 'Şamil Əliyev',
-    7262243946: 'Soltan Abbasov',
-    7329891614: 'Hüseyn Səfərov',
-    8835096199: 'Texniki Dəstək',
+    chat_id: name for chat_id, name in TG_CHAT_TO_EMPLOYEE.items()
+    if chat_id != 1628569350
 }
 
 _KPI_TARGET_TIMES = {
@@ -4428,54 +4548,6 @@ _EMPLOYEE_TYPES = {
 
 def get_employee_type(telegram_id):
     return _EMPLOYEE_TYPES.get(telegram_id, 'piecework')
-
-async def evaluate_kpi_with_ai(task_text, actual_minutes, target_minutes, kpi_score):
-    # Load admin's rules/feedback
-    rules_text = ''
-    try:
-        from gh_storage import _load_file, _cache
-        _load_file("ratings.json")
-        rules = _cache.get("ratings.json", {}).get("ai_rules", [])
-        if rules:
-            # Use last 10 rules
-            recent_rules = rules[-10:]
-            rules_text = "\nRəhbərin qaydaları (MÜTLƏQ nəzərə al):\n" + "\n".join(f"- {r['rule']}" for r in recent_rules)
-    except: pass
-    try:
-        if kpi_score == -1:
-            # No timer data - evaluate based on task note quality only
-            prompt = (f"Sən iş performansını qiymətləndirən köməkçisən. Azərbaycan dilində cavab ver.\n"
-                      f"Tapşırıq: {task_text}\n"
-                      f"Taymer istifadə olunmayıb (vaxt məlumatı yoxdur).\n\n"
-                      f"Yalnız tapşırığın məzmununa görə qısa rəy yaz (1-2 cümlə). "
-                      f"Vaxt haqqında heç nə yazma - məlumat yoxdur.")
-            prompt += rules_text
-        else:
-            prompt = (f"Sən iş performansını qiymətləndirən köməkçisən. Azərbaycan dilində cavab ver.\n"
-                      f"Tapşırıq: {task_text}\n"
-                      f"Hədəf vaxt: {target_minutes} dəqiqə\n"
-                      f"Faktiki vaxt: {actual_minutes:.0f} dəqiqə\n"
-                      f"KPI bal: {kpi_score}/100\n\n"
-                      f"Qısa qiymətləndirmə ver (2-3 cümlə). Əvvəlcə nəticəni yaz (Əla/Yaxşı/Orta/Pis), "
-                      f"sonra SƏBƏB yaz - nəyə əsasən belə qiymət verdin.\n"
-                      f"Əgər faktiki vaxt hədəfdən azdırsa - bu yaxşıdır. Əgər çoxdursa - gecikmə var.")
-            prompt += rules_text
-        resp = llm_client.chat.completions.create(
-            model='anthropic/claude-sonnet-4-20250514',
-            messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=150
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f'KPI AI eval error: {e}')
-        if kpi_score == -1:
-            return 'Tamamlandı.'
-        elif kpi_score >= 80:
-            return f'Əla nəticə! {actual_minutes:.0f}/{target_minutes} dəq.'
-        elif kpi_score >= 60:
-            return f'Yaxşı. {actual_minutes:.0f}/{target_minutes} dəq.'
-        else:
-            return f'Gecikmə var. {actual_minutes:.0f}/{target_minutes} dəq.'
 
 async def handle_api_balance(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get("X-TG-User-ID", "")
@@ -4496,8 +4568,17 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
     for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
         employees.append({'name': name, 'tg_id': tg_id, 'balance': all_bals.get(tg_id, 0)})
     recent = get_all_recent_transactions(30)
-    recent_fmt = [{'employee': _EMPLOYEE_NAMES_BY_TG.get(r.get('telegram_id', 0), str(r.get('telegram_id', ''))), 'task_id': r.get('task_id', ''), 'amount': r.get('amount', 0), 'task_text': r.get('task_text', ''), 'date': r.get('date', '')} for r in recent]
-    return web.json_response({'success': True, 'employees': employees, 'recent': recent_fmt})
+    recent_fmt = [{
+        "employee": r.get("executor") or _EMPLOYEE_NAMES_BY_TG.get(r.get("telegram_id", 0), str(r.get("telegram_id", ""))),
+        "executor": r.get("executor", ""),
+        "client": r.get("client", ""),
+        "task_type": r.get("task_type", ""),
+        "task_id": r.get("task_id", ""),
+        "amount": r.get("amount", 0),
+        "task_text": r.get("task_text", ""),
+        "date": r.get("date", ""),
+    } for r in recent]
+    return web.json_response({"success": True, "employees": employees, "recent": recent_fmt})
 
 async def handle_api_kpi(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get('X-TG-User-ID', '')
@@ -4532,7 +4613,8 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
     app.add_handler(CallbackQueryHandler(update_task_confirm_callback, pattern="^updtask-"))
-    app.add_handler(CallbackQueryHandler(admin_rate_callback, pattern="^rate-"))
+    app.add_handler(CallbackQueryHandler(next_stage_callback, pattern="^nstg-"))
+    app.add_handler(CallbackQueryHandler(admin_kpi_correction_callback, pattern="^kpicorr-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
