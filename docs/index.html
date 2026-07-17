@@ -27,7 +27,8 @@
         @media (min-width: 768px) {
             body { background:#e5e7eb; }
             .bg-\[\#1a252f\] { max-width:600px; margin:0 auto; border-radius:0 0 16px 16px; }
-            #content-area { max-width:600px; margin:0 auto; }
+            #content-area { max-width:600px; margin:0 auto; padding-left:16px; padding-right:16px; box-sizing:border-box; }
+            .screen { width:100%; box-sizing:border-box; }
             #tab-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:16px 16px 0 0; }
             #bottom-action-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:24px 24px 0 0; }
         }
@@ -78,6 +79,20 @@
                 <div id="balance-expected" class="text-[10px] opacity-80 mt-1" style="display:none;"></div>
             </div>
             <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Tarixçə</button>
+        </div>
+
+        <!-- Finance Widget (salary employees only) -->
+        <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Ümumi KPI</div>
+                    <div class="text-2xl font-black mt-1" id="main-finance-kpi">0/100</div>
+                </div>
+                <div class="border-l border-white/25 pl-4">
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Bonus məbləği</div>
+                    <div class="text-2xl font-black mt-1" id="main-finance-bonus">0</div>
+                </div>
+            </div>
         </div>
 
         <!-- Task count + overdue -->
@@ -154,7 +169,7 @@
                 </div>
                 <div class="border-l border-white/25 pl-4">
                     <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Bonus məbləği</div>
-                    <div class="text-2xl font-black mt-1" id="finance-bonus">0 AZN</div>
+                    <div class="text-2xl font-black mt-1" id="finance-bonus">0</div>
                 </div>
             </div>
         </div>
@@ -794,6 +809,8 @@ async function loadKpi() {
             kpiData = j;
             const w = document.getElementById('finance-widget'); if(w) w.style.display = 'block';
             const s = document.getElementById('finance-kpi'); if(s) s.textContent = (j.avg_kpi || 0) + '/100';
+            const mainWidget = document.getElementById('main-finance-widget'); if(mainWidget) mainWidget.style.display = 'block';
+            const mainKpi = document.getElementById('main-finance-kpi'); if(mainKpi) mainKpi.textContent = (j.avg_kpi || 0) + '/100';
         }
     } catch(e) {}
 }
@@ -866,8 +883,12 @@ async function loadBalance() {
             window._balanceData = j.transactions || [];
             if(employeeType === 'salary') {
                 const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
+                const mainFinanceWidget = document.getElementById('main-finance-widget'); if(mainFinanceWidget) mainFinanceWidget.style.display = 'block';
+                const bonusValue = parseFloat(j.balance || 0).toFixed(0);
                 const bonus = document.getElementById('finance-bonus');
-                if(bonus) bonus.textContent = parseFloat(j.balance || 0).toFixed(0) + ' AZN';
+                if(bonus) bonus.textContent = bonusValue;
+                const mainBonus = document.getElementById('main-finance-bonus');
+                if(mainBonus) mainBonus.textContent = bonusValue;
                 const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';
                 return;
             }
