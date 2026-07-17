@@ -147,18 +147,49 @@ def _save_file(filename: str):
 def add_balance_transaction(telegram_id: int, task_id: int, amount: float, task_text: str):
     """Add a transaction and save to GitHub."""
     filename = "balance.json"
-    _load_file(filename, force=True)
+    new_tx = {
+        "task_id": task_id,
+        "amount": amount,
+        "task_text": task_text,
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    # Load fresh from GitHub to get latest state
+    remote_data = {}
+    try:
+        r = requests.get(
+            f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}",
+            headers=_headers(), timeout=15
+        )
+        if r.status_code == 200:
+            import base64 as _b64
+            remote_data = json.loads(_b64.b64decode(r.json()["content"]).decode())
+            with _lock:
+                _cache_sha[filename] = r.json()["sha"]
+    except:
+        pass
+    # Merge: use remote as base, add local-only transactions, then add new one
     with _lock:
-        data = _cache.setdefault(filename, {})
-        key = str(telegram_id)
-        if key not in data:
-            data[key] = {"transactions": []}
-        data[key]["transactions"].append({
-            "task_id": task_id,
-            "amount": amount,
-            "task_text": task_text,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
+        local_data = _cache.get(filename, {})
+        # Merge local transactions that aren't in remote
+        merged = {}
+        for uid in set(list(remote_data.keys()) + list(local_data.keys())):
+            remote_txs = remote_data.get(uid, {}).get("transactions", [])
+            local_txs = local_data.get(uid, {}).get("transactions", [])
+            # Use task_id+date as unique key
+            seen = set()
+            all_txs = []
+            for tx in remote_txs + local_txs:
+                key = (tx.get("task_id"), tx.get("date"))
+                if key not in seen:
+                    seen.add(key)
+                    all_txs.append(tx)
+            merged[uid] = {"transactions": all_txs}
+        # Add new transaction
+        tg_key = str(telegram_id)
+        if tg_key not in merged:
+            merged[tg_key] = {"transactions": []}
+        merged[tg_key]["transactions"].append(new_tx)
+        _cache[filename] = merged
     _save_file(filename)
 
 
