@@ -3814,13 +3814,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if res:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
-                if assignee_name_raw and _bot_app:
+                if assignee_name_raw:
                     target_chat = get_chat_id_by_name(assignee_name_raw)
                     if target_chat and target_chat != chat_id:
+                        display_text = text.replace(f'[{assignee_name_raw}] ', '')
+                        notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
                         try:
-                            display_text = text.replace(f'[{assignee_name_raw}] ', '')
-                            await _bot_app.bot.send_message(target_chat, f"📋 *Yeni tap\u015f\u0131r\u0131q!*\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                            requests.post(
+                                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
+                                timeout=10
+                            )
                         except: pass
+                        send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
                 return web.json_response({"success": True, "message": msg, "link": result.get('link', '')})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
@@ -4270,6 +4276,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             timeout=10
                         )
                         send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
+                        save_pending_action("change_stage", {
+                            "contact_name": contact_name or "—",
+                            "phone": phone or "—",
+                            "lead_id": lead_id,
+                            "task_id": int(task_id),
+                            "sender_name": completion_sender,
+                            "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+                            "link": link,
+                            "callback_key": callback_key,
+                        }, [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
                     except Exception as notify_error:
                         logger.error(f"Completion notification error: {notify_error}")
               except Exception as notif_block_err:
