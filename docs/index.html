@@ -1110,24 +1110,33 @@ async function submitMexaric() {
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>
 <script>
-const VAPID_PUBLIC = 'BP8tLwSN97_PH8NcJJFhnoxCtnha8Fbla57LsP2Yf298N17qlUdbqEjvuHlmpL0QS2o6wrt_fkkLjB0_7WGsuP8';
+const VAPID_PUBLIC = 'BH097FHI9PEdu_jf8XblQnnlS9mEtvPgKSnCkm5uERGGljVryVGl-dhTKKxg_HIfASiujCM_MF2A49N3xRTNNtc';
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  const reg = await navigator.serviceWorker.register('sw.js');
-  await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-  if(!sub) {
-    const perm = await Notification.requestPermission();
-    if(perm !== 'granted') return;
-    const key = Uint8Array.from(atob(VAPID_PUBLIC.replace(/-/g,'+').replace(/_/g,'/') + '=='), c=>c.charCodeAt(0));
-    sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:key});
-  }
-  // Send subscription to server
-  fetch(API_BASE + '/api/push-subscribe', {
-    method:'POST',
-    headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
-    body:JSON.stringify({subscription: sub.toJSON()})
-  }).catch(()=>{});
+  try {
+    const reg = await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub) {
+      const perm = await Notification.requestPermission();
+      if(perm !== 'granted') return;
+      sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC)});
+    }
+    // Send subscription to server
+    fetch(API_BASE + '/api/push-subscribe', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+      body:JSON.stringify({subscription: sub.toJSON()})
+    }).catch(()=>{});
+  } catch(e) { console.warn('Push init error:', e); }
 }
 initPush();
 </script>

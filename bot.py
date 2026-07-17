@@ -47,8 +47,8 @@ LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 
 # VAPID keys for Web Push
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "m_p92u2p1doA03xrk2GpCmvFsTjYGlrGoPAyehc5XH8")
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BP8tLwSN97_PH8NcJJFhnoxCtnha8Fbla57LsP2Yf298N17qlUdbqEjvuHlmpL0QS2o6wrt_fkkLjB0_7WGsuP8")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "6i8cjNC8eztEI8LpdwvKAFcKKr-lXR9oEES_zFIbN74")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BH097FHI9PEdu_jf8XblQnnlS9mEtvPgKSnCkm5uERGGljVryVGl-dhTKKxg_HIfASiujCM_MF2A49N3xRTNNtc")
 VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
 # Push subscriptions loaded from gh_storage on demand
 
