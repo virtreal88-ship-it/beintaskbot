@@ -139,7 +139,7 @@
     "id": "9a7c30ae",
     "type": "change_stage",
     "created_at": "2026-07-18T02:09:26.042128+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "—",
       "phone": "—",
@@ -165,7 +165,9 @@
       "cavab gözlənilir",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:12:14.238793+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "7df79313",
