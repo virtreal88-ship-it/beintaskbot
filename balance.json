@@ -2,6 +2,12 @@
   "7920785774": {
     "transactions": [
       {
+        "task_id": 93539931,
+        "amount": 100.0,
+        "task_text": "Calmera",
+        "date": "2026-07-17 09:56:27"
+      },
+      {
         "task_id": 93537013,
         "amount": 130.0,
         "task_text": "Balıq ferması.",
