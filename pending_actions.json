@@ -1,5 +1,37 @@
 [
   {
+    "id": "46994b6b",
+    "type": "change_stage",
+    "created_at": "2026-07-18T00:45:29.113875+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "BEİNAZ Nizami",
+      "phone": "994502072240",
+      "lead_id": 58671196,
+      "task_id": 93544157,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Вово",
+      "note": "53535",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/58671196",
+      "callback_key": "bb77c520"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "cavab gözlənilir",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "00ff70de",
     "type": "reassign_task",
     "created_at": "2026-07-17T23:51:58.679646+04:00",
