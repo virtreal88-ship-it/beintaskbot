@@ -35,7 +35,7 @@
     "id": "031d1aa1",
     "type": "change_stage",
     "created_at": "2026-07-18T02:13:51.851238+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ülvi",
       "phone": "+994705316627",
@@ -61,7 +61,9 @@
       "cavab gözlənilir",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:22:46.506918+04:00",
+    "resolved_choice": "danışıqlar"
   },
   {
     "id": "1e65a92e",
