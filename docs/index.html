@@ -504,11 +504,7 @@ async function doFetch(payload, btnId) {
         } else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
-async function doFetchThen(payload, btnId, callback) {
-    const btn = document.getElementById(btnId);
-    let origText = '';
-    if(btn) { origText = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> Yüklənir...'; }
-    lastPayload = payload;
+async function doFetchSilent(payload) {
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
@@ -516,12 +512,8 @@ async function doFetchThen(payload, btnId, callback) {
             body: JSON.stringify(payload)
         });
         const j = await r.json();
-        if(r.ok && j.success) {
-            await syncNotifications();
-            toast(j.message || 'Uğurla!', false);
-            if(callback) callback();
-        } else { toast(j.error || 'Xəta!', true); }
-    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
+        if(r.ok && j.success) { await syncNotifications(); }
+    } catch(e) { }
 }
 let _pendingNoteTaskId = null;
 function showEditNoteModal(taskId) {
@@ -573,12 +565,14 @@ function submitTask() {
 
         const assigneeChanged = gd.originalAssignee && gd.assigneeName && gd.originalAssignee !== gd.assigneeName;
         const savedTaskId = editingTaskId;
+        editingTaskId = null;
         if(assigneeChanged) {
-            doFetchThen(payload, 'edit-submit-btn', () => showEditNoteModal(savedTaskId));
+            // Save silently in background, show note modal instantly
+            doFetchSilent(payload);
+            showEditNoteModal(savedTaskId);
         } else {
             doFetch(payload, 'edit-submit-btn');
         }
-        editingTaskId = null;
     } else {
         const phone = document.getElementById('search-phone').value.trim();
         if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }

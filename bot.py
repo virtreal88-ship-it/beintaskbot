@@ -3215,7 +3215,18 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 try:
                     note_msg = f"\ud83d\udcdd *{sender_name}* qeyd \u0259lav\u0259 etdi:\n\n\ud83d\udcac {text}"
                     if task_id_note:
-                        note_msg += f"\n\ud83d\udccc Tap\u015f\u0131r\u0131q ID: {task_id_note}"
+                        try:
+                            headers_k2 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                            t_resp2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k2, timeout=5)
+                            t_data2 = t_resp2.json()
+                            entity_id2 = t_data2.get("entity_id", "")
+                            entity_type2 = t_data2.get("entity_type", "leads")
+                            task_text2 = t_data2.get("text", "")
+                            if task_text2:
+                                note_msg += f"\n\ud83d\udcdd {task_text2}"
+                            if entity_id2:
+                                note_msg += f"\n\ud83d\udd17 {KOMMO_BASE_URL}/{entity_type2}/detail/{entity_id2}"
+                        except: pass
                     await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
                 except: pass
             # Extract link from result message
