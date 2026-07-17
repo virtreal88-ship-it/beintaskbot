@@ -4215,62 +4215,61 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 except Exception as balance_error:
                     logger.error(f"Balance crediting error: {balance_error}")
 
-                if _bot_app:
-                    admin_chat = get_chat_id_for_kommo_user(10932455)
-                    if admin_chat:
-                        deadline_display = (
-                            datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-                            if task_deadline_ts else "—"
-                        )
-                        kpi_info = ""
-                        if kpi_result:
-                            timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
-                            kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
-                            if delay_reason:
-                                kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                if admin_chat:
+                    deadline_display = (
+                        datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                        if task_deadline_ts else "—"
+                    )
+                    kpi_info = ""
+                    if kpi_result:
+                        timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
+                        kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
+                        if delay_reason:
+                            kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
 
-                        # Get current deal stage
-                        current_stage_name = "—"
-                        if lead_id:
-                            try:
-                                lead_detail = get_lead_details(int(lead_id))
-                                if lead_detail:
-                                    current_status_id = lead_detail.get("status_id")
-                                    current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
-                            except Exception:
-                                pass
-                        completion_message = (
-                            f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
-                            f"👤 {contact_name or '—'}\n"
-                            f"📝 {task_desc_display or '—'}\n"
-                            f"📞 {phone or '—'}\n"
-                            f"⏰ {deadline_display}\n"
-                            f"📋 {task_type_name}\n"
-                            f"📌 Mərhələ: {current_stage_name}"
-                        )
-                        if note_text:
-                            completion_message += f"\n💬 İcraçı qeydi: {note_text}"
-                        completion_message += kpi_info
-                        if link:
-                            completion_message += f"\n🔗 {link}"
+                    # Get current deal stage
+                    current_stage_name = "—"
+                    if lead_id:
+                        try:
+                            lead_detail = get_lead_details(int(lead_id))
+                            if lead_detail:
+                                current_status_id = lead_detail.get("status_id")
+                                current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
+                        except Exception:
+                            pass
+                    completion_message = (
+                        f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
+                        f"👤 {contact_name or '—'}\n"
+                        f"📝 {task_desc_display or '—'}\n"
+                        f"📞 {phone or '—'}\n"
+                        f"⏰ {deadline_display}\n"
+                        f"📋 {task_type_name}\n"
+                        f"📌 Mərhələ: {current_stage_name}"
+                    )
+                    if note_text:
+                        completion_message += f"\n💬 İcraçı qeydi: {note_text}"
+                    completion_message += kpi_info
+                    if link:
+                        completion_message += f"\n🔗 {link}"
 
-                        callback_key = str(uuid.uuid4())[:8]
+                    callback_key = str(uuid.uuid4())[:8]
+                    if _bot_app:
                         _bot_app.bot_data.setdefault("pending_stage_change", {})[callback_key] = {
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "employee_tg_id": int(chat_id),
                         }
-                        keyboard_rows = [[InlineKeyboardButton("📋 Mərhələni dəyiş", callback_data=f"chgstg-{callback_key}")]]
-                        try:
-                            await _bot_app.bot.send_message(
-                                admin_chat,
-                                completion_message,
-                                reply_markup=InlineKeyboardMarkup(keyboard_rows),
-                                disable_web_page_preview=True,
-                            )
-                            send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
-                        except Exception as notify_error:
-                            logger.error(f"Completion notification error: {notify_error}")
+                    kb_json = {"inline_keyboard": [[{"text": "📋 Mərhələni dəyiş", "callback_data": f"chgstg-{callback_key}"}]]}
+                    try:
+                        requests.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                            json={"chat_id": admin_chat, "text": completion_message, "reply_markup": kb_json, "disable_web_page_preview": True},
+                            timeout=10
+                        )
+                        send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
+                    except Exception as notify_error:
+                        logger.error(f"Completion notification error: {notify_error}")
               except Exception as notif_block_err:
                 logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
               localStorage_key = f'timer_{task_id}'
