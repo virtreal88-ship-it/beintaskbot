@@ -6,6 +6,12 @@
         "amount": 80.0,
         "task_text": "Calmera",
         "date": "2026-07-17 11:37:39"
+      },
+      {
+        "task_id": 93540827,
+        "amount": 120.0,
+        "task_text": "Tamarin",
+        "date": "2026-07-17 11:39:50"
       }
     ]
   }
