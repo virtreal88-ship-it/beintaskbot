@@ -660,7 +660,7 @@ function renderNotifications() {
         card.addEventListener('touchend', () => {
             isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
             if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; handlePostponeTime('+2h'); }, 200); }
+            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
             else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
             currentX = 0;
         });
@@ -754,6 +754,28 @@ async function confirmComplete() {
 
 function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
     document.getElementById('action-buttons').style.display = 'flex';
+function showPostponeReasonModal() {
+    const existing = document.getElementById('postpone-reason-modal');
+    if(existing) existing.remove();
+    const html = `<div id="postpone-reason-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;" onclick="this.remove()">
+      <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:320px;" onclick="event.stopPropagation()">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:16px;text-align:center;">Səbəb seçin</h3>
+        <div style="display:flex;gap:10px;">
+          <button onclick="submitPostponeReason('Müştəri istədi')" style="flex:1;background:#2563eb;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:700;border:none;">Müştəri istədi</button>
+          <button onclick="submitPostponeReason('Çatdıra bilmirəm')" style="flex:1;background:#dc2626;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:700;border:none;">Çatdıra bilmirəm</button>
+        </div>
+        <button onclick="document.getElementById('postpone-reason-modal').remove()" style="width:100%;margin-top:10px;background:#f3f4f6;color:#555;padding:10px;border-radius:12px;font-size:12px;font-weight:600;border:none;">Ləğv et</button>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+async function submitPostponeReason(reason) {
+    document.getElementById('postpone-reason-modal').remove();
+    if(!selectedTaskId) return;
+    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
+    const oldTime = task.time; task.time = '+2h'; task.is_overdue = false; setCachedTasks(mockTasks); renderNotifications(); toast('🕒 +2 saat (' + reason + ')', false);
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'update_task_deadline', task_id:task.id, time_preset:'+2h', reason:reason}) }); if(!r.ok) throw new Error(); }
+    catch(e) { task.time = oldTime; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Vaxt dəyişmədi', true); }
+}
 async function handlePostponeTime(preset) {
     if(!selectedTaskId) return;
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return; closeBottomBar();
