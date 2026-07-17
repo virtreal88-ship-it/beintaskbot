@@ -3724,13 +3724,24 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             if delay_reason:
                                 kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
 
+                        # Get current deal stage
+                        current_stage_name = "—"
+                        if lead_id:
+                            try:
+                                lead_detail = get_lead_details(int(lead_id))
+                                if lead_detail:
+                                    current_status_id = lead_detail.get("status_id")
+                                    current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
+                            except Exception:
+                                pass
                         completion_message = (
                             f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
                             f"👤 {contact_name or '—'}\n"
                             f"📝 {task_desc_display or '—'}\n"
                             f"📞 {phone or '—'}\n"
                             f"⏰ {deadline_display}\n"
-                            f"📋 {task_type_name}"
+                            f"📋 {task_type_name}\n"
+                            f"📌 Mərhələ: {current_stage_name}"
                         )
                         if note_text:
                             completion_message += f"\n💬 İcraçı qeydi: {note_text}"
