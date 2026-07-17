@@ -3220,17 +3220,61 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if conf_key and conf_key in pending_updates:
                     pending = pending_updates[conf_key]
                 elif task_id_note:
-                    # Fallback: find pending by task_id
+                    # Fallback: find pending by task_id (compare as strings to avoid type mismatch)
                     for pk, pv in pending_updates.items():
-                        if pv.get("task_id") == task_id_note:
+                        if str(pv.get("task_id", "")) == str(task_id_note):
                             pending = pv
                             found_conf_key = pk
                             break
             if pending and admin_chat and _bot_app:
-                # Send confirmation to admin WITH the note text
+                # Send confirmation to admin WITH the note text + client details
                 try:
                     pending["note_text"] = text  # store note in pending for later
-                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {pending.get('display_text', '')}\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}\n\ud83d\udcac Qeyd: {text}"
+                    # Get task details for rich notification
+                    client_name = ""
+                    client_phone = ""
+                    task_type_name = ""
+                    deal_link = ""
+                    try:
+                        headers_k3 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                        t_resp3 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
+                        t_data3 = t_resp3.json()
+                        entity_id3 = t_data3.get("entity_id", "")
+                        entity_type3 = t_data3.get("entity_type", "leads")
+                        task_type_id = t_data3.get("task_type_id")
+                        if task_type_id:
+                            TASK_TYPE_NAMES = {4229218: "\u018flaq\u0259 saxla", 4229220: "G\u00f6r\u00fc\u015f", 4229222: "Qura\u015fd\u0131rma", 4229224: "Cavab g\u00f6zl\u0259nilir", 4229226: "T\u0259qdimat"}
+                            task_type_name = TASK_TYPE_NAMES.get(task_type_id, "")
+                        if entity_id3:
+                            deal_link = f"{KOMMO_BASE_URL}/{entity_type3}/detail/{entity_id3}"
+                            # Get lead/contact info
+                            l_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
+                            l_data = l_resp.json()
+                            client_name = l_data.get("name", "")
+                            # Get contact phone
+                            contacts = l_data.get("_embedded", {}).get("contacts", [])
+                            if contacts:
+                                c_id = contacts[0].get("id")
+                                if c_id:
+                                    c_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{c_id}", headers=headers_k3, timeout=5)
+                                    c_data = c_resp.json()
+                                    for cf in c_data.get("custom_fields_values", []):
+                                        if cf.get("field_code") == "PHONE":
+                                            client_phone = cf["values"][0].get("value", "")
+                                            break
+                    except: pass
+                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n"
+                    if client_name:
+                        msg_text += f"\n\ud83d\udc64 {client_name}"
+                    if client_phone:
+                        msg_text += f"\n\ud83d\udcde {client_phone}"
+                    msg_text += f"\n\ud83d\udcdd {pending.get('display_text', '')}"
+                    if task_type_name:
+                        msg_text += f"\n\ud83d\udccb N\u00f6v: {task_type_name}"
+                    msg_text += f"\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}"
+                    msg_text += f"\n\ud83d\udcac Qeyd: {text}"
+                    if deal_link:
+                        msg_text += f"\n\ud83d\udd17 {deal_link}"
                     kb_json = {"inline_keyboard": [
                         [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
                         [{"text": "\u015eamil", "callback_data": f"updtask-{found_conf_key}-shamil"}, {"text": "Soltan", "callback_data": f"updtask-{found_conf_key}-soltan"}],

@@ -539,6 +539,9 @@ function showEditNoteModal(taskId) {
 async function submitEditNote() {
     const text = document.getElementById('edit-note-modal-text').value.trim();
     if(!text) { toast('Qeyd yazın!', true); return; }
+    // Disable button immediately to prevent double click
+    const btn = document.querySelector('#edit-note-modal button');
+    if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Göndərilir...'; }
     // Wait for conf_key if save is still in progress (max 5 sec)
     if(!_pendingConfKey) {
         for(let i=0; i<50; i++) { await new Promise(r=>setTimeout(r,100)); if(_pendingConfKey) break; }
