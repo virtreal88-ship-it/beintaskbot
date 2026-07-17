@@ -202,7 +202,7 @@
                 <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));">
             </div>
             <div class="flex gap-2">
-                <button id="edit-submit-btn" onclick="submitTask()" class="flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">📤 Göndər</button>
+                <button id="edit-submit-btn" onclick="submitTask()" disabled class="flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">✅ Təsdiqlə</button>
                 <button onclick="editingTaskId=null; nav('screen-notifications');" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
             </div>
         </div>
@@ -398,7 +398,7 @@ function handleSearchProceed() {
     else if(flow === 'info') doFetch({action: 'info', phone: p}, 'task-submit-btn');
 }
 
-function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; saveSessionForms(); }
+function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; saveSessionForms(); if(editingTaskId) checkEditChanged(); }
 function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'block' : 'none'; saveSessionForms(); }
 
 function saveSessionForms() {
@@ -877,9 +877,37 @@ function handleBarAction(actionType) {
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
 
+        // Store original values for change tracking
+        window._editOriginal = {
+            desc: document.getElementById('edit-task-desc').value,
+            assignee: gd.assigneeName || '',
+            task_type: gd.task_type || '',
+            deadline: gd.deadline || '',
+            price: (document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '')
+        };
+        // Disable submit button initially
+        const esb = document.getElementById('edit-submit-btn');
+        if(esb) { esb.disabled = true; esb.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
         currentEditScreen = 'screen-task-details'; closeBottomBar(); nav('screen-task-details');
     }
 }
+function checkEditChanged() {
+    if(!window._editOriginal) return;
+    const btn = document.getElementById('edit-submit-btn'); if(!btn) return;
+    const desc = document.getElementById('edit-task-desc').value;
+    const assignee = document.getElementById('edit-assignee-select') ? document.getElementById('edit-assignee-select').value : '';
+    const taskType = document.getElementById('edit-task-type-select') ? document.getElementById('edit-task-type-select').value : '';
+    const deadline = gd.deadline || '';
+    const price = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '';
+    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price;
+    if(changed) { btn.disabled = false; btn.className = 'flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
+    else { btn.disabled = true; btn.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
+}
+document.addEventListener('DOMContentLoaded', () => {
+    ['edit-task-desc','edit-task-price'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
+    ['edit-assignee-select','edit-task-type-select'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('change', () => { gd.assigneeName = document.getElementById('edit-assignee-select').value; checkEditChanged(); }); });
+    const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
+});
 
 function switchTab(tabId) {
     document.getElementById('tab-tasks').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
