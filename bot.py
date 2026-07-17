@@ -3240,7 +3240,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "creator_chat_id": chat_id, "note": data.get("note", "").strip()
                 }
                 _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                 display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 kb = InlineKeyboardMarkup([
