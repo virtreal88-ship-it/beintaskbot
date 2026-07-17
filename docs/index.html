@@ -241,10 +241,6 @@
     <div class="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 cursor-pointer" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <h3 class="text-xs font-extrabold text-gray-800" id="bottom-bar-title">Seçilmiş tapşırıq</h3>
     <div class="text-[10px] text-gray-400 mt-1 mb-3" id="bottom-bar-meta"></div>
-    <div class="flex gap-2 mb-3">
-        <button onclick="handleBarAction('edit')" class="flex-1 bg-[#2481cc] text-white font-bold py-2.5 rounded-xl text-xs">Düzəliş et</button>
-        <button onclick="showNotePanel()" class="flex-1 bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs">Yeni qeyd</button>
-    </div>
     <div id="note-panel" style="display:none;" class="mb-3">
         <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea>
         <button onclick="submitNoteInline()" class="w-full bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs mt-2">Göndər</button>
