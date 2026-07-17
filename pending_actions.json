@@ -3,7 +3,7 @@
     "id": "0a107549",
     "type": "change_stage",
     "created_at": "2026-07-18T02:22:16.639119+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Şah_Parfum_777",
       "phone": "—",
@@ -29,7 +29,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:23:11.682780+04:00",
+    "resolved_choice": "Arxiv"
   },
   {
     "id": "031d1aa1",
