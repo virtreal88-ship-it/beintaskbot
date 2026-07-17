@@ -877,11 +877,14 @@ async function resolvePendingAction(actionId, choice, button) {
 function openSubtaskFromPending(action) {
     const data = action.data || {};
     const phone = data.phone || '';
+    const contactName = data.contact_name || '';
     const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}">${n}</option>`).join('');
-    const desc = data.task_text || data.description || '';
+    const desc = '';
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
+        <label style="font-size:11px;color:#888;font-weight:600;">Müştəri:</label>
+        <input value="${contactName}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
@@ -906,7 +909,7 @@ async function submitSubtaskFromPending(actionId) {
     const btn = document.querySelector('#subtask-modal button');
     if(btn) btn.disabled = true;
     try {
-        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'create_task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline}) });
+        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline}) });
         const j = await r.json(); if(!r.ok||!j.success) throw new Error(j.message||'Xəta');
         toast('Alt tapşırıq yaradıldı', false);
         document.getElementById('subtask-modal').remove();
