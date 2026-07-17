@@ -4188,6 +4188,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
 
             if True:  # Always notify admin even if task was already completed
               try:
+                logger.info("complete_task: ENTERING notification block")
                 task_text_full = task_data.get("text", "").strip()
                 task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
                 task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
@@ -4215,7 +4216,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 except Exception as balance_error:
                     logger.error(f"Balance crediting error: {balance_error}")
 
-                admin_chat = get_chat_id_for_kommo_user(10932455)
+                admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
+                logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}")
                 if admin_chat:
                     deadline_display = (
                         datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
