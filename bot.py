@@ -3503,6 +3503,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
         elif action == "update_task_deadline":
             task_id = data.get("task_id")
             time_preset = data.get("time_preset", "+2h")
+            reason = data.get("reason", "")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             now = datetime.now(tz=BAKU_TZ)
@@ -3517,6 +3518,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
             else:
                 new_dl = now + timedelta(hours=2)
             result = update_task_kommo(task_id, {"complete_till": int(new_dl.timestamp())})
+            # If reason is employee's fault, record KPI=0
+            if reason == "Çatdıra bilmirəm" and get_employee_type(chat_id) == "salary":
+                # Auto-create session and finish with KPI=0 (missed deadline)
+                if not has_active_session(chat_id, int(task_id)):
+                    start_task_session(chat_id, int(task_id))
+                # Finish with deadline_ts=0 to force KPI=0 (completed after deadline)
+                finish_task_session(chat_id, int(task_id), 1, reason, deadline_ts=0)
+                logger.info(f"KPI=0 recorded for task {task_id}, reason: {reason}")
             if result:
                 return web.json_response({"success": True, "message": "Vaxt dəyişdirildi."})
             else:
