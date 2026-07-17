@@ -37,7 +37,7 @@
     "id": "2b6f675c",
     "type": "change_stage",
     "created_at": "2026-07-18T02:06:27.896437+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "—",
       "phone": "—",
@@ -63,7 +63,9 @@
       "cavab gözlənilir",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:07:43.234310+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "46994b6b",
