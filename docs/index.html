@@ -187,7 +187,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
 
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
                 <div class="grid grid-cols-2 gap-2 mb-2">
@@ -272,10 +272,10 @@
         </div>
     </div>
     <div id="complete-panel" style="display:none;">
-        <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sifariş üçün qeyd:</label>
-        <textarea id="complete-note-text" placeholder="Sifariş üçün qeydinizi yazın..." class="w-full min-h-[180px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3"></textarea>
+        <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sövdələşmə qeydi (nəticə):</label>
+        <textarea id="complete-note-text" placeholder="Nəticəni yazın..." class="w-full min-h-[200px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3" style="flex:1;"></textarea>
         <div class="flex gap-2">
-            <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-3 rounded-xl text-xs">Təsdiqlə</button>
+            <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-3 rounded-xl text-xs">Göndər</button>
             <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
         </div>
     </div>
