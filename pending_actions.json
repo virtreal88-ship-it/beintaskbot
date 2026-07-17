@@ -1,5 +1,37 @@
 [
   {
+    "id": "0a107549",
+    "type": "change_stage",
+    "created_at": "2026-07-18T02:22:16.639119+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Şah_Parfum_777",
+      "phone": "—",
+      "lead_id": 76897347,
+      "task_id": 93522889,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Связаться",
+      "note": "Нет ответа",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76897347",
+      "callback_key": "4ed06818"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "031d1aa1",
     "type": "change_stage",
     "created_at": "2026-07-18T02:13:51.851238+04:00",
