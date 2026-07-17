@@ -40,10 +40,17 @@
     "sessions": [
       {
         "start_time": "2026-07-17 14:15:30",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-07-17 14:16:08",
+        "actual_minutes": 0.6,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 0,
+    "target_minutes": 60,
+    "actual_minutes": 0.6,
+    "deadline_ts": 1784295600,
+    "completed_before_deadline": false,
+    "delay_reason": "",
+    "completed_at": "2026-07-17 14:16:08"
   }
 }
