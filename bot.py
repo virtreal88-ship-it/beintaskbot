@@ -377,6 +377,33 @@ def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
             f"📞 {phone}\n⏰ {datetime.now(tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
         )
 
+    elif action_type == "reassign_task":
+        task_id = action_data.get("task_id")
+        update_data = action_data.get("update_data") or {}
+        creator_chat_id = action_data.get("creator_chat_id")
+        if choice == "Rədd et":
+            result_message = "Dəyişiklik rədd edildi."
+            _send_telegram_text(creator_chat_id, "❌ Dəyişiklik rədd edildi.")
+        else:
+            _UPD_MARKER = {"Təsdiq et": None, "Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": ("Texniki tapşırıq", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
+            if choice != "Təsdiq et":
+                marker_info = _UPD_MARKER.get(choice)
+                if marker_info:
+                    new_name, new_id = marker_info
+                    update_data["responsible_user_id"] = new_id
+                    import re as _re3
+                    old_text = _re3.sub(r"^\[.*?\]\s*", "", update_data.get("text", ""))
+                    if new_name and choice != "Özüm":
+                        update_data["text"] = f"[{new_name}] {old_text}"
+                    else:
+                        update_data["text"] = old_text
+            if task_id and update_data:
+                if not update_task_kommo(task_id, update_data):
+                    return False, "Yeniləmə uğursuz oldu."
+            chosen_name = choice if choice == "Təsdiq et" else ((_UPD_MARKER.get(choice) or ("",))[0] or choice)
+            result_message = f"Təsdiq ləndi! İcraçı: {chosen_name}"
+            _send_telegram_text(creator_chat_id, "✅ Dəyişiklik təsdiq edildi!")
+
     elif action_type == "change_stage":
         status_id = next(
             (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
