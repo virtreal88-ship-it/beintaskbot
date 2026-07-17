@@ -24,6 +24,13 @@
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
         .stage-row.selected { background:#2481cc !important; color:#fff !important; }
+        @media (min-width: 768px) {
+            body { background:#e5e7eb; }
+            .bg-\[\#1a252f\] { max-width:600px; margin:0 auto; border-radius:0 0 16px 16px; }
+            #content-area { max-width:600px; margin:0 auto; }
+            #tab-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:16px 16px 0 0; }
+            #bottom-action-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:24px 24px 0 0; }
+        }
     </style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
