@@ -241,7 +241,7 @@
     "id": "aa51967b",
     "type": "change_stage",
     "created_at": "2026-07-18T02:08:40.529088+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "—",
       "phone": "—",
@@ -267,7 +267,9 @@
       "cavab gözlənilir",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T02:13:02.774316+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "424c1876",
