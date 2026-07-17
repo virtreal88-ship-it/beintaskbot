@@ -34,6 +34,7 @@ from telegram.ext import (
     filters,
 )
 from aiohttp import web
+from pywebpush import webpush, WebPushException
 # import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -44,6 +45,13 @@ KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
+
+# VAPID keys for Web Push
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "m_p92u2p1doA03xrk2GpCmvFsTjYGlrGoPAyehc5XH8")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BP8tLwSN97_PH8NcJJFhnoxCtnha8Fbla57LsP2Yf298N17qlUdbqEjvuHlmpL0QS2o6wrt_fkkLjB0_7WGsuP8")
+VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
+# In-memory push subscriptions: {user_id: subscription_info}
+push_subscriptions = {}
 
 # OpenAI client
 llm_client = OpenAI(
@@ -1156,6 +1164,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                                     f"📝 {result['task_text']}\n⏰ {result['date']} {result['time']}\n🔗 {result['link']}",
                                     disable_web_page_preview=True
                                 )
+                                send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{result['contact_name']} - {result['task_text']}")
                             except:
                                 pass
                     return msg
@@ -1595,6 +1604,7 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
                         f"📝 {task_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
                         parse_mode="Markdown", disable_web_page_preview=True
                     )
+                    send_push_notification(str(assignee_chat), '📋 Yeni tapşırıq!', f"{contact_name} - {task_text}")
                     tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if tid and sent_a:
                         store_message_task(assignee_chat, sent_a.message_id, int(tid), task_text, entity_id=entity_id, entity_type=entity_type, phone=phone)
@@ -1783,6 +1793,7 @@ async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_T
                         f"📝 {pending['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {pending['link']}",
                         disable_web_page_preview=True
                     )
+                    send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{pending['contact_name']} - {pending['task_text']}")
                     task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if task_id and sent_msg:
                         store_message_task(assignee_chat, sent_msg.message_id, int(task_id), pending["task_text"],
@@ -4137,6 +4148,43 @@ async def cors_middleware(request, handler):
     resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-TG-User-ID'
     return resp
 
+# ─── Web Push ─────────────────────────────────────────────────────────────────
+async def handle_push_subscribe(request):
+    """Save push subscription for a user."""
+    data = await request.json()
+    user_id = request.headers.get('X-TG-User-ID', '')
+    sub = data.get('subscription')
+    if user_id and sub:
+        push_subscriptions[user_id] = sub
+        logger.info(f"Push subscription saved for user {user_id}")
+    return web.json_response({'success': True})
+
+def send_push_notification(user_id, title, body, url=None):
+    """Send push notification to a user if subscribed."""
+    sub = push_subscriptions.get(str(user_id))
+    if not sub:
+        return
+    payload = json.dumps({'title': title, 'body': body, 'url': url or '/'})
+    try:
+        webpush(
+            subscription_info=sub,
+            data=payload,
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims=VAPID_CLAIMS
+        )
+        logger.info(f"Push sent to {user_id}")
+    except WebPushException as e:
+        logger.warning(f"Push failed for {user_id}: {e}")
+        if '410' in str(e) or '404' in str(e):
+            push_subscriptions.pop(str(user_id), None)
+    except Exception as e:
+        logger.warning(f"Push error for {user_id}: {e}")
+
+def send_push_to_all_salary(title, body, url=None):
+    """Send push to all salary employees."""
+    for uid in ['7962757442','7262243946','7329891614']:
+        send_push_notification(uid, title, body, url)
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
@@ -4150,6 +4198,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/kpi", handle_api_kpi)
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
+    app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())
+    app_web.router.add_post("/api/push-subscribe", handle_push_subscribe)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
@@ -4205,6 +4255,8 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 disable_web_page_preview=True
             )
+            # Push notification
+            send_push_notification(str(chat_id), '⏰ 15 dəq qalıb!', f'{task_text} - {dt.strftime("%H:%M")}')
         except:
             pass
     # Overdue tasks
@@ -4239,6 +4291,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+            send_push_notification(str(chat_id), '🔴 Vaxt keçib!', task_text)
         except:
             pass
 

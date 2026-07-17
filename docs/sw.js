@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintask-v78';
+const CACHE_NAME = 'beintask-v79';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -18,5 +18,31 @@ self.addEventListener('fetch', e => {
       }
       return r;
     }).catch(() => caches.match(e.request))
+  );
+});
+
+// Push notification handler
+self.addEventListener('push', e => {
+  let data = {title: 'Bein Systems', body: 'Yeni bildiriş', icon: '/docs/icon-192.png'};
+  try { data = e.data.json(); } catch(err) { data.body = e.data ? e.data.text() : 'Yeni bildiriş'; }
+  e.waitUntil(
+    self.registration.showNotification(data.title || 'Bein Systems', {
+      body: data.body || '',
+      icon: data.icon || '/docs/icon-192.png',
+      badge: '/docs/icon-192.png',
+      data: data.url || '/',
+      vibrate: [200, 100, 200]
+    })
+  );
+});
+
+// Click on notification -> open app
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({type: 'window'}).then(list => {
+      for(const c of list) { if(c.url.includes('beintaskbot') && 'focus' in c) return c.focus(); }
+      return clients.openWindow(e.notification.data || '/');
+    })
   );
 });
