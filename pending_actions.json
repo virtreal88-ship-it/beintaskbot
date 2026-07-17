@@ -3,7 +3,7 @@
     "id": "00ff70de",
     "type": "reassign_task",
     "created_at": "2026-07-17T23:51:58.679646+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "BEİNAZ Nizami",
       "phone": "",
@@ -35,7 +35,9 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-18T00:44:46.275262+04:00",
+    "resolved_choice": "Rədd et"
   },
   {
     "id": "10d6addc",
