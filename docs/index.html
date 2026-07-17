@@ -873,13 +873,13 @@ async function finishTaskKpi(taskId) {
 // Balance System
 async function loadBalance() {
     if(isAdmin) return;
-    if(employeeType === 'salary') return;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(j.success) {
             const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
-            const a = document.getElementById('balance-amount'); if(a) a.textContent = parseFloat(j.balance).toFixed(2) + ' AZN';
+            if(employeeType==='salary') { const lbl = w.querySelector('div > .text-\\[10px\\]'); if(lbl) lbl.textContent = 'Bonuslar'; }
+            const a = document.getElementById('balance-amount'); if(a) a.textContent = employeeType==='salary' ? parseFloat(j.balance).toFixed(0) : parseFloat(j.balance).toFixed(2) + ' AZN';
             window._balanceData = j.transactions || [];
             // Show expected earnings from pending tasks
             let expected = 0;
