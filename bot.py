@@ -50,8 +50,7 @@ WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "m_p92u2p1doA03xrk2GpCmvFsTjYGlrGoPAyehc5XH8")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BP8tLwSN97_PH8NcJJFhnoxCtnha8Fbla57LsP2Yf298N17qlUdbqEjvuHlmpL0QS2o6wrt_fkkLjB0_7WGsuP8")
 VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
-# In-memory push subscriptions: {user_id: subscription_info}
-push_subscriptions = {}
+# Push subscriptions loaded from gh_storage on demand
 
 # OpenAI client
 llm_client = OpenAI(
@@ -4155,13 +4154,13 @@ async def handle_push_subscribe(request):
     user_id = request.headers.get('X-TG-User-ID', '')
     sub = data.get('subscription')
     if user_id and sub:
-        push_subscriptions[user_id] = sub
+        save_push_subscription(user_id, sub)
         logger.info(f"Push subscription saved for user {user_id}")
     return web.json_response({'success': True})
 
 def send_push_notification(user_id, title, body, url=None):
     """Send push notification to a user if subscribed."""
-    sub = push_subscriptions.get(str(user_id))
+    sub = get_push_subscription(str(user_id))
     if not sub:
         return
     payload = json.dumps({'title': title, 'body': body, 'url': url or '/'})
@@ -4176,7 +4175,7 @@ def send_push_notification(user_id, title, body, url=None):
     except WebPushException as e:
         logger.warning(f"Push failed for {user_id}: {e}")
         if '410' in str(e) or '404' in str(e):
-            push_subscriptions.pop(str(user_id), None)
+            remove_push_subscription(str(user_id))
     except Exception as e:
         logger.warning(f"Push error for {user_id}: {e}")
 
@@ -4640,7 +4639,8 @@ from gh_storage import (
     add_balance_transaction, get_balance, get_balance_transactions,
     get_all_balances, get_all_recent_transactions,
     has_active_session, start_task_session, pause_task_session,
-    finish_task_session, get_kpi_summary, set_kpi_score
+    finish_task_session, get_kpi_summary, set_kpi_score,
+    save_push_subscription, get_push_subscription, remove_push_subscription
 )
 
 # Initialize GitHub storage with token from git remote
