@@ -187,7 +187,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Son qeyd:</label><textarea id="edit-task-note" placeholder="Qeyd..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea></div>
+
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
                 <div class="grid grid-cols-2 gap-2 mb-2">
                     <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
@@ -195,7 +195,10 @@
                 </div>
                 <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));">
             </div>
-            <button id="edit-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">💾 Yadda saxla</button>
+            <div class="flex gap-2">
+                <button id="edit-submit-btn" onclick="submitTask()" class="flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">💾 Yadda saxla</button>
+                <button onclick="editingTaskId=null; nav('screen-notifications');" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
+            </div>
         </div>
     </div>
 
@@ -261,8 +264,11 @@
         <button onclick="showNotePanel()" class="flex-1 bg-gray-700 text-white font-bold py-2.5 rounded-xl text-xs">Qeyd əlavə et</button>
     </div>
     <div id="note-panel" style="display:none;" class="mb-3">
-        <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea>
-        <button onclick="submitNoteInline()" class="w-full bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs mt-2">Göndər</button>
+        <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea>
+        <div class="flex gap-2 mt-2">
+            <button onclick="submitNoteInline()" class="flex-1 bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs">Göndər</button>
+            <button onclick="document.getElementById('note-panel').style.display='none'; document.getElementById('action-buttons').style.display='flex';" class="bg-gray-100 text-gray-700 font-bold px-4 py-2.5 rounded-xl text-xs">Ləğv et</button>
+        </div>
     </div>
     <div id="complete-panel" style="display:none;">
         <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sifariş üçün qeyd:</label>
@@ -315,7 +321,7 @@ const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
     'search-phone','task-type-select','task-assignee-select','task-price-input','task-desc','task-deadline-custom',
-    'edit-task-type-select','edit-assignee-select','edit-task-price','edit-task-desc','edit-task-note','edit-deadline-custom',
+    'edit-task-type-select','edit-assignee-select','edit-task-price','edit-task-desc','edit-deadline-custom',
     'note-text-input','complete-note-text','search-phone-flow','deal-customer-name','deal-subtask-text',
     'note-text','note-subtask-text','job-comment'
 ];
@@ -506,8 +512,7 @@ function submitTask() {
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.originalAssignee) payload.originalAssignee = gd.originalAssignee;
         if(gd.task_type) payload.task_type = gd.task_type;
-        const editNote = document.getElementById('edit-task-note');
-        if(editNote && editNote.value.trim()) payload.note = editNote.value.trim();
+
         doFetch(payload, 'edit-submit-btn');
         editingTaskId = null;
     } else {
@@ -636,7 +641,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            <div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="flex-1 text-white py-2 rounded-lg text-[11px] font-bold" style="background:#e65100;">➕ Alt tapşırıq</button></div>`;
+            <div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="flex-1 text-white py-2 rounded-lg text-[11px] font-bold" style="background:#374151;">➕ Alt tapşırıq</button></div>`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -775,7 +780,7 @@ function handleBarAction(actionType) {
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
-        const noteField = document.getElementById('edit-task-note'); if(noteField) noteField.value = task.last_note || '';
+
         currentEditScreen = 'screen-task-details'; closeBottomBar(); nav('screen-task-details');
     }
 }
