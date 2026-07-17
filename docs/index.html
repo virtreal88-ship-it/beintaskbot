@@ -757,6 +757,9 @@ function renderPendingActions() {
         appendPendingDetail(details, '📝', 'Təsvir', description);
         if(data.note) appendPendingDetail(details, '💬', 'Qeyd', data.note);
         appendPendingDetail(details, '📞', 'Telefon', data.phone);
+        if(data.task_type_name) appendPendingDetail(details, '📌', 'Növ', data.task_type_name);
+        if(data.sender_name) appendPendingDetail(details, '👷', 'İcraçı', data.sender_name);
+        if(data.assignee_name_raw) appendPendingDetail(details, '➡️', 'Yeni icraçı', data.assignee_name_raw);
         appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));
         if(data.link) {
             const linkRow = document.createElement('a');

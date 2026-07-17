@@ -3681,9 +3681,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     save_pending_action("reassign_task", {
                         "contact_name": client_name or pending.get('display_text', ''),
                         "phone": client_phone,
-                        "lead_id": None,
+                        "lead_id": entity_id3 if entity_id3 else None,
                         "task_id": pending.get('task_id'),
                         "task_text": pending.get('display_text', ''),
+                        "task_type_name": task_type_name,
                         "stage_name": f"İcraçı: {pending['sender_name']} → {pending['assignee_name_raw']}",
                         "sender_name": pending['sender_name'],
                         "assignee_name_raw": pending['assignee_name_raw'],
@@ -3816,8 +3817,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
-                    logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
                     target_chat = get_chat_id_by_name(assignee_name_raw)
+                    logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
                     if target_chat and target_chat != chat_id:
                         display_text = text.replace(f'[{assignee_name_raw}] ', '')
                         notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
