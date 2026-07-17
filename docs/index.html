@@ -730,11 +730,11 @@ function renderPendingActions() {
         // Swipe handling
         let startX = 0, currentX = 0, swiping = false;
         card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; swiping = true; currentX = 0; });
-        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#d1fae5'; else card.style.background='#fff'; });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#dbeafe'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
             swiping = false;
             if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; const rej = (Array.isArray(action.options)?action.options:[]).find(o=>o==='Rədd et'||o==='Ləğv et')||'Rədd et'; setTimeout(()=>{resolvePendingAction(action.id,rej,card);},300); }
-            else if(currentX < -100) { const opts = Array.isArray(action.options)?action.options:[]; const approve = opts.find(o=>o==='Təsdiq et')||opts[0]||'Təsdiq et'; card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,approve,card);},300); }
+            else if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{openSubtaskFromPending(action);},300); }
             else { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
         });
 
@@ -872,9 +872,47 @@ async function resolvePendingAction(actionId, choice, button) {
         toast(error.message || 'Sorğu həll edilmədi', true);
         buttons.forEach(item => { item.disabled = false; });
         if(card) { card.style.opacity='1'; const ldr=card.querySelector('.pending-loader'); if(ldr) ldr.remove(); }
-    }
+        }
 }
-
+function openSubtaskFromPending(action) {
+    const data = action.data || {};
+    const phone = data.phone || '';
+    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}">${n}</option>`).join('');
+    const desc = data.task_text || data.description || '';
+    const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
+        <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
+        <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
+        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select>
+        <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
+        <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${assigneeOptions}</select>
+        <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
+        <textarea id="sub-desc" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;">${desc}</textarea>
+        <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
+        <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+async function submitSubtaskFromPending(actionId) {
+    const phone = document.getElementById('sub-phone').value;
+    const desc = document.getElementById('sub-desc').value.trim();
+    const assignee = document.getElementById('sub-assignee').value;
+    const taskType = document.getElementById('sub-type').value;
+    const deadline = document.getElementById('sub-deadline').value;
+    if(!desc) { toast('Təsvir boş ola bilməz', true); return; }
+    const btn = document.querySelector('#subtask-modal button');
+    if(btn) btn.disabled = true;
+    try {
+        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'create_task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline}) });
+        const j = await r.json(); if(!r.ok||!j.success) throw new Error(j.message||'Xəta');
+        toast('Alt tapşırıq yaradıldı', false);
+        document.getElementById('subtask-modal').remove();
+        loadPendingActions();
+    } catch(e) { toast(e.message||'Xəta', true); if(btn) btn.disabled=false; }
+}
 function startPendingActionPolling() {
     stopPendingActionPolling();
     pendingActionsTimer = setInterval(() => {
