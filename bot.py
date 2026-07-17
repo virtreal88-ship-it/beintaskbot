@@ -3556,8 +3556,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
             emp_type = get_employee_type(chat_id)
             kpi_result = None
             if emp_type == "salary":
+                # Auto-create session if none exists (timer removed from UI)
                 if not has_active_session(chat_id, int(task_id)):
-                    return web.json_response({"success": False, "error": "Əvvəlcə 'İşə başla' basın!", "need_start": True})
+                    start_task_session(chat_id, int(task_id))
                 kpi_result = finish_task_session(
                     chat_id,
                     int(task_id),
@@ -3565,15 +3566,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     delay_reason,
                     deadline_ts=task_deadline_ts,
                 )
-                if kpi_result and kpi_result["needs_reason"] and not delay_reason:
-                    return web.json_response({
-                        "success": False,
-                        "error": "delay_needed",
-                        "needs_delay_reason": True,
-                        "kpi_score": kpi_result["kpi_score"],
-                        "actual_minutes": kpi_result["actual_minutes"],
-                        "target_minutes": kpi_result["target_minutes"],
-                    })
 
             result = update_task_kommo(
                 task_id,
