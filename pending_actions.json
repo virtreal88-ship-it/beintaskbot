@@ -3,7 +3,7 @@
     "id": "f6bf8571",
     "type": "change_stage",
     "created_at": "2026-07-17T23:28:44.204560+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "BEİNAZ Nizami",
       "phone": "994502072240",
@@ -27,7 +27,9 @@
       "cavab gözlənilir",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-17T23:30:11.487123+04:00",
+    "resolved_choice": "imtina olundu"
   },
   {
     "id": "29c10d7c",
