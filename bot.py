@@ -3213,7 +3213,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
             if admin_chat and admin_chat != chat_id and _bot_app:
                 try:
-                    await _bot_app.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
+                    note_msg = f"\ud83d\udcdd *{sender_name}* qeyd \u0259lav\u0259 etdi:\n\n\ud83d\udcac {text}"
+                    if task_id_note:
+                        note_msg += f"\n\ud83d\udccc Tap\u015f\u0131r\u0131q ID: {task_id_note}"
+                    await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
                 except: pass
             # Extract link from result message
             link = ""
