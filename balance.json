@@ -1,5 +1,12 @@
 {
   "7920785774": {
-    "transactions": []
+    "transactions": [
+      {
+        "task_id": 93540793,
+        "amount": 80.0,
+        "task_text": "Calmera",
+        "date": "2026-07-17 11:37:39"
+      }
+    ]
   }
 }
