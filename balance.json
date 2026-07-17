@@ -2,6 +2,12 @@
   "7920785774": {
     "transactions": [
       {
+        "task_id": 0,
+        "amount": -100.0,
+        "task_text": "💸 Test Nizami ",
+        "date": "2026-07-17 10:30:36"
+      },
+      {
         "task_id": 93539977,
         "amount": 100.0,
         "task_text": "Tamarin",
