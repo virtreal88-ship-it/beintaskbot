@@ -196,7 +196,7 @@ def add_balance_transaction(telegram_id: int, task_id: int, amount: float, task_
 def get_balance(telegram_id: int) -> float:
     """Get total balance for a user."""
     filename = "balance.json"
-    _load_file(filename)
+    _load_file(filename, force=True)
     with _lock:
         data = _cache.get(filename, {})
         key = str(telegram_id)
