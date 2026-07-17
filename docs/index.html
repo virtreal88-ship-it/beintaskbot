@@ -241,6 +241,10 @@
     <div class="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 cursor-pointer" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <h3 class="text-xs font-extrabold text-gray-800" id="bottom-bar-title">Seçilmiş tapşırıq</h3>
     <div class="text-[10px] text-gray-400 mt-1 mb-3" id="bottom-bar-meta"></div>
+    <div id="action-buttons" class="flex gap-2 mb-3">
+        <button onclick="handleBarAction('edit')" class="flex-1 bg-[#2481cc] text-white font-bold py-2.5 rounded-xl text-xs">Düzəliş et</button>
+        <button onclick="showNotePanel()" class="flex-1 bg-gray-700 text-white font-bold py-2.5 rounded-xl text-xs">Qeyd əlavə et</button>
+    </div>
     <div id="note-panel" style="display:none;" class="mb-3">
         <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea>
         <button onclick="submitNoteInline()" class="w-full bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs mt-2">Göndər</button>
@@ -652,6 +656,7 @@ function clickNotification(id, desc, metaText) {
     const bar = document.getElementById('bottom-action-bar');
     document.removeEventListener('click', closeBottomBarOutside);
     bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
+    document.getElementById('action-buttons').style.display = 'flex';
     setTimeout(() => { document.addEventListener('click', closeBottomBarOutside); }, 500);
 }
 function closeBottomBarOutside(e) {
@@ -664,12 +669,14 @@ function closeBottomBar() {
     selectedTaskId = null; document.removeEventListener('click', closeBottomBarOutside);
     document.getElementById('note-panel').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'none';
+    document.getElementById('action-buttons').style.display = 'flex';
     document.getElementById('postpone-fast-menu').style.display = 'none';
 }
 
 let editingTaskId = null;
 
 function showNotePanel() { document.getElementById('note-panel').style.display = 'block'; document.getElementById('complete-panel').style.display = 'none'; document.getElementById('postpone-fast-menu').style.display = 'none'; }
+    document.getElementById('action-buttons').style.display = 'flex';
 async function submitNoteInline() {
     const noteText = document.getElementById('note-text-input').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
@@ -682,6 +689,7 @@ async function submitNoteInline() {
 
 function showCompletePanel() {
     document.getElementById('note-panel').style.display = 'none';
+    document.getElementById('action-buttons').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'block';
     document.getElementById('postpone-fast-menu').style.display = 'none';
     const note = document.getElementById('complete-note-text');
@@ -724,6 +732,7 @@ async function confirmComplete() {
 }
 
 function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
+    document.getElementById('action-buttons').style.display = 'flex';
 async function handlePostponeTime(preset) {
     if(!selectedTaskId) return;
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return; closeBottomBar();
