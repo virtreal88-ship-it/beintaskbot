@@ -1,5 +1,42 @@
 [
   {
+    "id": "6ddf8a22",
+    "type": "reassign_task",
+    "created_at": "2026-07-17T22:38:43.758473+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "BEİNAZ Nizami",
+      "phone": "",
+      "lead_id": null,
+      "task_id": 93543939,
+      "stage_name": "İcraçı: Hüseyn Səfərov → Nizami Qasımov",
+      "sender_name": "Hüseyn Səfərov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": "0",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/58671196",
+      "conf_key": "acf36425",
+      "update_data": {
+        "text": "[Nizami Qasımov] Тестирую",
+        "responsible_user_id": 10932455,
+        "task_type_id": 4232112,
+        "complete_till": 1784314380
+      },
+      "creator_chat_id": 7329891614,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2681
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "ff4db6e8",
     "type": "reassign_task",
     "created_at": "2026-07-17T22:18:53.040609+04:00",
