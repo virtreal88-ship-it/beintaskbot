@@ -1,5 +1,37 @@
 [
   {
+    "id": "031d1aa1",
+    "type": "change_stage",
+    "created_at": "2026-07-18T02:13:51.851238+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Ülvi",
+      "phone": "+994705316627",
+      "lead_id": 76922337,
+      "task_id": 93542501,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Связаться",
+      "note": "Əlaqə saxladım",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76922337",
+      "callback_key": "896299a3"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "cavab gözlənilir",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "1e65a92e",
     "type": "change_stage",
     "created_at": "2026-07-18T02:10:30.084328+04:00",
