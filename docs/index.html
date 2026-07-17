@@ -878,10 +878,11 @@ function openSubtaskFromPending(action) {
     const data = action.data || {};
     const phone = data.phone || '';
     const contactName = data.contact_name || '';
+    const leadId = data.lead_id || '';
     const parentAssignee = data.sender_name || '';
     const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const desc = '';
-    const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+    const html = `<div id="subtask-modal" data-lead-id="${leadId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Müştəri:</label>
@@ -895,8 +896,8 @@ function openSubtaskFromPending(action) {
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
         <textarea id="sub-desc" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;">${desc}</textarea>
         <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
-        <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
-        <div style="display:flex;gap:8px;"><button onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <input type="datetime-local" id="sub-deadline" required style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button id="sub-submit-btn" onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
@@ -906,16 +907,20 @@ async function submitSubtaskFromPending(actionId) {
     const assignee = document.getElementById('sub-assignee').value;
     const taskType = document.getElementById('sub-type').value;
     const deadline = document.getElementById('sub-deadline').value;
+    const leadId = document.getElementById('subtask-modal').dataset.leadId || '';
     if(!desc) { toast('Təsvir boş ola bilməz', true); return; }
-    const btn = document.querySelector('#subtask-modal button');
-    if(btn) btn.disabled = true;
+    if(!deadline) { toast('Deadline seçin', true); return; }
+    const btn = document.getElementById('sub-submit-btn');
+    if(btn) { btn.disabled = true; btn.textContent = '…'; }
     try {
-        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline}) });
+        const body = {action:'task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline:'custom:'+deadline};
+        if(leadId) { body.entity_id = leadId; body.entity_type = 'leads'; }
+        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(body) });
         const j = await r.json(); if(!r.ok||!j.success) throw new Error(j.message||'Xəta');
         toast('Alt tapşırıq yaradıldı', false);
         document.getElementById('subtask-modal').remove();
         loadPendingActions();
-    } catch(e) { toast(e.message||'Xəta', true); if(btn) btn.disabled=false; }
+    } catch(e) { toast(e.message||'Xəta', true); if(btn) { btn.disabled=false; btn.textContent='Yarat'; } }
 }
 function startPendingActionPolling() {
     stopPendingActionPolling();
