@@ -70,23 +70,14 @@
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
-        <!-- KPI Widget (salary only) -->
-        <div id="kpi-widget" style="display:none;" class="bg-gradient-to-br from-[#3b82f6] to-[#1d4ed8] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center mb-3">
-            <div>
-                <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI Balınız</div>
-                <div class="text-2xl font-black mt-1" id="kpi-avg-score">0/100</div>
-                <div class="text-[10px] opacity-75 mt-0.5" id="kpi-total-count">0 tapşırıq</div>
-            </div>
-            <span class="text-3xl">🎯</span>
-        </div>
-        <!-- Balance Widget (non-admin only) -->
+        <!-- Balance Widget (piecework employees only) -->
         <div id="balance-widget" style="display:none;" class="bg-gradient-to-br from-[#10b981] to-[#059669] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center">
             <div>
                 <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Şəxsi Balansınız</div>
                 <div class="text-2xl font-black mt-1" id="balance-amount">0.00 AZN</div>
                 <div id="balance-expected" class="text-[10px] opacity-80 mt-1" style="display:none;"></div>
             </div>
-            <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">📊 Tarixçə</button>
+            <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Tarixçə</button>
         </div>
 
         <!-- Task count + overdue -->
@@ -131,7 +122,6 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Son qeyd:</label><textarea id="task-note-edit" placeholder="Qeyd..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
                 <div class="grid grid-cols-2 gap-2 mb-2">
                     <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
@@ -154,8 +144,21 @@
 
     <div id="screen-kpi-history" class="screen space-y-4">
         <div class="border-b border-gray-200 pb-2 mb-3">
-            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">KPI Tarixçəsi</span>
+            <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə</span>
         </div>
+        <div id="finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Ümumi KPI</div>
+                    <div class="text-2xl font-black mt-1" id="finance-kpi">0/100</div>
+                </div>
+                <div class="border-l border-white/25 pl-4">
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Bonus məbləği</div>
+                    <div class="text-2xl font-black mt-1" id="finance-bonus">0 AZN</div>
+                </div>
+            </div>
+        </div>
+        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">KPI Tarixçəsi</div>
         <div id="kpi-history-container" class="space-y-3"></div>
     </div>
 
@@ -239,29 +242,19 @@
     <h3 class="text-xs font-extrabold text-gray-800" id="bottom-bar-title">Seçilmiş tapşırıq</h3>
     <div class="text-[10px] text-gray-400 mt-1 mb-3" id="bottom-bar-meta"></div>
     <div class="flex gap-2 mb-3">
-        <button onclick="showCompletePanel()" class="flex-1 bg-[#10b981] text-white font-bold py-2.5 rounded-xl text-xs">✓ İcra olundu</button>
-        <button onclick="showNotePanel()" class="flex-1 bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs">📝 Yeni qeyd</button>
+        <button onclick="handleBarAction('edit')" class="flex-1 bg-[#2481cc] text-white font-bold py-2.5 rounded-xl text-xs">Düzəliş et</button>
+        <button onclick="showNotePanel()" class="flex-1 bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs">Yeni qeyd</button>
     </div>
     <div id="note-panel" style="display:none;" class="mb-3">
         <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-16 resize-none"></textarea>
         <button onclick="submitNoteInline()" class="w-full bg-[#3b82f6] text-white font-bold py-2.5 rounded-xl text-xs mt-2">Göndər</button>
     </div>
     <div id="complete-panel" style="display:none;">
-        <div class="text-[10px] font-bold text-gray-500 mb-2">Mərhələ seçin:</div>
-        <div id="stage-list" class="grid grid-cols-2 gap-2 mb-3">
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('danisiqlar',this)">Danışıqlar</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('qiymet_teklifi',this)">Qiymət təklifi</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('teqdimat',this)">Təqdimat</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('yeni_sifaris',this)">Yeni sifariş</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('gorus',this)">Görüş</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('qurashdirma',this)">Quraşdırma</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('ugurlu',this)">Uğurlu</div>
-            <div class="option-card stage-row text-[11px] py-2" onclick="selectCompleteStage('imtina',this)">İmtina</div>
-        </div>
-        <div id="complete-note-block" class="mb-3"><textarea id="complete-note-text" placeholder="Sifariş üçün qeyd yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-14 resize-none"></textarea></div>
+        <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sifariş üçün qeyd:</label>
+        <textarea id="complete-note-text" placeholder="Sifariş üçün qeydinizi yazın..." class="w-full min-h-[180px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3"></textarea>
         <div class="flex gap-2">
-            <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-2.5 rounded-xl text-xs">✅ Təsdiqlə</button>
-            <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-2.5 rounded-xl text-xs">Ləğv et</button>
+            <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-3 rounded-xl text-xs">Təsdiqlə</button>
+            <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
         </div>
     </div>
     <div id="postpone-fast-menu" style="display:none;" class="grid grid-cols-2 gap-2 mt-2">
@@ -304,11 +297,18 @@ function getUserId() {
 }
 const CURRENT_USER_ID = getUserId();
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
+const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
+const PERSISTED_FORM_IDS = [
+    'search-phone','task-type-select','task-assignee-select','task-price-input','task-desc','task-deadline-custom',
+    'edit-task-type-select','edit-assignee-select','edit-task-price','edit-task-desc','edit-task-note','edit-deadline-custom',
+    'note-text-input','complete-note-text','search-phone-flow','deal-customer-name','deal-subtask-text',
+    'note-text','note-subtask-text','job-comment'
+];
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['7962757442','7262243946','7329891614'];
-if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'KPI'; }); }
+if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; }); }
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
@@ -328,10 +328,12 @@ function initApp() {
     // Show user name in header
     const name = tg.initDataUnsafe?.user?.first_name || '';
     if(name) document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
+    initSessionPersistence();
+    restoreSessionForms();
     openNotifications();
 }
 
-document.addEventListener('visibilitychange', () => { if(!document.hidden) openNotifications(); });
+document.addEventListener('visibilitychange', () => { if(!document.hidden) syncNotifications(); });
 
 function nav(id) {
     closeBottomBar();
@@ -368,8 +370,61 @@ function handleSearchProceed() {
     else if(flow === 'info') doFetch({action: 'info', phone: p}, 'task-submit-btn');
 }
 
-function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; }
-function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'block' : 'none'; }
+function sel(k, v, el) { el.parentNode.querySelectorAll('.option-card').forEach(c => c.classList.remove('selected')); el.classList.add('selected'); gd[k] = v; saveSessionForms(); }
+function tog(id, cb) { document.getElementById(id).style.display = cb.checked ? 'block' : 'none'; saveSessionForms(); }
+
+function saveSessionForms() {
+    try {
+        const previous = JSON.parse(sessionStorage.getItem(FORM_STATE_KEY) || '{}');
+        const fields = {};
+        PERSISTED_FORM_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if(el) fields[id] = el.type === 'checkbox' ? el.checked : el.value;
+        });
+        const createScreen = document.getElementById('screen-create');
+        const createDeadline = createScreen?.classList.contains('active') ? (gd.deadline || '') : (previous.createDeadline || '');
+        sessionStorage.setItem(FORM_STATE_KEY, JSON.stringify({fields, createDeadline}));
+    } catch(e) {}
+}
+function restoreSessionForms() {
+    try {
+        const saved = JSON.parse(sessionStorage.getItem(FORM_STATE_KEY) || '{}');
+        Object.entries(saved.fields || {}).forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if(el) { if(el.type === 'checkbox') el.checked = Boolean(value); else el.value = value; }
+        });
+        const assignee = document.getElementById('task-assignee-select');
+        const taskType = document.getElementById('task-type-select');
+        const customDeadline = document.getElementById('task-deadline-custom');
+        gd.assigneeName = assignee?.value || '';
+        gd.task_type = taskType?.value || '';
+        gd.deadline = customDeadline?.value ? 'custom:' + customDeadline.value : (saved.createDeadline || '');
+        document.querySelectorAll('#screen-create .option-card').forEach(c => c.classList.remove('selected'));
+        if(gd.deadline === '15m' || gd.deadline === '1h') {
+            const btn = Array.from(document.querySelectorAll('#screen-create .option-card')).find(c => c.textContent.includes(gd.deadline === '15m' ? '15 dəq' : '1 saat'));
+            if(btn) btn.classList.add('selected');
+        }
+    } catch(e) {}
+}
+function initSessionPersistence() {
+    PERSISTED_FORM_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) { el.addEventListener('input', saveSessionForms); el.addEventListener('change', saveSessionForms); }
+    });
+}
+function clearCreateFormState() {
+    ['search-phone','task-type-select','task-assignee-select','task-price-input','task-desc','task-deadline-custom'].forEach(id => {
+        const el = document.getElementById(id); if(!el) return;
+        if(el.tagName === 'SELECT') el.selectedIndex = 0; else el.value = '';
+    });
+    gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
+    document.querySelectorAll('#screen-create .option-card').forEach(c => c.classList.remove('selected'));
+    saveSessionForms();
+}
+function clearSessionField(id) {
+    const el = document.getElementById(id); if(el) el.value = '';
+    saveSessionForms();
+}
 
 function showSuccessScreen(msg, link, isInfo) {
     let html = msg.replace(/\n/g, '<br>');
@@ -379,6 +434,29 @@ function showSuccessScreen(msg, link, isInfo) {
     ss.style.display = 'flex';
 }
 function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
+
+async function syncNotifications(showError = false) {
+    try {
+        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(!r.ok || !j.success || !j.tasks) throw new Error(j.error || 'Sync failed');
+        if(j.is_admin) {
+            isAdmin = true;
+            localStorage.setItem('is_admin','true');
+            const filterRow = document.getElementById('filter-row'); if(filterRow) filterRow.style.display = 'flex';
+        }
+        let tasks = j.tasks;
+        if(Object.keys(_completedTaskIds).length > 0) tasks = tasks.filter(t => !_completedTaskIds[t.id]);
+        mockTasks = tasks;
+        setCachedTasks(tasks);
+        renderNotifications();
+        return true;
+    } catch(e) {
+        renderNotifications();
+        if(showError) toast('Bildirişlər yüklənmədi', true);
+        return false;
+    }
+}
 
 async function doFetch(payload, btnId) {
     const btn = document.getElementById(btnId);
@@ -393,16 +471,9 @@ async function doFetch(payload, btnId) {
         });
         const j = await r.json();
         if(r.ok && j.success) {
+            if(payload.action === 'task' && !payload.parent_task_id) clearCreateFormState();
+            await syncNotifications();
             showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info');
-            try {
-                const r2 = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
-                const j2 = await r2.json();
-                if(j2.success && j2.tasks) {
-                    let ft = j2.tasks;
-                    if(Object.keys(_completedTaskIds).length > 0) { ft = j2.tasks.filter(t => !_completedTaskIds[t.id]); }
-                    mockTasks = ft; setCachedTasks(ft);
-                }
-            } catch(e2) {}
         } else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
@@ -434,8 +505,6 @@ function submitTask() {
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType};
         const priceInput = document.getElementById('task-price-input');
         if(priceInput && priceInput.value) newPayload.price = priceInput.value;
-        const createNote = document.getElementById('task-note-edit');
-        if(createNote && createNote.value.trim()) newPayload.note = createNote.value.trim();
         doFetch(newPayload, 'task-submit-btn');
     }
 }
@@ -461,23 +530,21 @@ function submitClose() {
 async function openNotifications() {
     nav('screen-notifications');
     const fa = document.getElementById('filter-assignee');
-    if(fa && currentFilter !== 'all') { fa.value = currentFilter; }
-    if(isAdmin || currentFilter !== 'all') { document.getElementById('filter-row').style.display = 'flex'; }
+    if(fa && currentFilter !== 'all') fa.value = currentFilter;
+    if(isAdmin || currentFilter !== 'all') document.getElementById('filter-row').style.display = 'flex';
     const cachedData = getCachedTasks();
-    if (cachedData && cachedData.length > 0) { mockTasks = cachedData; renderNotifications(); }
-    else if (mockTasks.length === 0) { showLoader(); }
+    if(cachedData) {
+        mockTasks = cachedData;
+        renderNotifications();
+    } else if(mockTasks.length === 0) {
+        showLoader();
+    }
     showSyncIndicator();
-    try {
-        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
-        const j = await r.json();
-        if(j.success && j.tasks) {
-            if(j.is_admin) { isAdmin = true; localStorage.setItem('is_admin','true'); document.getElementById('filter-row').style.display = 'flex'; if(fa && currentFilter !== 'all') fa.value = currentFilter; }
-            let filteredTasks = j.tasks;
-            if(Object.keys(_completedTaskIds).length > 0) { filteredTasks = j.tasks.filter(t => !_completedTaskIds[t.id]); }
-            if (JSON.stringify(filteredTasks) !== JSON.stringify(mockTasks)) { mockTasks = filteredTasks; setCachedTasks(filteredTasks); renderNotifications(); }
-        }
-    } catch(e) { if(!cachedData || cachedData.length === 0) toast('Bildirişlər yüklənmədi', true); }
-    hideLoader(); hideSyncIndicator(); loadBalance(); loadKpi();
+    await syncNotifications(!cachedData);
+    hideLoader();
+    hideSyncIndicator();
+    loadBalance();
+    loadKpi();
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || 'all';
@@ -528,7 +595,7 @@ function renderNotifications() {
         wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
         const bgAction = document.createElement('div');
         bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
-        bgAction.innerHTML = `<span style="opacity:0;">✏️ Düzəliş</span><span style="opacity:0;">🕒 +2 saat</span>`;
+        bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
         wrapper.appendChild(bgAction);
         const card = document.createElement('div');
         const isOverdue = t.is_overdue;
@@ -554,7 +621,7 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 ${priceTag}
             </div>
-            ${(!isAdmin) ? `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button id="kpi-start-${t.id}" onclick="startTaskKpi(${t.id})" class="flex-1 bg-blue-600 text-white py-2 rounded-lg text-[11px] font-bold">▶️ İşə başla</button><button onclick="openSubtask(${t.id})" class="flex-1 text-white py-2 rounded-lg text-[11px] font-bold" style="background:#e65100;">➕ Alt tapşırıq</button></div>` : `<div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="flex-1 text-white py-2 rounded-lg text-[11px] font-bold" style="background:#e65100;">➕ Alt tapşırıq</button></div>`}`;
+            <div class="mt-2 pt-2 border-t border-gray-100 flex gap-2" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="flex-1 text-white py-2 rounded-lg text-[11px] font-bold" style="background:#e65100;">➕ Alt tapşırıq</button></div>`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
@@ -565,24 +632,19 @@ function renderNotifications() {
             if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
             if(currentX < -120) currentX = -120 + (currentX+120)*0.2;
             card.style.transform = `translateX(${currentX}px)`;
-            if(currentX > 20) { bgAction.style.background='#3b82f6'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
+            if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
             else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
             else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
         }, {passive:true});
         card.addEventListener('touchend', () => {
             isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
-            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { selectedTaskId=t.id; clickNotification(t.id,'',''); handleBarAction('edit'); }, 200); }
+            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
             else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; handlePostponeTime('+2h'); }, 200); }
             else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
             currentX = 0;
         });
                 wrapper.appendChild(card);
         container.appendChild(wrapper);
-    });
-    // Restore active timers from localStorage
-    mockTasks.forEach(t => {
-        const saved = localStorage.getItem('timer_'+t.id);
-        if(saved) { const acc = parseInt(localStorage.getItem('timer_acc_'+t.id)||'0'); _startTimerDisplay(t.id, parseInt(saved), acc); }
     });
 }
 function clickNotification(id, desc, metaText) {
@@ -610,39 +672,24 @@ function closeBottomBar() {
 }
 
 let editingTaskId = null;
-let completeStageSelected = '';
 
 function showNotePanel() { document.getElementById('note-panel').style.display = 'block'; document.getElementById('complete-panel').style.display = 'none'; document.getElementById('postpone-fast-menu').style.display = 'none'; }
 async function submitNoteInline() {
     const noteText = document.getElementById('note-text-input').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    document.getElementById('note-text-input').value = ''; closeBottomBar();
+    clearSessionField('note-text-input'); closeBottomBar();
     const oldNote = task.last_note; task.last_note = noteText; setCachedTasks(mockTasks); renderNotifications(); toast('✅ Qeyd əlavə edildi', false);
     try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:task.id, text:noteText, phone:task.phone||''}) }); if(!r.ok) throw new Error(); }
     catch(e) { task.last_note = oldNote; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Qeyd göndərilmədi', true); }
 }
 
-async function showCompletePanel() {
-    // For salary employees: check if task was started
-    if(employeeType === 'salary' && selectedTaskId) {
-        try {
-            const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'check_started', task_id:selectedTaskId}) });
-            const j = await r.json();
-            if(!j.started) { alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return; }
-        } catch(e) {}
-    }
-    completeStageSelected = '';
+function showCompletePanel() {
     document.getElementById('note-panel').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'block';
     document.getElementById('postpone-fast-menu').style.display = 'none';
-    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    document.getElementById('complete-note-block').style.display = 'block';
-    document.getElementById('complete-note-text').value = '';
-}
-function selectCompleteStage(stage, el) {
-    document.querySelectorAll('#stage-list .stage-row').forEach(c => c.classList.remove('selected'));
-    el.classList.add('selected'); completeStageSelected = stage;
+    const note = document.getElementById('complete-note-text');
+    if(note) setTimeout(() => note.focus(), 100);
 }
 
 let _completedTaskIds = {};
@@ -653,33 +700,31 @@ async function confirmComplete() {
     const completedId = task.id;
     const btn = document.getElementById('btn-confirm-complete');
     const origText = btn ? btn.innerHTML : '';
-    if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Yüklənir...'; }
-    const payload = {action:'complete_task', task_id:completedId, new_stage:completeStageSelected, phone:task.phone||'', note:noteText};
+    if(btn) { btn.disabled = true; btn.innerHTML = 'Yüklənir...'; }
     try {
-        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body:JSON.stringify({action:'complete_task', task_id:completedId, phone:task.phone||'', note:noteText})
+        });
         const j = await r.json();
-        if(!j.success && j.needs_delay_reason) {
-            if(btn) { btn.disabled = false; btn.innerHTML = origText; }
-            const reason = prompt(`⚠️ Gecikmə aşkar edildi!\n⏱ ${j.actual_minutes} dəq / ${j.target_minutes} dəq (KPI: ${j.kpi_score}/100)\n\nGecikmənin səbəbini yazın:`);
-            if(!reason || !reason.trim()) { toast('Səbəb yazılmalıdır!', true); return; }
-            payload.delay_reason = reason.trim();
-            if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Yüklənir...'; }
-            const r2 = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload) });
-            const j2 = await r2.json();
-            if(!j2.success && j2.need_start) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return; }
-            if(!j2.success) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast(j2.error || 'Xəta!', true); return; }
-        } else if(!j.success && j.need_start) {
-            if(btn) { btn.disabled = false; btn.innerHTML = origText; } alert('Zəhmət olmasa, əvvəlcə işə başladığınızı qeyd edin (İşə başla)'); return;
-        } else if(!j.success) {
-            if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast(j.error || 'Xəta!', true); return;
-        }
-    } catch(e) { if(btn) { btn.disabled = false; btn.innerHTML = origText; } toast('Xəta! Tapşırıq bağlanmadı', true); return; }
-    if(btn) { btn.disabled = false; btn.innerHTML = origText; }
+        if(!r.ok || !j.success) { toast(j.error || j.message || 'Tapşırıq tamamlanmadı', true); return; }
+    } catch(e) {
+        toast('Xəta! Tapşırıq bağlanmadı', true);
+        return;
+    } finally {
+        if(btn) { btn.disabled = false; btn.innerHTML = origText; }
+    }
     _completedTaskIds[completedId] = Date.now();
-    localStorage.removeItem('timer_'+completedId); if(_taskTimers[completedId]) { clearInterval(_taskTimers[completedId]); delete _taskTimers[completedId]; }
-    mockTasks = mockTasks.filter(t => t.id !== completedId); setCachedTasks(mockTasks); closeBottomBar(); renderNotifications(); toast('✓ Tapşırıq bağlandı', false);
+    mockTasks = mockTasks.filter(t => t.id !== completedId);
+    setCachedTasks(mockTasks);
+    clearSessionField('complete-note-text');
+    closeBottomBar();
+    renderNotifications();
+    await syncNotifications();
+    toast('✓ Tapşırıq bağlandı', false);
     setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
-    if(employeeType === 'salary') loadKpi();
+    if(employeeType === 'salary') { loadKpi(); loadBalance(); }
 }
 
 function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
@@ -724,15 +769,8 @@ function switchTab(tabId) {
         nav('screen-notifications'); openNotifications();
     } else if(tabId === 'tab-create') {
         document.getElementById('tab-create').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-        editingTaskId = null; gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
-        document.getElementById('task-desc').value = '';
-        document.getElementById('search-phone').value = '';
-        const pi = document.getElementById('task-price-input'); if(pi) pi.value = '';
-        const tn = document.getElementById('task-note-edit'); if(tn) tn.value = '';
-        const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
-        const asel = document.getElementById('task-assignee-select'); if(asel) asel.selectedIndex = 0;
-        const tsel = document.getElementById('task-type-select'); if(tsel) tsel.selectedIndex = 0;
-        document.querySelectorAll('#screen-create .option-card').forEach(c => c.classList.remove('selected'));
+        editingTaskId = null;
+        restoreSessionForms();
         nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
@@ -749,67 +787,22 @@ async function loadKpi() {
         const j = await r.json();
         if(j.success) {
             kpiData = j;
-            const w = document.getElementById('kpi-widget'); if(w) w.style.display = 'flex';
-            const s = document.getElementById('kpi-avg-score'); if(s) s.textContent = j.avg_kpi + '/100';
-            const c = document.getElementById('kpi-total-count'); if(c) c.textContent = j.total_tasks + ' tapşırıq';
+            const w = document.getElementById('finance-widget'); if(w) w.style.display = 'block';
+            const s = document.getElementById('finance-kpi'); if(s) s.textContent = (j.avg_kpi || 0) + '/100';
         }
     } catch(e) {}
 }
-function loadKpiHistory() {
-    loadKpi();
+async function loadKpiHistory() {
+    const widget = document.getElementById('finance-widget'); if(widget) widget.style.display = 'block';
+    await Promise.all([loadKpi(), loadBalance()]);
     const container = document.getElementById('kpi-history-container');
     const hist = kpiData?.history || [];
     if(!hist.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ KPI məlumatı yoxdur.</div>'; return; }
     container.innerHTML = hist.map(h => {
         const d = h.date ? new Date(h.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
         const color = h.kpi_score >= 70 ? 'text-emerald-600' : h.kpi_score >= 40 ? 'text-amber-600' : 'text-red-600';
-        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ⏱ ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
+        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
     }).join('');
-}
-const _taskTimers = {};
-function _startTimerDisplay(taskId, startTime, accumulated) {
-    const btn = document.getElementById('kpi-start-'+taskId);
-    if(!btn) return;
-    btn.disabled = false;
-    btn.className = btn.className.replace('bg-blue-600','bg-green-600');
-    btn.onclick = function(e) { e.stopPropagation(); stopTaskKpi(taskId); };
-    btn.textContent = '⏱️ 00:00:00';
-    if(_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
-    const acc = accumulated || 0;
-    _taskTimers[taskId] = setInterval(() => {
-        const elapsed = acc + Math.floor((Date.now() - startTime) / 1000);
-        const h = String(Math.floor(elapsed/3600)).padStart(2,'0');
-        const m = String(Math.floor((elapsed%3600)/60)).padStart(2,'0');
-        const s = String(elapsed%60).padStart(2,'0');
-        btn.textContent = `⏱️ ${h}:${m}:${s}`;
-    }, 1000);
-}
-async function startTaskKpi(taskId) {
-    const btn = document.getElementById('kpi-start-'+taskId);
-    if(btn) { btn.disabled = true; btn.innerHTML = '⏳'; }
-    const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'start_task', task_id:taskId}) });
-    const j = await r.json();
-    if(j.success) {
-        const acc = parseInt(localStorage.getItem('timer_acc_'+taskId)||'0');
-        const now = Date.now();
-        localStorage.setItem('timer_'+taskId, now);
-        _startTimerDisplay(taskId, now, acc);
-        toast('▶️ Başladı!');
-    } else { if(btn) { btn.disabled = false; btn.innerHTML = '▶️ İşə başla'; } toast(j.message||'Xəta', true); }
-}
-async function stopTaskKpi(taskId) {
-    const btn = document.getElementById('kpi-start-'+taskId);
-    const startTime = parseInt(localStorage.getItem('timer_'+taskId)||'0');
-    const elapsed = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
-    const prevAcc = parseInt(localStorage.getItem('timer_acc_'+taskId)||'0');
-    const totalAcc = prevAcc + elapsed;
-    localStorage.setItem('timer_acc_'+taskId, totalAcc);
-    localStorage.removeItem('timer_'+taskId);
-    if(_taskTimers[taskId]) { clearInterval(_taskTimers[taskId]); delete _taskTimers[taskId]; }
-    // Notify backend about pause
-    try { await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'pause_task', task_id:taskId, elapsed_seconds:elapsed}) }); } catch(e){}
-    if(btn) { btn.className = btn.className.replace('bg-green-600','bg-blue-600'); btn.textContent = '▶️ İşə başla'; btn.onclick = function(e){ e.stopPropagation(); startTaskKpi(taskId); }; }
-    toast(`⏹ Dayandırıldı (${Math.floor(totalAcc/60)} dəq)`);
 }
 function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
@@ -854,22 +847,10 @@ async function submitSubtask(parentTaskId) {
         const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const j = await r.json();
         toast(j.message||'Yaradıldı!', !j.success);
+        if(j.success) await syncNotifications();
     } catch(e) { toast('Xəta!', true); }
     document.getElementById('subtask-modal').remove();
 }
-async function finishTaskKpi(taskId) {
-    const task = mockTasks.find(t => t.id === taskId);
-    const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'finish_task', task_id:taskId, task_type_id: task?.task_type_id||1, task_text: task?.desc||task?.text||''}) });
-    const j = await r.json();
-    if(j.success) {
-        let msg = `KPI: ${j.kpi_score}/100\n⏱ ${j.actual_minutes} dəq / ${j.target_minutes} dəq`;
-        if(j.ai_feedback) msg += `\n💬 ${j.ai_feedback}`;
-        if(j.needs_reason) msg += `\n⚠️ Gecikməni izah edin!`;
-        alert(msg);
-        loadKpi();
-    } else { toast(j.error || 'Xəta!', true); }
-}
-
 // Balance System
 async function loadBalance() {
     if(isAdmin) return;
@@ -877,11 +858,16 @@ async function loadBalance() {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(j.success) {
-            const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
-            if(employeeType==='salary') { const lbl = w.querySelector('div > .text-\\[10px\\]'); if(lbl) lbl.textContent = 'Bonuslar'; }
-            const a = document.getElementById('balance-amount'); if(a) a.textContent = employeeType==='salary' ? parseFloat(j.balance).toFixed(0) : parseFloat(j.balance).toFixed(2) + ' AZN';
             window._balanceData = j.transactions || [];
-            // Show expected earnings from pending tasks
+            if(employeeType === 'salary') {
+                const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
+                const bonus = document.getElementById('finance-bonus');
+                if(bonus) bonus.textContent = parseFloat(j.balance || 0).toFixed(0) + ' AZN';
+                const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';
+                return;
+            }
+            const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
+            const a = document.getElementById('balance-amount'); if(a) a.textContent = parseFloat(j.balance || 0).toFixed(2) + ' AZN';
             let expected = 0;
             (mockTasks||[]).forEach(t => {
                 const pm = (t.desc||t.text||'').match(/:([\d.]+)\]/);
@@ -964,7 +950,7 @@ async function submitMexaric() {
     let ptrStart = 0, ptrDist = 0, ptrActive = false;
     ca.addEventListener('touchstart', e => { if(ca.scrollTop <= 0) { ptrStart = e.touches[0].clientY; ptrActive = true; } }, {passive:true});
     ca.addEventListener('touchmove', e => { if(!ptrActive) return; ptrDist = e.touches[0].clientY - ptrStart; }, {passive:true});
-    ca.addEventListener('touchend', () => { if(ptrActive && ptrDist > 80) { showSyncIndicator(); fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} }).then(r=>r.json()).then(j=>{ if(j.success && j.tasks) { let ft = j.tasks; if(Object.keys(_completedTaskIds).length > 0) ft = j.tasks.filter(t=>!_completedTaskIds[t.id]); mockTasks = ft; setCachedTasks(ft); renderNotifications(); } }).catch(()=>{}).finally(()=>hideSyncIndicator()); } ptrActive = false; ptrDist = 0; });
+    ca.addEventListener('touchend', async () => { if(ptrActive && ptrDist > 80) { showSyncIndicator(); await syncNotifications(); hideSyncIndicator(); } ptrActive = false; ptrDist = 0; });
 })();
 document.addEventListener("DOMContentLoaded", () => { initApp(); });
 </script>
