@@ -3230,7 +3230,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Send confirmation to admin WITH the note text
                 try:
                     pending["note_text"] = text  # store note in pending for later
-                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {pending.get('display_text', '')}\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}\n\ud83d\udcac Qeyd: {text}\n\ud83c\udd94 Task: {pending['task_id']}"
+                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {pending.get('display_text', '')}\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}\n\ud83d\udcac Qeyd: {text}"
                     kb_json = {"inline_keyboard": [
                         [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
                         [{"text": "\u015eamil", "callback_data": f"updtask-{found_conf_key}-shamil"}, {"text": "Soltan", "callback_data": f"updtask-{found_conf_key}-soltan"}],
@@ -3506,30 +3506,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
-        elif action == "add_note":
-            task_id = data.get("task_id")
-            note_text = data.get("note", "")
-            if not task_id or not note_text:
-                return web.json_response({"success": False, "error": "task_id v\u0259 ya qeyd yoxdur."})
-            try:
-                headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}
-                t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers={"Authorization": f"Bearer {KOMMO_TOKEN}"})
-                t_data = t_resp.json()
-                entity_id = t_data.get("entity_id")
-                entity_type = t_data.get("entity_type", "leads")
-                if entity_id:
-                    note_payload = [{"note_type": "common", "params": {"text": note_text}}]
-                    r = requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=headers_k, json=note_payload)
-                    logger.info(f"add_note: entity={entity_type}/{entity_id} status={r.status_code} resp={r.text[:200]}")
-                    if r.status_code in (200, 201):
-                        return web.json_response({"success": True, "message": "\u2705 Qeyd \u0259lav\u0259 edildi!"})
-                    else:
-                        return web.json_response({"success": False, "error": f"Kommo xəta: {r.status_code}"})
-                else:
-                    return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı."})
-            except Exception as e:
-                logger.error(f"add_note error: {e}")
-                return web.json_response({"success": False, "error": str(e)})
         elif action == "update_task_deadline":
             task_id = data.get("task_id")
             time_preset = data.get("time_preset", "+2h")
