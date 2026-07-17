@@ -12,6 +12,15 @@
         "amount": 120.0,
         "task_text": "Tamarin",
         "date": "2026-07-17 11:39:50"
+      },
+      {
+        "task_id": 93541725,
+        "executor": "Rasim Əsgərov",
+        "client": "Şahdağ Forel +0502071077",
+        "task_type": "Quraşdırma",
+        "amount": 130.0,
+        "task_text": "Şahdağ Farel",
+        "date": "2026-07-17 13:47:57"
       }
     ]
   }
