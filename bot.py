@@ -3739,30 +3739,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             completion_message += f"\n🔗 {link}"
 
                         callback_key = str(uuid.uuid4())[:8]
-                        _bot_app.bot_data.setdefault("pending_next_stages", {})[callback_key] = {
+                        _bot_app.bot_data.setdefault("pending_stage_change", {})[callback_key] = {
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "employee_tg_id": int(chat_id),
                         }
-                        if kpi_result:
-                            _bot_app.bot_data.setdefault("pending_kpi_corrections", {})[callback_key] = {
-                                "task_id": int(task_id),
-                                "employee_tg_id": int(chat_id),
-                            }
-                        stage_buttons = [
-                            InlineKeyboardButton(
-                                STAGE_NAMES.get(status_id, stage_key),
-                                callback_data=f"nstg-{callback_key}-{stage_key}",
-                            )
-                            for stage_key, status_id in STAGES.items()
-                        ]
-                        keyboard_rows = [stage_buttons[index:index + 2] for index in range(0, len(stage_buttons), 2)]
-                        if kpi_result:
-                            keyboard_rows.append([
-                                InlineKeyboardButton("KPI 100", callback_data=f"kpicorr-{callback_key}-100"),
-                                InlineKeyboardButton("KPI 50", callback_data=f"kpicorr-{callback_key}-50"),
-                                InlineKeyboardButton("KPI 0", callback_data=f"kpicorr-{callback_key}-0"),
-                            ])
+                        keyboard_rows = [[InlineKeyboardButton("📋 Mərhələni dəyiş", callback_data=f"chgstg-{callback_key}")]]
                         try:
                             await _bot_app.bot.send_message(
                                 admin_chat,
@@ -4279,6 +4261,35 @@ async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
+async def change_stage_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin pressed 'Mərhələni dəyiş' - show stage list."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("Yalnız Admin istifadə edə bilər.", show_alert=True)
+        return
+    callback_key = query.data.replace("chgstg-", "")
+    pending = context.bot_data.get("pending_stage_change", {}).get(callback_key)
+    if not pending or not pending.get("lead_id"):
+        await query.answer("Bu seçim artıq keçərsizdir.", show_alert=True)
+        return
+    # Send stage selection buttons
+    stage_buttons = [
+        InlineKeyboardButton(
+            STAGE_NAMES.get(status_id, stage_key),
+            callback_data=f"nstg-{callback_key}-{stage_key}",
+        )
+        for stage_key, status_id in STAGES.items()
+    ]
+    keyboard_rows = [stage_buttons[i:i+2] for i in range(0, len(stage_buttons), 2)]
+    # Copy pending data to pending_next_stages for nstg handler
+    context.bot_data.setdefault("pending_next_stages", {})[callback_key] = pending
+    try:
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard_rows))
+    except Exception:
+        pass
+    await query.answer()
+
+
 async def next_stage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Move a completed task's deal to the stage selected by Admin."""
     query = update.callback_query
@@ -4306,19 +4317,12 @@ async def next_stage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     context.bot_data.get("pending_next_stages", {}).pop(callback_key, None)
-    kpi_pending = context.bot_data.get("pending_kpi_corrections", {}).get(callback_key)
-    remaining_markup = None
-    if kpi_pending:
-        remaining_markup = InlineKeyboardMarkup([[
-            InlineKeyboardButton("KPI 100", callback_data=f"kpicorr-{callback_key}-100"),
-            InlineKeyboardButton("KPI 50", callback_data=f"kpicorr-{callback_key}-50"),
-            InlineKeyboardButton("KPI 0", callback_data=f"kpicorr-{callback_key}-0"),
-        ]])
+    context.bot_data.get("pending_stage_change", {}).pop(callback_key, None)
+    stage_name = STAGE_NAMES.get(status_id, stage_key)
     try:
-        await query.edit_message_reply_markup(reply_markup=remaining_markup)
+        await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass
-    stage_name = STAGE_NAMES.get(status_id, stage_key)
     await query.answer(f"Mərhələ dəyişdirildi: {stage_name}", show_alert=True)
 
 
@@ -4614,8 +4618,8 @@ def main():
     app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
     app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
     app.add_handler(CallbackQueryHandler(update_task_confirm_callback, pattern="^updtask-"))
+    app.add_handler(CallbackQueryHandler(change_stage_button_callback, pattern="^chgstg-"))
     app.add_handler(CallbackQueryHandler(next_stage_callback, pattern="^nstg-"))
-    app.add_handler(CallbackQueryHandler(admin_kpi_correction_callback, pattern="^kpicorr-"))
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
