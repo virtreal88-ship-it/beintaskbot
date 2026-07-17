@@ -2714,6 +2714,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         if admin_chat and admin_chat != chat_id:
             try:
                 await context.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
+                send_push_to_admin(f"{sender_name} qeyd əlavə etdi: {result}", title="📝 Qeyd")
             except:
                 pass
     elif action == "stage":
@@ -2736,6 +2737,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 keyboard = [[InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no")]]
                 try:
                     await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                    send_push_to_admin(f"{sender_name} mərhələ dəyişikliyi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
                 except:
                     pass
             await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
@@ -2794,6 +2796,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
                 try:
                     await context.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
+                    send_push_to_admin(f"{sender_name} tapşırıq yaratdı: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
         else:
             await update.message.reply_text("❌ Tapşırıq yaradılarkən xəta.")
@@ -3106,6 +3109,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
+                send_push_to_admin(f"Qiymət təklifi: {contact_name}", title="💰 Qiymət təklifi")
             except:
                 pass
             return web.Response(status=200, text="OK")
@@ -3145,6 +3149,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 )
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
+                send_push_to_admin(f"Mərhələ: {stage_display} - {contact_name}", title="📋 İcraçı seç")
             except Exception as e:
                 logger.error(f"Webhook stage-task error: {e}")
         else:
@@ -3155,6 +3160,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
+                send_push_to_admin(f"{contact_name}: {old_stage_name} → {new_stage_name}", title="🔄 Mərhələ dəyişdi")
             except:
                 pass
         return web.Response(status=200, text="OK")
@@ -3293,6 +3299,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                     ]}
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
+                    send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi")
                 except Exception as e:
                     logger.error(f"add_note conf notification error: {e}")
             elif admin_chat and admin_chat != chat_id and _bot_app:
@@ -3313,6 +3320,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 note_msg += f"\n\ud83d\udd17 {KOMMO_BASE_URL}/{entity_type2}/detail/{entity_id2}"
                         except: pass
                     await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
+                    send_push_to_admin(note_msg, title="📝 Qeyd əlavə edildi")
                 except: pass
             # Extract link from result message
             link = ""
@@ -3401,6 +3409,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 ])
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
+                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
             # Admin creates directly
@@ -3434,6 +3443,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if admin_chat and _bot_app:
                     try:
                         await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
+                        send_push_to_admin(f"{sender_name}: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
                     except: pass
                 return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
             update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
@@ -3444,6 +3454,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if admin_chat and admin_chat != chat_id and _bot_app:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
+                    send_push_to_admin(f"{sender_name} mərhələni dəyişdi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
                 except: pass
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
             # Auto-create task for the new stage if applicable
@@ -3667,6 +3678,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     }
                                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
                                     await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
+                                    send_push_to_admin(f"{sender_name}: {contact_name} → {stage_display}", title="🔄 Mərhələ təsdiqi")
                                 except Exception as e:
                                     logger.error(f"complete_task confirmation send error: {e}")
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
@@ -3711,6 +3723,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     }
                                     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
                                     await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
+                                    send_push_to_admin(f"{sender_name}: {stage_display}", title="🔄 Mərhələ təsdiqi")
                                 except Exception as e:
                                     logger.error(f"complete_task confirmation (no phone) error: {e}")
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
@@ -3823,6 +3836,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 reply_markup=InlineKeyboardMarkup(keyboard_rows),
                                 disable_web_page_preview=True,
                             )
+                            send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
                         except Exception as notify_error:
                             logger.error(f"Completion notification error: {notify_error}")
                 localStorage_key = f'timer_{task_id}'
@@ -3939,6 +3953,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if admin_chat and _bot_app:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"✅ *{sender_name}* iş hesabatı:\n\n📝 {comment}", parse_mode="Markdown")
+                    send_push_to_admin(f"{sender_name}: {comment[:80]}", title="✅ İş hesabatı")
                 except: pass
             return web.json_response({"success": True, "message": "✅ Hesabat göndərildi!"})
         else:
@@ -4178,6 +4193,10 @@ def send_push_notification(user_id, title, body, url=None):
             remove_push_subscription(str(user_id))
     except Exception as e:
         logger.warning(f"Push error for {user_id}: {e}")
+
+def send_push_to_admin(body, title="Bein Systems", url=None):
+    """Send push notification to admin."""
+    send_push_notification('1628569350', title, body, url)
 
 def send_push_to_all_salary(title, body, url=None):
     """Send push to all salary employees."""
