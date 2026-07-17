@@ -3728,7 +3728,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "message": result, "link": link})
         elif action == "task":
             text = data.get("text", "")
-            assignee_name_raw = data.get("assigneeName", "").strip()
+            assignee_name_raw = (data.get("assigneeName") or data.get("assignee_name") or "").strip()
             creator_name = get_employee_name_by_chat_id(chat_id, "")
             # A shared Sahə Meneceri Kommo identity must never hide the real
             # employee in the marker or the admin confirmation.
@@ -3761,7 +3761,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if deadline_dt <= now: deadline_dt += timedelta(days=1)
             elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
             else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-            task_type_id = int(data.get("task_type", "1") or "1")
+            task_type_id = int(data.get("task_type") or data.get("task_type_id") or "1")
             # If entity_id passed directly (from subtask), use it instead of phone search
             direct_entity_id = data.get("entity_id")
             direct_entity_type = data.get("entity_type", "leads")
@@ -4599,7 +4599,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     break
             if user_marker_name:
                 tasks_list = [t for t in tasks_list if t.get("assigneeName", "").lower() == user_marker_name.lower()]
-        return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455})
+        user_display_name = get_employee_name_by_chat_id(chat_id, "")
+        return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)

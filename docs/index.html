@@ -380,7 +380,9 @@ function applyHashRoute() {
 
 async function initApp() {
     // Show user name in header
-    const name = tg.initDataUnsafe?.user?.first_name || '';
+    const firstName = tg.initDataUnsafe?.user?.first_name || '';
+    const lastName = tg.initDataUnsafe?.user?.last_name || '';
+    const name = (firstName + ' ' + lastName).trim();
     if(name) document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
     initSessionPersistence();
     restoreSessionForms();
@@ -503,6 +505,9 @@ async function syncNotifications(showError = false) {
         const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(!r.ok || !j.success || !j.tasks) throw new Error(j.error || 'Sync failed');
+        if(j.user_name) {
+            document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${j.user_name}</span>`;
+        }
         if(j.is_admin) {
             isAdmin = true;
             localStorage.setItem('is_admin','true');
@@ -685,7 +690,8 @@ function pendingActionTitle(type) {
     return {
         assign_executor: 'İcraçı seçimi',
         confirm_stage: 'Mərhələ təsdiqi',
-        change_stage: 'Mərhələ seçimi',
+        change_stage: 'Tapşırıq tamamlandı — mərhələ seç',
+        reassign_task: 'İcraçı dəyişikliyi',
     }[type] || 'Admin sorğusu';
 }
 
