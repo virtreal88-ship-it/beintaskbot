@@ -3043,7 +3043,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         if admin_chat and admin_chat != chat_id:
             try:
                 await context.bot.send_message(admin_chat, f"📝 *{sender_name}* qeyd əlavə etdi:\n\n{result}", parse_mode="Markdown", disable_web_page_preview=True)
-                send_push_to_admin(f"{sender_name} qeyd əlavə etdi: {result}", title="📝 Qeyd")
+#                 send_push_to_admin(f"{sender_name} qeyd əlavə etdi: {result}", title="📝 Qeyd")
             except:
                 pass
     elif action == "stage":
@@ -3072,6 +3072,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             send_push_to_admin(
                 f"{sender_name} mərhələ dəyişikliyi: {result['contact_name']} → {stage_display}",
                 title="🔄 Mərhələ",
+            url="#pending",
             )
             await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
         else:
@@ -3129,7 +3130,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
                 try:
                     await context.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratdı:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}", parse_mode="Markdown", disable_web_page_preview=True)
-                    send_push_to_admin(f"{sender_name} tapşırıq yaratdı: {result['contact_name']}", title="📋 Yeni tapşırıq")
+#                    send_push_to_admin(f"{sender_name} tapşırıq yaratdı: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
         else:
             await update.message.reply_text("❌ Tapşırıq yaradılarkən xəta.")
@@ -3442,7 +3443,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-                send_push_to_admin(f"Qiymət təklifi: {contact_name}", title="💰 Qiymət təklifi")
+#                send_push_to_admin(f"Qiymət təklifi: {contact_name}", title="💰 Qiymət təklifi")
             except:
                 pass
             return web.Response(status=200, text="OK")
@@ -3509,7 +3510,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-                send_push_to_admin(f"{contact_name}: {old_stage_name} → {new_stage_name}", title="🔄 Mərhələ dəyişdi")
+#                send_push_to_admin(f"{contact_name}: {old_stage_name} → {new_stage_name}", title="🔄 Mərhələ dəyişdi")
             except:
                 pass
         return web.Response(status=200, text="OK")
@@ -3715,7 +3716,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 note_msg += f"\n\ud83d\udd17 {KOMMO_BASE_URL}/{entity_type2}/detail/{entity_id2}"
                         except: pass
                     await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
-                    send_push_to_admin(note_msg, title="📝 Qeyd əlavə edildi")
+#                    send_push_to_admin(note_msg, title="📝 Qeyd əlavə edildi")
                 except: pass
             # Extract link from result message
             link = ""
@@ -3804,7 +3805,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 ])
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
-                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
+#                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
             # Admin creates directly
@@ -3815,6 +3816,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
+                    logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
                     target_chat = get_chat_id_by_name(assignee_name_raw)
                     if target_chat and target_chat != chat_id:
                         display_text = text.replace(f'[{assignee_name_raw}] ', '')
@@ -3868,6 +3870,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 send_push_to_admin(
                     f"{sender_name}: {result['contact_name']} → {stage_display}",
                     title="🔄 Mərhələ",
+                url="#pending",
                 )
                 return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
             update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
@@ -3878,7 +3881,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if admin_chat and admin_chat != chat_id and _bot_app:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
-                    send_push_to_admin(f"{sender_name} mərhələni dəyişdi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
+#                    send_push_to_admin(f"{sender_name} mərhələni dəyişdi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
                 except: pass
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
             # Auto-create task for the new stage if applicable
@@ -4112,6 +4115,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             send_push_to_admin(
                                 f"{sender_name}: {contact_name} → {stage_display}",
                                 title="🔄 Mərhələ təsdiqi",
+                                url="#pending",
                             )
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         else:
@@ -4162,6 +4166,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             send_push_to_admin(
                                 f"{sender_name}: {stage_display}",
                                 title="🔄 Mərhələ təsdiqi",
+                                url="#pending",
                             )
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
@@ -4275,7 +4280,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             json={"chat_id": admin_chat, "text": completion_message, "reply_markup": kb_json, "disable_web_page_preview": True},
                             timeout=10
                         )
-                        send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
+                        send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı", url="#pending")
                         save_pending_action("change_stage", {
                             "contact_name": contact_name or "—",
                             "phone": phone or "—",
@@ -4402,7 +4407,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if admin_chat and _bot_app:
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"✅ *{sender_name}* iş hesabatı:\n\n📝 {comment}", parse_mode="Markdown")
-                    send_push_to_admin(f"{sender_name}: {comment[:80]}", title="✅ İş hesabatı")
+#                    send_push_to_admin(f"{sender_name}: {comment[:80]}", title="✅ İş hesabatı")
                 except: pass
             return web.json_response({"success": True, "message": "✅ Hesabat göndərildi!"})
         else:

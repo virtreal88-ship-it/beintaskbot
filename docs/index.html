@@ -857,6 +857,7 @@ async function resolvePendingAction(actionId, choice, button) {
     const card = button?.closest('section');
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
     buttons.forEach(item => { item.disabled = true; });
+    if(card) { card.style.opacity='0.5'; card.insertAdjacentHTML('beforeend','<div class="pending-loader" style="text-align:center;padding:8px"><div style="display:inline-block;width:24px;height:24px;border:3px solid #ccc;border-top-color:#2481cc;border-radius:50%;animation:spin 0.6s linear infinite"></div></div>'); }
     try {
         const response = await fetch(API_BASE + '/api/pending_actions/resolve', {
             method: 'POST',
@@ -870,6 +871,7 @@ async function resolvePendingAction(actionId, choice, button) {
     } catch(error) {
         toast(error.message || 'Sorğu həll edilmədi', true);
         buttons.forEach(item => { item.disabled = false; });
+        if(card) { card.style.opacity='1'; const ldr=card.querySelector('.pending-loader'); if(ldr) ldr.remove(); }
     }
 }
 
