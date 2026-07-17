@@ -4050,19 +4050,22 @@ async def handle_api_action(request: web.Request) -> web.Response:
 
             # Salary KPI is deterministic: on/before the Kommo deadline = 100,
             # after the deadline = 0. Admin can correct it afterward.
-            emp_type = get_employee_type(chat_id)
             kpi_result = None
-            if emp_type == "salary":
-                # Auto-create session if none exists (timer removed from UI)
-                if not has_active_session(chat_id, int(task_id)):
-                    start_task_session(chat_id, int(task_id))
-                kpi_result = finish_task_session(
-                    chat_id,
-                    int(task_id),
-                    task_type_id,
-                    delay_reason,
-                    deadline_ts=task_deadline_ts,
-                )
+            try:
+                emp_type = get_employee_type(chat_id)
+                if emp_type == "salary":
+                    # Auto-create session if none exists (timer removed from UI)
+                    if not has_active_session(chat_id, int(task_id)):
+                        start_task_session(chat_id, int(task_id))
+                    kpi_result = finish_task_session(
+                        chat_id,
+                        int(task_id),
+                        task_type_id,
+                        delay_reason,
+                        deadline_ts=task_deadline_ts,
+                    )
+            except Exception as kpi_err:
+                logger.error(f"KPI processing error in complete_task: {kpi_err}\n{traceback.format_exc()}")
 
             result = update_task_kommo(
                 task_id,
@@ -4183,6 +4186,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
 
             if result:
+              try:
                 task_text_full = task_data.get("text", "").strip()
                 task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
                 task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
@@ -4266,9 +4270,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı")
                         except Exception as notify_error:
                             logger.error(f"Completion notification error: {notify_error}")
-                localStorage_key = f'timer_{task_id}'
-                msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-                return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+              except Exception as notif_block_err:
+                logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
+              localStorage_key = f'timer_{task_id}'
+              msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+              return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
             else:
                 return web.json_response({"success": False, "error": "Tap\u015f\u0131r\u0131q ba\u011flanmad\u0131."})
         elif action == "update_task_deadline":

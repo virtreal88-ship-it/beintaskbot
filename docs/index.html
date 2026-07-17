@@ -264,7 +264,7 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləyən sorğular</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Telegram və webhook sorğularını idarə edin</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Sola sürüşdür — rədd et • Sağa sürüşdür — təsdiq et</div>
             </div>
             <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
@@ -724,7 +724,19 @@ function renderPendingActions() {
     pendingActions.forEach(action => {
         const data = action.data || {};
         const card = document.createElement('section');
-        card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3';
+        card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 relative overflow-hidden';
+        card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+        card.dataset.actionId = action.id;
+        // Swipe handling
+        let startX = 0, currentX = 0, swiping = false;
+        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; swiping = true; currentX = 0; });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; card.style.opacity = Math.max(0.4, 1 - Math.abs(currentX)/300); });
+        card.addEventListener('touchend', () => {
+            swiping = false;
+            if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,'Rədd et',card);},300); }
+            else if(currentX > 100) { const opts = Array.isArray(action.options)?action.options:[]; const approve = opts.find(o=>o==='Təsdiq et')||opts[0]||'Təsdiq et'; card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{resolvePendingAction(action.id,approve,card);},300); }
+            else { card.style.transform='translateX(0)'; card.style.opacity='1'; }
+        });
 
         const header = document.createElement('div');
         header.className = 'flex items-start justify-between gap-3';
@@ -743,6 +755,7 @@ function renderPendingActions() {
             (data.stage_name ? `Mərhələ: ${data.stage_name}` : 'Sorğu üçün seçim gözlənilir.');
         appendPendingDetail(details, '👤', 'Müştəri', data.contact_name || data.client_name);
         appendPendingDetail(details, '📝', 'Təsvir', description);
+        if(data.note) appendPendingDetail(details, '💬', 'Qeyd', data.note);
         appendPendingDetail(details, '📞', 'Telefon', data.phone);
         appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));
         if(data.link) {
