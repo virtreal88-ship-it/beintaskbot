@@ -24,6 +24,11 @@
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
         .stage-row.selected { background:#2481cc !important; color:#fff !important; }
+        button { transition: transform 0.1s ease, opacity 0.15s ease; }
+        button:active { transform: scale(0.95); opacity:0.85; }
+        #bottom-action-bar { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
+        #complete-panel, #note-panel { animation: slideUp 0.25s ease forwards; }
+        @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
         @media (min-width: 768px) {
             body { background:#e5e7eb; }
             .bg-\[\#1a252f\] { max-width:600px; margin:0 auto; border-radius:0 0 16px 16px; }
@@ -499,6 +504,59 @@ async function doFetch(payload, btnId) {
         } else { toast(j.error || 'Xəta!', true); }
     } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
+async function doFetchThen(payload, btnId, callback) {
+    const btn = document.getElementById(btnId);
+    let origText = '';
+    if(btn) { origText = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> Yüklənir...'; }
+    lastPayload = payload;
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if(r.ok && j.success) {
+            await syncNotifications();
+            toast(j.message || 'Uğurla!', false);
+            if(callback) callback();
+        } else { toast(j.error || 'Xəta!', true); }
+    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
+}
+function showEditNoteModal(taskId) {
+    const existing = document.getElementById('edit-note-modal');
+    if(existing) existing.remove();
+    const html = `<div id="edit-note-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0;opacity:0;transition:opacity 0.2s ease;" onclick="this.remove()">
+      <div style="background:#fff;border-radius:20px 20px 0 0;padding:24px;width:100%;max-width:500px;transform:translateY(100%);transition:transform 0.3s ease;" onclick="event.stopPropagation()" id="edit-note-modal-inner">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;color:#374151;">Sövdələşmə qeydi:</h3>
+        <textarea id="edit-note-modal-text" placeholder="Qeyd yazın..." style="width:100%;min-height:150px;padding:12px;font-size:14px;line-height:1.6;border:1px solid #e5e7eb;border-radius:12px;outline:none;resize:vertical;background:#f9fafb;"></textarea>
+        <div style="display:flex;gap:10px;margin-top:12px;">
+          <button onclick="submitEditNote('${taskId}')" style="flex:1;background:#2563eb;color:#fff;padding:12px;border-radius:12px;font-size:13px;font-weight:700;border:none;transition:transform 0.1s;" onmousedown="this.style.transform='scale(0.95)'" onmouseup="this.style.transform='scale(1)'">Göndər</button>
+          <button onclick="document.getElementById('edit-note-modal').remove(); nav('screen-notifications');" style="background:#f3f4f6;color:#555;padding:12px 20px;border-radius:12px;font-size:13px;font-weight:600;border:none;transition:transform 0.1s;" onmousedown="this.style.transform='scale(0.95)'" onmouseup="this.style.transform='scale(1)'">Keç</button>
+        </div>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+    const modal = document.getElementById('edit-note-modal');
+    const inner = document.getElementById('edit-note-modal-inner');
+    requestAnimationFrame(() => { modal.style.opacity='1'; inner.style.transform='translateY(0)'; });
+    setTimeout(() => document.getElementById('edit-note-modal-text').focus(), 300);
+}
+async function submitEditNote(taskId) {
+    const text = document.getElementById('edit-note-modal-text').value.trim();
+    if(!text) { toast('Qeyd yazın!', true); return; }
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body:JSON.stringify({action:'add_note', task_id:taskId, note:text})
+        });
+        const j = await r.json();
+        if(r.ok && j.success) { toast('Qeyd əlavə olundu', false); }
+        else { toast(j.error || 'Xəta!', true); }
+    } catch(e) { toast('Sistem xətası!', true); }
+    document.getElementById('edit-note-modal').remove();
+    nav('screen-notifications');
+}
 
 function submitTask() {
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
@@ -514,7 +572,13 @@ function submitTask() {
         if(gd.originalAssignee) payload.originalAssignee = gd.originalAssignee;
         if(gd.task_type) payload.task_type = gd.task_type;
 
-        doFetch(payload, 'edit-submit-btn');
+        const assigneeChanged = gd.originalAssignee && gd.assigneeName && gd.originalAssignee !== gd.assigneeName;
+        const savedTaskId = editingTaskId;
+        if(assigneeChanged) {
+            doFetchThen(payload, 'edit-submit-btn', () => showEditNoteModal(savedTaskId));
+        } else {
+            doFetch(payload, 'edit-submit-btn');
+        }
         editingTaskId = null;
     } else {
         const phone = document.getElementById('search-phone').value.trim();
