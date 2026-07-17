@@ -6,5 +6,13 @@
       "p256dh": "BAjk7yW9RcDHRcTSR21f9_TQ2P6AI6dim1doN_uMd_xwtwSL2iXerAldBlPVHLZekXITMRD1VJQ445KpIaVsZio",
       "auth": "T2M5wePjQFNAzF2fbqDbvQ"
     }
+  },
+  "7920785774": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/flIVRB-U6q8:APA91bFNFAt1NVgWVchTytFOc7y_2a6yupZJXljmZeGJWbkBdWYK7yjbDhhG1JasT6GG7Bgpeo4u0qdSKBGr8UaKaZe4olRu_k8mp4iUwvhZhZOi5X1-y_DWzeiQDHBRHVhhe4q-QUwQ",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BAwUEvjPx-9t1WNBtQus4TJ2Ub4ShzLhFaWUnAImPyEI2F1dw-EbjHINQ9Mgfrd62yQhcoyhhxqRCFcX-dMKEeo",
+      "auth": "jZmlpARgV5QsNtWlck2D2g"
+    }
   }
 }
