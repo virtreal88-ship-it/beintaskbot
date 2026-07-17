@@ -1,0 +1,9 @@
+{
+  "1628569350": {
+    "endpoint": "https://test.example.com",
+    "keys": {
+      "p256dh": "test",
+      "auth": "test"
+    }
+  }
+}
