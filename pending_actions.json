@@ -1,5 +1,37 @@
 [
   {
+    "id": "2b731e4c",
+    "type": "change_stage",
+    "created_at": "2026-07-18T02:24:04.575292+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tural Ismayilov",
+      "phone": "—",
+      "lead_id": 76921185,
+      "task_id": 93541149,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Связаться",
+      "note": "Ждём ответа",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76921185",
+      "callback_key": "22df9758"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "0a107549",
     "type": "change_stage",
     "created_at": "2026-07-18T02:22:16.639119+04:00",
