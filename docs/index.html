@@ -202,7 +202,7 @@
                 <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));">
             </div>
             <div class="flex gap-2">
-                <button id="edit-submit-btn" onclick="submitTask()" class="flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">💾 Yadda saxla</button>
+                <button id="edit-submit-btn" onclick="submitTask()" class="flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">📤 Göndər</button>
                 <button onclick="editingTaskId=null; nav('screen-notifications');" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
             </div>
         </div>
@@ -539,6 +539,10 @@ function showEditNoteModal(taskId) {
 async function submitEditNote() {
     const text = document.getElementById('edit-note-modal-text').value.trim();
     if(!text) { toast('Qeyd yazın!', true); return; }
+    // Wait for conf_key if save is still in progress (max 5 sec)
+    if(!_pendingConfKey) {
+        for(let i=0; i<50; i++) { await new Promise(r=>setTimeout(r,100)); if(_pendingConfKey) break; }
+    }
     const payload = {action:'add_note', task_id: _pendingNoteTaskId, text:text};
     if(_pendingConfKey) { payload.conf_key = _pendingConfKey; _pendingConfKey = null; }
     try {
@@ -573,9 +577,9 @@ function submitTask() {
         const savedTaskId = editingTaskId;
         editingTaskId = null;
         if(assigneeChanged) {
-            // Save silently in background, show note modal instantly
-            doFetchSilent(payload);
+            // Show modal instantly, save in background, conf_key arrives before user finishes typing
             showEditNoteModal(savedTaskId);
+            doFetchSilent(payload);
         } else {
             doFetch(payload, 'edit-submit-btn');
         }
