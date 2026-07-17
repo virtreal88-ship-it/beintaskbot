@@ -3214,19 +3214,29 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # Check if there's a pending assignee change waiting for this note
             conf_key = data.get("conf_key", "")
             pending = None
-            if conf_key and _bot_app:
-                pending = _bot_app.bot_data.get("pending_updates", {}).get(conf_key)
+            found_conf_key = conf_key
+            if _bot_app:
+                pending_updates = _bot_app.bot_data.get("pending_updates", {})
+                if conf_key and conf_key in pending_updates:
+                    pending = pending_updates[conf_key]
+                elif task_id_note:
+                    # Fallback: find pending by task_id
+                    for pk, pv in pending_updates.items():
+                        if pv.get("task_id") == task_id_note:
+                            pending = pv
+                            found_conf_key = pk
+                            break
             if pending and admin_chat and _bot_app:
                 # Send confirmation to admin WITH the note text
                 try:
                     pending["note_text"] = text  # store note in pending for later
                     msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n\n\ud83d\udcdd {pending.get('display_text', '')}\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}\n\ud83d\udcac Qeyd: {text}\n\ud83c\udd94 Task: {pending['task_id']}"
                     kb_json = {"inline_keyboard": [
-                        [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{conf_key}-yes"}],
-                        [{"text": "\u015eamil", "callback_data": f"updtask-{conf_key}-shamil"}, {"text": "Soltan", "callback_data": f"updtask-{conf_key}-soltan"}],
-                        [{"text": "H\u00fcseyn", "callback_data": f"updtask-{conf_key}-huseyn"}, {"text": "Rasim", "callback_data": f"updtask-{conf_key}-rasim"}],
-                        [{"text": "Texniki", "callback_data": f"updtask-{conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{conf_key}-admin"}],
-                        [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{conf_key}-no"}]
+                        [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
+                        [{"text": "\u015eamil", "callback_data": f"updtask-{found_conf_key}-shamil"}, {"text": "Soltan", "callback_data": f"updtask-{found_conf_key}-soltan"}],
+                        [{"text": "H\u00fcseyn", "callback_data": f"updtask-{found_conf_key}-huseyn"}, {"text": "Rasim", "callback_data": f"updtask-{found_conf_key}-rasim"}],
+                        [{"text": "Texniki", "callback_data": f"updtask-{found_conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
+                        [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                     ]}
                     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
                 except Exception as e:
