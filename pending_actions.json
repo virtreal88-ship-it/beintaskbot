@@ -1,5 +1,35 @@
 [
   {
+    "id": "10d6addc",
+    "type": "change_stage",
+    "created_at": "2026-07-17T23:38:42.932657+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Seyran",
+      "phone": "+994507354375",
+      "lead_id": 76900927,
+      "task_id": 93528247,
+      "sender_name": "Rasim Əsgərov",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76900927",
+      "callback_key": "2c359a36"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "cavab gözlənilir",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f6bf8571",
     "type": "change_stage",
     "created_at": "2026-07-17T23:28:44.204560+04:00",
