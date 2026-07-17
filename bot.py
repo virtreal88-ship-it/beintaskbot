@@ -3645,8 +3645,28 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         [{"text": "Texniki", "callback_data": f"updtask-{found_conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
                         [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                     ]}
-                    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
-                    send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi")
+                    tg_resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
+                    tg_msg_id = None
+                    try:
+                        tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
+                    except: pass
+                    save_pending_action("reassign_task", {
+                        "contact_name": client_name or pending.get('display_text', ''),
+                        "phone": client_phone,
+                        "lead_id": None,
+                        "task_id": pending.get('task_id'),
+                        "stage_name": f"İcraçı: {pending['sender_name']} → {pending['assignee_name_raw']}",
+                        "sender_name": pending['sender_name'],
+                        "assignee_name_raw": pending['assignee_name_raw'],
+                        "note": text,
+                        "link": deal_link,
+                        "conf_key": found_conf_key,
+                        "update_data": pending.get('update_data'),
+                        "creator_chat_id": pending.get('creator_chat_id'),
+                        "telegram_chat_id": admin_chat,
+                        "telegram_message_id": tg_msg_id,
+                    }, ["Təsdiq et", "Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
+                    send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending")
                 except Exception as e:
                     logger.error(f"add_note conf notification error: {e}")
             elif admin_chat and admin_chat != chat_id and _bot_app:
@@ -4938,6 +4958,15 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
         if creator_chat and _bot_app:
             try: await _bot_app.bot.send_message(creator_chat, "❌ Dəyişiklik rədd edildi.")
             except: pass
+        # Resolve matching pending action in PWA
+        try:
+            actions = get_pending_actions()
+            for a in actions:
+                if not a.get("resolved") and a.get("data", {}).get("conf_key") == conf_key:
+                    a["resolved"] = True
+                    break
+            write_json("pending_actions.json", actions)
+        except: pass
         return
     # Resolve assignee
     _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": ("Texniki tapşırıq", 15532668), "admin": ("Nizami Qasımov", 10932455)}
@@ -4957,7 +4986,7 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
     result = update_task_kommo(pending["task_id"], update_data)
     if result:
         chosen = _UPD_MARKER.get(decision, (pending.get("assignee_name_raw",""), None))[0] if decision != "yes" else pending.get("assignee_name_raw", "")
-        try: await query.edit_message_text(f"✅ Təsdiqləndi! İcraçı: {chosen}")
+        try: await query.edit_message_text(f"✅ Təsdiq ləndi! İcraçı: {chosen}")
         except: pass
         creator_chat = pending.get("creator_chat_id")
         if creator_chat and _bot_app:
@@ -4966,6 +4995,15 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
     else:
         try: await query.edit_message_text("⚠️ Yeniləmə uğursuz oldu.")
         except: pass
+    # Resolve matching pending action in PWA
+    try:
+        actions = get_pending_actions()
+        for a in actions:
+            if not a.get("resolved") and a.get("data", {}).get("conf_key") == conf_key:
+                a["resolved"] = True
+                break
+        write_json("pending_actions.json", actions)
+    except: pass
 
 async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle cnftask-{key}-yes/no for task creation confirmation."""
