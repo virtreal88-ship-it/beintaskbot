@@ -71,7 +71,7 @@ STAGES = {
     "gorus": 108537892,
     "daxili_muzakire": 108538104,
     "qurashdirma": 108537896,
-    "cavab_gozlenilir": 108537976,
+    "arxiv": 108537976,
     "ugurlu": 142,
     "imtina": 143,
 }
@@ -85,7 +85,7 @@ STAGE_NAMES = {
     108537892: "görüş",
     108538104: "daxili müzakirə",
     108537896: "quraşdırma",
-    108537976: "cavab gözlənilir",
+    108537976: "Arxiv",
     142: "uğurlu sifariş",
     143: "imtina olundu",
 }
@@ -1037,7 +1037,7 @@ AI_TOOLS = [
         "description": "Sövdələşmənin mərhələsini dəyişmək",
         "parameters": {"type": "object", "properties": {
             "phone": {"type": "string", "description": "Müştərinin telefon nömrəsi"},
-            "stage": {"type": "string", "enum": ["danisiqlar","qiymet_teklifi","teqdimat","teqdimat_olundu","yeni_sifaris","gorus","daxili_muzakire","qurashdirma","cavab_gozlenilir","ugurlu","imtina"], "description": "Yeni mərhələ"}
+            "stage": {"type": "string", "enum": ["danisiqlar","qiymet_teklifi","teqdimat","teqdimat_olundu","yeni_sifaris","gorus","daxili_muzakire","qurashdirma","arxiv","ugurlu","imtina"], "description": "Yeni mərhələ"}
         }, "required": ["phone", "stage"]}
     }},
     {"type": "function", "function": {
@@ -3407,7 +3407,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
             else:
                 del _bot_changed_leads[lead_id]
         # Suppressed stages - no notification
-        suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["cavab_gozlenilir"]}
+        suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["arxiv"]}
         if new_status_id in suppressed:
             return web.Response(status=200, text="OK")
         # Get lead details
