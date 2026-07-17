@@ -3633,8 +3633,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         entity_type3 = t_data3.get("entity_type", "leads")
                         task_type_id = t_data3.get("task_type_id")
                         if task_type_id:
-                            TASK_TYPE_NAMES = {4229218: "\u018flaq\u0259 saxla", 4229220: "G\u00f6r\u00fc\u015f", 4229222: "Qura\u015fd\u0131rma", 4229224: "Cavab g\u00f6zl\u0259nilir", 4229226: "T\u0259qdimat"}
-                            task_type_name = TASK_TYPE_NAMES.get(task_type_id, "")
+                            _LOCAL_TASK_TYPES = {4229218: "\u018flaq\u0259 saxla", 4229220: "G\u00f6r\u00fc\u015f", 4229222: "Qura\u015fd\u0131rma", 4229224: "Cavab g\u00f6zl\u0259nilir", 4229226: "T\u0259qdimat"}
+                            task_type_name = _LOCAL_TASK_TYPES.get(task_type_id, "")
                         if entity_id3:
                             deal_link = f"{KOMMO_BASE_URL}/{entity_type3}/detail/{entity_id3}"
                             # Get lead/contact info
