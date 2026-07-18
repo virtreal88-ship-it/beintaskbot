@@ -48,6 +48,15 @@
         "amount": 5.0,
         "task_text": "Vasif Bayramov. Görüşüb təqdimat et, almaq istəyir. Salyanda gedəndə yol üstünə sala bilərsən",
         "date": "2026-07-18 07:09:35"
+      },
+      {
+        "task_id": 93543501,
+        "executor": "Rasim Əsgərov",
+        "client": "Salyan +994553022596",
+        "task_type": "Quraşdırma",
+        "amount": 150.0,
+        "task_text": "Hüseynə məlumat ver satışa yazsın",
+        "date": "2026-07-18 10:39:37"
       }
     ]
   }
