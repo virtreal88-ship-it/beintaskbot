@@ -120,6 +120,15 @@
         "amount": -307.5,
         "task_text": "💸 Şirkətə olan borcun",
         "date": "2026-07-18 13:29:08"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "task_type": "Ödəniş",
+        "amount": -500.0,
+        "task_text": "💸 Maşının ilk ayı",
+        "date": "2026-07-18 13:29:36"
       }
     ]
   }
