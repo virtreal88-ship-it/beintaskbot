@@ -3,7 +3,7 @@
     "id": "4717241d",
     "type": "change_stage",
     "created_at": "2026-07-18T17:14:21.255568+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Soft Oneline",
       "phone": "+994102135104",
@@ -29,7 +29,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T17:17:12.658386+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "0cc4caed",
