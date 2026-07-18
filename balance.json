@@ -258,6 +258,20 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-07-18 14:51:54"
+      },
+      {
+        "task_id": 93548443,
+        "executor": "Rasim Əsgərov",
+        "client": "Nəriman dönərlinski",
+        "phone": "+994504984418",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Kəndstorun ikincisi filialı. İnteqrasiya qalıb dine də",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-07-18 15:05:48"
       }
     ],
     "balance": 0.5
