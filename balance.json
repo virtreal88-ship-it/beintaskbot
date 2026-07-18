@@ -102,6 +102,15 @@
         "amount": 100.0,
         "task_text": "Emyaşıldərə",
         "date": "2026-07-18 11:40:57"
+      },
+      {
+        "task_id": 93547989,
+        "executor": "Rasim Əsgərov",
+        "client": "Soft Oneline +994102135104",
+        "task_type": "Texniki tapşırıq",
+        "amount": 30.0,
+        "task_text": "Ceceshoes görə əlavə",
+        "date": "2026-07-18 13:14:19"
       }
     ]
   }
