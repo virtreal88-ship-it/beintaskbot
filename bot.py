@@ -1196,6 +1196,10 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
     full_contact = get_contact_details(contact_id)
     if full_contact:
         contact_name = full_contact.get("name") or contact_name
+    # Update contact name in Kommo if client_name provided
+    if client_name:
+        update_contact_kommo(contact_id, {"name": client_name})
+        contact_name = client_name
     leads = (full_contact or {}).get("_embedded", {}).get("leads", [])
     lead_id = leads[0].get("id") if leads else None
     if not lead_id:
