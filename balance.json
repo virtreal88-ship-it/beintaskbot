@@ -57,6 +57,15 @@
         "amount": 150.0,
         "task_text": "Hüseynə məlumat ver satışa yazsın",
         "date": "2026-07-18 10:39:37"
+      },
+      {
+        "task_id": 93547457,
+        "executor": "Rasim Əsgərov",
+        "client": "Soft Oneline +994102135104",
+        "task_type": "Quraşdırma",
+        "amount": 42.0,
+        "task_text": "Calaq Astech",
+        "date": "2026-07-18 11:39:25"
       }
     ]
   }
