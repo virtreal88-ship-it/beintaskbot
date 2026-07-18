@@ -313,38 +313,6 @@
     "resolved_choice": "Şamil"
   },
   {
-    "id": "14630d61",
-    "type": "change_stage",
-    "created_at": "2026-07-18T11:09:37.003857+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "Автоконтакт +994504014321",
-      "phone": "+994504014321",
-      "lead_id": null,
-      "task_id": 93531373,
-      "sender_name": "Rasim Əsgərov",
-      "task_text": "Vasif Bayramov. Görüşüb təqdimat et, almaq istəyir. Salyanda gedəndə yol üstünə sala bilərsən",
-      "note": "Görüş uğurla baş tutdu. Təqdimat edildi, bütün sualları cavablandırıldı. Real müştəri deyil\n\nÖzlərinin istehsalatı var, topdan ucuz geyimlər satan mağazadır. Görüşdüyüm adam sahibkarın adamadı. Özü qərar verib ki sistem yığmaq lazımdı. Sahibkarın heç xəbəri yoxdu. Dedi ki hələ gedim sahibkarla danışım razılaşdırsam sənə xəbər edəcəm.",
-      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
-      "link": "",
-      "callback_key": "fc0b24a8"
-    },
-    "options": [
-      "Nerazobrannoye",
-      "danışıqlar",
-      "Qiymət təklifi",
-      "Təqdimat",
-      "Təqdimat olundu",
-      "yeni sifariş",
-      "görüş",
-      "daxili müzakirə",
-      "quraşdırma",
-      "Arxiv",
-      "uğurlu sifariş",
-      "imtina olundu"
-    ]
-  },
-  {
     "id": "f581ef0e",
     "type": "change_stage",
     "created_at": "2026-07-18T04:10:58.663078+04:00",
