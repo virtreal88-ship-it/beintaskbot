@@ -1,5 +1,37 @@
 [
   {
+    "id": "4717241d",
+    "type": "change_stage",
+    "created_at": "2026-07-18T17:14:21.255568+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Soft Oneline",
+      "phone": "+994102135104",
+      "lead_id": 75819231,
+      "task_id": 93547989,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Ceceshoes görə əlavə",
+      "note": ".",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75819231",
+      "callback_key": "37f4f4f7"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "0cc4caed",
     "type": "change_stage",
     "created_at": "2026-07-18T15:40:58.980354+04:00",
