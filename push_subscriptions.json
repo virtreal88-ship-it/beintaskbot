@@ -38,5 +38,13 @@
       "p256dh": "BEW2w4jTlTS60eVZda8KuzXCEi6-fMZfe80rU9V71AtY1AAHkFH5hsri35rWE0kkU-7a3dirK8qeDRWHudww1Z0",
       "auth": "_aKY1F0w7KzjJDKhEvbXjw"
     }
+  },
+  "7962757442": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/fbagGQO875c:APA91bF_lJ26kR1svxK1VesNXBp5QXmNqrAv6tl7okqg5XmcbfTiQFiNcZnIC_BhjRIfFMHf7p0v0TNHKkSOcCclfHo1JuyMAJ62pxnV7-3Y4ps0cHVnm38m7H0qf-pM1ziEWhwyFPPo",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BJkwMLq0GCcDyClNJTpoD-5J0SnSC2NPOr22k0GIHvykFGGQbRQZR8mfGtoYoI8kj2oxeHmWJQaTduEeTf3gVC8",
+      "auth": "UkpwZs4COa1UnpFqCljoQA"
+    }
   }
 }
