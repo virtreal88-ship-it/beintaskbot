@@ -195,6 +195,7 @@
             <button class="text-xs font-bold text-blue-500" id="task-back-btn" onclick="goBack('screen-notifications')">← Geri</button>
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="edit-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
@@ -621,7 +622,8 @@ function submitTask() {
         if(!textInput) { toast('Mətni daxil edin!', true); return; }
         const editPriceVal = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value.trim() : '';
         let finalText = gd.assigneeName ? (editPriceVal ? `[${gd.assigneeName}:${editPriceVal}] ${textInput}` : `[${gd.assigneeName}] ${textInput}`) : textInput;
-        let payload = {action: 'update_task', task_id: editingTaskId, text: finalText};
+        const editClientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value.trim() : '';
+        let payload = {action: 'update_task', task_id: editingTaskId, text: finalText, client_name: editClientName};
         if(gd.deadline) payload.deadline = gd.deadline;
         payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
@@ -1226,6 +1228,7 @@ function handleBarAction(actionType) {
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
         const epri = document.getElementById('edit-priority'); if(epri) { epri.value = task.priority || ''; }
+        const ecn = document.getElementById('edit-client-name'); if(ecn) { ecn.value = task.contact_name || ''; }
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
 
@@ -1236,7 +1239,8 @@ function handleBarAction(actionType) {
             task_type: gd.task_type || '',
             deadline: gd.deadline || '',
             price: (document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : ''),
-            priority: (document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : '')
+            priority: (document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : ''),
+            client_name: (document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value : '')
         };
         // Disable submit button initially
         const esb = document.getElementById('edit-submit-btn');
@@ -1253,12 +1257,13 @@ function checkEditChanged() {
     const deadline = gd.deadline || '';
     const price = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '';
     const priority = document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : '';
-    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price || priority !== (window._editOriginal.priority || '');
+    const clientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value : '';
+    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price || priority !== (window._editOriginal.priority || '') || clientName !== (window._editOriginal.client_name || '');
     if(changed) { btn.disabled = false; btn.className = 'flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
     else { btn.disabled = true; btn.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
 }
 document.addEventListener('DOMContentLoaded', () => {
-    ['edit-task-desc','edit-task-price'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
+    ['edit-task-desc','edit-task-price','edit-client-name'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
     ['edit-assignee-select','edit-task-type-select','edit-priority'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('change', () => { gd.assigneeName = document.getElementById('edit-assignee-select').value; checkEditChanged(); }); });
     const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
 });

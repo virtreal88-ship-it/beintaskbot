@@ -4046,7 +4046,27 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 elif dl == "week": new_dl = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
                 else: new_dl = now + timedelta(hours=2)
                 update_data["complete_till"] = int(new_dl.timestamp())
-            if not update_data:
+            # Update contact name in Kommo if provided
+            edit_client_name = data.get("client_name", "").strip()
+            if edit_client_name and task_id:
+                # Get task to find entity_id, then find contact and update name
+                try:
+                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                    if t_resp.status_code == 200:
+                        task_info = t_resp.json()
+                        eid = task_info.get("entity_id")
+                        etype = task_info.get("entity_type", "leads")
+                        if eid and etype == "contacts":
+                            update_contact_kommo(int(eid), {"name": edit_client_name})
+                        elif eid and etype == "leads":
+                            l_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{eid}?with=contacts", headers=HEADERS, timeout=10)
+                            if l_resp.status_code == 200:
+                                contacts_emb = l_resp.json().get("_embedded", {}).get("contacts", [])
+                                if contacts_emb:
+                                    update_contact_kommo(int(contacts_emb[0]["id"]), {"name": edit_client_name})
+                except Exception as e:
+                    logger.error(f"Edit client_name update error: {e}")
+            if not update_data and not edit_client_name:
                 return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
             # Non-admin changing assignee → send to admin for confirmation
             is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
@@ -4071,6 +4091,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Return conf_key so frontend can attach note to this pending update
                 return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
             # Admin updates directly
+            if not update_data:
+                # Only client_name was changed, no task fields to update
+                return web.json_response({"success": True, "message": "\u2705 M\u00fc\u015ft\u0259ri ad\u0131 yenil\u0259ndi!"})
             result = update_task_kommo(task_id, update_data)
             if result:
                 link = ""
