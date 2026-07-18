@@ -66,6 +66,15 @@
         "amount": 42.0,
         "task_text": "Calaq Astech",
         "date": "2026-07-18 11:39:25"
+      },
+      {
+        "task_id": 93547499,
+        "executor": "Rasim Əsgərov",
+        "client": "Soft Oneline +994102135104",
+        "task_type": "Texniki tapşırıq",
+        "amount": 50.0,
+        "task_text": "1. Tərəzini Sumqayıt ofisdən SARP-a apardım",
+        "date": "2026-07-18 11:39:37"
       }
     ]
   }
