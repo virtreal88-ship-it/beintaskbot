@@ -434,7 +434,7 @@
     "id": "2bbc671c",
     "type": "assign_executor",
     "created_at": "2026-07-18T03:29:38.779057+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ferid Abbasquliyev",
       "phone": "",
@@ -454,7 +454,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-18T16:16:30.854410+04:00",
+    "resolved_choice": "Ləğv et"
   },
   {
     "id": "2b731e4c",
