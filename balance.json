@@ -30,6 +30,15 @@
         "amount": 100.0,
         "task_text": "Rəşid can et",
         "date": "2026-07-18 00:09:45"
+      },
+      {
+        "task_id": 93544863,
+        "executor": "Rasim Əsgərov",
+        "client": "Автоконтакт +994557491991 +994557491991",
+        "task_type": "Quraşdırma",
+        "amount": 80.0,
+        "task_text": "Mcurro. 1 c dən keçirdik. Avadanlıqlar var idi.",
+        "date": "2026-07-18 00:10:56"
       }
     ]
   }
