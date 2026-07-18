@@ -1,5 +1,44 @@
 [
   {
+    "id": "65be76b5",
+    "type": "reassign_task",
+    "created_at": "2026-07-18T12:38:19.873732+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994706593393",
+      "phone": "",
+      "lead_id": 121853293,
+      "task_id": 93515255,
+      "task_text": "Qızılgül restoranında quraşdırmadan sonra bəzi əksikliklər qalıb. Rkiper (kassa)çöldə quraşdırılıb lakin lazım, olanda içəriyə daşınması üçün şərait qurulmayıb. İçəridə rkiper və çek printerin qoyulması üçün lan kabel çəkilməlidir",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Rasim Əsgərov → Nizami Qasımov",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": ".",
+      "link": "https://texnikidestek50.kommo.com/contacts/detail/121853293",
+      "conf_key": "442729e1",
+      "update_data": {
+        "text": "[Nizami Qasımov] Qızılgül restoranında quraşdırmadan sonra bəzi əksikliklər qalıb. Rkiper (kassa)çöldə quraşdırılıb lakin lazım, olanda içəriyə daşınması üçün şərait qurulmayıb. İçəridə rkiper və çek printerin qoyulması üçün lan kabel çəkilməlidir",
+        "responsible_user_id": 10932455,
+        "task_type_id": 4232112,
+        "complete_till": 1784707200
+      },
+      "creator_chat_id": 7920785774,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2761
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "14630d61",
     "type": "change_stage",
     "created_at": "2026-07-18T11:09:37.003857+04:00",
