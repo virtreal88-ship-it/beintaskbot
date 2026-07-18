@@ -129,6 +129,15 @@
         "amount": -500.0,
         "task_text": "💸 Maşının ilk ayı",
         "date": "2026-07-18 13:29:36"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "task_type": "Ödəniş",
+        "amount": -50.0,
+        "task_text": "💸 Laşeyx",
+        "date": "2026-07-18 13:30:00"
       }
     ]
   }
