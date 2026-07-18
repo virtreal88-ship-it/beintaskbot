@@ -160,6 +160,36 @@ def write_json(filename: str, data) -> bool:
 
 # ─── Balance Functions ────────────────────────────────────────────────────────
 
+def _transaction_status(transaction: dict) -> str:
+    """Treat legacy transactions without a status as already confirmed."""
+    status = str(transaction.get("status") or "confirmed").lower()
+    return status if status in {"pending", "confirmed"} else "confirmed"
+
+
+def _transaction_total(transactions: list, status: str) -> float:
+    return round(sum(
+        float(transaction.get("amount", 0) or 0)
+        for transaction in transactions
+        if _transaction_status(transaction) == status
+    ), 2)
+
+
+def _ensure_balance_account(data: dict, key: str) -> dict:
+    """Normalize a balance account while preserving all legacy transactions."""
+    account = data.setdefault(key, {})
+    transactions = account.setdefault("transactions", [])
+    if not isinstance(transactions, list):
+        transactions = []
+        account["transactions"] = transactions
+    for transaction in transactions:
+        transaction.setdefault("status", "confirmed")
+        transaction.setdefault("phone", "")
+        transaction.setdefault("result_text", transaction.get("task_text", ""))
+        transaction.setdefault("kpi", 0)
+    account["balance"] = _transaction_total(transactions, "confirmed")
+    return account
+
+
 def add_balance_transaction(
     telegram_id: int,
     task_id: int,
@@ -168,73 +198,164 @@ def add_balance_transaction(
     executor_name: str = "",
     client: str = "",
     task_type: str = "",
+    phone: str = "",
+    result_text: str = "",
+    kpi: int = 0,
+    status: str = "confirmed",
+    transaction_type: str = "task",
 ):
-    """Add a transaction with complete business context and persist it."""
+    """Add a pending or confirmed transaction with complete business context."""
     filename = "balance.json"
+    _load_file(filename)
+    normalized_status = status if status in {"pending", "confirmed"} else "confirmed"
+    normalized_task_id = int(task_id or 0)
     with _lock:
         data = _cache.setdefault(filename, {})
-        key = str(telegram_id)
-        if key not in data:
-            data[key] = {"transactions": []}
-        data[key]["transactions"].append({
-            "task_id": task_id,
+        account = _ensure_balance_account(data, str(telegram_id))
+        if normalized_task_id and transaction_type == "task":
+            duplicate = next((
+                item for item in account["transactions"]
+                if int(item.get("task_id", 0) or 0) == normalized_task_id
+                and item.get("type", "task") == "task"
+            ), None)
+            if duplicate is not None:
+                return True
+        transaction = {
+            "task_id": normalized_task_id,
             "executor": executor_name,
             "client": client,
+            "phone": phone,
             "task_type": task_type,
-            "amount": amount,
+            "amount": float(amount),
+            "status": normalized_status,
             "task_text": task_text,
-            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        })
-    _save_file(filename)
+            "result_text": result_text or task_text,
+            "kpi": int(kpi or 0),
+            "type": transaction_type,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        account["transactions"].append(transaction)
+        account["balance"] = _transaction_total(account["transactions"], "confirmed")
+    if _save_file(filename):
+        return True
+    with _lock:
+        if transaction in account["transactions"]:
+            account["transactions"].remove(transaction)
+        account["balance"] = _transaction_total(account["transactions"], "confirmed")
+    return False
 
 
-def get_balance(telegram_id: int) -> float:
-    """Get total balance for a user."""
+def confirm_balance_transaction(telegram_id: int, task_id: int):
+    """Confirm a pending task transaction and return its updated account totals."""
     filename = "balance.json"
     _load_file(filename)
+    changed = False
+    normalized_task_id = int(task_id)
     with _lock:
-        data = _cache.get(filename, {})
-        key = str(telegram_id)
-        txns = data.get(key, {}).get("transactions", [])
-    return sum(t["amount"] for t in txns)
-
-
-def get_balance_transactions(telegram_id: int, limit: int = 50) -> list:
-    """Get recent transactions for a user."""
-    filename = "balance.json"
-    _load_file(filename)
-    with _lock:
-        data = _cache.get(filename, {})
-        key = str(telegram_id)
-        txns = data.get(key, {}).get("transactions", [])
-    return list(reversed(txns[-limit:]))
-
-
-def get_all_balances() -> dict:
-    """Get balances for all employees."""
-    filename = "balance.json"
-    _load_file(filename)
-    with _lock:
-        data = _cache.get(filename, {})
-    result = {}
-    for key, val in data.items():
-        txns = val.get("transactions", [])
-        result[int(key)] = sum(t["amount"] for t in txns)
+        data = _cache.setdefault(filename, {})
+        account = _ensure_balance_account(data, str(telegram_id))
+        matching = [
+            item for item in reversed(account["transactions"])
+            if int(item.get("task_id", 0) or 0) == normalized_task_id
+        ]
+        transaction = next((
+            item for item in matching if _transaction_status(item) == "pending"
+        ), matching[0] if matching else None)
+        if transaction is None:
+            return None
+        if _transaction_status(transaction) == "pending":
+            transaction["status"] = "confirmed"
+            changed = True
+        account["balance"] = _transaction_total(account["transactions"], "confirmed")
+        result = {
+            "transaction": dict(transaction),
+            "balance": account["balance"],
+            "pending_balance": _transaction_total(account["transactions"], "pending"),
+            "already_confirmed": not changed,
+        }
+    if changed and not _save_file(filename):
+        with _lock:
+            transaction["status"] = "pending"
+            account["balance"] = _transaction_total(account["transactions"], "confirmed")
+            result.update({
+                "transaction": dict(transaction),
+                "balance": account["balance"],
+                "pending_balance": _transaction_total(account["transactions"], "pending"),
+                "save_failed": True,
+            })
+        return result
     return result
 
 
-def get_all_recent_transactions(limit: int = 30) -> list:
-    """Get recent transactions across all employees."""
+def get_balance(telegram_id: int) -> float:
+    """Get the sum of confirmed transactions for a user."""
     filename = "balance.json"
     _load_file(filename)
     with _lock:
         data = _cache.get(filename, {})
-    all_txns = []
-    for key, val in data.items():
-        for t in val.get("transactions", []):
-            all_txns.append({**t, "telegram_id": int(key)})
-    all_txns.sort(key=lambda x: x.get("date", ""), reverse=True)
-    return all_txns[:limit]
+        account = _ensure_balance_account(data, str(telegram_id))
+        return account["balance"]
+
+
+def get_pending_balance(telegram_id: int) -> float:
+    """Get the sum of pending transactions for a user."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        transactions = _ensure_balance_account(data, str(telegram_id))["transactions"]
+        return _transaction_total(transactions, "pending")
+
+
+def get_balance_transactions(telegram_id: int, limit: int = 50) -> list:
+    """Get recent normalized transactions for a user."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        transactions = _ensure_balance_account(data, str(telegram_id))["transactions"]
+        return [dict(item) for item in reversed(transactions[-limit:])]
+
+
+def get_all_balances() -> dict:
+    """Get confirmed balances for all employees."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        return {
+            int(key): _ensure_balance_account(data, key)["balance"]
+            for key in data
+        }
+
+
+def get_all_pending_balances() -> dict:
+    """Get pending balances for all employees."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        return {
+            int(key): _transaction_total(
+                _ensure_balance_account(data, key)["transactions"], "pending"
+            )
+            for key in data
+        }
+
+
+def get_all_recent_transactions(limit: int = 30) -> list:
+    """Get recent normalized transactions across all employees."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        all_transactions = []
+        for key in data:
+            account = _ensure_balance_account(data, key)
+            for transaction in account["transactions"]:
+                all_transactions.append({**transaction, "telegram_id": int(key)})
+    all_transactions.sort(key=lambda item: item.get("date", ""), reverse=True)
+    return all_transactions[:limit]
 
 
 # ─── KPI Functions ────────────────────────────────────────────────────────────

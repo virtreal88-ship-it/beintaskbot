@@ -13,6 +13,7 @@ Telegram Bot with Kommo CRM Integration — AI Function Calling Architecture
 import os
 import re
 import json
+import math
 import logging
 import requests
 import subprocess
@@ -4293,12 +4294,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     chat_id,
                     KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
                 )
-                client_display = " ".join(part for part in [contact_name, phone] if part).strip()
-
-                # Credit piecework and persist the full transaction context.
+                # Queue piecework earnings for Admin confirmation and persist the
+                # task context needed by the redesigned balance history.
                 try:
                     price_match = re.match(r"^\[([^:\]]+)(?::(\d+(?:\.\d+)?))?\]\s*(.*)", task_text_full)
-                    if price_match and price_match.group(2):
+                    if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(2):
                         amount = float(price_match.group(2))
                         if amount > 0:
                             add_balance_transaction(
@@ -4307,11 +4307,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 amount,
                                 price_match.group(3),
                                 executor_name=completion_sender,
-                                client=client_display,
+                                client=contact_name or "—",
+                                phone=phone or "—",
                                 task_type=task_type_name,
+                                result_text=note_text or task_result_text,
+                                kpi=0,
+                                status="pending",
                             )
                 except Exception as balance_error:
-                    logger.error(f"Balance crediting error: {balance_error}")
+                    logger.error(f"Pending balance transaction error: {balance_error}")
 
                 admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
                 logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}")
@@ -4442,10 +4446,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 emp_id,
                 0,
                 -amount,
-                f"💸 {note}",
+                note,
                 executor_name=get_employee_name_by_chat_id(emp_id, str(emp_id)),
                 client="—",
-                task_type="Ödəniş",
+                phone="—",
+                task_type="Məxaric",
+                result_text=note,
+                kpi=0,
+                status="confirmed",
+                transaction_type="məxaric",
             )
             return web.json_response({'success': True, 'message': f'✅ {amount:.0f} AZN ödənildi.'})
         elif action == "pause_task":
@@ -4770,6 +4779,10 @@ async def start_webhook_server():
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)
     app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
     app_web.router.add_get("/api/balance", handle_api_balance)
+    app_web.router.add_route('OPTIONS', '/api/balance/confirm', lambda r: web.Response())
+    app_web.router.add_post("/api/balance/confirm", handle_api_balance_confirm)
+    app_web.router.add_route('OPTIONS', '/api/balance/credit', lambda r: web.Response())
+    app_web.router.add_post("/api/balance/credit", handle_api_balance_credit)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
@@ -5254,8 +5267,9 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
 # ─── GitHub-based Storage (replaces SQLite) ─────────────────────────────────
 from gh_storage import (
     init_storage as _init_gh_storage,
-    add_balance_transaction, get_balance, get_balance_transactions,
-    get_all_balances, get_all_recent_transactions,
+    add_balance_transaction, confirm_balance_transaction,
+    get_balance, get_pending_balance, get_balance_transactions,
+    get_all_balances, get_all_pending_balances, get_all_recent_transactions,
     has_active_session, start_task_session, pause_task_session,
     finish_task_session, get_kpi_summary, set_kpi_score,
     save_push_subscription, get_push_subscription, remove_push_subscription
@@ -5286,33 +5300,143 @@ _EMPLOYEE_TYPES = {
 def get_employee_type(telegram_id):
     return _EMPLOYEE_TYPES.get(telegram_id, 'piecework')
 
+def _balance_admin_chat_id(request: web.Request, data: dict) -> int | None:
+    """Validate the Admin identity supplied by the PWA header and/or JSON body."""
+    header_value = request.headers.get("X-TG-User-ID", "")
+    body_value = data.get("chat_id", "")
+    try:
+        header_chat_id = int(header_value) if header_value else None
+        body_chat_id = int(body_value) if body_value else None
+    except (TypeError, ValueError):
+        return None
+    if header_chat_id and body_chat_id and header_chat_id != body_chat_id:
+        return None
+    chat_id = header_chat_id or body_chat_id
+    return chat_id if chat_id and is_admin(chat_id) else None
+
+
 async def handle_api_balance(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get("X-TG-User-ID", "")
-    chat_id = int(tg_user_id) if tg_user_id else None
+    try:
+        chat_id = int(tg_user_id) if tg_user_id else None
+    except (TypeError, ValueError):
+        chat_id = None
     if not chat_id:
-        return web.json_response({"success": False}, status=401)
+        return web.json_response({"success": False, "error": "İstifadəçi tapılmadı."}, status=401)
     balance = get_balance(chat_id)
+    pending_balance = get_pending_balance(chat_id)
     transactions = get_balance_transactions(chat_id)
-    return web.json_response({"success": True, "balance": balance, "transactions": transactions})
+    return web.json_response({
+        "success": True,
+        "balance": balance,
+        "pending_balance": pending_balance,
+        "transactions": transactions,
+    })
+
+
+async def handle_api_balance_confirm(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"success": False, "error": "Yanlış sorğu formatı."}, status=400)
+    if not _balance_admin_chat_id(request, data):
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        employee_id = int(data.get("employee_id", 0))
+        task_id = int(data.get("task_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "Əməkdaş və ya tapşırıq ID-si yanlışdır."}, status=400)
+    if not employee_id or not task_id:
+        return web.json_response({"success": False, "error": "employee_id və task_id tələb olunur."}, status=400)
+
+    result = confirm_balance_transaction(employee_id, task_id)
+    if result is None:
+        return web.json_response({"success": False, "error": "Əməliyyat tapılmadı."}, status=404)
+    if result.get("save_failed"):
+        return web.json_response({"success": False, "error": "Balans yadda saxlanmadı."}, status=500)
+    return web.json_response({
+        "success": True,
+        "message": "Ödəniş təsdiqləndi.",
+        "balance": result["balance"],
+        "pending_balance": result["pending_balance"],
+        "transaction": result["transaction"],
+        "already_confirmed": result["already_confirmed"],
+    })
+
+
+async def handle_api_balance_credit(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"success": False, "error": "Yanlış sorğu formatı."}, status=400)
+    if not _balance_admin_chat_id(request, data):
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        employee_id = int(data.get("employee_id", 0))
+        amount = float(data.get("amount", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "Əməkdaş və ya məbləğ yanlışdır."}, status=400)
+    description = str(data.get("description") or "Mədaxil").strip()[:500]
+    if not employee_id or not math.isfinite(amount) or amount <= 0:
+        return web.json_response({"success": False, "error": "Müsbət məbləğ və əməkdaş seçin."}, status=400)
+
+    employee_name = get_employee_name_by_chat_id(employee_id, str(employee_id))
+    saved = add_balance_transaction(
+        employee_id,
+        0,
+        amount,
+        description,
+        executor_name=employee_name,
+        client="—",
+        phone="—",
+        task_type="Mədaxil",
+        result_text=description,
+        kpi=0,
+        status="confirmed",
+        transaction_type="mədaxil",
+    )
+    if not saved:
+        return web.json_response({"success": False, "error": "Mədaxil yadda saxlanmadı."}, status=500)
+    return web.json_response({
+        "success": True,
+        "message": f"{amount:.2f} AZN mədaxil edildi.",
+        "balance": get_balance(employee_id),
+        "pending_balance": get_pending_balance(employee_id),
+    })
+
 
 async def handle_api_admin_balances(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get('X-TG-User-ID', '')
-    chat_id = int(tg_user_id) if tg_user_id else None
-    if not chat_id or get_kommo_user_id_for_chat(chat_id) != 10932455:
-        return web.json_response({'success': False}, status=403)
+    try:
+        chat_id = int(tg_user_id) if tg_user_id else None
+    except (TypeError, ValueError):
+        chat_id = None
+    if not chat_id or not is_admin(chat_id):
+        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
     all_bals = get_all_balances()
+    all_pending = get_all_pending_balances()
     employees = []
     for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
-        employees.append({'name': name, 'tg_id': tg_id, 'balance': all_bals.get(tg_id, 0)})
-    recent = get_all_recent_transactions(30)
+        employees.append({
+            'name': name,
+            'tg_id': tg_id,
+            'balance': all_bals.get(tg_id, 0),
+            'pending_balance': all_pending.get(tg_id, 0),
+        })
+    recent = get_all_recent_transactions(50)
     recent_fmt = [{
+        "employee_id": r.get("telegram_id", 0),
         "employee": r.get("executor") or _EMPLOYEE_NAMES_BY_TG.get(r.get("telegram_id", 0), str(r.get("telegram_id", ""))),
         "executor": r.get("executor", ""),
         "client": r.get("client", ""),
+        "phone": r.get("phone", ""),
         "task_type": r.get("task_type", ""),
-        "task_id": r.get("task_id", ""),
+        "task_id": r.get("task_id", 0),
         "amount": r.get("amount", 0),
-        "task_text": r.get("task_text", ""),
+        "status": r.get("status", "confirmed"),
+        "result_text": r.get("result_text") or r.get("task_text", ""),
+        "kpi": r.get("kpi", 0),
+        "type": r.get("type", "task"),
         "date": r.get("date", ""),
     } for r in recent]
     return web.json_response({"success": True, "employees": employees, "recent": recent_fmt})

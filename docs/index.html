@@ -78,13 +78,18 @@
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
         <!-- Balance Widget (piecework employees only) -->
-        <div id="balance-widget" style="display:none;" class="bg-gradient-to-br from-[#10b981] to-[#059669] text-white p-4 rounded-2xl shadow-lg flex justify-between items-center">
-            <div>
-                <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Şəxsi Balansınız</div>
-                <div class="text-2xl font-black mt-1" id="balance-amount">0.00 AZN</div>
-                <div id="balance-expected" class="text-[10px] opacity-80 mt-1" style="display:none;"></div>
+        <div id="balance-widget" style="display:none;" class="bg-white border border-gray-100 p-4 rounded-2xl shadow-lg flex justify-between items-center gap-3">
+            <div class="grid grid-cols-2 gap-4 flex-1">
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balans</div>
+                    <div class="text-xl font-black mt-1 text-emerald-600" id="balance-amount">0.00 AZN</div>
+                </div>
+                <div class="border-l border-gray-100 pl-4">
+                    <div class="text-[10px] uppercase tracking-wider text-amber-600 font-bold">Gözləmədə</div>
+                    <div class="text-xl font-black mt-1 text-amber-500" id="balance-pending-amount">0.00 AZN</div>
+                </div>
             </div>
-            <button onclick="switchTab('tab-history')" class="bg-white/25 border border-white/10 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Tarixçə</button>
+            <button onclick="switchTab('tab-history')" class="bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">Tarixçə</button>
         </div>
 
         <!-- Finance Widget (salary employees only) -->
@@ -153,9 +158,12 @@
 
     <!-- SCREEN: BALANCE HISTORY -->
     <div id="screen-balance-history" class="screen space-y-4">
-        <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center">
+        <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
-            <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">💸 Məxaric</button>
+            <div class="flex items-center gap-1.5">
+                <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Mədaxil</button>
+                <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Məxaric</button>
+            </div>
         </div>
         <div id="balance-history-container" class="space-y-3"></div>
     </div>
@@ -1359,49 +1367,92 @@ async function submitSubtask(parentTaskId) {
     document.getElementById('subtask-modal').remove();
 }
 // Balance System
+const BALANCE_EMPLOYEE_OPTIONS = '<option value="7920785774">Rasim Əsgərov</option><option value="7962757442">Şamil Əliyev</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option><option value="8835096199">Texniki Dəstək</option>';
+
+function escapeBalanceText(value) {
+    return String(value ?? '—').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function renderKpiStars(kpi) {
+    const score = Math.max(0, Math.min(5, Math.round(Number(kpi) || 0)));
+    return `<span class="tracking-wide" aria-label="KPI ${score}/5"><span class="text-amber-400">${'★'.repeat(score)}</span><span class="text-gray-300">${'☆'.repeat(5-score)}</span></span>`;
+}
+
+function formatBalanceDate(value) {
+    if(!value) return '';
+    const parsed = new Date(String(value).replace(' ', 'T'));
+    return Number.isNaN(parsed.getTime()) ? escapeBalanceText(value) : parsed.toLocaleDateString('az-AZ', {day:'2-digit', month:'short', year:'numeric'});
+}
+
+function renderBalanceTransaction(t, adminView = false) {
+    const amount = Number(t.amount) || 0;
+    const isPending = t.status === 'pending';
+    const amountClass = isPending ? 'text-amber-600' : (amount < 0 ? 'text-red-600' : 'text-emerald-600');
+    const amountSign = amount > 0 ? '+' : '';
+    const statusBadge = isPending
+        ? '<span class="bg-amber-100 text-amber-700 px-2 py-1 rounded-full text-[9px] font-bold">Gözləmədə</span>'
+        : '<span class="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[9px] font-bold">Təsdiqləndi</span>';
+    const employeeId = Number(t.employee_id || 0);
+    const taskId = Number(t.task_id || 0);
+    const confirmButton = adminView && isPending && employeeId > 0 && taskId > 0
+        ? `<button onclick="confirmBalanceTransaction(${employeeId}, ${taskId}, this)" class="bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold">Təsdiq et</button>`
+        : '';
+    const employeeRow = adminView
+        ? `<div class="text-[10px] font-bold text-gray-800 mb-1">Əməkdaş: ${escapeBalanceText(t.employee || t.executor)}</div>`
+        : '';
+    return `<div class="p-3 bg-white border border-gray-100 rounded-xl shadow-sm space-y-2">
+        <div class="flex items-start justify-between gap-3">
+            <div>${employeeRow}<div class="text-xs font-bold text-gray-800">Müştəri: ${escapeBalanceText(t.client)}</div><div class="text-[10px] text-gray-500 mt-0.5">Telefon: ${escapeBalanceText(t.phone)}</div></div>
+            <div class="text-right shrink-0"><div class="text-sm font-black ${amountClass}">${amountSign}${amount.toFixed(2)} AZN</div><div class="mt-1">${statusBadge}</div></div>
+        </div>
+        <div class="grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[10px]"><span class="font-bold text-gray-400">Tapşırıq növü</span><span class="text-gray-700">${escapeBalanceText(t.task_type)}</span><span class="font-bold text-gray-400">Nəticə</span><span class="text-gray-700 whitespace-pre-wrap">${escapeBalanceText(t.result_text)}</span><span class="font-bold text-gray-400">KPI</span><span>${renderKpiStars(t.kpi)}</span></div>
+        <div class="flex items-center justify-between gap-2"><span class="text-[9px] text-gray-400 font-bold">${formatBalanceDate(t.date)}</span>${confirmButton}</div>
+    </div>`;
+}
+
 async function loadBalance() {
-    if(isAdmin) return;
+    if(isAdmin) return null;
     try {
         const r = await fetch(API_BASE + '/api/balance', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(j.success) {
-            window._balanceData = j.transactions || [];
-            if(employeeType === 'salary') {
-                const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
-                const mainFinanceWidget = document.getElementById('main-finance-widget'); if(mainFinanceWidget) mainFinanceWidget.style.display = 'block';
-                const bonusValue = parseFloat(j.balance || 0).toFixed(0);
-                const bonus = document.getElementById('finance-bonus');
-                if(bonus) bonus.textContent = bonusValue;
-                const mainBonus = document.getElementById('main-finance-bonus');
-                if(mainBonus) mainBonus.textContent = bonusValue;
-                const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';
-                return;
-            }
-            const w = document.getElementById('balance-widget'); if(w) w.style.display = 'flex';
-            const a = document.getElementById('balance-amount'); if(a) a.textContent = parseFloat(j.balance || 0).toFixed(2) + ' AZN';
-            let expected = 0;
-            (mockTasks||[]).forEach(t => {
-                const pm = (t.desc||t.text||'').match(/:([\d.]+)\]/);
-                if(pm) expected += parseFloat(pm[1]);
-            });
-            const expEl = document.getElementById('balance-expected');
-            if(expEl) {
-                if(expected > 0) { expEl.style.display='block'; expEl.innerHTML = `Gözlənilən: <b>${expected.toFixed(0)} AZN</b>`; }
-                else { expEl.style.display='none'; }
-            }
+        if(!r.ok || !j.success) throw new Error(j.error || 'Balans yüklənmədi');
+        window._balanceData = j.transactions || [];
+        window._balanceSummary = {balance: Number(j.balance) || 0, pending_balance: Number(j.pending_balance) || 0};
+        if(employeeType === 'salary') {
+            const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
+            const mainFinanceWidget = document.getElementById('main-finance-widget'); if(mainFinanceWidget) mainFinanceWidget.style.display = 'block';
+            const bonusValue = window._balanceSummary.balance.toFixed(0);
+            const bonus = document.getElementById('finance-bonus'); if(bonus) bonus.textContent = bonusValue;
+            const mainBonus = document.getElementById('main-finance-bonus'); if(mainBonus) mainBonus.textContent = bonusValue;
+            const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';
+            return j;
         }
-    } catch(e) {}
+        const widget = document.getElementById('balance-widget'); if(widget) widget.style.display = 'flex';
+        const balanceAmount = document.getElementById('balance-amount'); if(balanceAmount) balanceAmount.textContent = window._balanceSummary.balance.toFixed(2) + ' AZN';
+        const pendingAmount = document.getElementById('balance-pending-amount'); if(pendingAmount) pendingAmount.textContent = window._balanceSummary.pending_balance.toFixed(2) + ' AZN';
+        return j;
+    } catch(e) {
+        return null;
+    }
 }
-function loadBalanceHistory() {
-    if(isAdmin) { document.getElementById('btn-mexaric').style.display = 'inline-block'; loadAdminBalances(); return; }
-    loadBalance();
+
+async function loadBalanceHistory() {
+    const medaxilButton = document.getElementById('btn-medaxil');
+    const mexaricButton = document.getElementById('btn-mexaric');
+    if(isAdmin) {
+        if(medaxilButton) medaxilButton.style.display = 'inline-block';
+        if(mexaricButton) mexaricButton.style.display = 'inline-block';
+        await loadAdminBalances();
+        return;
+    }
+    if(medaxilButton) medaxilButton.style.display = 'none';
+    if(mexaricButton) mexaricButton.style.display = 'none';
+    await loadBalance();
     const container = document.getElementById('balance-history-container');
-    const txs = window._balanceData || [];
-    if(!txs.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ əməliyyat yoxdur.</div>'; return; }
-    container.innerHTML = txs.map(t => {
-        const d = t.date ? new Date(t.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
-        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">${t.task_text || 'Tapşırıq'}</strong><span class="text-[9px] text-gray-400 font-bold">${d}</span></div><span class="text-xs font-black text-emerald-600">+${parseFloat(t.amount).toFixed(0)} AZN</span></div>`;
-    }).join('');
+    const transactions = window._balanceData || [];
+    container.innerHTML = transactions.length
+        ? transactions.map(t => renderBalanceTransaction(t, false)).join('')
+        : '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ əməliyyat yoxdur.</div>';
 }
 
 // Admin balance management
@@ -1410,49 +1461,119 @@ async function loadAdminBalances() {
     try {
         const r = await fetch(API_BASE + '/api/admin_balances', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(j.success) {
-            let html = j.employees.map(e => {
-                return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800">${e.name}</strong></div><span class="text-xs font-black ${e.balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${parseFloat(e.balance).toFixed(0)} AZN</span></div>`;
-            }).join('');
-            if(j.recent && j.recent.length) {
-                html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
-                html += j.recent.map(t => {
-                    const d = t.date ? new Date(t.date+'Z').toLocaleDateString('az-AZ',{day:'2-digit',month:'short'}) : '';
-                    const color = t.amount < 0 ? 'text-red-600' : 'text-emerald-600';
-                    const sign = t.amount < 0 ? '' : '+';
-                    return `<div class="flex justify-between items-center p-2 bg-gray-50 rounded-lg mt-1"><div><span class="text-[10px] text-gray-700">${t.employee} - ${t.task_text||'Məxaric'}</span><br><span class="text-[9px] text-gray-400">${d}</span></div><span class="text-[10px] font-bold ${color}">${sign}${parseFloat(t.amount).toFixed(0)} AZN</span></div>`;
-                }).join('');
-            }
-            container.innerHTML = html || '<div class="text-center py-10 text-gray-400 text-xs">Məlumat yoxdur</div>';
+        if(!r.ok || !j.success) throw new Error(j.error || 'Balanslar yüklənmədi');
+        let html = (j.employees || []).map(e => {
+            const balance = Number(e.balance) || 0;
+            const pending = Number(e.pending_balance) || 0;
+            return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="text-right"><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">Balans: ${balance.toFixed(2)} AZN</div><div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div></div></div>`;
+        }).join('');
+        if(j.recent && j.recent.length) {
+            html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
+            html += j.recent.map(t => renderBalanceTransaction(t, true)).join('');
         }
-    } catch(e) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs">Xəta</div>'; }
+        container.innerHTML = html || '<div class="text-center py-10 text-gray-400 text-xs">Məlumat yoxdur</div>';
+    } catch(e) {
+        container.innerHTML = `<div class="text-center py-10 text-red-500 text-xs">${escapeBalanceText(e.message || 'Xəta')}</div>`;
+    }
 }
-function openMexaric() {
-    const html = `<div id="mexaric-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+
+async function confirmBalanceTransaction(employeeId, taskId, button) {
+    if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
+    const originalText = button ? button.textContent : '';
+    if(button) { button.disabled = true; button.textContent = 'Təsdiqlənir...'; }
+    try {
+        const r = await fetch(API_BASE + '/api/balance/confirm', {
+            method:'POST',
+            headers:{'Content-Type':'application/json', 'X-TG-User-ID':CURRENT_USER_ID},
+            body:JSON.stringify({chat_id:CURRENT_USER_ID, employee_id:String(employeeId), task_id:Number(taskId)})
+        });
+        const j = await r.json();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Təsdiqlənmədi');
+        toast(j.message || 'Ödəniş təsdiqləndi.', false);
+        await loadAdminBalances();
+    } catch(e) {
+        toast(e.message || 'Xəta!', true);
+        if(button) { button.disabled = false; button.textContent = originalText; }
+    }
+}
+
+function openMedaxil() {
+    if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
+    const existing = document.getElementById('medaxil-modal'); if(existing) existing.remove();
+    const html = `<div id="medaxil-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">💸 Məxaric (Ödəniş)</h3>
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Mədaxil</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
-        <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="7920785774">Rasim Əsgərov</option><option value="7962757442">Şamil Əliyev</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option><option value="8835096199">Texniki Dəstək</option></select>
+        <select id="med-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
-        <input type="number" id="mex-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
-        <label style="font-size:11px;color:#888;font-weight:600;">Qeyd:</label>
-        <input type="text" id="mex-note" placeholder="Aylıq ödəniş" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
-        <div style="display:flex;gap:8px;"><button onclick="submitMexaric()" style="flex:1;background:#ef4444;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ödə</button><button onclick="document.getElementById('mexaric-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <input type="number" min="0.01" step="0.01" id="med-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Açıqlama:</label>
+        <input type="text" maxlength="500" id="med-description" placeholder="Mədaxil açıqlaması" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button id="med-submit" onclick="submitMedaxil()" style="flex:1;background:#10b981;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Əlavə et</button><button onclick="document.getElementById('medaxil-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
-async function submitMexaric() {
-    const empId = document.getElementById('mex-employee').value;
-    const amount = parseFloat(document.getElementById('mex-amount').value);
-    const note = document.getElementById('mex-note').value || 'Ödəniş';
-    if(!amount || amount <= 0) { toast('Məbləğ daxil edin!', true); return; }
+
+async function submitMedaxil() {
+    const employeeId = document.getElementById('med-employee').value;
+    const amount = Number(document.getElementById('med-amount').value);
+    const description = document.getElementById('med-description').value.trim();
+    if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
+    if(!description) { toast('Açıqlama daxil edin!', true); return; }
+    const button = document.getElementById('med-submit');
+    if(button) { button.disabled = true; button.textContent = 'Əlavə edilir...'; }
     try {
-        const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'payout', employee_id:empId, amount:amount, note:note}) });
+        const r = await fetch(API_BASE + '/api/balance/credit', {
+            method:'POST',
+            headers:{'Content-Type':'application/json', 'X-TG-User-ID':CURRENT_USER_ID},
+            body:JSON.stringify({chat_id:CURRENT_USER_ID, employee_id:employeeId, amount, description})
+        });
         const j = await r.json();
-        toast(j.message || 'Ödənildi!', !j.success);
-    } catch(e) { toast('Xəta!', true); }
-    document.getElementById('mexaric-modal').remove();
-    loadAdminBalances();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Mədaxil edilmədi');
+        toast(j.message || 'Mədaxil edildi.', false);
+        document.getElementById('medaxil-modal').remove();
+        await loadAdminBalances();
+    } catch(e) {
+        toast(e.message || 'Xəta!', true);
+        if(button) { button.disabled = false; button.textContent = 'Əlavə et'; }
+    }
+}
+
+function openMexaric() {
+    if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
+    const existing = document.getElementById('mexaric-modal'); if(existing) existing.remove();
+    const html = `<div id="mexaric-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+      <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Məxaric (Ödəniş)</h3>
+        <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
+        <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
+        <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
+        <input type="number" min="0.01" step="0.01" id="mex-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Qeyd:</label>
+        <input type="text" id="mex-note" placeholder="Aylıq ödəniş" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <div style="display:flex;gap:8px;"><button id="mex-submit" onclick="submitMexaric()" style="flex:1;background:#ef4444;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ödə</button><button onclick="document.getElementById('mexaric-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+      </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function submitMexaric() {
+    const employeeId = document.getElementById('mex-employee').value;
+    const amount = Number(document.getElementById('mex-amount').value);
+    const note = document.getElementById('mex-note').value.trim() || 'Ödəniş';
+    if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
+    const button = document.getElementById('mex-submit');
+    if(button) { button.disabled = true; button.textContent = 'Ödənilir...'; }
+    try {
+        const r = await fetch(API_BASE + '/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'payout', employee_id:employeeId, amount, note})});
+        const j = await r.json();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Məxaric edilmədi');
+        toast(j.message || 'Ödənildi!', false);
+        document.getElementById('mexaric-modal').remove();
+        await loadAdminBalances();
+    } catch(e) {
+        toast(e.message || 'Xəta!', true);
+        if(button) { button.disabled = false; button.textContent = 'Ödə'; }
+    }
 }
 
 // Pull-to-refresh
