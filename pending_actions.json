@@ -375,32 +375,6 @@
     "resolved_choice": "Şamil"
   },
   {
-    "id": "0567370b",
-    "type": "assign_executor",
-    "created_at": "2026-07-18T03:30:03.584841+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "Ferid Abbasquliyev",
-      "phone": "",
-      "lead_id": 76926131,
-      "stage_name": "yeni sifariş",
-      "stage_key": "yeni_sifaris",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76926131",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 2741
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "2bbc671c",
     "type": "assign_executor",
     "created_at": "2026-07-18T03:29:38.779057+04:00",
