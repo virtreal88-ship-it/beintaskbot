@@ -244,8 +244,22 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-18 14:22:19"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 306.0,
+        "status": "confirmed",
+        "task_text": "M10 göndərdi",
+        "result_text": "M10 göndərdi",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-07-18 14:51:54"
       }
     ],
-    "balance": -305.5
+    "balance": 0.5
   }
 }
