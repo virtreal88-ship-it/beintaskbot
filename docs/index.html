@@ -142,6 +142,7 @@
             <button class="text-xs font-bold text-blue-500" onclick="switchTab('tab-tasks')">← Geri</button>
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
@@ -196,15 +197,12 @@
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-edit"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
 
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
-                <div class="grid grid-cols-2 gap-2 mb-2">
-                    <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
-                    <button type="button" class="option-card" onclick="sel('deadline','1h',this)">1 saat</button>
-                </div>
-                <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-task-details .option-card').forEach(c=>c.classList.remove('selected'));">
+                <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
             </div>
             <div class="flex gap-2">
                 <button id="edit-submit-btn" onclick="submitTask()" disabled class="flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">✅ Təsdiqlə</button>
@@ -348,8 +346,8 @@ const CURRENT_USER_ID = getUserId();
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
-    'search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
-    'edit-task-type-select','edit-assignee-select','edit-task-price','edit-task-desc','edit-deadline-custom',
+    'task-client-name','search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
+    'edit-task-type-select','edit-assignee-select','edit-priority','edit-task-price','edit-task-desc','edit-deadline-custom',
     'note-text-input','complete-note-text','search-phone-flow','deal-customer-name','deal-subtask-text',
     'note-text','note-subtask-text','job-comment'
 ];
@@ -629,6 +627,8 @@ function submitTask() {
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.originalAssignee) payload.originalAssignee = gd.originalAssignee;
         if(gd.task_type) payload.task_type = gd.task_type;
+        const editPriority = document.getElementById('edit-priority');
+        if(editPriority && editPriority.value) payload.priority = editPriority.value;
 
         const assigneeChanged = gd.originalAssignee && gd.assigneeName && gd.originalAssignee !== gd.assigneeName;
         const savedTaskId = editingTaskId;
@@ -647,7 +647,9 @@ function submitTask() {
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
         const tsel = document.getElementById('task-type-select');
         const taskType = gd.task_type || (tsel ? tsel.value : '1');
-        let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType};
+        const clientNameEl = document.getElementById('task-client-name');
+        const clientName = clientNameEl ? clientNameEl.value.trim() : '';
+        let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType, client_name: clientName};
         const prioritySelect = document.getElementById('task-priority');
         if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
         const priceInput = document.getElementById('task-price-input');
@@ -743,8 +745,8 @@ function renderPendingActions() {
         card.dataset.actionId = action.id;
         // Swipe handling
         let startX = 0, currentX = 0, swiping = false;
-        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; swiping = true; currentX = 0; });
-        card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#dbeafe'; else card.style.background='#fff'; });
+        card.addEventListener('touchstart', (e) => { if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; startX = e.touches[0].clientX; swiping = true; currentX = 0; });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#dbeafe'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
             swiping = false;
             if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{deletePendingAction(action.id,card);},300); }
@@ -1212,7 +1214,7 @@ function handleBarAction(actionType) {
         editingTaskId = task.id;
         flow = 'task'; gd = {phone: task.phone || '', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
         const rawDesc = task.desc || task.text || '';
-        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+))?\]\s*/);
+        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+(?:\.\d+)?))?\]\s*/);
         let editPrice = '';
         if(markerMatch) { gd.assigneeName = markerMatch[1]; editPrice = markerMatch[2] || ''; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
         else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
@@ -1223,6 +1225,7 @@ function handleBarAction(actionType) {
         gd.originalAssignee = gd.assigneeName || '';
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
+        const epri = document.getElementById('edit-priority'); if(epri) { epri.value = task.priority || ''; }
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
 
@@ -1232,7 +1235,8 @@ function handleBarAction(actionType) {
             assignee: gd.assigneeName || '',
             task_type: gd.task_type || '',
             deadline: gd.deadline || '',
-            price: (document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '')
+            price: (document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : ''),
+            priority: (document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : '')
         };
         // Disable submit button initially
         const esb = document.getElementById('edit-submit-btn');
@@ -1248,13 +1252,14 @@ function checkEditChanged() {
     const taskType = document.getElementById('edit-task-type-select') ? document.getElementById('edit-task-type-select').value : '';
     const deadline = gd.deadline || '';
     const price = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '';
-    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price;
+    const priority = document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : '';
+    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price || priority !== (window._editOriginal.priority || '');
     if(changed) { btn.disabled = false; btn.className = 'flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
     else { btn.disabled = true; btn.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
 }
 document.addEventListener('DOMContentLoaded', () => {
     ['edit-task-desc','edit-task-price'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
-    ['edit-assignee-select','edit-task-type-select'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('change', () => { gd.assigneeName = document.getElementById('edit-assignee-select').value; checkEditChanged(); }); });
+    ['edit-assignee-select','edit-task-type-select','edit-priority'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('change', () => { gd.assigneeName = document.getElementById('edit-assignee-select').value; checkEditChanged(); }); });
     const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
 });
 
@@ -1421,7 +1426,7 @@ async function loadBalance() {
         if(employeeType === 'salary') {
             const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
             const mainFinanceWidget = document.getElementById('main-finance-widget'); if(mainFinanceWidget) mainFinanceWidget.style.display = 'block';
-            const bonusValue = window._balanceSummary.balance.toFixed(0);
+            const bonusValue = window._balanceSummary.balance.toFixed(2);
             const bonus = document.getElementById('finance-bonus'); if(bonus) bonus.textContent = bonusValue;
             const mainBonus = document.getElementById('main-finance-bonus'); if(mainBonus) mainBonus.textContent = bonusValue;
             const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';

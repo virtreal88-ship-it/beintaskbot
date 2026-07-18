@@ -1175,11 +1175,12 @@ def create_lead_for_contact(contact_id: int, contact_name: str) -> int | None:
     return None
 
 
-def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None) -> dict:
+def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "") -> dict:
     """Resolve the task entity, creating a contact and/or linked deal when needed."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
-        result = create_contact_kommo(phone, phone)
+        contact_display_name = client_name or phone
+        result = create_contact_kommo(contact_display_name, phone)
         if not result:
             return {"success": False, "message": f"❌ '{phone}' kontakt yaradıla bilmədi."}
         contact_data = result.get("_embedded", {}).get("contacts", [{}])[0]
@@ -3858,7 +3859,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 logger.info(f"Subtask create: entity_id={direct_entity_id}, entity_type={direct_entity_type}, assignee={assignee}, assignee_id={assignee_id_direct}")
                 result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
             else:
-                result = execute_tool_create_task(phone, text, None, None, assignee)
+                client_name_input = data.get("client_name", "").strip()
+                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input)
             if isinstance(result, str):
                 return web.json_response({"success": False, "error": result})
             if not result.get("success"):
@@ -4456,7 +4458,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 status="confirmed",
                 transaction_type="məxaric",
             )
-            return web.json_response({'success': True, 'message': f'✅ {amount:.0f} AZN ödənildi.'})
+            return web.json_response({'success': True, 'message': f'✅ {amount:.2f} AZN ödənildi.'})
         elif action == "pause_task":
             task_id = data.get('task_id')
             elapsed_seconds = data.get('elapsed_seconds', 0)
