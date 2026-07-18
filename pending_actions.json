@@ -1,5 +1,37 @@
 [
   {
+    "id": "b299b039",
+    "type": "change_stage",
+    "created_at": "2026-07-18T14:39:39.580412+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Salyan",
+      "phone": "+994553022596",
+      "lead_id": 75538571,
+      "task_id": 93543501,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Hüseynə məlumat ver satışa yazsın",
+      "note": "Görülən işlər\n- Avadanlıqlar sazlandı\n- məhsullar miqrasiya edildi\n- təlimat edildi\n\nQeyd:\nDigər aptekdə olan lakin bu aptekdə olmayan çox sayda məhsul var. İlk öncə onları sistemə işləyəcəklər, daha sonra sayım edib sonra satışa başlayacaqlar. Sistemi işlədə bildikləri üçün köməyə ehtiyac yoxdur. Ancaq sayım vaxtı online dəstək vermək lazım ola bilər.",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75538571",
+      "callback_key": "4455b36c"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e896fdad",
     "type": "change_stage",
     "created_at": "2026-07-18T14:24:54.558427+04:00",
