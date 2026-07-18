@@ -93,6 +93,15 @@
         "amount": 70.0,
         "task_text": "Ceceshoes",
         "date": "2026-07-18 11:40:44"
+      },
+      {
+        "task_id": 93547465,
+        "executor": "Rasim Əsgərov",
+        "client": "0702781414 0702781414",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "task_text": "Emyaşıldərə",
+        "date": "2026-07-18 11:40:57"
       }
     ]
   }
