@@ -84,6 +84,15 @@
         "amount": 60.0,
         "task_text": "Köşk Zabrat",
         "date": "2026-07-18 11:40:32"
+      },
+      {
+        "task_id": 93547471,
+        "executor": "Rasim Əsgərov",
+        "client": "0773324522 0773324522",
+        "task_type": "Əlaqə saxla",
+        "amount": 70.0,
+        "task_text": "Ceceshoes",
+        "date": "2026-07-18 11:40:44"
       }
     ]
   }
