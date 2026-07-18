@@ -3,7 +3,7 @@
     "id": "0cc4caed",
     "type": "change_stage",
     "created_at": "2026-07-18T15:40:58.980354+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "0702781414",
       "phone": "0702781414",
@@ -29,7 +29,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T16:01:57.375233+04:00",
+    "resolved_choice": "quraşdırma"
   },
   {
     "id": "385549ba",
