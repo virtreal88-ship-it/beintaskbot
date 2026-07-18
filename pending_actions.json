@@ -71,7 +71,7 @@
     "id": "ff565a1a",
     "type": "change_stage",
     "created_at": "2026-07-18T15:40:33.782682+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rauf Quliyev",
       "phone": "+0559771186",
@@ -97,7 +97,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T16:14:45.848979+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "3f77b0b5",
