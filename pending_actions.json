@@ -1,5 +1,37 @@
 [
   {
+    "id": "f581ef0e",
+    "type": "change_stage",
+    "created_at": "2026-07-18T04:10:58.663078+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994557491991",
+      "phone": "+994557491991",
+      "lead_id": 76649313,
+      "task_id": 93544863,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Mcurro. 1 c dən keçirdik. Avadanlıqlar var idi.",
+      "note": "2 dəfə təlimat edildi. Daha sonra qrup üzərindən texniki dəstək verilib.",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76649313",
+      "callback_key": "e2fcce7c"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "cda49388",
     "type": "change_stage",
     "created_at": "2026-07-18T04:09:46.771679+04:00",
