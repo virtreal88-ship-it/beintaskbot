@@ -230,8 +230,22 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-18 14:21:40"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -465.0,
+        "status": "confirmed",
+        "task_text": "Sadə aptekdən aldığın pul",
+        "result_text": "Sadə aptekdən aldığın pul",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-18 14:22:19"
       }
     ],
-    "balance": 159.5
+    "balance": -305.5
   }
 }
