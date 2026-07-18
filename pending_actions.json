@@ -1,5 +1,37 @@
 [
   {
+    "id": "0cc4caed",
+    "type": "change_stage",
+    "created_at": "2026-07-18T15:40:58.980354+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "0702781414",
+      "phone": "0702781414",
+      "lead_id": 76928379,
+      "task_id": 93547465,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Emyaşıldərə",
+      "note": "Uğurlu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76928379",
+      "callback_key": "d32181fd"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "385549ba",
     "type": "change_stage",
     "created_at": "2026-07-18T15:40:46.413831+04:00",
