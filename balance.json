@@ -5,13 +5,21 @@
         "task_id": 93540793,
         "amount": 80.0,
         "task_text": "Calmera",
-        "date": "2026-07-17 11:37:39"
+        "date": "2026-07-17 11:37:39",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Calmera",
+        "kpi": 0
       },
       {
         "task_id": 93540827,
         "amount": 120.0,
         "task_text": "Tamarin",
-        "date": "2026-07-17 11:39:50"
+        "date": "2026-07-17 11:39:50",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Tamarin",
+        "kpi": 0
       },
       {
         "task_id": 93541725,
@@ -20,7 +28,11 @@
         "task_type": "Quraşdırma",
         "amount": 130.0,
         "task_text": "Şahdağ Farel",
-        "date": "2026-07-17 13:47:57"
+        "date": "2026-07-17 13:47:57",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Şahdağ Farel",
+        "kpi": 0
       },
       {
         "task_id": 93544877,
@@ -29,7 +41,11 @@
         "task_type": "Quraşdırma",
         "amount": 100.0,
         "task_text": "Rəşid can et",
-        "date": "2026-07-18 00:09:45"
+        "date": "2026-07-18 00:09:45",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Rəşid can et",
+        "kpi": 0
       },
       {
         "task_id": 93544863,
@@ -38,7 +54,11 @@
         "task_type": "Quraşdırma",
         "amount": 80.0,
         "task_text": "Mcurro. 1 c dən keçirdik. Avadanlıqlar var idi.",
-        "date": "2026-07-18 00:10:56"
+        "date": "2026-07-18 00:10:56",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Mcurro. 1 c dən keçirdik. Avadanlıqlar var idi.",
+        "kpi": 0
       },
       {
         "task_id": 93531373,
@@ -47,7 +67,11 @@
         "task_type": "Görüş",
         "amount": 5.0,
         "task_text": "Vasif Bayramov. Görüşüb təqdimat et, almaq istəyir. Salyanda gedəndə yol üstünə sala bilərsən",
-        "date": "2026-07-18 07:09:35"
+        "date": "2026-07-18 07:09:35",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Vasif Bayramov. Görüşüb təqdimat et, almaq istəyir. Salyanda gedəndə yol üstünə sala bilərsən",
+        "kpi": 0
       },
       {
         "task_id": 93543501,
@@ -56,7 +80,11 @@
         "task_type": "Quraşdırma",
         "amount": 150.0,
         "task_text": "Hüseynə məlumat ver satışa yazsın",
-        "date": "2026-07-18 10:39:37"
+        "date": "2026-07-18 10:39:37",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Hüseynə məlumat ver satışa yazsın",
+        "kpi": 0
       },
       {
         "task_id": 93547457,
@@ -65,7 +93,11 @@
         "task_type": "Quraşdırma",
         "amount": 42.0,
         "task_text": "Calaq Astech",
-        "date": "2026-07-18 11:39:25"
+        "date": "2026-07-18 11:39:25",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Calaq Astech",
+        "kpi": 0
       },
       {
         "task_id": 93547499,
@@ -74,7 +106,11 @@
         "task_type": "Texniki tapşırıq",
         "amount": 50.0,
         "task_text": "1. Tərəzini Sumqayıt ofisdən SARP-a apardım",
-        "date": "2026-07-18 11:39:37"
+        "date": "2026-07-18 11:39:37",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "1. Tərəzini Sumqayıt ofisdən SARP-a apardım",
+        "kpi": 0
       },
       {
         "task_id": 93547413,
@@ -83,7 +119,11 @@
         "task_type": "Quraşdırma",
         "amount": 60.0,
         "task_text": "Köşk Zabrat",
-        "date": "2026-07-18 11:40:32"
+        "date": "2026-07-18 11:40:32",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Köşk Zabrat",
+        "kpi": 0
       },
       {
         "task_id": 93547471,
@@ -92,7 +132,11 @@
         "task_type": "Əlaqə saxla",
         "amount": 70.0,
         "task_text": "Ceceshoes",
-        "date": "2026-07-18 11:40:44"
+        "date": "2026-07-18 11:40:44",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Ceceshoes",
+        "kpi": 0
       },
       {
         "task_id": 93547465,
@@ -101,7 +145,11 @@
         "task_type": "Quraşdırma",
         "amount": 100.0,
         "task_text": "Emyaşıldərə",
-        "date": "2026-07-18 11:40:57"
+        "date": "2026-07-18 11:40:57",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Emyaşıldərə",
+        "kpi": 0
       },
       {
         "task_id": 93547989,
@@ -110,7 +158,11 @@
         "task_type": "Texniki tapşırıq",
         "amount": 30.0,
         "task_text": "Ceceshoes görə əlavə",
-        "date": "2026-07-18 13:14:19"
+        "date": "2026-07-18 13:14:19",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "Ceceshoes görə əlavə",
+        "kpi": 0
       },
       {
         "task_id": 0,
@@ -119,7 +171,11 @@
         "task_type": "Ödəniş",
         "amount": -307.5,
         "task_text": "💸 Şirkətə olan borcun",
-        "date": "2026-07-18 13:29:08"
+        "date": "2026-07-18 13:29:08",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "💸 Şirkətə olan borcun",
+        "kpi": 0
       },
       {
         "task_id": 0,
@@ -128,7 +184,11 @@
         "task_type": "Ödəniş",
         "amount": -500.0,
         "task_text": "💸 Maşının ilk ayı",
-        "date": "2026-07-18 13:29:36"
+        "date": "2026-07-18 13:29:36",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "💸 Maşının ilk ayı",
+        "kpi": 0
       },
       {
         "task_id": 0,
@@ -137,8 +197,27 @@
         "task_type": "Ödəniş",
         "amount": -50.0,
         "task_text": "💸 Laşeyx",
-        "date": "2026-07-18 13:30:00"
+        "date": "2026-07-18 13:30:00",
+        "status": "confirmed",
+        "phone": "",
+        "result_text": "💸 Laşeyx",
+        "kpi": 0
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 465.0,
+        "status": "confirmed",
+        "task_text": "Safeaptekdən aldın",
+        "result_text": "Safeaptekdən aldın",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-07-18 14:20:44"
       }
-    ]
+    ],
+    "balance": 624.5
   }
 }
