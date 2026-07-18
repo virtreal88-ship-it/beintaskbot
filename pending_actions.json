@@ -1,5 +1,37 @@
 [
   {
+    "id": "b57d5734",
+    "type": "change_stage",
+    "created_at": "2026-07-18T15:39:26.869890+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Soft Oneline",
+      "phone": "+994102135104",
+      "lead_id": 75819231,
+      "task_id": 93547457,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Calaq Astech",
+      "note": "Uğurlu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75819231",
+      "callback_key": "25d6fc0f"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b299b039",
     "type": "change_stage",
     "created_at": "2026-07-18T14:39:39.580412+04:00",
