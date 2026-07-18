@@ -39,6 +39,15 @@
         "amount": 80.0,
         "task_text": "Mcurro. 1 c dən keçirdik. Avadanlıqlar var idi.",
         "date": "2026-07-18 00:10:56"
+      },
+      {
+        "task_id": 93531373,
+        "executor": "Rasim Əsgərov",
+        "client": "Автоконтакт +994504014321 +994504014321",
+        "task_type": "Görüş",
+        "amount": 5.0,
+        "task_text": "Vasif Bayramov. Görüşüb təqdimat et, almaq istəyir. Salyanda gedəndə yol üstünə sala bilərsən",
+        "date": "2026-07-18 07:09:35"
       }
     ]
   }
