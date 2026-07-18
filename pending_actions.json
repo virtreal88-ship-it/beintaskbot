@@ -1,5 +1,38 @@
 [
   {
+    "id": "d3abf685",
+    "type": "change_stage",
+    "created_at": "2026-07-18T19:05:50.183540+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nəriman dönərlinski",
+      "phone": "+994504984418",
+      "lead_id": 76857785,
+      "task_id": 93548443,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Kəndstorun ikincisi filialı. İnteqrasiya qalıb dine də",
+      "task_price": "100",
+      "note": "Uğurlu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76857785",
+      "callback_key": "9e997bfa"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4717241d",
     "type": "change_stage",
     "created_at": "2026-07-18T17:14:21.255568+04:00",
