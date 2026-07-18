@@ -75,6 +75,15 @@
         "amount": 50.0,
         "task_text": "1. Tərəzini Sumqayıt ofisdən SARP-a apardım",
         "date": "2026-07-18 11:39:37"
+      },
+      {
+        "task_id": 93547413,
+        "executor": "Rasim Əsgərov",
+        "client": "Rauf Quliyev +0559771186",
+        "task_type": "Quraşdırma",
+        "amount": 60.0,
+        "task_text": "Köşk Zabrat",
+        "date": "2026-07-18 11:40:32"
       }
     ]
   }
