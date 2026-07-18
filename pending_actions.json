@@ -142,7 +142,7 @@
     "id": "0488cb25",
     "type": "assign_executor",
     "created_at": "2026-07-18T03:50:04.614190+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ferid Abbasquliyev",
       "phone": "",
@@ -162,7 +162,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-18T13:48:18.647725+04:00",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "0567370b",
