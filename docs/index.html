@@ -141,14 +141,11 @@
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-create"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-18 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
-                <div class="grid grid-cols-2 gap-2 mb-2">
-                    <button type="button" class="option-card" onclick="sel('deadline','15m',this)">15 dəq</button>
-                    <button type="button" class="option-card" onclick="sel('deadline','1h',this)">1 saat</button>
-                </div>
-                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value; document.querySelectorAll('#screen-create .option-card').forEach(c=>c.classList.remove('selected'));">
+                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
             </div>
             <button id="task-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">🚀 Tapşırığı CRM-ə Göndər</button>
         </div>
@@ -343,7 +340,7 @@ const CURRENT_USER_ID = getUserId();
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
-    'search-phone','task-type-select','task-assignee-select','task-price-input','task-desc','task-deadline-custom',
+    'search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
     'edit-task-type-select','edit-assignee-select','edit-task-price','edit-task-desc','edit-deadline-custom',
     'note-text-input','complete-note-text','search-phone-flow','deal-customer-name','deal-subtask-text',
     'note-text','note-subtask-text','job-comment'
@@ -417,6 +414,7 @@ function openFlow(f) {
     document.getElementById('task-desc').value = '';
     const dp = document.getElementById('task-deadline-custom'); if(dp) dp.value = '';
     const asel = document.getElementById('task-assignee-select'); if(asel) asel.selectedIndex = 0;
+    const priority = document.getElementById('task-priority'); if(priority) priority.selectedIndex = 0;
     const tsel = document.getElementById('task-type-select'); if(tsel) tsel.selectedIndex = 0;
     if(f === 'close_job') { document.getElementById('job-comment').value = ''; currentEditScreen = 'screen-close-job'; nav('screen-close-job'); }
     else if(f === 'task') { switchTab('tab-create'); }
@@ -478,7 +476,7 @@ function initSessionPersistence() {
     });
 }
 function clearCreateFormState() {
-    ['search-phone','task-type-select','task-assignee-select','task-price-input','task-desc','task-deadline-custom'].forEach(id => {
+    ['search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom'].forEach(id => {
         const el = document.getElementById(id); if(!el) return;
         if(el.tagName === 'SELECT') el.selectedIndex = 0; else el.value = '';
     });
@@ -642,6 +640,8 @@ function submitTask() {
         const tsel = document.getElementById('task-type-select');
         const taskType = gd.task_type || (tsel ? tsel.value : '1');
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType};
+        const prioritySelect = document.getElementById('task-priority');
+        if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
         const priceInput = document.getElementById('task-price-input');
         if(priceInput && priceInput.value) newPayload.price = priceInput.value;
         doFetch(newPayload, 'task-submit-btn');
@@ -739,7 +739,7 @@ function renderPendingActions() {
         card.addEventListener('touchmove', (e) => { if(!swiping) return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#dbeafe'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
             swiping = false;
-            if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; const rej = (Array.isArray(action.options)?action.options:[]).find(o=>o==='Rədd et'||o==='Ləğv et')||'Rədd et'; setTimeout(()=>{resolvePendingAction(action.id,rej,card);},300); }
+            if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{deletePendingAction(action.id,card);},300); }
             else if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{openSubtaskFromPending(action);},300); }
             else { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
         });
@@ -764,6 +764,7 @@ function renderPendingActions() {
         if(data.note) appendPendingDetail(details, '💬', 'Qeyd', data.note);
         appendPendingDetail(details, '📞', 'Telefon', data.phone);
         if(data.task_type_name) appendPendingDetail(details, '📌', 'Növ', data.task_type_name);
+        if(data.task_price) appendPendingDetail(details, '💰', 'Məbləğ', `${data.task_price} AZN`);
         if(data.sender_name) appendPendingDetail(details, '👷', 'İcraçı', data.sender_name);
         if(data.assignee_name_raw) appendPendingDetail(details, '➡️', 'Yeni icraçı', data.assignee_name_raw);
         appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));
@@ -858,6 +859,29 @@ async function loadPendingActions(showFeedback = false) {
         }
         if(showFeedback) toast('Gözləyən sorğular yüklənmədi', true);
         return false;
+    }
+}
+
+async function deletePendingAction(actionId, card) {
+    if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
+    const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
+    buttons.forEach(item => { item.disabled = true; });
+    try {
+        const response = await fetch(API_BASE + '/api/pending_actions/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId}),
+        });
+        const payload = await response.json();
+        if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Sorğu silinmədi');
+        pendingActions = pendingActions.filter(action => String(action.id) !== String(actionId));
+        if(card) card.remove();
+        if(!pendingActions.length) renderPendingActions();
+        toast('Sorğu silindi.', false);
+    } catch(error) {
+        toast(error.message || 'Sorğu silinmədi', true);
+        buttons.forEach(item => { item.disabled = false; });
+        if(card) { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
     }
 }
 
@@ -1013,6 +1037,12 @@ function renderNotifications() {
         else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
         const priceMatch = (t.desc || t.text || '').match(/\[[^:\]]+:(\d+)\]/);
         const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
+        const priorityTags = {
+            urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
+            medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
+            low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
+        };
+        const priorityTag = priorityTags[t.priority] || '';
         card.innerHTML = `
             ${header}
             <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
@@ -1024,7 +1054,7 @@ function renderNotifications() {
             </div>
             <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
-                ${priceTag}
+                <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
             </div>
             <div class="mt-2 pt-2 border-t border-gray-100" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="text-white px-4 py-1.5 rounded-lg text-[10px] font-bold" style="background:#374151;">➕ Alt tapşırıq</button></div>`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };

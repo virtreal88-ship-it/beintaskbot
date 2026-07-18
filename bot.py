@@ -148,6 +148,8 @@ def is_admin(chat_id: int) -> bool:
 
 
 _PENDING_ACTIONS_FILE = "pending_actions.json"
+_TASK_PRIORITIES_FILE = "task_priorities.json"
+_VALID_TASK_PRIORITIES = {"urgent", "medium", "low"}
 _PENDING_EXECUTOR_NAMES = {
     "Şamil": "Şamil Əliyev",
     "Soltan": "Soltan Abbasov",
@@ -181,6 +183,46 @@ def save_pending_action(action_type: str, data: dict, options: list) -> dict:
     if not write_json(_PENDING_ACTIONS_FILE, actions[:500]):
         logger.error("Failed to persist pending action %s", action["id"])
     return action
+
+
+def delete_pending_action(action_id: str) -> bool:
+    """Remove a persisted pending action entirely without resolving it."""
+    actions = get_pending_actions()
+    remaining = [action for action in actions if str(action.get("id")) != str(action_id)]
+    if len(remaining) == len(actions):
+        return False
+    if not write_json(_PENDING_ACTIONS_FILE, remaining):
+        logger.error("Failed to delete pending action %s", action_id)
+        return False
+    return True
+
+
+def _normalize_task_priority(priority: str) -> str:
+    normalized = str(priority or "").strip().lower()
+    return normalized if normalized in _VALID_TASK_PRIORITIES else ""
+
+
+def save_task_priority(create_result: dict, priority: str) -> bool:
+    """Persist priority for a task returned by Kommo's create-task endpoint."""
+    normalized = _normalize_task_priority(priority)
+    if not normalized:
+        return True
+    try:
+        task_id = create_result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
+    except (AttributeError, IndexError, TypeError):
+        task_id = None
+    if not task_id:
+        logger.error("Cannot persist task priority: created task id is missing")
+        return False
+    priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+    if not isinstance(priorities, dict):
+        logger.warning("task_priorities.json is not a dict; resetting invalid content")
+        priorities = {}
+    priorities[str(task_id)] = normalized
+    if not write_json(_TASK_PRIORITIES_FILE, priorities):
+        logger.error("Failed to persist priority for task %s", task_id)
+        return False
+    return True
 
 
 def mark_pending_action_resolved(
@@ -1101,11 +1143,41 @@ def execute_tool_search_contact(phone: str) -> str:
         results.append(format_contact_info(full_contact, notes, tasks))
     return "\n\n".join(results)
 
+def create_lead_for_contact(contact_id: int, contact_name: str) -> int | None:
+    """Create a pipeline deal linked to a contact and return the new lead ID."""
+    payload = [{
+        "name": contact_name or str(contact_id),
+        "_embedded": {"contacts": [{"id": int(contact_id)}]},
+        "pipeline_id": PIPELINE_ID,
+    }]
+    headers = {
+        "Authorization": f"Bearer {KOMMO_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.post(
+            f"https://texnikidestek50.kommo.com/api/v4/leads",
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
+        if response.status_code in (200, 201):
+            return response.json().get("_embedded", {}).get("leads", [{}])[0].get("id")
+        logger.error(
+            "Create lead for contact %s failed: status=%s body=%s",
+            contact_id,
+            response.status_code,
+            response.text[:500],
+        )
+    except Exception as exc:
+        logger.error("Create lead for contact %s error: %s", contact_id, exc)
+    return None
+
+
 def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None) -> dict:
-    """Returns dict with result info. If deadline not specified, returns pending state."""
+    """Resolve the task entity, creating a contact and/or linked deal when needed."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
-        # Auto-create contact + lead
         result = create_contact_kommo(phone, phone)
         if not result:
             return {"success": False, "message": f"❌ '{phone}' kontakt yaradıla bilmədi."}
@@ -1113,31 +1185,26 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         contact_id = contact_data.get("id")
         if not contact_id:
             return {"success": False, "message": f"❌ '{phone}' kontakt yaradıla bilmədi."}
-        # Create a lead for this contact
-        lead_payload = [{
-            "name": f"Sövdələşmə - {phone}",
-            "pipeline_id": PIPELINE_ID,
-            "status_id": STAGES["danisiqlar"],
-            "responsible_user_id": 10932455,
-            "_embedded": {"contacts": [{"id": contact_id}]}
-        }]
-        try:
-            resp = requests.post(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, json=lead_payload, timeout=15)
-            lead_result = resp.json() if resp.status_code in (200, 201) else None
-        except:
-            lead_result = None
-        contacts = [{"id": contact_id, "name": phone}]
-        logger.info(f"Auto-created contact {contact_id} + lead for phone {phone}")
+        contacts = [{"id": contact_id, "name": contact_data.get("name") or phone}]
+        logger.info("Auto-created contact %s for phone %s", contact_id, phone)
+
     contact = contacts[0]
-    contact_id = contact["id"]
-    contact_name = contact.get("name", "Adsız")
-    full_c = get_contact_details(contact_id)
-    leads = (full_c or {}).get("_embedded", {}).get("leads", [])
-    lead_id = leads[0]["id"] if leads else None
-    entity_id = lead_id or contact_id
-    entity_type = "leads" if lead_id else "contacts"
-    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else f"{KOMMO_BASE_URL}/contacts/detail/{contact_id}"
-    # Resolve assignee
+    contact_id = int(contact["id"])
+    contact_name = contact.get("name") or "Adsız"
+    full_contact = get_contact_details(contact_id)
+    if full_contact:
+        contact_name = full_contact.get("name") or contact_name
+    leads = (full_contact or {}).get("_embedded", {}).get("leads", [])
+    lead_id = leads[0].get("id") if leads else None
+    if not lead_id:
+        lead_id = create_lead_for_contact(contact_id, contact_name)
+        if not lead_id:
+            return {"success": False, "message": "❌ Müştəri üçün sövdələşmə yaradıla bilmədi."}
+        logger.info("Auto-created lead %s for contact %s", lead_id, contact_id)
+
+    entity_id = int(lead_id)
+    entity_type = "leads"
+    link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
     assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
     assignee_id = assignee_map.get(assign_to, 10932455)
     assignee_name = KOMMO_USERS.get(assignee_id, "Admin")
@@ -3546,6 +3613,22 @@ async def handle_resolve_action(request: web.Request) -> web.Response:
     return web.json_response({"success": success, "message": message})
 
 
+async def handle_delete_pending_action(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "message": "Invalid JSON"}, status=400)
+    chat_id = data.get("chat_id") or request.headers.get("X-TG-User-ID", "")
+    if not is_admin(chat_id):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    action_id = data.get("id")
+    if not action_id:
+        return web.json_response({"success": False, "message": "Sorğu ID-si tələb olunur."}, status=400)
+    if not delete_pending_action(str(action_id)):
+        return web.json_response({"success": False, "message": "Sorğu tapılmadı və ya silinmədi."}, status=404)
+    return web.json_response({"success": True})
+
+
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
     try:
@@ -3728,6 +3811,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "message": result, "link": link})
         elif action == "task":
             text = data.get("text", "")
+            priority = _normalize_task_priority(data.get("priority", ""))
             assignee_name_raw = (data.get("assigneeName") or data.get("assignee_name") or "").strip()
             creator_name = get_employee_name_by_chat_id(chat_id, "")
             # A shared Sahə Meneceri Kommo identity must never hide the real
@@ -3792,7 +3876,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
                     "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
                     "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
-                    "creator_chat_id": chat_id
+                    "creator_chat_id": chat_id, "priority": priority
                 }
                 _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
@@ -3814,6 +3898,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id)
             logger.info(f"Create task result: {res}")
             if res:
+                save_task_priority(res, priority)
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
@@ -4267,12 +4352,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     if link:
                         completion_message += f"\n🔗 {link}"
 
+                    raw_task_text = task_data.get("text", "").strip()
+                    task_price_match = re.search(r":(\d+)\]", raw_task_text)
                     callback_key = str(uuid.uuid4())[:8]
                     if _bot_app:
                         _bot_app.bot_data.setdefault("pending_stage_change", {})[callback_key] = {
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "employee_tg_id": int(chat_id),
+                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
+                            "task_price": task_price_match.group(1) if task_price_match else "",
                         }
                     kb_json = {"inline_keyboard": [[{"text": "📋 Mərhələni dəyiş", "callback_data": f"chgstg-{callback_key}"}]]}
                     try:
@@ -4288,7 +4377,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "sender_name": completion_sender,
-                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", task_data.get("text", "").strip()) or "—",
+                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
+                            "task_price": task_price_match.group(1) if task_price_match else "",
                             "note": note_text or "",
                             "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
                             "link": link,
@@ -4437,6 +4527,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         tasks_list = []
         fetch_ids = [15532668] if kommo_user_id != 10932455 else [10932455, 15532668]
         raw_tasks = []
+        task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+        if not isinstance(task_priorities, dict):
+            task_priorities = {}
         try:
             for fid in fetch_ids:
                 params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fid, "limit": 50}
@@ -4583,7 +4676,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "complete_till": t.get("complete_till", 0),
                         "task_type_name": task_type_name,
                         "task_type_id": t.get("task_type_id", 1),
-                        "last_note": last_note
+                        "last_note": last_note,
+                        "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), ""))
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
@@ -4667,11 +4761,13 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
+    app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)
     app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
     app_web.router.add_get("/api/balance", handle_api_balance)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
@@ -4886,6 +4982,8 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
         "lead_id": lead_id,
         "task_id": pending.get("task_id"),
         "sender_name": get_employee_name_by_chat_id(pending.get("employee_tg_id"), ""),
+        "task_text": pending.get("task_text", "—"),
+        "task_price": pending.get("task_price", ""),
         "description": "Tapşırıq tamamlandıqdan sonra yeni mərhələni seçin.",
         "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         "callback_key": callback_key,
@@ -5122,6 +5220,7 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
                       responsible_user_id=assignee_id, entity_type=pending["entity_type"],
                       task_type_id=pending.get("task_type_id", 1))
     if res:
+        save_task_priority(res, pending.get("priority", ""))
         deadline_str = datetime.fromtimestamp(pending["deadline_ts"], tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')
         try:
             await query.edit_message_text(f"✅ Tapşırıq təsdiq edildi və yaradıldı!\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n📝 {pending['text']}\n⏰ {deadline_str}")
