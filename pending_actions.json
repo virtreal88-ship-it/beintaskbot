@@ -37,7 +37,7 @@
     "id": "385549ba",
     "type": "change_stage",
     "created_at": "2026-07-18T15:40:46.413831+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "0773324522",
       "phone": "0773324522",
@@ -63,7 +63,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-18T16:14:20.284733+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "ff565a1a",
