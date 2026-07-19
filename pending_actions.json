@@ -3,7 +3,7 @@
     "id": "ea481195",
     "type": "change_stage",
     "created_at": "2026-07-19T19:11:35.199718+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Vidadi Mammmadov",
       "phone": "+994552209800",
@@ -30,7 +30,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T19:12:15.842574+04:00",
+    "resolved_choice": "daxili müzakirə"
   },
   {
     "id": "f526d891",
