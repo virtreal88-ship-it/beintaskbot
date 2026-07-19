@@ -1,5 +1,44 @@
 [
   {
+    "id": "4af0aaf0",
+    "type": "reassign_task",
+    "created_at": "2026-07-19T18:16:38.470702+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Test müştəri",
+      "phone": "",
+      "lead_id": 76935135,
+      "task_id": 93551939,
+      "task_text": "[Texniki tapşırıq] [Texniki tapşırıq] İlk tapşırıq",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Texniki tapşırıq → Nizami Qasımov",
+      "sender_name": "Texniki tapşırıq",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": "stop",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76935135",
+      "conf_key": "4270e22e",
+      "update_data": {
+        "text": "[Nizami Qasımov] [Texniki tapşırıq] [Texniki tapşırıq] İlk tapşırıq",
+        "responsible_user_id": 10932455,
+        "task_type_id": 4232112,
+        "complete_till": 1784472840
+      },
+      "creator_chat_id": 8835096199,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2900
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "472448ef",
     "type": "reassign_task",
     "created_at": "2026-07-19T18:15:07.981161+04:00",
