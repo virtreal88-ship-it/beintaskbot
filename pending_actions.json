@@ -1,5 +1,38 @@
 [
   {
+    "id": "f0d80a70",
+    "type": "change_stage",
+    "created_at": "2026-07-19T14:18:29.540427+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "+994 70 391 38 18",
+      "phone": "+994 70 391 38 18",
+      "lead_id": 76881787,
+      "task_id": 93506965,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Bolmarket2 mağazasında skaner problemi var. Yeni 2 ədəd skaner (9620c və syble)göndərilib lakin göndərilən skanerlər, bəzi barkodları (Siqaret,saqqız,zajiqalka) oxumur.problemi təyin edib həll etmək lazımdır.",
+      "task_price": "",
+      "note": "Bolmarketə bəxtiyardan rw21c skaneri göndərdim. Ondan əvvəl göndərdiyim syble (acomdan) və 9620c (bəxtiyardan) işləmədi. Bəzi bar kodları oxumurdu.  Bu skaner ilə problem həll oldu. Digər skanerləri taksiyə qoyub geri göndərdilər 28 may unisetə",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76881787",
+      "callback_key": "e1aba3a0"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "32a44ae5",
     "type": "assign_executor",
     "created_at": "2026-07-19T13:45:03.216371+04:00",
