@@ -1,5 +1,31 @@
 [
   {
+    "id": "3f0efbc9",
+    "type": "assign_executor",
+    "created_at": "2026-07-19T16:30:24.171165+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Smell_Parfum",
+      "phone": "",
+      "lead_id": 76934609,
+      "stage_name": "yeni sifariş",
+      "stage_key": "yeni_sifaris",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76934609",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": null
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "311db1b3",
     "type": "change_stage",
     "created_at": "2026-07-19T16:15:53.542211+04:00",
