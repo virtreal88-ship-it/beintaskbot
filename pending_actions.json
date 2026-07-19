@@ -3,7 +3,7 @@
     "id": "96b40df0",
     "type": "change_stage",
     "created_at": "2026-07-19T17:12:54.397431+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Smell_Parfum",
       "phone": "—",
@@ -30,7 +30,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T17:13:12.812300+04:00",
+    "resolved_choice": "yeni sifariş"
   },
   {
     "id": "583b0ecc",
