@@ -460,5 +460,15 @@
     "completed_before_deadline": true,
     "delay_reason": "",
     "completed_at": "2026-07-19 10:18:26"
+  },
+  "7962757442_93547127": {
+    "sessions": [
+      {
+        "start_time": "2026-07-19 11:48:49",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
