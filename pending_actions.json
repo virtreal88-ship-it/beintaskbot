@@ -1,5 +1,44 @@
 [
   {
+    "id": "c6d12959",
+    "type": "reassign_task",
+    "created_at": "2026-07-19T14:51:46.477866+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "bosstravel.az Fərid Bəy",
+      "phone": "",
+      "lead_id": 76934071,
+      "task_id": 93551273,
+      "task_text": "Müştəriyə təqdimat keçirmək",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Rasim Əsgərov → Nizami Qasımov",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": ".",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76934071",
+      "conf_key": "e070e06b",
+      "update_data": {
+        "text": "[Nizami Qasımov] Müştəriyə təqdimat keçirmək",
+        "responsible_user_id": 10932455,
+        "task_type_id": 1,
+        "complete_till": 1784461920
+      },
+      "creator_chat_id": 7920785774,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2863
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "7ab7ce00",
     "type": "assign_executor",
     "created_at": "2026-07-19T14:45:03.074970+04:00",
