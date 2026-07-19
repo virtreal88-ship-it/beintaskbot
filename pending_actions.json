@@ -67,7 +67,7 @@
     "id": "311db1b3",
     "type": "change_stage",
     "created_at": "2026-07-19T16:15:53.542211+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Fərid bəy",
       "phone": "+0556200757",
@@ -94,7 +94,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T16:57:45.661711+04:00",
+    "resolved_choice": "Təqdimat"
   },
   {
     "id": "c3dea190",
