@@ -1,5 +1,31 @@
 [
   {
+    "id": "90b6a1d6",
+    "type": "assign_executor",
+    "created_at": "2026-07-20T00:35:03.527380+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Telman Şirinov",
+      "phone": "",
+      "lead_id": 76936717,
+      "stage_name": "Təqdimat",
+      "stage_key": "teqdimat",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76936717",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2923
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "ae46813c",
     "type": "assign_executor",
     "created_at": "2026-07-20T00:15:03.489078+04:00",
