@@ -124,7 +124,7 @@
     "id": "c3dea190",
     "type": "reassign_task",
     "created_at": "2026-07-19T16:15:35.672261+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "bosstravel.az Fərid Bəy",
       "phone": "",
