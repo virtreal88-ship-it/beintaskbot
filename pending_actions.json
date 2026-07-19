@@ -1,5 +1,38 @@
 [
   {
+    "id": "7d8d277f",
+    "type": "change_stage",
+    "created_at": "2026-07-19T19:22:12.825505+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": ".",
+      "phone": "+994993999299",
+      "lead_id": 76842497,
+      "task_id": 93507023,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Online quraşdırma və təqdimat et . Test edəcək bir müddət.  Real işə başlayanda 150 AZN ödəniş demişəm. Danışıq whatsapp üzərində olub. Aylıq 50 AZN. Qoşulanda ilk ay ilə birgə ödənişi götür.\n--------------------------\nHesab açıldı, təlimat keçildi və 14 günlük sınaq müddəti üçün müştəriyə təhvil verildi.",
+      "task_price": "",
+      "note": "Hesab açıldı, təlimat keçildi və 14\n\ngünlük sınaq müddəti üçün müştəriyə təhvil verildi.",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76842497",
+      "callback_key": "6d32fdf4"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b1fab162",
     "type": "assign_executor",
     "created_at": "2026-07-19T19:20:11.107424+04:00",
