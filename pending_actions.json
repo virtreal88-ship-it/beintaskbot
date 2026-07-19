@@ -94,7 +94,7 @@
     "id": "d195fb30",
     "type": "change_stage",
     "created_at": "2026-07-19T10:38:51.771741+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "+994 55 855 55 00",
       "phone": "+994 55 855 55 00",
@@ -121,7 +121,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T14:41:58.368584+04:00",
+    "resolved_choice": "Arxiv"
   },
   {
     "id": "df11eeb7",
