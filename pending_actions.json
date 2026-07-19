@@ -1,5 +1,44 @@
 [
   {
+    "id": "59715e86",
+    "type": "reassign_task",
+    "created_at": "2026-07-19T18:06:38.326609+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Test müştəri",
+      "phone": "",
+      "lead_id": 76935135,
+      "task_id": 93551939,
+      "task_text": "İlk tapşırıq",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Soltan Abbasov → Nizami Qasımov",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": "Sən etməlisən",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76935135",
+      "conf_key": "7160b71b",
+      "update_data": {
+        "text": "[Nizami Qasımov] İlk tapşırıq",
+        "responsible_user_id": 10932455,
+        "task_type_id": 4232112,
+        "complete_till": 1784472840
+      },
+      "creator_chat_id": 7262243946,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2892
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "073c7928",
     "type": "reassign_task",
     "created_at": "2026-07-19T17:58:07.490813+04:00",
