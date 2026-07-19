@@ -1,5 +1,31 @@
 [
   {
+    "id": "9ba267f0",
+    "type": "assign_executor",
+    "created_at": "2026-07-19T14:25:02.806585+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Surayye",
+      "phone": "+994516689801",
+      "lead_id": 76933963,
+      "stage_name": "Təqdimat",
+      "stage_key": "teqdimat",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76933963",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2858
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "f0d80a70",
     "type": "change_stage",
     "created_at": "2026-07-19T14:18:29.540427+04:00",
