@@ -3,7 +3,7 @@
     "id": "f0d80a70",
     "type": "change_stage",
     "created_at": "2026-07-19T14:18:29.540427+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "+994 70 391 38 18",
       "phone": "+994 70 391 38 18",
@@ -30,7 +30,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T14:24:03.620928+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "32a44ae5",
