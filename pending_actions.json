@@ -1,5 +1,31 @@
 [
   {
+    "id": "0733dc73",
+    "type": "assign_executor",
+    "created_at": "2026-07-19T22:05:04.075562+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Saleh Farug",
+      "phone": "",
+      "lead_id": 76936093,
+      "stage_name": "Təqdimat",
+      "stage_key": "teqdimat",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76936093",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2917
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "fefd9284",
     "type": "assign_executor",
     "created_at": "2026-07-19T21:45:03.462302+04:00",
