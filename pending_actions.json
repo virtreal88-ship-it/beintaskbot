@@ -181,39 +181,6 @@
     ]
   },
   {
-    "id": "eb1a852e",
-    "type": "change_stage",
-    "created_at": "2026-07-19T09:43:52.739591+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "Sakit Əlihəsənov Müştəri Pro",
-      "phone": "Sakit Əlihəsənov Müştəri Pro",
-      "lead_id": null,
-      "task_id": 93523867,
-      "sender_name": "Rasim Əsgərov",
-      "task_text": "Təqdimat | Dine",
-      "task_price": "",
-      "note": "Əlaqə saxlaya bilmədik",
-      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
-      "link": "",
-      "callback_key": "6003f752"
-    },
-    "options": [
-      "Nerazobrannoye",
-      "danışıqlar",
-      "Qiymət təklifi",
-      "Təqdimat",
-      "Təqdimat olundu",
-      "yeni sifariş",
-      "görüş",
-      "daxili müzakirə",
-      "quraşdırma",
-      "Arxiv",
-      "uğurlu sifariş",
-      "imtina olundu"
-    ]
-  },
-  {
     "id": "d3abf685",
     "type": "change_stage",
     "created_at": "2026-07-18T19:05:50.183540+04:00",
