@@ -83,7 +83,7 @@
     "id": "59715e86",
     "type": "reassign_task",
     "created_at": "2026-07-19T18:06:38.326609+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Test müştəri",
       "phone": "",
@@ -116,7 +116,9 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-19T18:15:23.797348+04:00",
+    "resolved_choice": "Texniki"
   },
   {
     "id": "073c7928",
