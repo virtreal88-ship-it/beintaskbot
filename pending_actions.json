@@ -1,5 +1,38 @@
 [
   {
+    "id": "d195fb30",
+    "type": "change_stage",
+    "created_at": "2026-07-19T10:38:51.771741+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "+994 55 855 55 00",
+      "phone": "+994 55 855 55 00",
+      "lead_id": 76897483,
+      "task_id": 93522895,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Əli Mirəliyev. Fast food şəbəkəsi işlədir. Mövcud proqramdan narazıdır. Çətindir. Hazırda xəstəxanadadır , online təqdimat etmək lazımdır. Zəng elə vaxtı danış. Təqdimatı yaxşı elə\n--------------------------------\nŞamildən qeyd: müştəri ilə əlaqə saxladım. Gecə saatlarında boş vaxtı olacağını və məni yağacağı dedi",
+      "task_price": "",
+      "note": "Müştəri ilə dəfələrlə əlaqə saxlamağa cəhd elədim lakin telefonu götürmür",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76897483",
+      "callback_key": "2a5d87a1"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "df11eeb7",
     "type": "change_stage",
     "created_at": "2026-07-19T10:38:34.966373+04:00",
