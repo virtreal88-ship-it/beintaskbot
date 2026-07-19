@@ -1,31 +1,5 @@
 [
   {
-    "id": "9722fa5a",
-    "type": "assign_executor",
-    "created_at": "2026-07-19T14:05:03.438963+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "bosstravel.az Fərid Bəy",
-      "phone": "+994556200757",
-      "lead_id": 76934071,
-      "stage_name": "Təqdimat",
-      "stage_key": "teqdimat",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76934071",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 2850
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "32a44ae5",
     "type": "assign_executor",
     "created_at": "2026-07-19T13:45:03.216371+04:00",
