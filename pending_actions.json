@@ -127,7 +127,7 @@
     "id": "df11eeb7",
     "type": "change_stage",
     "created_at": "2026-07-19T10:38:34.966373+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Panah Yusibov",
       "phone": "+994707367036",
@@ -154,7 +154,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T14:41:45.420718+04:00",
+    "resolved_choice": "Arxiv"
   },
   {
     "id": "68ddd343",
