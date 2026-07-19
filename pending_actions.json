@@ -3,7 +3,7 @@
     "id": "34aae7aa",
     "type": "change_stage",
     "created_at": "2026-07-19T17:47:30.051325+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Qoca_8_0_0",
       "phone": "+994502072240",
@@ -30,7 +30,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T17:48:18.230658+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "96b40df0",
