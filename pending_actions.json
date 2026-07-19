@@ -3,7 +3,7 @@
     "id": "c81baaf2",
     "type": "change_stage",
     "created_at": "2026-07-19T18:22:53.577465+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Test müştəri",
       "phone": "0502072241",
@@ -30,7 +30,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T18:23:34.332166+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "4af0aaf0",
