@@ -3,7 +3,7 @@
     "id": "583b0ecc",
     "type": "assign_executor",
     "created_at": "2026-07-19T16:55:18.905035+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Smell_Parfum",
       "phone": "",
@@ -23,7 +23,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-19T16:56:42.625894+04:00",
+    "resolved_choice": "Özüm"
   },
   {
     "id": "84321105",
