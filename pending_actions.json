@@ -1,5 +1,38 @@
 [
   {
+    "id": "68ddd343",
+    "type": "change_stage",
+    "created_at": "2026-07-19T10:37:46.165374+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Gold parfum",
+      "phone": "0552000553",
+      "lead_id": 76930253,
+      "task_id": 93548717,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Tiktok danışığmıza bax öncə",
+      "task_price": "",
+      "note": "Təqdimat olundu. Müştəri həm quraşdırma həm sayım istəyir. Sayım olmayacaqsa proqramı istəmir. Məndə sayım mümkündür dedim. Uyğun olan vaxtda əlaqə saxlayacaq quraşdırma üçün",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76930253",
+      "callback_key": "70753dcb"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "eb1a852e",
     "type": "change_stage",
     "created_at": "2026-07-19T09:43:52.739591+04:00",
