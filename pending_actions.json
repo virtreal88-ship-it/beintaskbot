@@ -1,5 +1,38 @@
 [
   {
+    "id": "a60dd924",
+    "type": "change_stage",
+    "created_at": "2026-07-19T19:12:41.067216+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Fuad Qanberli",
+      "phone": "+994504111951",
+      "lead_id": 76871051,
+      "task_id": 93523737,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Qiymət təklifini göndər",
+      "task_price": "",
+      "note": "Qiymət təklifi verildi",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76871051",
+      "callback_key": "b7ad8d52"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ea481195",
     "type": "change_stage",
     "created_at": "2026-07-19T19:11:35.199718+04:00",
