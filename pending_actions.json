@@ -1,5 +1,38 @@
 [
   {
+    "id": "ea481195",
+    "type": "change_stage",
+    "created_at": "2026-07-19T19:11:35.199718+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Vidadi Mammmadov",
+      "phone": "+994552209800",
+      "lead_id": 72229221,
+      "task_id": 93512527,
+      "sender_name": "Nizami Qasımov",
+      "task_text": "Müştəri qoşulmaq istəyir lakin bəzi tələbləri var. Müzakirə etməliyik",
+      "task_price": "",
+      "note": "Qiymət təklifi verildi",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/72229221",
+      "callback_key": "a1b2f914"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f526d891",
     "type": "assign_executor",
     "created_at": "2026-07-19T19:00:05.375742+04:00",
