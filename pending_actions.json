@@ -3,7 +3,7 @@
     "id": "32a44ae5",
     "type": "assign_executor",
     "created_at": "2026-07-19T13:45:03.216371+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "bosstravel.az Fərid Bəy",
       "phone": "+994556200757",
@@ -23,7 +23,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-19T13:52:49.075627+04:00",
+    "resolved_choice": "Rasim"
   },
   {
     "id": "846b7281",
