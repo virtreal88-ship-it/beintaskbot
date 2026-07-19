@@ -3,7 +3,7 @@
     "id": "186b09b7",
     "type": "reassign_task",
     "created_at": "2026-07-19T18:07:47.948532+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Test müştəri",
       "phone": "",
@@ -36,7 +36,9 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-19T18:13:22.384382+04:00",
+    "resolved_choice": "Texniki"
   },
   {
     "id": "59715e86",
