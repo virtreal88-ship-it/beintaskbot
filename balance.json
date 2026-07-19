@@ -272,8 +272,30 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-07-18 15:05:48"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -60.0,
+        "status": "confirmed",
+        "task_text": "Pul qabı",
+        "result_text": "Pul qabı",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-19 08:04:25"
       }
     ],
-    "balance": 0.5
+    "balance": -59.5
+  },
+  "7329891614": {
+    "transactions": [],
+    "balance": 0
+  },
+  "7962757442": {
+    "transactions": [],
+    "balance": 0
   }
 }
