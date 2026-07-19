@@ -1,5 +1,31 @@
 [
   {
+    "id": "d567b9d5",
+    "type": "assign_executor",
+    "created_at": "2026-07-19T19:00:07.082378+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": ".",
+      "phone": "+994993999299",
+      "lead_id": 76842497,
+      "stage_name": "quraşdırma",
+      "stage_key": "qurashdirma",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76842497",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2905
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "f526d891",
     "type": "assign_executor",
     "created_at": "2026-07-19T19:00:05.375742+04:00",
