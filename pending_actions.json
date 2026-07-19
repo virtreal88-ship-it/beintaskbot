@@ -1,5 +1,31 @@
 [
   {
+    "id": "b1fab162",
+    "type": "assign_executor",
+    "created_at": "2026-07-19T19:20:11.107424+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Fuad Qanberli",
+      "phone": "+994504111951",
+      "lead_id": 76871051,
+      "stage_name": "quraşdırma",
+      "stage_key": "qurashdirma",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76871051",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 2911
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "fa77da2b",
     "type": "assign_executor",
     "created_at": "2026-07-19T19:20:09.776425+04:00",
