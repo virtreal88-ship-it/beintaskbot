@@ -160,7 +160,7 @@
     "id": "68ddd343",
     "type": "change_stage",
     "created_at": "2026-07-19T10:37:46.165374+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Gold parfum",
       "phone": "0552000553",
@@ -187,7 +187,9 @@
       "Arxiv",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-19T14:41:30.483782+04:00",
+    "resolved_choice": "Təqdimat olundu"
   },
   {
     "id": "d3abf685",
