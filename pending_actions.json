@@ -70,32 +70,6 @@
     "resolved_choice": "daxili müzakirə"
   },
   {
-    "id": "ea65b471",
-    "type": "assign_executor",
-    "created_at": "2026-07-19T18:57:53.205042+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": ".",
-      "phone": "+994993999299",
-      "lead_id": 76842497,
-      "stage_name": "quraşdırma",
-      "stage_key": "qurashdirma",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76842497",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 2903
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "e007f7bd",
     "type": "assign_executor",
     "created_at": "2026-07-19T18:55:47.014066+04:00",
