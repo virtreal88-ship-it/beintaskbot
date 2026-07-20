@@ -294,7 +294,7 @@
         "phone": "+994502280265",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Hazır zoo mağaza bazası verilməlidir. Öncədən miqrasiya edin.",
         "result_text": "- avadanlıqlar sazlandı\n- təlimatlar keçildi\n- məhsullar inteqrasiya edildi\n\nQeyd: sayım ediləcək. Tam sayım qurtarana kimi mən online kömək edəcəm in şəə Allah",
         "kpi": 0,
@@ -302,7 +302,7 @@
         "date": "2026-07-20 17:23:01"
       }
     ],
-    "balance": -59.5
+    "balance": 40.5
   },
   "7329891614": {
     "transactions": [],
