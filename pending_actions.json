@@ -1,5 +1,38 @@
 [
   {
+    "id": "a038da5b",
+    "type": "change_stage",
+    "created_at": "2026-07-20T10:34:32.588529+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994503754040",
+      "phone": "+994503754040",
+      "lead_id": 76933931,
+      "task_id": 93551267,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Ridvantekstil Tərəf-müqabilin üzləşmə aktında sənədlərin içini də görmək istəyir (hətta əlavə ödəniş etmək şərtilə). Məs. pərakəndə satış-50 azn yerinə /Pərakəndə satış- Adapter-50 azn kimi və s. olsun",
+      "task_price": "",
+      "note": "Task açdım,",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76933931",
+      "callback_key": "29d32462"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e930a324",
     "type": "reassign_task",
     "created_at": "2026-07-20T10:15:16.448955+04:00",
