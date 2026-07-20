@@ -1,5 +1,38 @@
 [
   {
+    "id": "8e724f43",
+    "type": "change_stage",
+    "created_at": "2026-07-20T15:05:11.666378+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Telman Şirinov",
+      "phone": "—",
+      "lead_id": 76936717,
+      "task_id": 93555571,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Müştəriyə təqdimat keçirmək",
+      "task_price": "",
+      "note": "Qiyməti soruşdu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76936717",
+      "callback_key": "52ac0073"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b18f93e6",
     "type": "change_stage",
     "created_at": "2026-07-20T11:16:43.668639+04:00",
