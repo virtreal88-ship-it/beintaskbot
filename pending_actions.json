@@ -3,7 +3,7 @@
     "id": "dc278d85",
     "type": "change_stage",
     "created_at": "2026-07-20T18:33:49.404841+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Elnur izabel qarcia",
       "phone": "+994552118230",
@@ -30,7 +30,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-20T18:35:43.723868+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "5e5dba83",
