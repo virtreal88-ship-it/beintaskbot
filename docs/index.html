@@ -809,62 +809,26 @@ function renderPendingActions() {
             card.appendChild(kpiRow);
         }
 
-        const options = Array.isArray(action.options) ? action.options : [];
+        // Simple confirm button only
         const controls = document.createElement('div');
-        controls.className = 'space-y-2';
-        const rejectOption = options.find(o => o === 'R\u0259dd et' || o === 'L\u0259\u011fv et');
-        const approveOption = options.find(o => o === 'T\u0259sdiq et');
-        const executorOptions = options.filter(o => o !== 'R\u0259dd et' && o !== 'L\u0259\u011fv et' && o !== 'T\u0259sdiq et');
-        if(executorOptions.length > 0 || approveOption) {
-            const select = document.createElement('select');
-            select.className = 'w-full bg-slate-50 border border-gray-200 rounded-xl py-2.5 px-3 text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300';
-            select.id = 'pending-select-' + action.id;
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'Se\u00e7im edin...';
-            placeholder.disabled = true;
-            placeholder.selected = true;
-            select.appendChild(placeholder);
-            if(approveOption) {
-                const opt = document.createElement('option');
-                opt.value = approveOption;
-                opt.textContent = '\u2705 ' + approveOption;
-                select.appendChild(opt);
-            }
-            executorOptions.forEach(choice => {
-                const opt = document.createElement('option');
-                opt.value = choice;
-                opt.textContent = choice;
-                select.appendChild(opt);
-            });
-            controls.appendChild(select);
-            const btnRow = document.createElement('div');
-            btnRow.className = 'flex gap-2';
-            const confirmBtn = document.createElement('button');
-            confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-            confirmBtn.textContent = 'T\u0259sdiq et';
-            confirmBtn.addEventListener('click', () => {
-                const selected = select.value;
-                if(!selected) { toast('Se\u00e7im edin!', true); return; }
-                resolvePendingAction(action.id, selected, confirmBtn);
-            });
-            btnRow.appendChild(confirmBtn);
-            if(rejectOption) {
-                const rejectBtn = document.createElement('button');
-                rejectBtn.className = 'flex-1 bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-3 rounded-xl text-[12px]';
-                rejectBtn.textContent = rejectOption;
-                rejectBtn.addEventListener('click', () => resolvePendingAction(action.id, rejectOption, rejectBtn));
-                btnRow.appendChild(rejectBtn);
-            }
-            controls.appendChild(btnRow);
-        } else if(rejectOption) {
-            const rejectBtn = document.createElement('button');
-            rejectBtn.className = 'w-full bg-red-50 text-red-700 border border-red-200 font-bold py-2.5 px-3 rounded-xl text-[12px]';
-            rejectBtn.textContent = rejectOption;
-            rejectBtn.addEventListener('click', () => resolvePendingAction(action.id, rejectOption, rejectBtn));
-            controls.appendChild(rejectBtn);
-        }
-        if(options.length) card.appendChild(controls);
+        controls.className = 'flex gap-2';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        confirmBtn.textContent = 'Təsdiq et';
+        confirmBtn.addEventListener('click', () => {
+            resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
+        });
+        controls.appendChild(confirmBtn);
+        card.appendChild(controls);
+
+        // Long press context menu for pending cards
+        let _pLongTimer = null;
+        card.addEventListener('touchstart', (e) => {
+            if(e.target.tagName==='BUTTON'||e.target.tagName==='SELECT') return;
+            _pLongTimer = setTimeout(() => { showPendingContextMenu(action, e.touches[0].clientX, e.touches[0].clientY); }, 500);
+        });
+        card.addEventListener('touchend', () => { clearTimeout(_pLongTimer); });
+        card.addEventListener('touchmove', () => { clearTimeout(_pLongTimer); });
         container.appendChild(card);
     });
 }
@@ -1703,6 +1667,41 @@ function showTaskContextMenu(taskId, x, y) {
         });
     }, 100);
 }
+function showPendingContextMenu(action, x, y) {
+    const existing = document.getElementById('pending-context-menu');
+    if(existing) existing.remove();
+    const data = action.data || {};
+    const options = Array.isArray(action.options) ? action.options : [];
+    const stageOptions = (action.type === 'change_stage') ? options : Object.values(window._STAGE_NAMES || {});
+    const executorOptions = ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'];
+    const menu = document.createElement('div');
+    menu.id = 'pending-context-menu';
+    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;max-height:70vh;overflow-y:auto;';
+    let html = '';
+    // 1. Mərhələ seç
+    html += '<div style="padding:10px 16px;border-bottom:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#1e293b;">📋 Mərhələ seç</div><div style="font-size:10px;color:#94a3b8;margin-top:2px;">sövdələşmənin mərhələsini dəyiş</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">';
+    stageOptions.forEach(s => {
+        html += `<button onclick="resolvePendingAction('${action.id}','${s}',this); document.getElementById('pending-context-menu').remove();" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;font-weight:600;background:#f8fafc;cursor:pointer;">${s}</button>`;
+    });
+    html += '</div></div>';
+    // 2. İcraçı dəyiş
+    html += '<div style="padding:10px 16px;border-bottom:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#1e293b;">👷 İcraçı dəyiş</div><div style="font-size:10px;color:#94a3b8;margin-top:2px;">tapşırığın icraçısını dəyiş</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">';
+    executorOptions.forEach(e => {
+        html += `<button onclick="resolvePendingAction('${action.id}','${e}',this); document.getElementById('pending-context-menu').remove();" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;font-weight:600;background:#f8fafc;cursor:pointer;">${e}</button>`;
+    });
+    html += '</div></div>';
+    // 3. Əlavə tapşırıq
+    html += `<button onclick="openSubtaskFromPending(${JSON.stringify(action).replace(/"/g,'&quot;')}); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;"><div>➕ Əlavə tapşırıq</div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>bu sifarişə bağlı əlavə tapşırıq</div></button>`;
+    menu.innerHTML = html;
+    document.body.appendChild(menu);
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+            if(!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closeMenu); }
+        });
+    }, 100);
+}
+window._STAGE_NAMES = {};
+fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
 </script>
 </body>
 </html>

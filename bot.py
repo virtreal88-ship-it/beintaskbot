@@ -375,6 +375,8 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
     link = action_data.get("link") or (f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else "")
 
     if action_type == "assign_executor":
+        if choice == "Təsdiq et":
+            choice = "Özüm"
         if choice != "Ləğv et":
             stage_key = action_data.get("stage_key") or _stage_key_for_name(stage_name)
             task_text = _STAGE_TASK_TEXTS.get(stage_key)
@@ -465,12 +467,15 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
             _send_telegram_text(creator_chat_id, "✅ Dəyişiklik təsdiq edildi!")
 
     elif action_type == "change_stage":
+        # If user just confirms (Təsdiq et) without selecting stage via long-press, use Düşünür
+        effective_choice = choice if choice != "Təsdiq et" else "Düşünür"
         status_id = next(
-            (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
+            (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == effective_choice.casefold()),
             None,
         )
         if not lead_id or not status_id:
             return False, "Seçilmiş mərhələ tapılmadı."
+        choice = effective_choice
         if not update_lead_kommo(
             int(lead_id),
             {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
@@ -4868,6 +4873,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/balance/credit", handle_api_balance_credit)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
+    app_web.router.add_get("/api/stages", lambda r: web.json_response({"stages": {str(v): STAGE_NAMES.get(v, k) for k, v in STAGES.items()}}))
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())
