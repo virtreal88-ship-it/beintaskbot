@@ -1,5 +1,31 @@
 [
   {
+    "id": "c313343c",
+    "type": "assign_executor",
+    "created_at": "2026-07-21T01:15:29.311110+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "DSU'Kombi evi",
+      "phone": "",
+      "lead_id": 76940107,
+      "stage_name": "yeni sifariş",
+      "stage_key": "yeni_sifaris",
+      "sender_name": "Webhook",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76940107",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 3123
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "a903fcc7",
     "type": "assign_executor",
     "created_at": "2026-07-21T01:14:57.302283+04:00",
