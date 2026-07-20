@@ -184,7 +184,7 @@
     "id": "37f772d6",
     "type": "change_stage",
     "created_at": "2026-07-20T17:23:32.733205+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Zoo mağaza",
       "phone": "+994502280265",
@@ -211,7 +211,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-20T21:48:49.654782+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "485260fe",
