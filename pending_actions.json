@@ -263,32 +263,6 @@
     ]
   },
   {
-    "id": "a307b5bc",
-    "type": "assign_executor",
-    "created_at": "2026-07-19T23:25:04.408149+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "İ",
-      "phone": "+0518604852",
-      "lead_id": 76936553,
-      "stage_name": "yeni sifariş",
-      "stage_key": "yeni_sifaris",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76936553",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 2919
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "7d8d277f",
     "type": "change_stage",
     "created_at": "2026-07-19T19:22:12.825505+04:00",
