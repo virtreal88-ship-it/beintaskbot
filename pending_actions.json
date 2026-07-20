@@ -1,5 +1,38 @@
 [
   {
+    "id": "d6b09ab9",
+    "type": "change_stage",
+    "created_at": "2026-07-20T09:24:00.144837+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994558384848",
+      "phone": "+994558384848",
+      "lead_id": 71073327,
+      "task_id": 93542255,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "[Soltan Abbasov] Səhər müştərinin işi olmur, səhər mütləq həll edilməlidir. Məhsullar prospektdən götürülüb import olunacaq.sayları yazılacaq",
+      "task_price": "",
+      "note": "6cı gün məhsullar işlənilib",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71073327",
+      "callback_key": "4b720b78"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Arxiv",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "48f3beb0",
     "type": "reassign_task",
     "created_at": "2026-07-20T00:57:58.736522+04:00",
