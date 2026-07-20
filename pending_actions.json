@@ -163,7 +163,7 @@
     "id": "448d9655",
     "type": "change_stage",
     "created_at": "2026-07-20T16:52:12.710225+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ferid",
       "phone": "+994506149255",
@@ -190,7 +190,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-20T21:01:09.958162+04:00",
+    "resolved_choice": "uğurlu sifariş"
   },
   {
     "id": "8e724f43",
