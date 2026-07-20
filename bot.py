@@ -5066,7 +5066,7 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
         "task_id": pending.get("task_id"),
     }
     kpi_buttons = [
-        InlineKeyboardButton(f"{'\u2b50' * i}", callback_data=f"kpicor-{callback_key}-{i * 20}")
+        InlineKeyboardButton("\u2b50" * i, callback_data=f"kpicor-{callback_key}-{i * 20}")
         for i in range(1, 6)
     ]
     stage_buttons = [
