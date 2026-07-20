@@ -1,5 +1,38 @@
 [
   {
+    "id": "5e5dba83",
+    "type": "change_stage",
+    "created_at": "2026-07-20T17:35:03.715006+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Kamelie",
+      "phone": "+994 10 324 02 69",
+      "lead_id": 76940409,
+      "task_id": 93556989,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "İnteqrasiya edərkən problem yaranıb. Müştəri deyir ki səhərdən inteqrasiya alınmır. Gedib yerində inteqrasiya etmək lazımdı",
+      "task_price": "",
+      "note": "İnteqrasiya qoşuldu və əlavə olaraq təlimat keçildi",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76940409",
+      "callback_key": "6d43c21c"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "37f772d6",
     "type": "change_stage",
     "created_at": "2026-07-20T17:23:32.733205+04:00",
