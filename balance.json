@@ -286,6 +286,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-19 08:04:25"
+      },
+      {
+        "task_id": 93554785,
+        "executor": "Rasim Əsgərov",
+        "client": "Zoo mağaza",
+        "phone": "+994502280265",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Hazır zoo mağaza bazası verilməlidir. Öncədən miqrasiya edin.",
+        "result_text": "- avadanlıqlar sazlandı\n- təlimatlar keçildi\n- məhsullar inteqrasiya edildi\n\nQeyd: sayım ediləcək. Tam sayım qurtarana kimi mən online kömək edəcəm in şəə Allah",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-07-20 17:23:01"
       }
     ],
     "balance": -59.5
@@ -295,6 +309,14 @@
     "balance": 0
   },
   "7962757442": {
+    "transactions": [],
+    "balance": 0
+  },
+  "8835096199": {
+    "transactions": [],
+    "balance": 0
+  },
+  "7262243946": {
     "transactions": [],
     "balance": 0
   }
