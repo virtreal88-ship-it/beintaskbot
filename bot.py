@@ -355,7 +355,7 @@ def _create_stage_task(lead_id: int, stage_key: str, sender_name: str = "") -> b
     ))
 
 
-def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
+def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> tuple[bool, str]:
     """Execute one persisted admin action and resolve it only after success."""
     actions = get_pending_actions()
     action = next((item for item in actions if item.get("id") == action_id), None)
@@ -445,7 +445,14 @@ def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
                     new_name, new_id = marker_info
                     update_data["responsible_user_id"] = new_id
                     import re as _re3
-                    old_text = _re3.sub(r"^\[.*?\]\s*", "", update_data.get("text", ""))
+                    current_text = update_data.get("text", "")
+                    if not current_text and task_id:
+                        try:
+                            t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                            if t_resp.status_code == 200:
+                                current_text = t_resp.json().get("text", "")
+                        except: pass
+                    old_text = _re3.sub(r"^\[.*?\]\s*", "", current_text)
                     if new_name and choice != "Özüm":
                         update_data["text"] = f"[{new_name}] {old_text}"
                     else:
@@ -470,6 +477,11 @@ def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
         ):
             return False, "Kommo mərhələsi dəyişdirilmədi."
         stage_name = STAGE_NAMES.get(int(status_id), choice)
+        # Apply KPI score if provided
+        if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
+            employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
+            if employee_tg_id:
+                set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
         result_message = f"Mərhələ dəyişdirildi: {stage_name}."
 
     else:
@@ -3634,9 +3646,10 @@ async def handle_resolve_action(request: web.Request) -> web.Response:
         return web.json_response({"error": "Unauthorized"}, status=403)
     action_id = data.get("id")
     choice = data.get("choice")
+    kpi_score = data.get("kpi_score", 0)
     if not action_id or not choice:
         return web.json_response({"success": False, "message": "Sorğu və seçim tələb olunur."}, status=400)
-    success, message = resolve_pending_action(str(action_id), str(choice))
+    success, message = resolve_pending_action(str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0)
     return web.json_response({"success": success, "message": message})
 
 
@@ -5043,9 +5056,19 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
     callback_key = query.data.replace("chgstg-", "")
     pending = context.bot_data.get("pending_stage_change", {}).get(callback_key)
     if not pending or not pending.get("lead_id"):
-        await query.answer("Bu seçim artıq keçərsizdir.", show_alert=True)
+        await query.answer("Bu se\u00e7im art\u0131q ke\u00e7\u0259rsizdir.", show_alert=True)
         return
-    # Send stage selection buttons
+    # Copy pending data to pending_next_stages for nstg handler
+    context.bot_data.setdefault("pending_next_stages", {})[callback_key] = pending
+    # Show KPI star rating buttons first, then stage selection
+    context.bot_data.setdefault("pending_kpi_corrections", {})[callback_key] = {
+        "employee_tg_id": pending.get("employee_tg_id"),
+        "task_id": pending.get("task_id"),
+    }
+    kpi_buttons = [
+        InlineKeyboardButton(f"{'\u2b50' * i}", callback_data=f"kpicor-{callback_key}-{i * 20}")
+        for i in range(1, 6)
+    ]
     stage_buttons = [
         InlineKeyboardButton(
             STAGE_NAMES.get(status_id, stage_key),
@@ -5053,9 +5076,7 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
         )
         for stage_key, status_id in STAGES.items()
     ]
-    keyboard_rows = [stage_buttons[i:i+2] for i in range(0, len(stage_buttons), 2)]
-    # Copy pending data to pending_next_stages for nstg handler
-    context.bot_data.setdefault("pending_next_stages", {})[callback_key] = pending
+    keyboard_rows = [kpi_buttons] + [stage_buttons[i:i+2] for i in range(0, len(stage_buttons), 2)]
     lead_id = int(pending["lead_id"])
     contact_name = get_contact_name_from_entity(lead_id, "leads") or "—"
     phone = get_phone_from_entity(lead_id, "leads") or "—"

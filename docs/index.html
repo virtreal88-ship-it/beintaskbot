@@ -147,7 +147,7 @@
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-create"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
@@ -199,7 +199,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Telefon:</label><input type="text" id="edit-phone" readonly class="w-full p-2.5 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-edit"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
 
@@ -317,8 +317,8 @@
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Balans</span>
     </button>
-    <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span>
+    <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
+        <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
     </button>
 </div>
 
@@ -353,7 +353,7 @@ const PERSISTED_FORM_IDS = [
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
-const SALARY_IDS = ['7962757442','7262243946','7329891614'];
+const SALARY_IDS = ['7962757442','7262243946','7329891614','8835096199'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; }); }
 document.addEventListener('DOMContentLoaded', () => { });
 
@@ -633,8 +633,8 @@ function submitTask() {
         const assigneeChanged = gd.originalAssignee && gd.assigneeName && gd.originalAssignee !== gd.assigneeName;
         const savedTaskId = editingTaskId;
         editingTaskId = null;
-        if(assigneeChanged) {
-            // Show modal instantly, save in background, conf_key arrives before user finishes typing
+        if(assigneeChanged && !isAdmin) {
+            // Non-admin: show modal instantly, save in background, conf_key arrives before user finishes typing
             showEditNoteModal(savedTaskId);
             doFetchSilent(payload);
         } else {
@@ -789,6 +789,26 @@ function renderPendingActions() {
         }
         card.appendChild(details);
 
+        // KPI star rating for change_stage
+        if(action.type === 'change_stage') {
+            const kpiRow = document.createElement('div');
+            kpiRow.className = 'flex items-center gap-1 py-2';
+            kpiRow.innerHTML = '<span class="text-xs font-bold text-gray-600 mr-2">KPI:</span>';
+            for(let i = 1; i <= 5; i++) {
+                const star = document.createElement('button');
+                star.className = 'text-xl text-gray-300 transition-colors';
+                star.textContent = '⭐';
+                star.dataset.score = i;
+                star.addEventListener('click', () => {
+                    kpiRow.querySelectorAll('button').forEach((s, idx) => { s.style.opacity = idx < i ? '1' : '0.3'; });
+                    card.dataset.kpiScore = i * 20;
+                });
+                star.style.opacity = '0.3';
+                kpiRow.appendChild(star);
+            }
+            card.appendChild(kpiRow);
+        }
+
         const options = Array.isArray(action.options) ? action.options : [];
         const controls = document.createElement('div');
         controls.className = 'space-y-2';
@@ -862,6 +882,8 @@ async function loadPendingActions(showFeedback = false) {
         if(!response.ok || !Array.isArray(payload)) throw new Error(payload.error || 'Pending actions unavailable');
         pendingActions = payload;
         renderPendingActions();
+        const badge = document.getElementById('pending-badge');
+        if(badge) { if(pendingActions.length > 0) { badge.textContent = pendingActions.length; badge.style.display = 'flex'; } else { badge.style.display = 'none'; } }
         return true;
     } catch(error) {
         if(container) {
@@ -905,7 +927,7 @@ async function resolvePendingAction(actionId, choice, button) {
         const response = await fetch(API_BASE + '/api/pending_actions/resolve', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice}),
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice, kpi_score: card ? (parseInt(card.dataset.kpiScore) || 0) : 0}),
         });
         const payload = await response.json();
         if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
@@ -1049,6 +1071,7 @@ function renderNotifications() {
         const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
         const priorityTags = {
             urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
+            high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
             medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
             low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
         };
@@ -1067,7 +1090,7 @@ function renderNotifications() {
                 <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
             </div>
             </div>`;
-        card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
+        card.onclick = () => { };
         // Long-press handler for context menu
         let longPressTimer = null;
         card.addEventListener('touchstart', (e) => {
@@ -1656,15 +1679,15 @@ function showTaskContextMenu(taskId, x, y) {
     menu.id = 'task-context-menu';
     menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:200px;overflow:hidden;';
     menu.innerHTML = `
-        <button onclick="openSubtask(${taskId}); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+        <button onclick="selectedTaskId=${taskId}; openSubtask(${taskId}); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
             <div>➕ Əlavə tapşırıq</div>
             <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu sifarişə bağlı əlavə tapşırıq</div>
         </button>
-        <button onclick="handleBarAction('edit'); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+        <button onclick="selectedTaskId=${taskId}; handleBarAction('edit'); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
             <div>✏️ Redaktə et</div>
             <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığı redaktə et</div>
         </button>
-        <button onclick="showNotePanel(); selectedTaskId=${taskId}; document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;">
+        <button onclick="selectedTaskId=${taskId}; clickNotification(${taskId},'',''); showNotePanel(); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;">
             <div>📝 Qeyd əlavə et</div>
             <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığa bağlı sifarişə qeyd əlavə etmək</div>
         </button>
