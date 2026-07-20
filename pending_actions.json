@@ -1,5 +1,38 @@
 [
   {
+    "id": "37f772d6",
+    "type": "change_stage",
+    "created_at": "2026-07-20T17:23:32.733205+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Zoo mağaza",
+      "phone": "+994502280265",
+      "lead_id": 76939285,
+      "task_id": 93554787,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "[Hüseyn Səfərov] Bu sifarişin mallarını hazırla , akula yaz",
+      "task_price": "",
+      "note": "Mehsullar dump la import olundu.",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76939285",
+      "callback_key": "131bf328"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "485260fe",
     "type": "change_stage",
     "created_at": "2026-07-20T17:13:34.466380+04:00",
