@@ -1670,35 +1670,85 @@ function showTaskContextMenu(taskId, x, y) {
 function showPendingContextMenu(action, x, y) {
     const existing = document.getElementById('pending-context-menu');
     if(existing) existing.remove();
-    const data = action.data || {};
-    const options = Array.isArray(action.options) ? action.options : [];
-    const stageOptions = (action.type === 'change_stage') ? options : Object.values(window._STAGE_NAMES || {});
-    const executorOptions = ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'];
     const menu = document.createElement('div');
     menu.id = 'pending-context-menu';
-    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;max-height:70vh;overflow-y:auto;';
-    let html = '';
-    // 1. Mərhələ seç
-    html += '<div style="padding:10px 16px;border-bottom:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#1e293b;">📋 Mərhələ seç</div><div style="font-size:10px;color:#94a3b8;margin-top:2px;">sövdələşmənin mərhələsini dəyiş</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">';
-    stageOptions.forEach(s => {
-        html += `<button onclick="resolvePendingAction('${action.id}','${s}',this); document.getElementById('pending-context-menu').remove();" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;font-weight:600;background:#f8fafc;cursor:pointer;">${s}</button>`;
-    });
-    html += '</div></div>';
-    // 2. İcraçı dəyiş
-    html += '<div style="padding:10px 16px;border-bottom:1px solid #e2e8f0;"><div style="font-size:13px;font-weight:700;color:#1e293b;">👷 İcraçı dəyiş</div><div style="font-size:10px;color:#94a3b8;margin-top:2px;">tapşırığın icraçısını dəyiş</div><div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">';
-    executorOptions.forEach(e => {
-        html += `<button onclick="resolvePendingAction('${action.id}','${e}',this); document.getElementById('pending-context-menu').remove();" style="padding:4px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;font-weight:600;background:#f8fafc;cursor:pointer;">${e}</button>`;
-    });
-    html += '</div></div>';
-    // 3. Əlavə tapşırıq
-    html += `<button onclick="openSubtaskFromPending(${JSON.stringify(action).replace(/"/g,'&quot;')}); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;"><div>➕ Əlavə tapşırıq</div><div style='font-size:10px;color:#94a3b8;margin-top:2px;'>bu sifarişə bağlı əlavə tapşırıq</div></button>`;
-    menu.innerHTML = html;
+    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;';
+    const actionJson = JSON.stringify(action).replace(/"/g,'&quot;');
+    menu.innerHTML = `
+        <button onclick="pendingMenuAction('stage','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+            <div>📋 Mərhələ seç</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">sövdələşmənin mərhələsini dəyiş</div>
+        </button>
+        <button onclick="pendingMenuAction('executor','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+            <div>👷 İcraçı dəyiş</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">tapşırığın icraçısını dəyiş</div>
+        </button>
+        <button onclick="openSubtaskFromPending(${actionJson}); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+            <div>➕ Əlavə tapşırıq</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu sifarişə bağlı əlavə tapşırıq</div>
+        </button>
+        <button onclick="pendingMenuAction('note','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;">
+            <div>📝 Qeyd əlavə et</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığa bağlı sifarişə qeyd əlavə etmək</div>
+        </button>
+    `;
     document.body.appendChild(menu);
     setTimeout(() => {
         document.addEventListener('click', function closeMenu(e) {
             if(!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closeMenu); }
         });
     }, 100);
+}
+function pendingMenuAction(type, actionId) {
+    const action = pendingActions.find(a => a.id === actionId);
+    if(!action) return;
+    const options = Array.isArray(action.options) ? action.options : [];
+    if(type === 'stage') {
+        const stageOpts = (action.type === 'change_stage') ? options : Object.values(window._STAGE_NAMES || {});
+        showPendingSelectModal('Mərhələ seç', stageOpts, (choice) => {
+            pendingChangeStage(actionId, choice);
+        });
+    } else if(type === 'executor') {
+        showPendingSelectModal('İcraçı seç', ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
+            pendingChangeExecutor(actionId, choice);
+        });
+    } else if(type === 'note') {
+        const data = action.data || {};
+        const taskId = data.task_id;
+        if(taskId) { selectedTaskId = taskId; clickNotification(taskId,'',''); showNotePanel(); }
+        else toast('Tapşırıq tapılmadı', true);
+    }
+}
+function showPendingSelectModal(title, items, callback) {
+    const existing = document.getElementById('pending-select-modal');
+    if(existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = 'pending-select-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    let btns = items.map(i => `<button onclick="document.getElementById('pending-select-modal')._cb('${i}')" style="width:100%;text-align:left;padding:10px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #f1f5f9;cursor:pointer;">${i}</button>`).join('');
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;min-width:260px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2);"><div style="padding:14px 16px;font-size:14px;font-weight:700;border-bottom:1px solid #e2e8f0;">${title}</div>${btns}<button onclick="document.getElementById('pending-select-modal').remove()" style="width:100%;padding:12px;border:none;background:#f8fafc;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-radius:0 0 16px 16px;">Ləğv et</button></div>`;
+    modal._cb = (val) => { modal.remove(); callback(val); };
+    document.body.appendChild(modal);
+}
+async function pendingChangeStage(actionId, stageName) {
+    try {
+        const r = await fetch(API_BASE + '/api/pending_actions/change_stage', {
+            method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify({id: actionId, stage: stageName})
+        });
+        const d = await r.json();
+        toast(d.message || 'Mərhələ dəyişdirildi', !d.success);
+    } catch(e) { toast('Xəta: ' + e.message, true); }
+}
+async function pendingChangeExecutor(actionId, executorName) {
+    try {
+        const r = await fetch(API_BASE + '/api/pending_actions/change_executor', {
+            method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify({id: actionId, executor: executorName})
+        });
+        const d = await r.json();
+        toast(d.message || 'İcraçı dəyişdirildi', !d.success);
+    } catch(e) { toast('Xəta: ' + e.message, true); }
 }
 window._STAGE_NAMES = {};
 fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});

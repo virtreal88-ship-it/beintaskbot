@@ -3674,6 +3674,59 @@ async def handle_delete_pending_action(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
+async def handle_pending_change_stage(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "message": "Invalid JSON"}, status=400)
+    if not is_admin(data.get("chat_id") or request.headers.get("X-TG-User-ID", "")):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    action_id = data.get("id")
+    stage_name = data.get("stage")
+    action = next((a for a in load_pending_actions() if a["id"] == action_id), None)
+    if not action:
+        return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
+    lead_id = action.get("data", {}).get("lead_id")
+    status_id = next((sid for sid, dn in STAGE_NAMES.items() if dn.casefold() == stage_name.casefold()), None)
+    if not lead_id or not status_id:
+        return web.json_response({"success": False, "message": "Mərhələ tapılmadı."})
+    if not update_lead_kommo(int(lead_id), {"status_id": int(status_id), "pipeline_id": PIPELINE_ID}):
+        return web.json_response({"success": False, "message": "Kommo xətası."})
+    return web.json_response({"success": True, "message": f"Mərhələ: {stage_name}"})
+
+async def handle_pending_change_executor(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "message": "Invalid JSON"}, status=400)
+    if not is_admin(data.get("chat_id") or request.headers.get("X-TG-User-ID", "")):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    action_id = data.get("id")
+    executor = data.get("executor")
+    action = next((a for a in load_pending_actions() if a["id"] == action_id), None)
+    if not action:
+        return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
+    task_id = action.get("data", {}).get("task_id")
+    if not task_id:
+        return web.json_response({"success": False, "message": "Tapşırıq ID tapılmadı."})
+    marker_info = _UPD_MARKER.get(executor)
+    update_data = {}
+    if executor == "Özüm":
+        update_data["responsible_user_id"] = 10932455
+    elif marker_info:
+        full_name, _ = marker_info
+        update_data["responsible_user_id"] = 15532668
+        old_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=KOMMO_HEADERS)
+        if old_resp.status_code == 200:
+            old_text = old_resp.json().get("text", "")
+            new_text = re.sub(r"^\[[^\]]+\]\s*", "", old_text)
+            update_data["text"] = f"[{full_name}] {new_text}"
+    else:
+        return web.json_response({"success": False, "message": "İcraçı tanınmadı."})
+    if not update_task_kommo(int(task_id), update_data):
+        return web.json_response({"success": False, "message": "Yeniləmə uğursuz oldu."})
+    return web.json_response({"success": True, "message": f"İcraçı: {executor}"})
+
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
     try:
@@ -4865,6 +4918,10 @@ async def start_webhook_server():
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)
+    app_web.router.add_route('OPTIONS', '/api/pending_actions/change_stage', lambda r: web.Response())
+    app_web.router.add_post("/api/pending_actions/change_stage", handle_pending_change_stage)
+    app_web.router.add_route('OPTIONS', '/api/pending_actions/change_executor', lambda r: web.Response())
+    app_web.router.add_post("/api/pending_actions/change_executor", handle_pending_change_executor)
     app_web.router.add_route('OPTIONS', '/api/balance', lambda r: web.Response())
     app_web.router.add_get("/api/balance", handle_api_balance)
     app_web.router.add_route('OPTIONS', '/api/balance/confirm', lambda r: web.Response())
