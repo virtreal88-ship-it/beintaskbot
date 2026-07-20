@@ -1,5 +1,38 @@
 [
   {
+    "id": "b18f93e6",
+    "type": "change_stage",
+    "created_at": "2026-07-20T11:16:43.668639+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Seyran",
+      "phone": "+994507354375",
+      "lead_id": 76900927,
+      "task_id": 93544255,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Xəbər al",
+      "task_price": "",
+      "note": "Danışdım. Hər şeydən razı olduqlarını dedilər\n Lakin hələ başqa işləri var deyə indi qoşulmurlar. Özləri geri dönüş edəcəklər",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76900927",
+      "callback_key": "e303443d"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "51baa952",
     "type": "assign_executor",
     "created_at": "2026-07-20T11:15:07.134431+04:00",
