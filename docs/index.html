@@ -53,7 +53,7 @@
     <div style="font-size:22px; font-weight:700; margin-bottom:8px;">Uğurla yaradıldı!</div>
     <div id="success-msg" style="font-size:14px; color:#64748b; margin-bottom:32px;"></div>
     <div style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:300px;">
-        <button onclick="resumeEdit()" class="w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-sm">✏️ Düzəliş et</button>
+        <button onclick="resumeEdit()" class="w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-sm">✏️ Redaktə et</button>
         <button onclick="switchTab('tab-tasks')" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-sm">Tapşırıqlara qayıt</button>
     </div>
 </div>
@@ -196,6 +196,7 @@
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="edit-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Telefon:</label><input type="text" id="edit-phone" readonly class="w-full p-2.5 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
@@ -241,8 +242,8 @@
         <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştərinin Adı:</label><input type="text" id="deal-customer-name" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ad Soyad"></div>
             <div class="space-y-2"><div class="option-card" onclick="sel('stage','yeni_sifaris',this)">Yeni sifariş</div><div class="option-card" onclick="sel('stage','qurashdirma',this)">Quraşdırma</div><div class="option-card" onclick="sel('stage','danisiqlar',this)">Danışıqlar</div></div>
-            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="deal-subtask-toggle" onchange="tog('deal-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Alt-tapşırıq əlavə edilsin?</span></label>
-            <div id="deal-subtask-block" style="display:none;"><input type="text" id="deal-subtask-text" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Alt-tapşırıq mətni"></div>
+            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="deal-subtask-toggle" onchange="tog('deal-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Əlavə tapşırıq əlavə edilsin?</span></label>
+            <div id="deal-subtask-block" style="display:none;"><input type="text" id="deal-subtask-text" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Əlavə tapşırıq mətni"></div>
             <button id="deal-submit-btn" onclick="submitDeal()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Sifarişi Yarat</button>
         </div>
     </div>
@@ -250,7 +251,7 @@
         <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('step-search')">← Geri</button></div>
         <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Qeyd:</label><textarea id="note-text" placeholder="Qeydinizi yazın..." class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-20 resize-none"></textarea></div>
-            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="note-subtask-toggle" onchange="tog('note-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Alt-tapşırıq yaradılsın?</span></label>
+            <label class="flex items-center gap-2 bg-gray-50 p-3 rounded-xl cursor-pointer"><input type="checkbox" id="note-subtask-toggle" onchange="tog('note-subtask-block',this)"><span class="text-xs font-bold text-gray-600">Əlavə tapşırıq yaradılsın?</span></label>
             <div id="note-subtask-block" style="display:none;"><input type="text" id="note-subtask-text" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Tapşırıq mətni"></div>
             <button id="note-submit-btn" onclick="submitNoteFlow()" class="w-full bg-gray-700 text-white font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button>
         </div>
@@ -281,10 +282,7 @@
     <div class="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 cursor-pointer" onclick="closeBottomBar(); event.stopPropagation();"></div>
     <h3 class="text-xs font-extrabold text-gray-800" id="bottom-bar-title">Seçilmiş tapşırıq</h3>
     <div class="text-[10px] text-gray-400 mt-1 mb-3" id="bottom-bar-meta"></div>
-    <div id="action-buttons" class="flex gap-2 mb-3">
-        <button onclick="handleBarAction('edit')" class="flex-1 bg-[#2481cc] text-white font-bold py-2.5 rounded-xl text-xs">Düzəliş et</button>
-        <button onclick="showNotePanel()" class="flex-1 bg-gray-700 text-white font-bold py-2.5 rounded-xl text-xs">Qeyd əlavə et</button>
-    </div>
+    <div id="action-buttons" style="display:none;"></div>
     <div id="note-panel" style="display:none;" class="mb-3">
         <textarea id="note-text-input" placeholder="Qeyd yazın..." class="w-full p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea>
         <div class="flex gap-2 mt-2">
@@ -357,7 +355,7 @@ let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['7962757442','7262243946','7329891614'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; }); }
-document.addEventListener('DOMContentLoaded', () => { if(!isAdmin) { const pf1 = document.getElementById('price-field-create'); if(pf1) pf1.style.display='none'; const pf2 = document.getElementById('price-field-edit'); if(pf2) pf2.style.display='none'; } });
+document.addEventListener('DOMContentLoaded', () => { });
 
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
@@ -929,7 +927,7 @@ function openSubtaskFromPending(action) {
     const desc = '';
     const html = `<div id="subtask-modal" data-lead-id="${leadId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Əlavə tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Müştəri:</label>
         <input value="${contactName}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
@@ -1068,8 +1066,18 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
             </div>
-            <div class="mt-2 pt-2 border-t border-gray-100" onclick="event.stopPropagation();"><button onclick="openSubtask(${t.id})" class="text-white px-4 py-1.5 rounded-lg text-[10px] font-bold" style="background:#374151;">➕ Alt tapşırıq</button></div>`;
+            </div>`;
         card.onclick = () => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); };
+        // Long-press handler for context menu
+        let longPressTimer = null;
+        card.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => {
+                e.preventDefault();
+                showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
+            }, 500);
+        }, {passive: false});
+        card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+        card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
         // Swipe
         let startX = 0, currentX = 0, isSwiping = false;
         card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
@@ -1229,6 +1237,7 @@ function handleBarAction(actionType) {
         const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
         const epri = document.getElementById('edit-priority'); if(epri) { epri.value = task.priority || ''; }
         const ecn = document.getElementById('edit-client-name'); if(ecn) { ecn.value = task.contact_name || ''; }
+        const eph = document.getElementById('edit-phone'); if(eph) { eph.value = task.phone || ''; }
         const dp = document.getElementById('edit-deadline-custom');
         if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
 
@@ -1336,7 +1345,7 @@ function openSubtask(taskId) {
     const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Texniki Dəstək'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Alt tapşırıq</h3>
+        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Əlavə tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
@@ -1638,3 +1647,39 @@ initPush();
 </script>
 </body>
 </html>
+// Long-press context menu for task cards
+function showTaskContextMenu(taskId, x, y) {
+    const task = mockTasks.find(t => t.id === taskId);
+    if(!task) return;
+    // Remove existing menu if any
+    const existing = document.getElementById('task-context-menu');
+    if(existing) existing.remove();
+    // Create menu
+    const menu = document.createElement('div');
+    menu.id = 'task-context-menu';
+    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:200px;overflow:hidden;';
+    menu.innerHTML = `
+        <button onclick="openSubtask(${taskId}); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+            <div>➕ Əlavə tapşırıq</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu sifarişə bağlı əlavə tapşırıq</div>
+        </button>
+        <button onclick="handleBarAction('edit'); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
+            <div>✏️ Redaktə et</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığı redaktə et</div>
+        </button>
+        <button onclick="showNotePanel(); selectedTaskId=${taskId}; document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;">
+            <div>📝 Qeyd əlavə et</div>
+            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığa bağlı sifarişə qeyd əlavə etmək</div>
+        </button>
+    `;
+    document.body.appendChild(menu);
+    // Close menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+            if(!menu.contains(e.target)) {
+                menu.remove();
+                document.removeEventListener('click', closeMenu);
+            }
+        });
+    }, 100);
+}

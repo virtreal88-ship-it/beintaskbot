@@ -62,6 +62,10 @@ llm_client = OpenAI(
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
+ADMIN_CHAT_ID = 1628569350
+ADMIN_KOMMO_USER_ID = 10932455
+TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
+
 STAGES = {
     "nerazobrannoye": 66107683,
     "danisiqlar": 108537924,
@@ -72,7 +76,7 @@ STAGES = {
     "gorus": 108537892,
     "daxili_muzakire": 108538104,
     "qurashdirma": 108537896,
-    "arxiv": 108537976,
+    "dusunur": 108537976,
     "ugurlu": 142,
     "imtina": 143,
 }
@@ -86,7 +90,7 @@ STAGE_NAMES = {
     108537892: "görüş",
     108538104: "daxili müzakirə",
     108537896: "quraşdırma",
-    108537976: "Arxiv",
+    108537976: "Düşünür",
     142: "uğurlu sifariş",
     143: "imtina olundu",
 }
@@ -145,7 +149,13 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     return None
 
 def is_admin(chat_id: int) -> bool:
-    return get_kommo_user_id_for_chat(chat_id) == 10932455
+    """Return whether a Telegram chat belongs to the Admin account."""
+    try:
+        if int(chat_id) == ADMIN_CHAT_ID:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return get_kommo_user_id_for_chat(chat_id) == ADMIN_KOMMO_USER_ID
 
 
 _PENDING_ACTIONS_FILE = "pending_actions.json"
@@ -156,7 +166,7 @@ _PENDING_EXECUTOR_NAMES = {
     "Soltan": "Soltan Abbasov",
     "Hüseyn": "Hüseyn Səfərov",
     "Rasim": "Rasim Əsgərov",
-    "Texniki": "Texniki tapşırıq",
+    "Texniki": TECHNICAL_SUPPORT_NAME,
 }
 
 
@@ -428,7 +438,7 @@ def resolve_pending_action(action_id: str, choice: str) -> tuple[bool, str]:
             result_message = "Dəyişiklik rədd edildi."
             _send_telegram_text(creator_chat_id, "❌ Dəyişiklik rədd edildi.")
         else:
-            _UPD_MARKER = {"Təsdiq et": None, "Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": ("Texniki tapşırıq", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
+            _UPD_MARKER = {"Təsdiq et": None, "Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": (TECHNICAL_SUPPORT_NAME, 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
             if choice != "Təsdiq et":
                 marker_info = _UPD_MARKER.get(choice)
                 if marker_info:
@@ -484,7 +494,7 @@ TG_CHAT_TO_EMPLOYEE = {
     7262243946: "Soltan Abbasov",
     7329891614: "Hüseyn Səfərov",
     7920785774: "Rasim Əsgərov",
-    8835096199: "Texniki tapşırıq",
+    8835096199: TECHNICAL_SUPPORT_NAME,
 }
 
 def get_employee_name_by_chat_id(chat_id: int, default: str = "Əməkdaş") -> str:
@@ -502,7 +512,10 @@ NAME_TO_CHAT = {
     "Hüseyn Səfərov": 7329891614,
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
+    TECHNICAL_SUPPORT_NAME: 8835096199,
+    # Keep historical task markers routable while writing the employee's real name.
     "Texniki tapşırıq": 8835096199,
+    "Texniki": 8835096199,
     "Şamil": 7962757442,
     "Soltan": 7262243946,
     "Hüseyn": 7329891614,
@@ -512,6 +525,14 @@ NAME_TO_CHAT = {
 
 def get_chat_id_by_name(name: str) -> int | None:
     return NAME_TO_CHAT.get(name)
+
+
+def normalize_assignee_name(name: str) -> str:
+    """Normalize employee labels without conflating task types with employee names."""
+    cleaned = str(name or "").strip()
+    if cleaned.casefold() in {"texniki", "texniki dəstək", "texniki destek", "texniki tapşırıq"}:
+        return TECHNICAL_SUPPORT_NAME
+    return cleaned
 
 # ─── Message Maps (reply context) ───────────────────────────────────────────
 MESSAGE_MAPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message_maps.json")
@@ -1080,7 +1101,7 @@ AI_TOOLS = [
         "description": "Sövdələşmənin mərhələsini dəyişmək",
         "parameters": {"type": "object", "properties": {
             "phone": {"type": "string", "description": "Müştərinin telefon nömrəsi"},
-            "stage": {"type": "string", "enum": ["danisiqlar","qiymet_teklifi","teqdimat","teqdimat_olundu","yeni_sifaris","gorus","daxili_muzakire","qurashdirma","arxiv","ugurlu","imtina"], "description": "Yeni mərhələ"}
+            "stage": {"type": "string", "enum": ["danisiqlar","qiymet_teklifi","teqdimat","teqdimat_olundu","yeni_sifaris","gorus","daxili_muzakire","qurashdirma","dusunur","ugurlu","imtina"], "description": "Yeni mərhələ"}
         }, "required": ["phone", "stage"]}
     }},
     {"type": "function", "function": {
@@ -1211,7 +1232,7 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
     entity_id = int(lead_id)
     entity_type = "leads"
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-    assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
+    assignee_map = {"shamil": 15532668, "soltan": 15531960, "huseyn": 15532668, "rasim": 15532668, "texniki": 15532668, "admin": 10932455, "sahe_meneceri": 15532668}
     assignee_id = assignee_map.get(assign_to, 10932455)
     assignee_name = KOMMO_USERS.get(assignee_id, "Admin")
     return {
@@ -2302,7 +2323,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         )
         return
     # All employees go to Sahə Meneceri with marker; admin goes to admin
-    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
+    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -2359,7 +2380,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
+    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -3480,7 +3501,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
             else:
                 del _bot_changed_leads[lead_id]
         # Suppressed stages - no notification
-        suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["arxiv"]}
+        suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["dusunur"]}
         if new_status_id in suppressed:
             return web.Response(status=200, text="OK")
         # Get lead details
@@ -3711,10 +3732,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 try:
                     pending["note_text"] = text  # store note in pending for later
                     # Get task details for rich notification
-                    client_name = ""
-                    client_phone = ""
+                    client_name = pending.get("contact_name", "")
+                    client_phone = pending.get("phone", "")
                     task_type_name = ""
-                    deal_link = ""
+                    deal_link = pending.get("link", "")
                     try:
                         headers_k3 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
                         t_resp3 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
@@ -3730,7 +3751,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             # Get lead/contact info
                             l_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
                             l_data = l_resp.json()
-                            client_name = l_data.get("name", "")
+                            client_name = l_data.get("name", "") or client_name
                             # Get contact phone
                             contacts = l_data.get("_embedded", {}).get("contacts", [])
                             if contacts:
@@ -3740,7 +3761,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     c_data = c_resp.json()
                                     for cf in c_data.get("custom_fields_values", []):
                                         if cf.get("field_code") == "PHONE":
-                                            client_phone = cf["values"][0].get("value", "")
+                                            client_phone = cf["values"][0].get("value", "") or client_phone
                                             break
                     except: pass
                     msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n"
@@ -3769,7 +3790,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     except: pass
                     save_pending_action("reassign_task", {
                         "contact_name": client_name or pending.get('display_text', ''),
-                        "phone": client_phone,
+                        "phone": client_phone or pending.get("phone", ""),
                         "lead_id": entity_id3 if entity_id3 else None,
                         "task_id": pending.get('task_id'),
                         "task_text": pending.get('display_text', ''),
@@ -3778,7 +3799,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         "sender_name": pending['sender_name'],
                         "assignee_name_raw": pending['assignee_name_raw'],
                         "note": text,
-                        "link": deal_link,
+                        "link": deal_link or pending.get("link", ""),
                         "conf_key": found_conf_key,
                         "update_data": pending.get('update_data'),
                         "creator_chat_id": pending.get('creator_chat_id'),
@@ -3818,7 +3839,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
         elif action == "task":
             text = data.get("text", "")
             priority = _normalize_task_priority(data.get("priority", ""))
-            assignee_name_raw = (data.get("assigneeName") or data.get("assignee_name") or "").strip()
+            assignee_name_raw = normalize_assignee_name(data.get("assigneeName") or data.get("assignee_name"))
             creator_name = get_employee_name_by_chat_id(chat_id, "")
             # A shared Sahə Meneceri Kommo identity must never hide the real
             # employee in the marker or the admin confirmation.
@@ -3872,7 +3893,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             deadline_ts = int(deadline_dt.timestamp())
             # If non-admin creating for OTHERS, send to admin for confirmation
             # If creating for themselves, no confirmation needed
-            is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
+            is_admin_user = is_admin(chat_id)
             creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
             creates_for_self = False  # Always require admin confirmation
             if not is_admin_user and not creates_for_self and _bot_app:
@@ -3911,7 +3932,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if assignee_name_raw:
                     target_chat = get_chat_id_by_name(assignee_name_raw)
                     logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
-                    if target_chat and target_chat != chat_id:
+                    # An Admin-created task must never generate a self-notification or self-push.
+                    if target_chat and target_chat != chat_id and not (is_admin_user and target_chat == ADMIN_CHAT_ID):
                         display_text = text.replace(f'[{assignee_name_raw}] ', '')
                         notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
                         try:
@@ -4019,9 +4041,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 update_data["text"] = data["text"]
             # Handle assignee change
             assignee = data.get("assignee")
-            assignee_name_raw = data.get("assigneeName", "")
+            assignee_name_raw = normalize_assignee_name(data.get("assigneeName", ""))
             if assignee:
-                assignee_map = {"shamil": 15532668, "soltan": 15531960, "admin": 10932455, "sahe_meneceri": 15532668}
+                assignee_map = {"shamil": 15532668, "soltan": 15531960, "huseyn": 15532668, "rasim": 15532668, "texniki": 15532668, "admin": 10932455, "sahe_meneceri": 15532668}
                 assignee_id = assignee_map.get(assignee)
                 if assignee_id:
                     update_data["responsible_user_id"] = assignee_id
@@ -4069,7 +4091,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not update_data and not edit_client_name:
                 return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
             # Non-admin changing assignee → send to admin for confirmation
-            is_admin_user = (get_kommo_user_id_for_chat(chat_id) == 10932455)
+            is_admin_user = is_admin(chat_id)
             creator_name = None
             for _n, _cid in NAME_TO_CHAT.items():
                 if _cid == chat_id and len(_n) > 5:
@@ -4081,12 +4103,31 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not is_admin_user and assignee_actually_changed and _bot_app:
                 # Non-admin changing assignee -> save pending, DON'T notify yet (wait for note)
                 sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+                # Resolve contact details now, because this volatile pending entry may be
+                # completed later through a note callback after the original UI request.
+                pending_contact_name = data.get("client_name", "").strip()
+                pending_phone = phone
+                pending_link = ""
+                try:
+                    task_response = requests.get(
+                        f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10
+                    )
+                    if task_response.status_code == 200:
+                        task_context = get_task_deal_context(task_response.json())
+                        pending_contact_name = task_context.get("client_name") or pending_contact_name
+                        pending_phone = task_context.get("phone") or pending_phone
+                        pending_link = task_context.get("link") or pending_link
+                except Exception as context_error:
+                    logger.warning("Could not resolve reassignment contact context for task %s: %s", task_id, context_error)
                 display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
                 conf_key = str(uuid.uuid4())[:8]
                 _bot_app.bot_data.setdefault("pending_updates", {})[conf_key] = {
                     "task_id": task_id, "update_data": update_data,
                     "assignee_name_raw": assignee_name_raw, "sender_name": sender_name,
-                    "creator_chat_id": chat_id, "display_text": display_text
+                    "creator_chat_id": chat_id, "display_text": display_text,
+                    "contact_name": pending_contact_name,
+                    "phone": pending_phone,
+                    "link": pending_link,
                 }
                 # Return conf_key so frontend can attach note to this pending update
                 return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
@@ -4672,9 +4713,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki tapşırıq|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Texniki tapşırıq|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
-                    _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki tapşırıq'}
+                    _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki': TECHNICAL_SUPPORT_NAME}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
@@ -5167,7 +5208,7 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
         except: pass
         return
     # Resolve assignee
-    _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": ("Texniki tapşırıq", 15532668), "admin": ("Nizami Qasımov", 10932455)}
+    _UPD_MARKER = {"shamil": ("Şamil Əliyev", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": (TECHNICAL_SUPPORT_NAME, 15532668), "admin": ("Nizami Qasımov", 10932455)}
     update_data = pending["update_data"]
     if decision != "yes":
         marker_info = _UPD_MARKER.get(decision)
@@ -5237,7 +5278,7 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 pass
         return
     # Admin selected an employee - resolve assignee
-    _CNFTASK_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": "Texniki tapşırıq", "admin": ""}
+    _CNFTASK_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
     marker_name = _CNFTASK_MARKER.get(decision, "")
     if decision == "admin":
         assignee_id = 10932455
@@ -5324,6 +5365,7 @@ _KPI_TARGET_TIMES = {
 _EMPLOYEE_TYPES = {
     7962757442: 'salary', 7262243946: 'salary',
     7329891614: 'salary', 7920785774: 'piecework',
+    8835096199: 'salary',
 }
 
 def get_employee_type(telegram_id):
