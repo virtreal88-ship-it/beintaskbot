@@ -1,5 +1,38 @@
 [
   {
+    "id": "dc278d85",
+    "type": "change_stage",
+    "created_at": "2026-07-20T18:33:49.404841+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Elnur izabel qarcia",
+      "phone": "+994552118230",
+      "lead_id": 76940515,
+      "task_id": 93556873,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Stokda məhsul yazanda əlavə məhsul artırır proqram. Birdə məhsulun maya dəyərini elə satış qiyməti olaraq qəbul edir proqramda. Bu məsələni araşdır, ehtiyac olsa yerində dəstək ol. Həmçinin axırda çəkiliş ilə bağlı mövzu ac Fəridə gedib çəksin",
+      "task_price": "",
+      "note": "Problemlər həll edildi",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76940515",
+      "callback_key": "8836d750"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "5e5dba83",
     "type": "change_stage",
     "created_at": "2026-07-20T17:35:03.715006+04:00",
