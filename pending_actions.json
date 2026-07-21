@@ -3,7 +3,7 @@
     "id": "eaaae24b",
     "type": "change_stage",
     "created_at": "2026-07-21T15:39:14.772240+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ucuzluq",
       "phone": "+994557577537",
@@ -31,7 +31,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-21T15:40:52.452664+04:00",
+    "resolved_choice": "Düşünür"
   },
   {
     "id": "f8b7c12f",
