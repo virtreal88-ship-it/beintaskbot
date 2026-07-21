@@ -3698,9 +3698,7 @@ async def handle_pending_change_stage(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": f"Mərhələ tapılmadı: {stage_name}"})
     if not update_lead_kommo(int(lead_id), {"status_id": int(status_id), "pipeline_id": PIPELINE_ID}):
         return web.json_response({"success": False, "message": "Kommo xətası."})
-    mark_pending_action_resolved(action_id=action_id, choice=stage_name)
-    _clear_runtime_pending_action(action)
-    return web.json_response({"success": True, "message": f"Mərhələ: {stage_name}"})
+    return web.json_response({"success": True, "message": f"Mərhələ dəyişdirildi: {stage_name}"})
 
 async def handle_pending_change_executor(request: web.Request) -> web.Response:
     try:
@@ -3733,9 +3731,7 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": "İcraçı tanınmadı."})
     if not update_task_kommo(int(task_id), update_data):
         return web.json_response({"success": False, "message": "Yeniləmə uğursuz oldu."})
-    mark_pending_action_resolved(action_id=action_id, choice=executor)
-    _clear_runtime_pending_action(action)
-    return web.json_response({"success": True, "message": f"İcraçı: {executor}"})
+    return web.json_response({"success": True, "message": f"İcraçı dəyişdirildi: {executor}"})
 
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
