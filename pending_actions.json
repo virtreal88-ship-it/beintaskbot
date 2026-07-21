@@ -109,7 +109,7 @@
     "id": "ebae6e8c",
     "type": "reassign_task",
     "created_at": "2026-07-21T14:56:35.052824+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Elvin Zerif Parfum Əməkdaş",
       "phone": "994703030596",
@@ -142,7 +142,9 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-21T15:38:02.958700+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "1bcdbf88",
