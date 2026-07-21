@@ -300,9 +300,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-07-20 17:23:01"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -40.0,
+        "status": "confirmed",
+        "task_text": "M10 atdım",
+        "result_text": "M10 atdım",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-21 16:33:18"
       }
     ],
-    "balance": 40.5
+    "balance": 0.5
   },
   "7329891614": {
     "transactions": [],
