@@ -3539,21 +3539,20 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
         if lead_id in _bot_changed_leads:
-            if _time.time() - _bot_changed_leads[lead_id] < 60:
+            if _time.time() - _bot_changed_leads[lead_id] < 120:
                 logger.info(f"Webhook suppressed: bot-initiated stage change for lead {lead_id}")
-                del _bot_changed_leads[lead_id]
                 return web.Response(status=200, text="OK")
             else:
                 del _bot_changed_leads[lead_id]
         # Deduplicate: same lead+stage within 60s = duplicate webhook
         import time as _time2
         _dedup_key = (lead_id, new_status_id)
-        if _dedup_key in _webhook_stage_dedup and _time2.time() - _webhook_stage_dedup[_dedup_key] < 60:
+        if _dedup_key in _webhook_stage_dedup and _time2.time() - _webhook_stage_dedup[_dedup_key] < 1800:
             logger.info(f"Webhook dedup: lead {lead_id} stage {new_status_id} already processed")
             return web.Response(status=200, text="OK")
         _webhook_stage_dedup[_dedup_key] = _time2.time()
         # Cleanup old dedup entries
-        _cutoff = _time2.time() - 120
+        _cutoff = _time2.time() - 3600
         for k in list(_webhook_stage_dedup.keys()):
             if _webhook_stage_dedup[k] < _cutoff:
                 del _webhook_stage_dedup[k]
@@ -3637,22 +3636,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
             except Exception as e:
                 logger.error(f"Webhook stage-task error: {e}")
-            save_pending_action("assign_executor", {
-                "contact_name": contact_name,
-                "phone": contact_phone,
-                "lead_id": lead_id,
-                "stage_name": stage_display,
-                "stage_key": stage_key,
-                "sender_name": "Webhook",
-                "link": link,
-                "telegram_chat_id": admin_chat,
-                "telegram_message_id": sent.message_id if sent else None,
-            }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Ləğv et"])
-            send_push_to_admin(
-                f"Mərhələ: {stage_display} - {contact_name}",
-                title="📋 İcraçı seç",
-                url="#pending",
-            )
+            # Telegram buttons are enough - no PWA pending action needed
         else:
             # Plain notification
             msg = (f"🔄 *Mərhələ dəyişikliyi:*\n\n👤 {contact_name}\n📞 {contact_phone}\n"
