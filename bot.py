@@ -626,6 +626,7 @@ _notified_task_webhooks: dict = {}  # {task_id: timestamp} - prevent duplicate w
 # Bot-initiated lead stage changes (suppress webhook echo)
 _bot_updated_tasks: dict = {}  # {task_id: timestamp} - suppress update webhook echo
 _bot_changed_leads: dict = {}  # {lead_id: timestamp}
+_webhook_stage_dedup: dict = {}  # {(lead_id, status_id): timestamp}
 
 # ─── Pending registrations ───────────────────────────────────────────────────
 _pending_partner_registration: dict = {}
@@ -3544,6 +3545,18 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 return web.Response(status=200, text="OK")
             else:
                 del _bot_changed_leads[lead_id]
+        # Deduplicate: same lead+stage within 60s = duplicate webhook
+        import time as _time2
+        _dedup_key = (lead_id, new_status_id)
+        if _dedup_key in _webhook_stage_dedup and _time2.time() - _webhook_stage_dedup[_dedup_key] < 60:
+            logger.info(f"Webhook dedup: lead {lead_id} stage {new_status_id} already processed")
+            return web.Response(status=200, text="OK")
+        _webhook_stage_dedup[_dedup_key] = _time2.time()
+        # Cleanup old dedup entries
+        _cutoff = _time2.time() - 120
+        for k in list(_webhook_stage_dedup.keys()):
+            if _webhook_stage_dedup[k] < _cutoff:
+                del _webhook_stage_dedup[k]
         # Suppressed stages - no notification
         suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["dusunur"]}
         if new_status_id in suppressed:
