@@ -1,5 +1,38 @@
 [
   {
+    "id": "1bcdbf88",
+    "type": "change_stage",
+    "created_at": "2026-07-21T12:00:30.543931+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Çinar",
+      "phone": "+994505617121",
+      "lead_id": 76989207,
+      "task_id": 93563317,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "DİNE\nSaat 11:30 təqdimat edilməlidi. Ödənişlə bağlı heçnə deyilməsin. İşin həcmimə görə ödəniş deyiləcək.",
+      "task_price": "",
+      "note": "Maraqlandığı nüanslar:\n1.İşçi giriş çıxışı\n2.Mobil ofisant(smendə olan işçi satış edə bilsin)\n3.Menecer ofisant adından satış edə bilsin\n4.Mətbəxə çek göndərilmə\n5.Məhsul silinməsi icazə ilə olsun\n6.Mətbəxə göndərilən çekləri ekranda görmək və idarə etmək.\n7.Telefondakı appdan hesabı bağlamaq(icazə ilə)\n8.Avtomatik istehsal\n9.Xarab olan məhsulların silinməsi\n10.İnventarizasiya\n11.QR menyu(sifarişin kassaya düşməsi)",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76989207",
+      "callback_key": "31b43e5f"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "7c33e3d3",
     "type": "change_stage",
     "created_at": "2026-07-21T11:58:28.699743+04:00",
