@@ -124,32 +124,6 @@
     ]
   },
   {
-    "id": "b7ceba50",
-    "type": "assign_executor",
-    "created_at": "2026-07-21T20:40:47.947889+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "Ucuzluq",
-      "phone": "+994557577537",
-      "lead_id": 76775495,
-      "stage_name": "quraşdırma",
-      "stage_key": "qurashdirma",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76775495",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 3226
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "b7f9f5db",
     "type": "assign_executor",
     "created_at": "2026-07-21T17:41:09.836122+04:00",
