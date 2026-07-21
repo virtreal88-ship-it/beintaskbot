@@ -1,5 +1,39 @@
 [
   {
+    "id": "eaaae24b",
+    "type": "change_stage",
+    "created_at": "2026-07-21T15:39:14.772240+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Ucuzluq",
+      "phone": "+994557577537",
+      "lead_id": 76775495,
+      "task_id": 93560761,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "[Hüseyn Səfərov] Bunun mallarını yığ hazır saxla. Akula yaz.",
+      "task_price": "",
+      "note": "Hazirladim, satisi yazdim, mallari kenara qoydum Rasim goturcek",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76775495",
+      "callback_key": "9bbe4eb0"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f8b7c12f",
     "type": "change_stage",
     "created_at": "2026-07-21T15:33:41.976902+04:00",
