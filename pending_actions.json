@@ -104,32 +104,6 @@
     ]
   },
   {
-    "id": "808bd623",
-    "type": "assign_executor",
-    "created_at": "2026-07-21T17:19:11.905863+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "La ilaha ilAllah",
-      "phone": "+994519086666",
-      "lead_id": 76994223,
-      "stage_name": "yeni sifariş",
-      "stage_key": "yeni_sifaris",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76994223",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 3209
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "eaaae24b",
     "type": "change_stage",
     "created_at": "2026-07-21T15:39:14.772240+04:00",
