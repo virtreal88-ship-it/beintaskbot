@@ -1711,8 +1711,9 @@ function pendingMenuAction(type, actionId) {
             pendingChangeStage(actionId, choice);
         });
     } else if(type === 'executor') {
-        showPendingSelectModal('İcraçı seç', ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
-            pendingChangeExecutor(actionId, choice);
+        showPendingSelectModal('İcraçı seç', ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Texniki Dəstək','Özüm'], (choice) => {
+            const shortMap = {'Şamil Əliyev':'Şamil','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
+            pendingChangeExecutor(actionId, shortMap[choice] || choice);
         });
     } else if(type === 'note') {
         const pData = action.data || {};
@@ -1736,8 +1737,13 @@ function showPendingSelectModal(title, items, callback) {
     const modal = document.createElement('div');
     modal.id = 'pending-select-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;';
-    let btns = items.map(i => `<button onclick="document.getElementById('pending-select-modal')._cb('${i}')" style="width:100%;text-align:left;padding:10px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #f1f5f9;cursor:pointer;">${i}</button>`).join('');
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;min-width:260px;max-width:90vw;max-height:70vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2);"><div style="padding:14px 16px;font-size:14px;font-weight:700;border-bottom:1px solid #e2e8f0;">${title}</div>${btns}<button onclick="document.getElementById('pending-select-modal').remove()" style="width:100%;padding:12px;border:none;background:#f8fafc;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-radius:0 0 16px 16px;">Ləğv et</button></div>`;
+    const _stgClr = {'danışıqlar':'#7ec8e3','Qiymət təklifi':'#ffd700','Təqdimat':'#f5a3d6','Təqdimat olundu':'#a3a3d9','yeni sifariş':'#f5a3d6','görüş':'#f5a020','daxili müzakirə':'#d9a3d9','quraşdırma':'#ff6b6b','Düşünür':'#a0a0a0','uğurlu sifariş':'#4caf50','imtina olundu':'#e53935','Nerazobrannoye':'#90caf9'};
+    const _isStg = title.includes('Mərhələ');
+    let btns = items.map(i => {
+        const dot = _isStg ? `<span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:${_stgClr[i]||'#ccc'};margin-right:14px;flex-shrink:0;"></span>` : '';
+        return `<button onclick="document.getElementById('pending-select-modal')._cb('${i}')" style="width:100%;text-align:left;padding:14px 16px;border:none;background:none;font-size:15px;font-weight:500;color:#1e293b;border-bottom:1px solid #f1f5f9;cursor:pointer;display:flex;align-items:center;">${dot}${i}</button>`;
+    }).join('');
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;min-width:280px;max-width:90vw;max-height:75vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2);"><div style="padding:14px 16px;font-size:15px;font-weight:700;border-bottom:1px solid #e2e8f0;">${title}</div>${btns}<button onclick="document.getElementById('pending-select-modal').remove()" style="width:100%;padding:12px;border:none;background:#f8fafc;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-radius:0 0 16px 16px;">Ləğv et</button></div>`;
     modal._cb = (val) => { modal.remove(); callback(val); };
     document.body.appendChild(modal);
 }
