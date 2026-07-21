@@ -3,7 +3,7 @@
     "id": "1bcdbf88",
     "type": "change_stage",
     "created_at": "2026-07-21T12:00:30.543931+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Çinar",
       "phone": "+994505617121",
@@ -30,7 +30,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-21T14:08:23.827410+04:00",
+    "resolved_choice": "daxili müzakirə"
   },
   {
     "id": "7c33e3d3",
