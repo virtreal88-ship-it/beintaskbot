@@ -471,27 +471,34 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
             _send_telegram_text(creator_chat_id, "✅ Dəyişiklik təsdiq edildi!")
 
     elif action_type == "change_stage":
-        # If user just confirms (Təsdiq et) without selecting stage via long-press, use Düşünür
-        effective_choice = choice if choice != "Təsdiq et" else "Düşünür"
-        status_id = next(
-            (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == effective_choice.casefold()),
-            None,
-        )
-        if not lead_id or not status_id:
-            return False, "Seçilmiş mərhələ tapılmadı."
-        choice = effective_choice
-        if not update_lead_kommo(
-            int(lead_id),
-            {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
-        ):
-            return False, "Kommo mərhələsi dəyişdirilmədi."
-        stage_name = STAGE_NAMES.get(int(status_id), choice)
-        # Apply KPI score if provided
-        if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
-            employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
-            if employee_tg_id:
-                set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
-        result_message = f"Mərhələ dəyişdirildi: {stage_name}."
+        # Təsdiq et = only confirm KPI, do NOT change stage (stage is changed separately via long press)
+        if choice == "Təsdiq et":
+            # Only apply KPI score, no stage change
+            if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
+                employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
+                if employee_tg_id:
+                    set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
+            result_message = "Təsdiq edildi."
+        else:
+            # Explicit stage selection from long-press menu
+            status_id = next(
+                (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
+                None,
+            )
+            if not lead_id or not status_id:
+                return False, "Seçilmiş mərhələ tapılmadı."
+            if not update_lead_kommo(
+                int(lead_id),
+                {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+            ):
+                return False, "Kommo mərhələsi dəyişdirilmədi."
+            stage_name = STAGE_NAMES.get(int(status_id), choice)
+            # Apply KPI score if provided
+            if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
+                employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
+                if employee_tg_id:
+                    set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
+            result_message = f"Mərhələ dəyişdirildi: {stage_name}."
 
     else:
         return False, "Naməlum sorğu növü."
