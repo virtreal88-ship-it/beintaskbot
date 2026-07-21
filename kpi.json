@@ -723,7 +723,10 @@
     "deadline_ts": 1784635963,
     "completed_before_deadline": true,
     "delay_reason": "",
-    "completed_at": "2026-07-21 11:31:07"
+    "completed_at": "2026-07-21 11:31:07",
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-07-21 11:37:01"
   },
   "7962757442_93555705": {
     "sessions": [
