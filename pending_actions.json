@@ -1,5 +1,39 @@
 [
   {
+    "id": "e17b3e0f",
+    "type": "change_stage",
+    "created_at": "2026-07-21T21:44:34.334262+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Çatdırılma",
+      "phone": "+994502018950",
+      "lead_id": 75759965,
+      "task_id": 93565937,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "[Hüseyn Səfərov] Bunu satışı icra et. Sadəcə avadanlıq satışıdır. Özünə məlumat ver. Rasimə ver Bakıya aparsın , sabah gedəcək deyəsən.",
+      "task_price": "",
+      "note": "Satışı yazdım. Rasimə dedim sabah danışıb təhvil verəcək. Malları verdim Rasimə",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75759965",
+      "callback_key": "abb64b0c"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "53660925",
     "type": "assign_executor",
     "created_at": "2026-07-21T21:05:11.668407+04:00",
