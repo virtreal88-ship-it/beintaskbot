@@ -3721,6 +3721,18 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
     task_id = action.get("data", {}).get("task_id")
     if not task_id:
+        # Try to find open task from lead_id
+        lead_id = action.get("data", {}).get("lead_id")
+        if lead_id:
+            try:
+                lead_tasks = get_entity_tasks(int(lead_id), "leads")
+                open_tasks = [t for t in lead_tasks if not t.get("is_completed")]
+                if open_tasks:
+                    open_tasks.sort(key=lambda t: t.get("complete_till", 0))
+                    task_id = open_tasks[0]["id"]
+            except:
+                pass
+    if not task_id:
         return web.json_response({"success": False, "message": "Tapşırıq ID tapılmadı."})
     marker_info = _UPD_MARKER.get(executor)
     update_data = {}
@@ -4547,6 +4559,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
               except Exception as notif_block_err:
                 logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
               localStorage_key = f'timer_{task_id}'
+              msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+              return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+            else:
+              # Admin completing task - just return success
               msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
               return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
         elif action == "update_task_deadline":
