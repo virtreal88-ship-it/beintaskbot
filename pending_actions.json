@@ -1,5 +1,39 @@
 [
   {
+    "id": "ddbeffb4",
+    "type": "change_stage",
+    "created_at": "2026-07-21T21:45:47.242951+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "0513891101",
+      "phone": "0513891101",
+      "lead_id": 76896923,
+      "task_id": 93540857,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "[Hüseyn Səfərov] FIskalda launch menu problemi\nQR menu\nWolt, bolt inteqrasiya\n\nBu problemlər var. Bunları həlli üçün proqramistlərə tapşırıq yarat və nəzarətdə saxla. Mümkün qədər tez həll edilsin",
+      "task_price": "",
+      "note": "Fiskal məsələsi həll olunub, müştəriyə deyib Şamil. Qalıb set hesabatı məsələsi, o məsələdə proqramistlərə deyilib",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76896923",
+      "callback_key": "ae1a28b6"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e17b3e0f",
     "type": "change_stage",
     "created_at": "2026-07-21T21:44:34.334262+04:00",
