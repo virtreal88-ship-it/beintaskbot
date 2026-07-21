@@ -3526,6 +3526,15 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         pipeline_id = int(pipeline_id) if pipeline_id else 0
         if pipeline_id != PIPELINE_ID:
             return web.Response(status=200, text="OK")
+        # Suppress if admin changed stage directly in Kommo
+        modified_by = data.get("leads[status][0][modified_user_id]") or data.get("account[id]")
+        try:
+            modified_by_int = int(modified_by) if modified_by else 0
+        except:
+            modified_by_int = 0
+        if modified_by_int == 10932455:
+            logger.info(f"Webhook suppressed: admin-initiated stage change for lead {lead_id}")
+            return web.Response(status=200, text="OK")
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
         if lead_id in _bot_changed_leads:
