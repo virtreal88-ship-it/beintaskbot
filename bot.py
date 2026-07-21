@@ -364,8 +364,11 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
         return False, "Sorğu tapılmadı."
     if action.get("resolved"):
         return False, "Sorğu artıq həll edilib."
-    if choice not in (action.get("options") or []):
-        return False, "Yanlış seçim."
+    action_options = action.get("options") or []
+    if choice not in action_options:
+        # Allow 'Təsdiq et' for change_stage even if old actions lack it in options
+        if not (action.get("type") == "change_stage" and choice == "Təsdiq et"):
+            return False, "Yanlış seçim."
 
     action_type = action.get("type")
     action_data = action.get("data") or {}
@@ -3695,6 +3698,8 @@ async def handle_pending_change_stage(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": f"Mərhələ tapılmadı: {stage_name}"})
     if not update_lead_kommo(int(lead_id), {"status_id": int(status_id), "pipeline_id": PIPELINE_ID}):
         return web.json_response({"success": False, "message": "Kommo xətası."})
+    mark_pending_action_resolved(action_id=action_id, choice=stage_name)
+    _clear_runtime_pending_action(action)
     return web.json_response({"success": True, "message": f"Mərhələ: {stage_name}"})
 
 async def handle_pending_change_executor(request: web.Request) -> web.Response:
@@ -3728,6 +3733,8 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": "İcraçı tanınmadı."})
     if not update_task_kommo(int(task_id), update_data):
         return web.json_response({"success": False, "message": "Yeniləmə uğursuz oldu."})
+    mark_pending_action_resolved(action_id=action_id, choice=executor)
+    _clear_runtime_pending_action(action)
     return web.json_response({"success": True, "message": f"İcraçı: {executor}"})
 
 async def handle_api_action(request: web.Request) -> web.Response:
@@ -4531,7 +4538,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
                             "link": link,
                             "callback_key": callback_key,
-                        }, [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
+                        }, ["Təsdiq et"] + [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
                     except Exception as notify_error:
                         logger.error(f"Completion notification error: {notify_error}")
               except Exception as notif_block_err:
@@ -5159,7 +5166,7 @@ async def change_stage_button_callback(update: Update, context: ContextTypes.DEF
         "callback_key": callback_key,
         "telegram_chat_id": query.message.chat_id,
         "telegram_message_id": query.message.message_id,
-    }, [STAGE_NAMES.get(status_id, stage_key) for stage_key, status_id in STAGES.items()])
+    }, ["Təsdiq et"] + [STAGE_NAMES.get(status_id, stage_key) for stage_key, status_id in STAGES.items()])
     try:
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard_rows))
     except Exception:

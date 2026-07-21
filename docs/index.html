@@ -1176,7 +1176,6 @@ async function confirmComplete() {
 }
 
 function togglePostponeMenu() { const m = document.getElementById('postpone-fast-menu'); m.style.display = m.style.display === 'grid' ? 'none' : 'grid'; document.getElementById('complete-panel').style.display = 'none'; }
-    document.getElementById('action-buttons').style.display = 'flex';
 function showPostponeReasonModal() {
     const existing = document.getElementById('postpone-reason-modal');
     if(existing) existing.remove();
