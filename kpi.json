@@ -749,6 +749,9 @@
     "deadline_ts": 1784699220,
     "completed_before_deadline": true,
     "delay_reason": "",
-    "completed_at": "2026-07-21 11:33:39"
+    "completed_at": "2026-07-21 11:33:39",
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-07-21 11:48:12"
   }
 }
