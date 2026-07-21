@@ -1,5 +1,38 @@
 [
   {
+    "id": "7c33e3d3",
+    "type": "change_stage",
+    "created_at": "2026-07-21T11:58:28.699743+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Smartteam",
+      "phone": "0102135104",
+      "lead_id": 75780295,
+      "task_id": 93557265,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Tapşırılan malları götürdüm:\n\n20əd 80T\n3əd RW21C skayner\n5əd PC dəst\n1əd monitor",
+      "task_price": "",
+      "note": "Uğurlu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75780295",
+      "callback_key": "18b52438"
+    },
+    "options": [
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e3ac082b",
     "type": "assign_executor",
     "created_at": "2026-07-21T06:55:03.930199+04:00",
