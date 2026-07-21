@@ -291,10 +291,10 @@ def _send_telegram_text(chat_id, text: str):
     if not chat_id:
         return
     try:
-        requests.post(
+        _http.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": int(chat_id), "text": text, "disable_web_page_preview": True},
-            timeout=10,
+            timeout=8,
         )
     except Exception as exc:
         logger.warning("Pending action Telegram notification failed: %s", exc)
@@ -308,7 +308,7 @@ def _close_pending_telegram_message(action: dict, result_text: str):
     if not chat_id or not message_id:
         return
     try:
-        requests.post(
+        _http.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
             json={
                 "chat_id": int(chat_id),
@@ -316,7 +316,7 @@ def _close_pending_telegram_message(action: dict, result_text: str):
                 "text": result_text,
                 "disable_web_page_preview": True,
             },
-            timeout=10,
+            timeout=8,
         )
     except Exception as exc:
         logger.warning("Pending action Telegram cleanup failed: %s", exc)
@@ -366,8 +366,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
         return False, "Sorğu artıq həll edilib."
     action_options = action.get("options") or []
     if choice not in action_options:
-        # Allow 'Təsdiq et' for change_stage even if old actions lack it in options
-        if not (action.get("type") == "change_stage" and choice == "Təsdiq et"):
+        if choice != "Təsdiq et":
             return False, "Yanlış seçim."
 
     action_type = action.get("type")
@@ -380,7 +379,11 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
-            choice = "Özüm"
+            result_message = "Təsdiq edildi."
+            if not mark_pending_action_resolved(action_id=action_id, choice=choice):
+                return False, "Sorğu bağlanmadı."
+            _clear_runtime_pending_action(action)
+            return True, result_message
         if choice != "Ləğv et":
             stage_key = action_data.get("stage_key") or _stage_key_for_name(stage_name)
             task_text = _STAGE_TASK_TEXTS.get(stage_key)
@@ -454,7 +457,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
                     current_text = update_data.get("text", "")
                     if not current_text and task_id:
                         try:
-                            t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                            t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
                             if t_resp.status_code == 200:
                                 current_text = t_resp.json().get("text", "")
                         except: pass
@@ -673,6 +676,10 @@ HEADERS = {
     "Authorization": f"Bearer {KOMMO_TOKEN}",
     "Content-Type": "application/json",
 }
+# Reusable session with connection pooling for faster API calls
+_http = requests.Session()
+_http.headers.update(HEADERS)
+_http.mount('https://', requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10))
 
 def search_contact_by_phone(phone: str) -> list:
     digits = re.sub(r"[^\d]", "", phone)
@@ -695,7 +702,7 @@ def search_contact_by_phone(phone: str) -> list:
         url = f"{KOMMO_BASE_URL}/api/v4/contacts"
         params = {"query": variant, "limit": 5}
         try:
-            resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+            resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
             if resp.status_code == 200:
                 contacts = resp.json().get("_embedded", {}).get("contacts", [])
                 for c in contacts:
@@ -721,7 +728,7 @@ def search_contact_by_phone(phone: str) -> list:
 def get_contact_details(contact_id: int) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}"
     try:
-        resp = requests.get(url, headers=HEADERS, params={"with": "leads"}, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params={"with": "leads"}, timeout=8)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -731,7 +738,7 @@ def get_contact_details(contact_id: int) -> dict | None:
 def get_lead_details(lead_id: int) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
     try:
-        resp = requests.get(url, headers=HEADERS, params={"with": "contacts"}, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params={"with": "contacts"}, timeout=8)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -819,7 +826,7 @@ def get_contact_name_from_entity(entity_id: int, entity_type: str) -> str:
 def get_contact_notes(contact_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
     try:
-        resp = requests.get(url, headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=8)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("notes", [])
     except:
@@ -830,7 +837,7 @@ def get_entity_tasks(entity_id: int, entity_type: str) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     params = {"filter[entity_id]": entity_id, "filter[entity_type]": entity_type, "filter[is_completed]": 0}
     try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("tasks", [])
     except:
@@ -848,7 +855,7 @@ def get_tasks(start: datetime, end: datetime, responsible_id: int = None) -> lis
     if responsible_id:
         params["filter[responsible_user_id]"] = responsible_id
     try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("tasks", [])
     except:
@@ -859,7 +866,7 @@ def get_all_incomplete_tasks() -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     params = {"filter[is_completed]": 0, "limit": 250}
     try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("tasks", [])
     except:
@@ -877,7 +884,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
         "task_type_id": task_type_id,
     }]
     try:
-        resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code in (200, 201):
             result = resp.json()
             try:
@@ -901,7 +908,7 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
     url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
     payload = [{"note_type": "common", "params": {"text": text}}]
     try:
-        resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code in (200, 201):
             return resp.json()
     except Exception as e:
@@ -911,7 +918,7 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
     try:
-        resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
+        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         if resp.status_code == 200:
             # Track bot-initiated stage changes to suppress webhook echo
             if "status_id" in data:
@@ -932,7 +939,7 @@ def update_task_kommo(task_id, data: dict) -> dict | None:
     import time as _time
     _bot_updated_tasks[int(task_id)] = _time.time()
     try:
-        resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
+        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         logger.info(f"update_task_kommo {task_id}: status={resp.status_code}")
         if resp.status_code == 200:
             return resp.json()
@@ -945,7 +952,7 @@ def update_task_kommo(task_id, data: dict) -> dict | None:
 def update_contact_kommo(contact_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}"
     try:
-        resp = requests.patch(url, headers=HEADERS, json=data, timeout=15)
+        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         if resp.status_code == 200:
             return resp.json()
     except Exception as e:
@@ -962,7 +969,7 @@ def create_contact_kommo(name: str, phone: str, custom_fields: list = None, resp
         ] + (custom_fields or [])
     }]
     try:
-        resp = requests.post(url, headers=HEADERS, json=payload, timeout=15)
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code in (200, 201):
             return resp.json()
     except Exception as e:
@@ -973,7 +980,7 @@ def get_leads_by_status(status_id: int) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/leads"
     params = {"filter[statuses][0][pipeline_id]": PIPELINE_ID, "filter[statuses][0][status_id]": status_id, "limit": 50}
     try:
-        resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
         if resp.status_code == 200:
             return resp.json().get("_embedded", {}).get("leads", [])
     except:
@@ -1026,7 +1033,7 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
             lead_info = f"\n\n📋 *Sövdələşmə:* {lead.get('name', '')}\n📌 Mərhələ: {stage_name}\n👤 Məsul: {responsible}{price_str}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}"
             # Get lead notes too
             try:
-                resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=15)
+                resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=8)
                 if resp.status_code == 200:
                     lead_notes_list = resp.json().get("_embedded", {}).get("notes", [])
             except:
@@ -1086,7 +1093,7 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
 def fetch_partner_enums() -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/custom_fields"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = _http.get(url, headers=HEADERS, timeout=8)
         if resp.status_code == 200:
             fields = resp.json().get("_embedded", {}).get("custom_fields", [])
             for f in fields:
@@ -1205,11 +1212,11 @@ def create_lead_for_contact(contact_id: int, contact_name: str) -> int | None:
         "Content-Type": "application/json",
     }
     try:
-        response = requests.post(
+        response = _http.post(
             f"https://texnikidestek50.kommo.com/api/v4/leads",
             headers=headers,
             json=payload,
-            timeout=15,
+            timeout=8,
         )
         if response.status_code in (200, 201):
             return response.json().get("_embedded", {}).get("leads", [{}])[0].get("id")
@@ -2915,7 +2922,7 @@ async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "_embedded": {"contacts": [{"id": contact_id}]}
             }]
             try:
-                resp = requests.post(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, json=lead_payload, timeout=15)
+                resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, json=lead_payload, timeout=8)
                 lead_result = resp.json() if resp.status_code in (200, 201) else None
             except:
                 lead_result = None
@@ -3418,7 +3425,7 @@ async def _handle_kommo_task_webhook(data: dict):
     if entity_id:
         try:
             _n_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-            _n_resp = requests.get(_n_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+            _n_resp = _http.get(_n_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
             if _n_resp.status_code == 200:
                 _n_data = _n_resp.json().get("_embedded", {}).get("notes", [])
                 if _n_data:
@@ -3432,7 +3439,7 @@ async def _handle_kommo_task_webhook(data: dict):
         _task_completed = False
         if task_id_raw:
             try:
-                _tc = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=10)
+                _tc = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=8)
                 if _tc.status_code == 200 and _tc.json().get("is_completed"):
                     _task_completed = True
                     logger.info(f"Assignee notification suppressed: task {task_id_raw} already completed")
@@ -3465,7 +3472,7 @@ async def _handle_kommo_task_webhook(data: dict):
         _skip_notify = False
         if task_id_raw:
             try:
-                _t_check = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=10)
+                _t_check = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_raw}", headers=HEADERS, timeout=8)
                 if _t_check.status_code == 200:
                     _t_json = _t_check.json()
                     if _t_json.get("is_completed"):
@@ -3741,7 +3748,7 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
     elif marker_info:
         full_name, _ = marker_info
         update_data["responsible_user_id"] = 15532668
-        old_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS)
+        old_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS)
         if old_resp.status_code == 200:
             old_text = old_resp.json().get("text", "")
             new_text = re.sub(r"^\[[^\]]+\]\s*", "", old_text)
@@ -3783,13 +3790,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if task_id_note:
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
+                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
                     t_data = t_resp.json()
                     entity_id = t_data.get("entity_id")
                     entity_type = t_data.get("entity_type", "leads")
                     if entity_id:
                         note_payload = [{"note_type": "common", "params": {"text": text}}]
-                        requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
+                        _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
                 except: pass
             result = execute_tool_add_note(phone, text) if (phone and not task_id_note) else "OK"
             # Subtask
@@ -3834,7 +3841,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     deal_link = pending.get("link", "")
                     try:
                         headers_k3 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                        t_resp3 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
+                        t_resp3 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
                         t_data3 = t_resp3.json()
                         entity_id3 = t_data3.get("entity_id", "")
                         entity_type3 = t_data3.get("entity_type", "leads")
@@ -3845,7 +3852,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         if entity_id3:
                             deal_link = f"{KOMMO_BASE_URL}/{entity_type3}/detail/{entity_id3}"
                             # Get lead/contact info
-                            l_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
+                            l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
                             l_data = l_resp.json()
                             client_name = l_data.get("name", "") or client_name
                             # Get contact phone
@@ -3853,7 +3860,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             if contacts:
                                 c_id = contacts[0].get("id")
                                 if c_id:
-                                    c_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{c_id}", headers=headers_k3, timeout=5)
+                                    c_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{c_id}", headers=headers_k3, timeout=5)
                                     c_data = c_resp.json()
                                     for cf in c_data.get("custom_fields_values", []):
                                         if cf.get("field_code") == "PHONE":
@@ -3879,7 +3886,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         [{"text": "Texniki", "callback_data": f"updtask-{found_conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
                         [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                     ]}
-                    tg_resp = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=10)
+                    tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
                     tg_msg_id = None
                     try:
                         tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
@@ -3912,7 +3919,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     if task_id_note:
                         try:
                             headers_k2 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                            t_resp2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k2, timeout=5)
+                            t_resp2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k2, timeout=5)
                             t_data2 = t_resp2.json()
                             entity_id2 = t_data2.get("entity_id", "")
                             entity_type2 = t_data2.get("entity_type", "leads")
@@ -4033,10 +4040,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         display_text = text.replace(f'[{assignee_name_raw}] ', '')
                         notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
                         try:
-                            requests.post(
+                            _http.post(
                                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                                 json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
-                                timeout=10
+                                timeout=8
                             )
                         except: pass
                         send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
@@ -4169,7 +4176,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if edit_client_name and task_id:
                 # Get task to find entity_id, then find contact and update name
                 try:
-                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
                     if t_resp.status_code == 200:
                         task_info = t_resp.json()
                         eid = task_info.get("entity_id")
@@ -4177,7 +4184,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         if eid and etype == "contacts":
                             update_contact_kommo(int(eid), {"name": edit_client_name})
                         elif eid and etype == "leads":
-                            l_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads/{eid}?with=contacts", headers=HEADERS, timeout=10)
+                            l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/{eid}?with=contacts", headers=HEADERS, timeout=8)
                             if l_resp.status_code == 200:
                                 contacts_emb = l_resp.json().get("_embedded", {}).get("contacts", [])
                                 if contacts_emb:
@@ -4205,8 +4212,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 pending_phone = phone
                 pending_link = ""
                 try:
-                    task_response = requests.get(
-                        f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10
+                    task_response = _http.get(
+                        f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8
                     )
                     if task_response.status_code == 200:
                         task_context = get_task_deal_context(task_response.json())
@@ -4236,7 +4243,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 link = ""
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                    t_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
+                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
                     t_data = t_resp.json()
                     entity_id = t_data.get("entity_id", "")
                     entity_type = t_data.get("entity_type", "leads")
@@ -4245,7 +4252,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     note_text = data.get("note", "").strip()
                     if note_text and entity_id:
                         note_payload = [{"note_type": "common", "params": {"text": note_text}}]
-                        requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=10)
+                        _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=8)
                 except:
                     pass
                 return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
@@ -4292,7 +4299,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
             try:
-                task_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=10)
+                task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
                 if task_resp.status_code != 200:
                     return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
                 task_data = task_resp.json()
@@ -4379,7 +4386,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 else:
                     # No phone - try to get lead from task entity
                     try:
-                        task_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=15)
+                        task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
                         if task_resp.status_code == 200:
                             task_data = task_resp.json()
                             entity_id = task_data.get("entity_id")
@@ -4535,10 +4542,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         }
                     kb_json = {"inline_keyboard": [[{"text": "📋 Mərhələni dəyiş", "callback_data": f"chgstg-{callback_key}"}]]}
                     try:
-                        requests.post(
+                        _http.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                             json={"chat_id": admin_chat, "text": completion_message, "reply_markup": kb_json, "disable_web_page_preview": True},
-                            timeout=10
+                            timeout=8
                         )
                         send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı", url="#pending")
                         save_pending_action("change_stage", {
@@ -4641,10 +4648,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "task_id lazımdır."})
             deadline_ts = 0
             try:
-                task_response = requests.get(
+                task_response = _http.get(
                     f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}",
                     headers=HEADERS,
-                    timeout=10,
+                    timeout=8,
                 )
                 if task_response.status_code == 200:
                     task_payload = task_response.json()
@@ -4712,7 +4719,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         try:
             for fid in fetch_ids:
                 params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fid, "limit": 50}
-                resp = requests.get(url, headers=HEADERS, params=params, timeout=15)
+                resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
                 if resp.status_code == 200:
                     raw_tasks.extend(resp.json().get("_embedded", {}).get("tasks", []))
             if raw_tasks:
@@ -4733,7 +4740,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     id_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(contact_ids)[:50])}
                     id_params["limit"] = 50
                     try:
-                        cr = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=15)
+                        cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
                         if cr.status_code == 200:
                             for c in cr.json().get("_embedded", {}).get("contacts", []):
                                 phone_val = ""
@@ -4749,7 +4756,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     lead_params = {f"filter[id][{i}]": lid for i, lid in enumerate(list(lead_ids)[:50])}
                     lead_params.update({"with": "contacts", "limit": 50})
                     try:
-                        lr = requests.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=15)
+                        lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=8)
                         if lr.status_code == 200:
                             for lead in lr.json().get("_embedded", {}).get("leads", []):
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
@@ -4764,7 +4771,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         new_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(new_cids)[:50])}
                         new_params["limit"] = 50
                         try:
-                            cr2 = requests.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=15)
+                            cr2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=8)
                             if cr2.status_code == 200:
                                 for c in cr2.json().get("_embedded", {}).get("contacts", []):
                                     phone_val = ""
@@ -4831,7 +4838,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         pass
                     try:
                         _note_url = f"{KOMMO_BASE_URL}/api/v4/{_note_entity_type}/{_note_entity_id}/notes"
-                        _note_resp = requests.get(_note_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                        _note_resp = _http.get(_note_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
                         if _note_resp.status_code == 200:
                             _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
                             if _notes_data:
@@ -5004,7 +5011,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         _note_15 = ""
         if entity_id:
             try:
-                _nr = requests.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=10)
+                _nr = _http.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
                 if _nr.status_code == 200:
                     _nd = _nr.json().get("_embedded", {}).get("notes", [])
                     if _nd:
