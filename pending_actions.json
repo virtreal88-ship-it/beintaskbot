@@ -3,7 +3,7 @@
     "id": "8cda2610",
     "type": "assign_executor",
     "created_at": "2026-07-21T22:50:06.952241+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Eeee",
       "phone": "+0515000905",
@@ -23,7 +23,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-21T23:34:01.458447+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "e4273a6b",
