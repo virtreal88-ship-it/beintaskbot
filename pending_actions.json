@@ -72,32 +72,6 @@
     "resolved_choice": "Təsdiq et"
   },
   {
-    "id": "b7f9f5db",
-    "type": "assign_executor",
-    "created_at": "2026-07-21T17:41:09.836122+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "nerd tesbeh el isleri satisi",
-      "phone": "",
-      "lead_id": 76994197,
-      "stage_name": "yeni sifariş",
-      "stage_key": "yeni_sifaris",
-      "sender_name": "Webhook",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76994197",
-      "telegram_chat_id": 1628569350,
-      "telegram_message_id": 3216
-    },
-    "options": [
-      "Şamil",
-      "Soltan",
-      "Hüseyn",
-      "Rasim",
-      "Texniki",
-      "Özüm",
-      "Ləğv et"
-    ]
-  },
-  {
     "id": "2c2203d1",
     "type": "assign_executor",
     "created_at": "2026-07-21T17:21:45.539062+04:00",
