@@ -38,7 +38,7 @@
     "id": "7c33e3d3",
     "type": "change_stage",
     "created_at": "2026-07-21T11:58:28.699743+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Smartteam",
       "phone": "0102135104",
@@ -65,7 +65,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-21T14:08:53.279540+04:00",
+    "resolved_choice": "Düşünür"
   },
   {
     "id": "e3ac082b",
