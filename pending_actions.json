@@ -1,5 +1,39 @@
 [
   {
+    "id": "cace3c34",
+    "type": "change_stage",
+    "created_at": "2026-07-21T15:31:10.392172+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rauf",
+      "phone": "+994506217404",
+      "lead_id": 75748533,
+      "task_id": 93564041,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Econova adında profil qeydiyyata sal. Ecoline profilindən malları bura import elə. Qeyd olunan nömrə ilə əlaqə saxla, məlumat lazım olsa. Sonra özünə məlumat ver",
+      "task_price": "",
+      "note": "Yeni profil açıldı, məhsullar miqrasiya edildi, müştəri məlumatlandırıldı",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75748533",
+      "callback_key": "91d39759"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "801503a1",
     "type": "change_stage",
     "created_at": "2026-07-21T15:21:22.545434+04:00",
