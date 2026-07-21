@@ -3684,7 +3684,7 @@ async def handle_pending_change_stage(request: web.Request) -> web.Response:
         return web.json_response({"error": "Unauthorized"}, status=403)
     action_id = data.get("id")
     stage_name = data.get("stage")
-    action = next((a for a in load_pending_actions() if a["id"] == action_id), None)
+    action = next((a for a in get_pending_actions() if a["id"] == action_id), None)
     if not action:
         return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
     lead_id = action.get("data", {}).get("lead_id")
@@ -3706,7 +3706,7 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
         return web.json_response({"error": "Unauthorized"}, status=403)
     action_id = data.get("id")
     executor = data.get("executor")
-    action = next((a for a in load_pending_actions() if a["id"] == action_id), None)
+    action = next((a for a in get_pending_actions() if a["id"] == action_id), None)
     if not action:
         return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
     task_id = action.get("data", {}).get("task_id")
