@@ -1117,16 +1117,18 @@ function closeBottomBar() {
 
 let editingTaskId = null;
 
-function showNotePanel() { document.getElementById('note-panel').style.display = 'block'; document.getElementById('complete-panel').style.display = 'none'; document.getElementById('postpone-fast-menu').style.display = 'none'; }
-    document.getElementById('action-buttons').style.display = 'flex';
+function showNotePanel() { document.getElementById('note-panel').style.display = 'block'; document.getElementById('complete-panel').style.display = 'none'; document.getElementById('postpone-fast-menu').style.display = 'none'; document.getElementById('action-buttons').style.display = 'none'; }
 async function submitNoteInline() {
     const noteText = document.getElementById('note-text-input').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
-    const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
+    const task = mockTasks.find(t => t.id === selectedTaskId);
+    const taskId = task ? task.id : selectedTaskId;
+    const taskPhone = task ? (task.phone||'') : (document.getElementById('bottom-bar-meta').textContent||'');
     clearSessionField('note-text-input'); closeBottomBar();
-    const oldNote = task.last_note; task.last_note = noteText; setCachedTasks(mockTasks); renderNotifications(); toast('✅ Qeyd əlavə edildi', false);
-    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:task.id, text:noteText, phone:task.phone||''}) }); if(!r.ok) throw new Error(); }
-    catch(e) { task.last_note = oldNote; setCachedTasks(mockTasks); renderNotifications(); toast('Xəta! Qeyd göndərilmədi', true); }
+    if(task) { task.last_note = noteText; setCachedTasks(mockTasks); renderNotifications(); }
+    toast('✅ Qeyd əlavə edildi', false);
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:taskId, text:noteText, phone:taskPhone}) }); if(!r.ok) throw new Error(); }
+    catch(e) { if(task) { task.last_note = ''; setCachedTasks(mockTasks); renderNotifications(); } toast('Xəta! Qeyd göndərilmədi', true); }
 }
 
 function showCompletePanel() {
@@ -1713,10 +1715,19 @@ function pendingMenuAction(type, actionId) {
             pendingChangeExecutor(actionId, choice);
         });
     } else if(type === 'note') {
-        const data = action.data || {};
-        const taskId = data.task_id;
-        if(taskId) { selectedTaskId = taskId; clickNotification(taskId,'',''); showNotePanel(); }
-        else toast('Tapşırıq tapılmadı', true);
+        const pData = action.data || {};
+        const taskId = pData.task_id;
+        const leadId = pData.lead_id;
+        if(taskId || leadId) {
+            selectedTaskId = taskId;
+            const desc = pData.task_text || pData.contact_name || '';
+            document.getElementById('bottom-bar-title').textContent = desc;
+            document.getElementById('bottom-bar-meta').textContent = pData.phone || '';
+            const bar = document.getElementById('bottom-action-bar');
+            bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
+            document.getElementById('action-buttons').style.display = 'none';
+            showNotePanel();
+        } else { toast('Tapşırıq tapılmadı', true); }
     }
 }
 function showPendingSelectModal(title, items, callback) {

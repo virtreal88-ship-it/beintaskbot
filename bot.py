@@ -65,6 +65,7 @@ PIPELINE_ID = 8329347
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
 TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
+_UPD_MARKER = {"Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": ("Texniki Dəstək", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
 
 STAGES = {
     "nerazobrannoye": 66107683,
@@ -3688,8 +3689,10 @@ async def handle_pending_change_stage(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": "Sorğu tapılmadı."}, status=404)
     lead_id = action.get("data", {}).get("lead_id")
     status_id = next((sid for sid, dn in STAGE_NAMES.items() if dn.casefold() == stage_name.casefold()), None)
-    if not lead_id or not status_id:
-        return web.json_response({"success": False, "message": "Mərhələ tapılmadı."})
+    if not lead_id:
+        return web.json_response({"success": False, "message": "Lead ID tapılmadı. Köhnə sorğu ola bilər."})
+    if not status_id:
+        return web.json_response({"success": False, "message": f"Mərhələ tapılmadı: {stage_name}"})
     if not update_lead_kommo(int(lead_id), {"status_id": int(status_id), "pipeline_id": PIPELINE_ID}):
         return web.json_response({"success": False, "message": "Kommo xətası."})
     return web.json_response({"success": True, "message": f"Mərhələ: {stage_name}"})
@@ -3716,7 +3719,7 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
     elif marker_info:
         full_name, _ = marker_info
         update_data["responsible_user_id"] = 15532668
-        old_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=KOMMO_HEADERS)
+        old_resp = requests.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS)
         if old_resp.status_code == 200:
             old_text = old_resp.json().get("text", "")
             new_text = re.sub(r"^\[[^\]]+\]\s*", "", old_text)
@@ -3766,7 +3769,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         note_payload = [{"note_type": "common", "params": {"text": text}}]
                         requests.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
                 except: pass
-            result = execute_tool_add_note(phone, text) if phone else "OK"
+            result = execute_tool_add_note(phone, text) if (phone and not task_id_note) else "OK"
             # Subtask
             if data.get("create_subtask") and data.get("subtask_text"):
                 st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
@@ -3966,7 +3969,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # If creating for themselves, no confirmation needed
             is_admin_user = is_admin(chat_id)
             creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
-            creates_for_self = False  # Always require admin confirmation
+            creates_for_self = (assignee_name_raw == creator_name) if (assignee_name_raw and creator_name) else False
             if not is_admin_user and not creates_for_self and _bot_app:
                 # Store pending task in bot_data
                 conf_key = str(uuid.uuid4())[:8]
@@ -4425,7 +4428,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
 
-            if True:  # Always notify admin even if task was already completed
+            if not is_admin(chat_id):  # Admin doesn't need self-confirmation
               try:
                 logger.info("complete_task: ENTERING notification block")
                 task_text_full = task_data.get("text", "").strip()
