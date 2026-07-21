@@ -73,7 +73,7 @@
     "id": "801503a1",
     "type": "change_stage",
     "created_at": "2026-07-21T15:21:22.545434+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Zərif parfum",
       "phone": "994703030596",
@@ -101,7 +101,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-21T15:37:23.084032+04:00",
+    "resolved_choice": "Düşünür"
   },
   {
     "id": "ebae6e8c",
