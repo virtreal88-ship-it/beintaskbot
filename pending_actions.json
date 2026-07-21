@@ -1,5 +1,44 @@
 [
   {
+    "id": "ebae6e8c",
+    "type": "reassign_task",
+    "created_at": "2026-07-21T14:56:35.052824+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Elvin Zerif Parfum Əməkdaş",
+      "phone": "994703030596",
+      "lead_id": 74476749,
+      "task_id": 93564153,
+      "task_text": "Tarifini artır, 1satış nöqtəsi +1istifadəçi",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Soltan Abbasov → Nizami Qasımov",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "note": "Tarifi artır",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74476749",
+      "conf_key": "a06a5e10",
+      "update_data": {
+        "text": "[Nizami Qasımov] Tarifini artır, 1satış nöqtəsi +1istifadəçi",
+        "responsible_user_id": 10932455,
+        "task_type_id": 1,
+        "complete_till": 1784632920
+      },
+      "creator_chat_id": 7262243946,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 3185
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "1bcdbf88",
     "type": "change_stage",
     "created_at": "2026-07-21T12:00:30.543931+04:00",
