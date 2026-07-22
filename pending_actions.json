@@ -3,7 +3,7 @@
     "id": "ff6d7a48",
     "type": "change_stage",
     "created_at": "2026-07-22T11:56:35.205086+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nizami",
       "phone": "+994502072240",
@@ -31,7 +31,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-22T11:57:19.241922+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "294fc0f8",
