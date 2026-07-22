@@ -214,11 +214,45 @@ def _normalize_task_priority(priority: str) -> str:
     return normalized if normalized in _VALID_TASK_PRIORITIES else ""
 
 
+# Təcili alarm: lead/task registry {task_id: {task info}} for 15-min repeated pushes
+_tecili_tasks: dict = {}
+
+
+def register_tecili_task(create_result: dict):
+    """Track an urgent task so the 15-min alarm loop keeps notifying the assignee."""
+    try:
+        task = create_result.get("_embedded", {}).get("tasks", [{}])[0]
+        task_id = task.get("id")
+        if not task_id:
+            return
+        _tecili_tasks[int(task_id)] = {
+            "task_id": int(task_id),
+            "entity_id": task.get("entity_id"),
+            "entity_type": task.get("entity_type", "leads"),
+            "text": task.get("text", ""),
+            "responsible_user_id": task.get("responsible_user_id"),
+        }
+        logger.info(f"Təcili task registered for alarm: {task_id}")
+    except Exception as exc:
+        logger.warning(f"register_tecili_task failed: {exc}")
+
+
+def unregister_tecili_task(task_id):
+    """Stop the 15-min alarm for a completed urgent task."""
+    try:
+        if _tecili_tasks.pop(int(task_id), None) is not None:
+            logger.info(f"Təcili task {task_id} removed from alarm registry")
+    except (TypeError, ValueError):
+        pass
+
+
 def save_task_priority(create_result: dict, priority: str) -> bool:
     """Persist priority for a task returned by Kommo's create-task endpoint."""
     normalized = _normalize_task_priority(priority)
     if not normalized:
         return True
+    if normalized == "urgent":
+        register_tecili_task(create_result)
     try:
         task_id = create_result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
     except (AttributeError, IndexError, TypeError):
@@ -939,6 +973,8 @@ def update_task_kommo(task_id, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}"
     import time as _time
     _bot_updated_tasks[int(task_id)] = _time.time()
+    if data.get("is_completed"):
+        unregister_tecili_task(task_id)
     try:
         resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         logger.info(f"update_task_kommo {task_id}: status={resp.status_code}")
@@ -3527,15 +3563,6 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         pipeline_id = int(pipeline_id) if pipeline_id else 0
         if pipeline_id != PIPELINE_ID:
             return web.Response(status=200, text="OK")
-        # Suppress if admin changed stage directly in Kommo
-        modified_by = data.get("leads[status][0][modified_user_id]") or data.get("account[id]")
-        try:
-            modified_by_int = int(modified_by) if modified_by else 0
-        except:
-            modified_by_int = 0
-        if modified_by_int == 10932455:
-            logger.info(f"Webhook suppressed: admin-initiated stage change for lead {lead_id}")
-            return web.Response(status=200, text="OK")
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
         if lead_id in _bot_changed_leads:
@@ -4949,12 +4976,12 @@ async def handle_push_subscribe(request):
         logger.info(f"Push subscription saved for user {user_id}")
     return web.json_response({'success': True})
 
-def send_push_notification(user_id, title, body, url=None):
+def send_push_notification(user_id, title, body, url=None, urgent=False):
     """Send push notification to a user if subscribed."""
     sub = get_push_subscription(str(user_id))
     if not sub:
         return
-    payload = json.dumps({'title': title, 'body': body, 'url': url or '/'})
+    payload = json.dumps({'title': title, 'body': body, 'url': url or '/', 'urgent': bool(urgent)})
     try:
         webpush(
             subscription_info=sub,
@@ -5011,6 +5038,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         offset = 0
         file_uuid = None
         download_url = None
+        version_href = ""
         while offset < file_size:
             chunk = audio_bytes[offset:offset+max_part]
             up_resp = requests.post(upload_url,
@@ -5024,13 +5052,32 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
             if "uuid" in up_data:
                 file_uuid = up_data["uuid"]
                 download_url = up_data.get("_links", {}).get("download", {}).get("href", "")
+                version_href = up_data.get("_links", {}).get("download_version", {}).get("href", "")
             offset += max_part
         if not file_uuid:
             return web.json_response({"success": False, "error": "No file UUID returned"}, status=500)
-        # Step 3: Attach file to entity
-        attach_url = f"{KOMMO_DRIVE_URL}/v1.0/files/entity/{entity_type}/{entity_id}"
-        requests.put(attach_url, headers={**auth_h, "Content-Type": "application/json"},
-            json=[{"file_uuid": file_uuid}], timeout=10)
+        # Step 3: Attach file to entity via main API domain (drive domain attach returns 404)
+        attached = False
+        try:
+            attach_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/files"
+            att_resp = _http.post(attach_url, headers=HEADERS, json=[{"file_uuid": file_uuid}], timeout=10)
+            logger.info(f"File attach {attach_url}: {att_resp.status_code}")
+            attached = att_resp.status_code in (200, 201, 202)
+        except Exception as _ae:
+            logger.error(f"File attach error: {_ae}")
+        if not attached:
+            # Fallback: attach via note with note_type=file
+            try:
+                version_uuid = ""
+                if version_href:
+                    _parts = [p for p in version_href.split("/") if p]
+                    version_uuid = _parts[-1] if _parts else ""
+                file_note_payload = [{"note_type": "file", "params": {"file_uuid": file_uuid, "file_name": filename, "version_uuid": version_uuid}}]
+                fn_resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, json=file_note_payload, timeout=10)
+                logger.info(f"File note attach: {fn_resp.status_code} {fn_resp.text[:200]}")
+                attached = fn_resp.status_code in (200, 201)
+            except Exception as _fe:
+                logger.error(f"File note attach error: {_fe}")
         # Step 4: Also add as note for visibility
         note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
         note_payload = [{"note_type": "common", "params": {"text": f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({file_size//1024}KB)"}}]
@@ -5082,6 +5129,83 @@ async def start_webhook_server():
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+
+
+def _rehydrate_tecili_tasks():
+    """Rebuild the təcili alarm registry from persisted priorities after restart."""
+    try:
+        priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+        urgent_ids = [tid for tid, pr in priorities.items() if pr == "urgent"] if isinstance(priorities, dict) else []
+        for tid in urgent_ids:
+            try:
+                resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{tid}", headers=HEADERS, timeout=8)
+                if resp.status_code != 200:
+                    continue
+                t = resp.json()
+                if t.get("is_completed"):
+                    continue
+                _tecili_tasks[int(tid)] = {
+                    "task_id": int(tid),
+                    "entity_id": t.get("entity_id"),
+                    "entity_type": t.get("entity_type", "leads"),
+                    "text": t.get("text", ""),
+                    "responsible_user_id": t.get("responsible_user_id"),
+                }
+            except Exception:
+                continue
+        if _tecili_tasks:
+            logger.info(f"Təcili alarm rehydrated: {len(_tecili_tasks)} open urgent tasks")
+    except Exception as exc:
+        logger.warning(f"_rehydrate_tecili_tasks failed: {exc}")
+
+
+async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
+    """Every 15 minutes, re-notify assignees of open təcili tasks until completed."""
+    if not _tecili_tasks:
+        return
+    for task_id, info in list(_tecili_tasks.items()):
+        try:
+            resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+            if resp.status_code == 200:
+                t = resp.json()
+                if t.get("is_completed"):
+                    unregister_tecili_task(task_id)
+                    continue
+                info["text"] = t.get("text", info.get("text", ""))
+                info["responsible_user_id"] = t.get("responsible_user_id", info.get("responsible_user_id"))
+                info["entity_id"] = t.get("entity_id", info.get("entity_id"))
+                info["entity_type"] = t.get("entity_type", info.get("entity_type", "leads"))
+            elif resp.status_code == 404:
+                unregister_tecili_task(task_id)
+                continue
+            responsible_id = info.get("responsible_user_id")
+            if not responsible_id:
+                continue
+            chat_id = get_chat_id_for_kommo_user(responsible_id)
+            task_text = info.get("text", "Tapşırıq")
+            entity_id = info.get("entity_id")
+            entity_type = info.get("entity_type", "leads")
+            _m = re.match(r"^\[(.+?)\]", task_text or "")
+            if _m:
+                marker_chat = get_chat_id_by_name(normalize_assignee_name(_m.group(1)))
+                if marker_chat:
+                    chat_id = marker_chat
+            if not chat_id:
+                continue
+            client_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
+            client_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
+            name_line = f"\n\U0001f464 {client_name}" if client_name else ""
+            phone_line = f"\n\U0001f4de {client_phone}" if client_phone else ""
+            link_line = f"\n\U0001f517 {KOMMO_BASE_URL}/{'leads' if entity_type == 'leads' else 'contacts'}/detail/{entity_id}" if entity_id else ""
+            body = f"\U0001f6a8 TƏCİLİ tapşırıq hələ açıqdır!\n\n\U0001f4dd {task_text}{name_line}{phone_line}{link_line}"
+            try:
+                await context.bot.send_message(int(chat_id), body, disable_web_page_preview=True)
+            except Exception:
+                pass
+            send_push_notification(str(chat_id), "\U0001f6a8 Təcili tapşırıq!", f"{task_text}" + (f" — {client_name}" if client_name else ""), urgent=True)
+        except Exception as exc:
+            logger.warning(f"tecili_alarm_check error for task {task_id}: {exc}")
+
 
 # ─── Background Jobs ─────────────────────────────────────────────────────────
 async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
@@ -5748,6 +5872,10 @@ def main():
     global _bot_app
     async def post_init(application: Application) -> None:
         await start_webhook_server()
+        try:
+            _rehydrate_tecili_tasks()
+        except Exception as _re_err:
+            logger.warning(f"Təcili rehydrate skipped: {_re_err}")
         logger.info(f"Bot started. Webhook on port {WEBHOOK_PORT}, Telegram polling active.")
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
@@ -5780,6 +5908,7 @@ def main():
     # Background jobs
     job_queue = app.job_queue
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
+    job_queue.run_repeating(tecili_alarm_check, interval=900, first=120)
     job_queue.run_daily(morning_digest, time=datetime.strptime("05:00", "%H:%M").time())
     job_queue.run_daily(check_stuck_deals, time=datetime.strptime("06:00", "%H:%M").time())
     job_queue.run_daily(check_stuck_deals, time=datetime.strptime("09:00", "%H:%M").time())

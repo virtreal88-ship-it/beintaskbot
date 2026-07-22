@@ -1804,6 +1804,7 @@ async function pendingChangeStage(actionId, stageName) {
         });
         const d = await r.json();
         toast(d.message || 'Mərhələ dəyişdirildi', !d.success);
+        if(d.success) await syncNotifications();
     } catch(e) { toast('Xəta: ' + e.message, true); }
 }
 async function pendingChangeExecutor(actionId, executorName) {
@@ -1814,6 +1815,7 @@ async function pendingChangeExecutor(actionId, executorName) {
         });
         const d = await r.json();
         toast(d.message || 'İcraçı dəyişdirildi', !d.success);
+        if(d.success) await syncNotifications();
     } catch(e) { toast('Xəta: ' + e.message, true); }
 }
 window._STAGE_NAMES = {};

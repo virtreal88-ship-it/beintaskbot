@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v118';
+const CACHE_NAME = 'bein-v119';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -25,14 +25,20 @@ self.addEventListener('fetch', e => {
 self.addEventListener('push', e => {
   let data = {title: 'Bein Systems', body: 'Yeni bildiriş', icon: '/docs/icon-192.png'};
   try { data = e.data.json(); } catch(err) { data.body = e.data ? e.data.text() : 'Yeni bildiriş'; }
+  const opts = {
+    body: data.body || '',
+    icon: data.icon || '/docs/icon-192.png',
+    badge: '/docs/icon-192.png',
+    data: data.url || '/',
+    vibrate: data.urgent ? [200, 100, 200, 100, 200] : [200, 100, 200]
+  };
+  if (data.urgent) {
+    opts.tag = 'tecili-' + Date.now();
+    opts.renotify = true;
+    opts.requireInteraction = true;
+  }
   e.waitUntil(
-    self.registration.showNotification(data.title || 'Bein Systems', {
-      body: data.body || '',
-      icon: data.icon || '/docs/icon-192.png',
-      badge: '/docs/icon-192.png',
-      data: data.url || '/',
-      vibrate: [200, 100, 200]
-    })
+    self.registration.showNotification(data.title || 'Bein Systems', opts)
   );
 });
 
