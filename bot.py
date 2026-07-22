@@ -4756,6 +4756,23 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                         if vals: phone_val = vals[0].get("value", "")
                                 contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
                     except: pass
+                # Fetch leads linked to contacts (to get stage)
+                contact_lead_stage = {}  # {contact_id: stage_name}
+                if contact_ids:
+                    try:
+                        # Batch: get leads with contacts filter
+                        cid_list = list(contact_ids)[:50]
+                        lead_params_c = {f"filter[contacts][{i}]": cid for i, cid in enumerate(cid_list)}
+                        lead_params_c["limit"] = 50
+                        lead_params_c["with"] = "contacts"
+                        lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params_c, timeout=8)
+                        if lr.status_code == 200:
+                            for ld in lr.json().get("_embedded", {}).get("leads", []):
+                                st_name = STAGE_NAMES.get(ld.get("status_id", 0), "")
+                                for lc in ld.get("_embedded", {}).get("contacts", []):
+                                    if lc["id"] in contact_ids and lc["id"] not in contact_lead_stage:
+                                        contact_lead_stage[lc["id"]] = st_name
+                    except: pass
                 # Batch fetch leads (get first contact from each)
                 leads_contact_cache = {}
                 leads_stage_cache = {}  # {lead_id: status_id}
@@ -4872,7 +4889,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "task_type_id": t.get("task_type_id", 1),
                         "last_note": last_note,
                         "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
-                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else ""
+                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, "")
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
@@ -4951,7 +4968,7 @@ def send_push_to_all_salary(title, body, url=None):
         send_push_notification(uid, title, body, url)
 
 async def handle_upload_voice(request: web.Request) -> web.Response:
-    """Upload voice recording and attach as note to Kommo entity."""
+    """Upload voice recording: send to Telegram as voice, save file_id link as Kommo note."""
     try:
         import base64, tempfile, os as _os
         data = await request.json()
@@ -4961,37 +4978,30 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         filename = data.get("filename", "voice.ogg")
         if not entity_id or not audio_b64:
             return web.json_response({"success": False, "error": "entity_id and audio required"}, status=400)
-        # Decode audio
         audio_bytes = base64.b64decode(audio_b64)
-        # Upload file to Kommo drive
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
         try:
-            upload_url = f"{KOMMO_BASE_URL}/api/v4/files"
+            # Send voice to admin TG chat (as storage) and get file_id
+            tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVoice"
             with open(tmp_path, "rb") as f:
-                files_payload = {"file": (filename, f, "audio/ogg")}
-                resp = requests.post(upload_url, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, files=files_payload, timeout=15)
-            if resp.status_code in (200, 201):
-                file_data = resp.json()
-                file_uuid = file_data.get("_embedded", {}).get("files", [{}])[0].get("uuid") or file_data.get("uuid", "")
-                # Create attachment note
+                resp = requests.post(tg_url, data={"chat_id": ADMIN_CHAT_ID, "caption": f"\ud83c\udf99 S\u0259s ({entity_type}/{entity_id})"}, files={"voice": (filename, f, "audio/ogg")}, timeout=15)
+            if resp.status_code == 200:
+                tg_data = resp.json()
+                file_id = tg_data.get("result", {}).get("voice", {}).get("file_id", "")
+                duration = tg_data.get("result", {}).get("voice", {}).get("duration", 0)
+                # Save as Kommo note with reference
                 note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-                note_payload = [{"note_type": "attachment", "params": {"file_uuid": file_uuid, "file_name": filename}}]
-                note_resp = _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
-                if note_resp.status_code in (200, 201):
-                    return web.json_response({"success": True, "message": "Səs yazısı əlavə olundu"})
-                else:
-                    # Fallback: add as common note with link
-                    note_payload2 = [{"note_type": "common", "params": {"text": f"🎙 Səs yazısı əlavə olundu ({filename})"}}]
-                    _http.post(note_url, headers=HEADERS, json=note_payload2, timeout=8)
-                    return web.json_response({"success": True, "message": "Səs yazısı qeyd kimi əlavə olundu"})
-            else:
-                # File upload failed - save as common note
-                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-                note_payload = [{"note_type": "common", "params": {"text": f"🎙 Səs yazısı ({len(audio_bytes)//1024}KB) - yüklənə bilmədi"}}]
+                note_text = f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({duration}s, {len(audio_bytes)//1024}KB)\nTG file: {file_id}"
+                note_payload = [{"note_type": "common", "params": {"text": note_text}}]
                 _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
-                return web.json_response({"success": True, "message": "Fayl yüklənmədi, qeyd əlavə olundu"})
+                return web.json_response({"success": True, "message": "S\u0259s yaz\u0131s\u0131 \u0259lav\u0259 olundu"})
+            else:
+                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
+                note_payload = [{"note_type": "common", "params": {"text": f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({len(audio_bytes)//1024}KB)"}}]
+                _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
+                return web.json_response({"success": True, "message": "S\u0259s qeyd kimi \u0259lav\u0259 olundu"})
         finally:
             _os.unlink(tmp_path)
     except Exception as e:
