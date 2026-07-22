@@ -3662,6 +3662,11 @@ async def handle_get_pending_actions(request: web.Request) -> web.Response:
     if not is_admin(chat_id):
         return web.json_response({"error": "Unauthorized"}, status=403)
     actions = [action for action in get_pending_actions() if not action.get("resolved")]
+    # Inject voice_url for each action
+    for a in actions:
+        eid = str(a.get("data", {}).get("lead_id") or a.get("data", {}).get("entity_id") or "")
+        if eid and eid in _voice_urls:
+            a.setdefault("data", {})["voice_url"] = _voice_urls[eid]
     return web.json_response(actions)
 
 
@@ -4036,6 +4041,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
+                # Also add task text as a note on the entity
+                try:
+                    note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
+                    _http.post(f"{KOMMO_BASE_URL}/api/v4/{result['entity_type']}/{result['entity_id']}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=5)
+                except: pass
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:

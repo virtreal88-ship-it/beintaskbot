@@ -301,6 +301,14 @@
     <div id="complete-panel" style="display:none;">
         <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sövdələşmə qeydi (nəticə):</label>
         <textarea id="complete-note-text" placeholder="Nəticəni yazın..." class="w-full min-h-[200px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3" style="flex:1;"></textarea>
+        <div class="mb-3">
+            <div class="flex items-center gap-2">
+                <button type="button" id="complete-voice-btn" onclick="toggleCompleteVoice()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Səs yaz</button>
+                <span id="complete-voice-status" class="text-[11px] text-gray-500"></span>
+                <button type="button" id="complete-voice-delete" style="display:none;" onclick="deleteCompleteVoice()" class="text-red-500 text-xs font-bold">❌</button>
+            </div>
+            <audio id="complete-voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
+        </div>
         <div class="flex gap-2">
             <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-3 rounded-xl text-xs">Göndər</button>
             <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
@@ -339,6 +347,7 @@ let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
 let pendingActions = [];
 let pendingActionsTimer = null;
+let _pendingVoiceUrls = {};
 
 function getUserId() {
     const p = new URLSearchParams(window.location.search);
@@ -798,8 +807,14 @@ function renderPendingActions() {
             linkRow.textContent = '🔗 Kommo-da aç';
             details.appendChild(linkRow);
         }
-        card.appendChild(details);
-
+                card.appendChild(details);
+        // Audio player if voice exists for this entity
+        if(data.voice_url) {
+            const audioDiv = document.createElement('div');
+            audioDiv.className = 'mt-2';
+            audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+data.voice_url+'"></audio>';
+            card.appendChild(audioDiv);
+        }
         // KPI star rating for change_stage
         if(action.type === 'change_stage') {
             const kpiRow = document.createElement('div');
@@ -1176,6 +1191,16 @@ async function confirmComplete() {
     } finally {
         if(btn) { btn.disabled = false; btn.innerHTML = origText; }
     }
+    // Upload voice if recorded
+    if(_completeVoiceBlob && task.entity_id) {
+        const reader = new FileReader();
+        reader.readAsDataURL(_completeVoiceBlob);
+        reader.onloadend = async () => {
+            const b64 = reader.result.split(',')[1];
+            try { await fetch(API_BASE + '/api/upload_voice', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body: JSON.stringify({entity_id: task.entity_id, entity_type: task.entity_type || 'leads', audio: b64, filename: 'complete_' + Date.now() + '.ogg'}) }); } catch(e) {}
+        };
+    }
+    deleteCompleteVoice();
     _completedTaskIds[completedId] = Date.now();
     mockTasks = mockTasks.filter(t => t.id !== completedId);
     setCachedTasks(mockTasks);
@@ -1817,6 +1842,41 @@ function deleteVoiceRecord() {
     document.getElementById('voice-preview').style.display = 'none';
     document.getElementById('voice-delete-btn').style.display = 'none';
     document.getElementById('voice-status').textContent = '';
+}
+let _completeVoiceRecorder = null, _completeVoiceChunks = [], _completeVoiceBlob = null, _completeVoiceRecording = false;
+function toggleCompleteVoice() {
+    if (_completeVoiceRecording) { stopCompleteVoice(); return; }
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
+        _completeVoiceRecorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'});
+        _completeVoiceChunks = [];
+        _completeVoiceRecorder.ondataavailable = e => { if(e.data.size>0) _completeVoiceChunks.push(e.data); };
+        _completeVoiceRecorder.onstop = () => {
+            _completeVoiceBlob = new Blob(_completeVoiceChunks, {type: _completeVoiceRecorder.mimeType});
+            const url = URL.createObjectURL(_completeVoiceBlob);
+            document.getElementById('complete-voice-preview').src = url;
+            document.getElementById('complete-voice-preview').style.display = 'block';
+            document.getElementById('complete-voice-delete').style.display = 'inline';
+            document.getElementById('complete-voice-status').textContent = Math.round(_completeVoiceBlob.size/1024) + ' KB';
+            stream.getTracks().forEach(t=>t.stop());
+        };
+        _completeVoiceRecorder.start();
+        _completeVoiceRecording = true;
+        document.getElementById('complete-voice-btn').innerHTML = '⏹ Dayandır';
+        document.getElementById('complete-voice-btn').classList.add('bg-red-100','border-red-300','text-red-700');
+        document.getElementById('complete-voice-status').textContent = 'Yazılır...';
+    }).catch(e => { toast('Mikrofon icazəsi lazımdır', true); });
+}
+function stopCompleteVoice() {
+    if (_completeVoiceRecorder && _completeVoiceRecorder.state !== 'inactive') _completeVoiceRecorder.stop();
+    _completeVoiceRecording = false;
+    document.getElementById('complete-voice-btn').innerHTML = '🎙 Səs yaz';
+    document.getElementById('complete-voice-btn').classList.remove('bg-red-100','border-red-300','text-red-700');
+}
+function deleteCompleteVoice() {
+    _completeVoiceBlob = null; _completeVoiceChunks = [];
+    document.getElementById('complete-voice-preview').style.display = 'none';
+    document.getElementById('complete-voice-delete').style.display = 'none';
+    document.getElementById('complete-voice-status').textContent = '';
 }
 async function uploadVoiceNote(entityId, entityType) {
     if (!_voiceBlob) return;
