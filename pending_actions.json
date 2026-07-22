@@ -1,40 +1,5 @@
 [
   {
-    "id": "a92fc9b6",
-    "type": "change_stage",
-    "created_at": "2026-07-22T20:21:48.227545+04:00",
-    "resolved": false,
-    "data": {
-      "contact_name": "Ucuzluq",
-      "phone": "+994557577537",
-      "lead_id": 76775495,
-      "task_id": 93568197,
-      "sender_name": "Rasim Əsgərov",
-      "task_text": "Məhsullar: pc, çek p, barkod p, skayner",
-      "task_price": "",
-      "note": "Sifariş uğurla yerinə yetirildi.\nTəlimat edildi. Ödəniş alındı",
-      "stage_name": "quraşdırma",
-      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
-      "link": "https://texnikidestek50.kommo.com/leads/detail/76775495",
-      "callback_key": "5cc34023"
-    },
-    "options": [
-      "Təsdiq et",
-      "Nerazobrannoye",
-      "danışıqlar",
-      "Qiymət təklifi",
-      "Təqdimat",
-      "Təqdimat olundu",
-      "yeni sifariş",
-      "görüş",
-      "daxili müzakirə",
-      "quraşdırma",
-      "Düşünür",
-      "uğurlu sifariş",
-      "imtina olundu"
-    ]
-  },
-  {
     "id": "8dc703db",
     "type": "change_stage",
     "created_at": "2026-07-22T19:28:04.654089+04:00",
