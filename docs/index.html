@@ -795,6 +795,7 @@ function renderPendingActions() {
         appendPendingDetail(details, '📞', 'Telefon', data.phone);
         if(data.task_type_name) appendPendingDetail(details, '📌', 'Növ', data.task_type_name);
         if(data.task_price) appendPendingDetail(details, '💰', 'Məbləğ', `${data.task_price} AZN`);
+        if(data.stage_name) appendPendingDetail(details, '📊', 'Mərhələ', data.stage_name);
         if(data.sender_name) appendPendingDetail(details, '👷', 'İcraçı', data.sender_name);
         if(data.assignee_name_raw) appendPendingDetail(details, '➡️', 'Yeni icraçı', data.assignee_name_raw);
         appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));

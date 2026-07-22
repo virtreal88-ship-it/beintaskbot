@@ -4044,8 +4044,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Also add task text as a note on the entity
                 try:
                     note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
-                    _http.post(f"{KOMMO_BASE_URL}/api/v4/{result['entity_type']}/{result['entity_id']}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=5)
-                except: pass
+                    nr = _http.post(f"{KOMMO_BASE_URL}/api/v4/{result['entity_type']}/{result['entity_id']}/notes", json=note_payload, timeout=5); logger.info(f"Note add: {nr.status_code} entity={result['entity_type']}/{result['entity_id']}")
+                except Exception as _ne: logger.error(f"Note add failed: {_ne}")
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
@@ -4573,6 +4573,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
                             "task_price": task_price_match.group(1) if task_price_match else "",
                             "note": note_text or "",
+                            "stage_name": current_stage_name,
                             "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
                             "link": link,
                             "callback_key": callback_key,
