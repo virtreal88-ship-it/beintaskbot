@@ -45,7 +45,7 @@
 <div id="toast"></div>
 
 <!-- Preloader -->
-<div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#f8f9fa;z-index:9999;display:flex;align-items:center;justify-content:center;"><div class="sync-spinner" style="width:36px;height:36px;border-width:4px;"></div></div>
+<div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.7);z-index:9999;align-items:center;justify-content:center;"><div class="sync-spinner" style="width:36px;height:36px;border-width:4px;"></div></div>
 
 <!-- Success Screen -->
 <div id="screen-success" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:#f8f9fa; z-index:1500; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center;">
@@ -560,6 +560,7 @@ async function syncNotifications(showError = false) {
 }
 
 async function doFetch(payload, btnId) {
+    showLoader();
     const btn = document.getElementById(btnId);
     let origText = '';
     if(btn) { origText = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="inline-block animate-spin mr-1">⏳</span> Yüklənir...'; }
@@ -579,7 +580,7 @@ async function doFetch(payload, btnId) {
             await syncNotifications();
             showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info');
         } else { toast(j.error || 'Xəta!', true); }
-    } catch(e) { toast('Sistem xətası!', true); } finally { if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
+    } catch(e) { toast('Sistem xətası!', true); } finally { hideLoader(); if(btn) { btn.disabled = false; btn.innerHTML = origText; } }
 }
 let _pendingConfKey = null;
 async function doFetchSilent(payload) {
@@ -618,6 +619,7 @@ async function submitEditNote() {
     if(!text) { toast('Qeyd yazın!', true); return; }
     // Disable button immediately to prevent double click
     const btn = document.querySelector('#edit-note-modal button');
+    showLoader();
     if(btn) { btn.disabled = true; btn.innerHTML = '⏳ Göndərilir...'; }
     // Wait for conf_key if save is still in progress (max 5 sec)
     if(!_pendingConfKey) {
@@ -634,7 +636,7 @@ async function submitEditNote() {
         const j = await r.json();
         if(r.ok && j.success) { toast('Qeyd əlavə olundu', false); }
         else { toast(j.error || 'Xəta!', true); }
-    } catch(e) { toast('Sistem xətası!', true); }
+    } catch(e) { toast('Sistem xətası!', true); } finally { hideLoader(); }
     document.getElementById('edit-note-modal').remove();
     nav('screen-notifications');
 }
@@ -939,6 +941,7 @@ async function rejectPendingAction(actionId, card) {
 async function resolvePendingAction(actionId, choice, button) {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
     if(choice === 'Təsdiq et' && !confirm('Təsdiq etmək istədiyinizə əminsiniz?')) return;
+    showLoader();
     const card = button?.closest('section');
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
     buttons.forEach(item => { item.disabled = true; });
@@ -957,7 +960,7 @@ async function resolvePendingAction(actionId, choice, button) {
         toast(error.message || 'Sorğu həll edilmədi', true);
         buttons.forEach(item => { item.disabled = false; });
         if(card) { card.style.opacity='1'; const ldr=card.querySelector('.pending-loader'); if(ldr) ldr.remove(); }
-        }
+    } finally { hideLoader(); }
 }
 function openSubtaskFromPending(action) {
     const data = action.data || {};
@@ -996,6 +999,7 @@ async function submitSubtaskFromPending(actionId) {
     if(!desc) { toast('Təsvir boş ola bilməz', true); return; }
     if(!deadline) { toast('Deadline seçin', true); return; }
     const btn = document.getElementById('sub-submit-btn');
+    showLoader();
     if(btn) { btn.disabled = true; btn.textContent = '…'; }
     try {
         const body = {action:'task', phone, text:desc, assignee_name:assignee, task_type_id:taskType, deadline:'custom:'+deadline};
@@ -1005,7 +1009,7 @@ async function submitSubtaskFromPending(actionId) {
         toast('Alt tapşırıq yaradıldı', false);
         document.getElementById('subtask-modal').remove();
         loadPendingActions();
-    } catch(e) { toast(e.message||'Xəta', true); if(btn) { btn.disabled=false; btn.textContent='Yarat'; } }
+    } catch(e) { toast(e.message||'Xəta', true); if(btn) { btn.disabled=false; btn.textContent='Yarat'; } } finally { hideLoader(); }
 }
 function startPendingActionPolling() {
     stopPendingActionPolling();
@@ -1187,9 +1191,9 @@ async function submitNoteInline() {
     const taskPhone = task ? (task.phone||'') : (document.getElementById('bottom-bar-meta').textContent||'');
     clearSessionField('note-text-input'); closeBottomBar();
     if(task) { task.last_note = noteText; setCachedTasks(mockTasks); renderNotifications(); }
-    toast('✅ Qeyd əlavə edildi', false);
-    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:taskId, text:noteText, phone:taskPhone}) }); if(!r.ok) throw new Error(); }
-    catch(e) { if(task) { task.last_note = ''; setCachedTasks(mockTasks); renderNotifications(); } toast('Xəta! Qeyd göndərilmədi', true); }
+    showLoader();
+    try { const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'add_note', task_id:taskId, text:noteText, phone:taskPhone}) }); if(!r.ok) throw new Error(); toast('✅ Qeyd əlavə edildi', false); }
+    catch(e) { if(task) { task.last_note = ''; setCachedTasks(mockTasks); renderNotifications(); } toast('Xəta! Qeyd göndərilmədi', true); } finally { hideLoader(); }
 }
 
 function showCompletePanel() {
@@ -1209,6 +1213,7 @@ async function confirmComplete() {
     const completedId = task.id;
     const btn = document.getElementById('btn-confirm-complete');
     const origText = btn ? btn.innerHTML : '';
+    showLoader();
     if(btn) { btn.disabled = true; btn.innerHTML = 'Yüklənir...'; }
     try {
         const r = await fetch(API_BASE + '/api/action', {
@@ -1222,6 +1227,7 @@ async function confirmComplete() {
         toast('Xəta! Tapşırıq bağlanmadı', true);
         return;
     } finally {
+        hideLoader();
         if(btn) { btn.disabled = false; btn.innerHTML = origText; }
     }
     // Upload voice if recorded
@@ -1436,12 +1442,13 @@ async function submitSubtask(parentTaskId) {
     if(assignee.toLowerCase().includes('nizami')) assigneeKey = 'admin';
     else if(assignee.toLowerCase().includes('soltan')) assigneeKey = 'soltan';
     const payload = {action:'task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assigneeKey, assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId, entity_id:entityId, entity_type:entityType};
+    showLoader();
     try {
         const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const j = await r.json();
         toast(j.message||'Yaradıldı!', !j.success);
         if(j.success) await syncNotifications();
-    } catch(e) { toast('Xəta!', true); }
+    } catch(e) { toast('Xəta!', true); } finally { hideLoader(); }
     document.getElementById('subtask-modal').remove();
 }
 // Balance System
@@ -1599,6 +1606,7 @@ async function submitMedaxil() {
     if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
     if(!description) { toast('Açıqlama daxil edin!', true); return; }
     const button = document.getElementById('med-submit');
+    showLoader();
     if(button) { button.disabled = true; button.textContent = 'Əlavə edilir...'; }
     try {
         const r = await fetch(API_BASE + '/api/balance/credit', {
@@ -1614,7 +1622,7 @@ async function submitMedaxil() {
     } catch(e) {
         toast(e.message || 'Xəta!', true);
         if(button) { button.disabled = false; button.textContent = 'Əlavə et'; }
-    }
+    } finally { hideLoader(); }
 }
 
 function openMexaric() {
@@ -1639,7 +1647,8 @@ async function submitMexaric() {
     const amount = Number(document.getElementById('mex-amount').value);
     const note = document.getElementById('mex-note').value.trim() || 'Ödəniş';
     if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
-    const button = document.getElementById('mex-submit');
+        const button = document.getElementById('mex-submit');
+    showLoader();
     if(button) { button.disabled = true; button.textContent = 'Ödənilir...'; }
     try {
         const r = await fetch(API_BASE + '/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'payout', employee_id:employeeId, amount, note})});
@@ -1651,9 +1660,8 @@ async function submitMexaric() {
     } catch(e) {
         toast(e.message || 'Xəta!', true);
         if(button) { button.disabled = false; button.textContent = 'Ödə'; }
-    }
+    } finally { hideLoader(); }
 }
-
 // Pull-to-refresh
 (function(){
     const ca = document.getElementById('content-area');
@@ -1829,6 +1837,7 @@ function showPendingSelectModal(title, items, callback) {
     document.body.appendChild(modal);
 }
 async function pendingChangeStage(actionId, stageName) {
+    showLoader();
     try {
         const r = await fetch(API_BASE + '/api/pending_actions/change_stage', {
             method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
@@ -1837,9 +1846,10 @@ async function pendingChangeStage(actionId, stageName) {
         const d = await r.json();
         toast(d.message || 'Mərhələ dəyişdirildi', !d.success);
         if(d.success) await syncNotifications();
-    } catch(e) { toast('Xəta: ' + e.message, true); }
+    } catch(e) { toast('Xəta: ' + e.message, true); } finally { hideLoader(); }
 }
 async function pendingChangeExecutor(actionId, executorName) {
+    showLoader();
     try {
         const r = await fetch(API_BASE + '/api/pending_actions/change_executor', {
             method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
@@ -1848,7 +1858,7 @@ async function pendingChangeExecutor(actionId, executorName) {
         const d = await r.json();
         toast(d.message || 'İcraçı dəyişdirildi', !d.success);
         if(d.success) await syncNotifications();
-    } catch(e) { toast('Xəta: ' + e.message, true); }
+    } catch(e) { toast('Xəta: ' + e.message, true); } finally { hideLoader(); }
 }
 window._STAGE_NAMES = {};
 fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
