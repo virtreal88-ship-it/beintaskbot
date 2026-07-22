@@ -1,5 +1,40 @@
 [
   {
+    "id": "daabc733",
+    "type": "change_stage",
+    "created_at": "2026-07-22T17:43:52.967282+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "nuru admin",
+      "phone": "+994554030363",
+      "lead_id": 77004983,
+      "task_id": 93577357,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Müştəri əlavə hesab istəyir.Lənkəran filialı üçün.Qeyd elədiki bu nömrənin whatsappı ilə\nsaxlanılsın.",
+      "task_price": "",
+      "note": "Danışıldı, məlumat verildi, yeni istifadəçi açılacaq",
+      "stage_name": "danışıqlar",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77004983",
+      "callback_key": "0094e458"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "1aebc1e0",
     "type": "change_stage",
     "created_at": "2026-07-22T16:04:52.853179+04:00",
