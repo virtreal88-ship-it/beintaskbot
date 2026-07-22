@@ -1703,6 +1703,17 @@ async function initPush() {
   } catch(e) { console.warn('Push init error:', e); }
 }
 initPush();
+// Urgent alarm sound handler
+const _alarmAudio = new Audio('alarm.wav');
+_alarmAudio.loop = false;
+if(navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener('message', ev => {
+    if(ev.data && ev.data.type === 'URGENT_ALARM') {
+      _alarmAudio.currentTime = 0;
+      _alarmAudio.play().catch(()=>{});
+    }
+  });
+}
 // Long-press context menu for task cards
 function showTaskContextMenu(taskId, x, y) {
     const task = mockTasks.find(t => t.id === taskId);

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v119';
+const CACHE_NAME = 'bein-v123';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -38,7 +38,13 @@ self.addEventListener('push', e => {
     opts.requireInteraction = true;
   }
   e.waitUntil(
-    self.registration.showNotification(data.title || 'Bein Systems', opts)
+    self.registration.showNotification(data.title || 'Bein Systems', opts).then(() => {
+      if (data.urgent) {
+        return self.clients.matchAll({type: 'window'}).then(cls => {
+          cls.forEach(c => c.postMessage({type: 'URGENT_ALARM'}));
+        });
+      }
+    })
   );
 });
 
