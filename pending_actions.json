@@ -1,5 +1,31 @@
 [
   {
+    "id": "9e608181",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T01:22:21.747416+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nizami",
+      "phone": "0502072240",
+      "lead_id": 74688617,
+      "task_text": "Test",
+      "deadline": "23.07.2026 02:21",
+      "sender_name": "Texniki Dəstək",
+      "assignee_name_raw": "Nizami Qasımov",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74688617",
+      "conf_key": "8f3a843d"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "8dc703db",
     "type": "change_stage",
     "created_at": "2026-07-22T19:28:04.654089+04:00",
