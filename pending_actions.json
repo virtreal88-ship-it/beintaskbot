@@ -451,7 +451,7 @@
     "id": "20c07045",
     "type": "assign_executor",
     "created_at": "2026-07-21T17:21:43.101433+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "La ilaha ilAllah",
       "phone": "+994519086666",
@@ -471,7 +471,9 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-22T18:40:25.463212+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "eaaae24b",
