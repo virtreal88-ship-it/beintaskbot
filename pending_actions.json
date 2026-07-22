@@ -3,7 +3,7 @@
     "id": "8dc703db",
     "type": "change_stage",
     "created_at": "2026-07-22T19:28:04.654089+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Kamran",
       "phone": "+994514103610",
@@ -32,7 +32,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-22T19:47:08.203555+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b78c72cc",
