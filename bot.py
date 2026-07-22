@@ -422,9 +422,12 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
                 return False, "Sorğu bağlanmadı."
             _clear_runtime_pending_action(action)
             return True, result_message
-        if choice != "Ləğv et":
+        if choice not in ("Ləğv et", "Rədd et"):
             stage_key = action_data.get("stage_key") or _stage_key_for_name(stage_name)
-            task_text = _STAGE_TASK_TEXTS.get(stage_key)
+            task_text = _STAGE_TASK_TEXTS.get(stage_key) if stage_key else None
+            # For cnftask-style (task creation from employee): use stored task_text
+            if not task_text and action_data.get("task_text"):
+                task_text = action_data["task_text"]
             if not lead_id or not task_text:
                 return False, "Mərhələ tapşırığı müəyyən edilmədi."
             if choice == "Özüm":
@@ -435,16 +438,25 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
                     return False, "İcraçı tanınmadı."
                 task_text = f"[{full_name}] {task_text}"
                 responsible_user_id = 15532668
-            deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            # Use stored deadline or default 2h
+            if action_data.get("deadline"):
+                try:
+                    deadline_ts = int(datetime.strptime(action_data["deadline"], "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ).timestamp())
+                except:
+                    deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            else:
+                deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            task_type_id = action_data.get("task_type_id")
             if not create_task(
                 int(lead_id),
                 task_text,
                 deadline_ts,
                 responsible_user_id=responsible_user_id,
                 entity_type="leads",
+                task_type_id=int(task_type_id) if task_type_id else None,
             ):
                 return False, "Kommo-da tapşırıq yaradılmadı."
-        result_message = "Sorğu ləğv edildi." if choice == "Ləğv et" else f"Tapşırıq {choice} üçün yaradıldı."
+        result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
         if choice == "Təsdiq et":
@@ -3667,7 +3679,16 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
             except Exception as e:
                 logger.error(f"Webhook stage-task error: {e}")
-            # Telegram buttons are enough - no PWA pending action needed
+            save_pending_action("assign_executor", {
+                "contact_name": contact_name,
+                "phone": contact_phone,
+                "lead_id": lead_id,
+                "task_text": f"Mərhələ: {stage_display}",
+                "stage_key": stage_key,
+                "stage_name": stage_display,
+                "link": link,
+            }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Ləğv et"])
+            send_push_to_admin(f"Mərhələ dəyişdi: {stage_display} - {contact_name}", title="📋 İcraçı seçimi")
         else:
             # Plain notification
             msg = (f"🔄 *Mərhələ dəyişikliyi:*\n\n👤 {contact_name}\n📞 {contact_phone}\n"
@@ -4065,8 +4086,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 ])
                 try:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
-#                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
+                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
+                save_pending_action("assign_executor", {
+                    "contact_name": result['contact_name'],
+                    "phone": phone,
+                    "lead_id": result.get('entity_id'),
+                    "task_text": display_text,
+                    "deadline": deadline_dt.strftime('%d.%m.%Y %H:%M'),
+                    "sender_name": sender_name,
+                    "assignee_name_raw": assignee_name_raw,
+                    "link": result.get('link', ''),
+                    "conf_key": conf_key,
+                }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             # Admin creates directly
             logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
