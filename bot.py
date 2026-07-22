@@ -4029,7 +4029,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
 #                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
-                return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi."})
+                return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             # Admin creates directly
             logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
             res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id)
@@ -4053,7 +4053,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             )
                         except: pass
                         send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
-                return web.json_response({"success": True, "message": msg, "link": result.get('link', '')})
+                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
             stage = data.get("stage", "")
@@ -4950,6 +4950,54 @@ def send_push_to_all_salary(title, body, url=None):
     for uid in ['7962757442','7262243946','7329891614']:
         send_push_notification(uid, title, body, url)
 
+async def handle_upload_voice(request: web.Request) -> web.Response:
+    """Upload voice recording and attach as note to Kommo entity."""
+    try:
+        import base64, tempfile, os as _os
+        data = await request.json()
+        entity_id = data.get("entity_id")
+        entity_type = data.get("entity_type", "leads")
+        audio_b64 = data.get("audio")  # base64 encoded audio
+        filename = data.get("filename", "voice.ogg")
+        if not entity_id or not audio_b64:
+            return web.json_response({"success": False, "error": "entity_id and audio required"}, status=400)
+        # Decode audio
+        audio_bytes = base64.b64decode(audio_b64)
+        # Upload file to Kommo drive
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        try:
+            upload_url = f"{KOMMO_BASE_URL}/api/v4/files"
+            with open(tmp_path, "rb") as f:
+                files_payload = {"file": (filename, f, "audio/ogg")}
+                resp = requests.post(upload_url, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, files=files_payload, timeout=15)
+            if resp.status_code in (200, 201):
+                file_data = resp.json()
+                file_uuid = file_data.get("_embedded", {}).get("files", [{}])[0].get("uuid") or file_data.get("uuid", "")
+                # Create attachment note
+                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
+                note_payload = [{"note_type": "attachment", "params": {"file_uuid": file_uuid, "file_name": filename}}]
+                note_resp = _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
+                if note_resp.status_code in (200, 201):
+                    return web.json_response({"success": True, "message": "Səs yazısı əlavə olundu"})
+                else:
+                    # Fallback: add as common note with link
+                    note_payload2 = [{"note_type": "common", "params": {"text": f"🎙 Səs yazısı əlavə olundu ({filename})"}}]
+                    _http.post(note_url, headers=HEADERS, json=note_payload2, timeout=8)
+                    return web.json_response({"success": True, "message": "Səs yazısı qeyd kimi əlavə olundu"})
+            else:
+                # File upload failed - save as common note
+                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
+                note_payload = [{"note_type": "common", "params": {"text": f"🎙 Səs yazısı ({len(audio_bytes)//1024}KB) - yüklənə bilmədi"}}]
+                _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
+                return web.json_response({"success": True, "message": "Fayl yüklənmədi, qeyd əlavə olundu"})
+        finally:
+            _os.unlink(tmp_path)
+    except Exception as e:
+        logger.error(f"Upload voice error: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
@@ -4980,6 +5028,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())
     app_web.router.add_post("/api/push-subscribe", handle_push_subscribe)
+    app_web.router.add_route('OPTIONS', '/api/upload_voice', lambda r: web.Response())
+    app_web.router.add_post("/api/upload_voice", handle_upload_voice)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)

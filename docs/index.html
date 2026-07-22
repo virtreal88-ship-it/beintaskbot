@@ -150,6 +150,14 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-create"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
+                <div class="flex items-center gap-2">
+                    <button type="button" id="voice-record-btn" onclick="toggleVoiceRecord()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
+                    <span id="voice-status" class="text-[11px] text-gray-500"></span>
+                    <button type="button" id="voice-delete-btn" style="display:none;" onclick="deleteVoiceRecord()" class="text-red-500 text-xs font-bold">❌</button>
+                </div>
+                <audio id="voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
+            </div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
                 <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
             </div>
@@ -549,6 +557,9 @@ async function doFetch(payload, btnId) {
         });
         const j = await r.json();
         if(r.ok && j.success) {
+            if(payload.action === 'task' && _voiceBlob && j.entity_id) {
+                uploadVoiceNote(j.entity_id, j.entity_type || 'leads');
+            }
             if(payload.action === 'task' && !payload.parent_task_id) clearCreateFormState();
             await syncNotifications();
             showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info');
@@ -1769,6 +1780,58 @@ async function pendingChangeExecutor(actionId, executorName) {
 }
 window._STAGE_NAMES = {};
 fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
+
+// Voice recording
+let _voiceRecorder = null, _voiceChunks = [], _voiceBlob = null, _voiceRecording = false;
+function toggleVoiceRecord() {
+    if (_voiceRecording) { stopVoiceRecord(); return; }
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
+        _voiceRecorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'});
+        _voiceChunks = [];
+        _voiceRecorder.ondataavailable = e => { if(e.data.size>0) _voiceChunks.push(e.data); };
+        _voiceRecorder.onstop = () => {
+            _voiceBlob = new Blob(_voiceChunks, {type: _voiceRecorder.mimeType});
+            const url = URL.createObjectURL(_voiceBlob);
+            document.getElementById('voice-preview').src = url;
+            document.getElementById('voice-preview').style.display = 'block';
+            document.getElementById('voice-delete-btn').style.display = 'inline';
+            document.getElementById('voice-status').textContent = Math.round(_voiceBlob.size/1024) + ' KB';
+            stream.getTracks().forEach(t=>t.stop());
+        };
+        _voiceRecorder.start();
+        _voiceRecording = true;
+        document.getElementById('voice-record-btn').innerHTML = '⏹ Dayandır';
+        document.getElementById('voice-record-btn').classList.add('bg-red-100','border-red-300','text-red-700');
+        document.getElementById('voice-status').textContent = 'Yazılır...';
+    }).catch(e => { toast('Mikrofon icazəsi lazımdır', true); });
+}
+function stopVoiceRecord() {
+    if (_voiceRecorder && _voiceRecorder.state !== 'inactive') _voiceRecorder.stop();
+    _voiceRecording = false;
+    document.getElementById('voice-record-btn').innerHTML = '🎙 Yaz';
+    document.getElementById('voice-record-btn').classList.remove('bg-red-100','border-red-300','text-red-700');
+}
+function deleteVoiceRecord() {
+    _voiceBlob = null; _voiceChunks = [];
+    document.getElementById('voice-preview').style.display = 'none';
+    document.getElementById('voice-delete-btn').style.display = 'none';
+    document.getElementById('voice-status').textContent = '';
+}
+async function uploadVoiceNote(entityId, entityType) {
+    if (!_voiceBlob) return;
+    const reader = new FileReader();
+    reader.readAsDataURL(_voiceBlob);
+    reader.onloadend = async () => {
+        const b64 = reader.result.split(',')[1];
+        try {
+            await fetch(API_BASE + '/api/upload_voice', {
+                method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+                body: JSON.stringify({entity_id: entityId, entity_type: entityType, audio: b64, filename: 'voice_' + Date.now() + '.ogg'})
+            });
+        } catch(e) { console.error('Voice upload failed:', e); }
+        deleteVoiceRecord();
+    };
+}
 </script>
 </body>
 </html>
