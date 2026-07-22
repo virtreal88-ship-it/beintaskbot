@@ -1,5 +1,40 @@
 [
   {
+    "id": "2f9beb3e",
+    "type": "change_stage",
+    "created_at": "2026-07-23T01:32:01.597054+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nizami",
+      "phone": "+994502072240",
+      "lead_id": 67210126,
+      "task_id": 93582473,
+      "sender_name": "Texniki Dəstək",
+      "task_text": "Test",
+      "task_price": "",
+      "note": "Test",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/67210126",
+      "callback_key": "2f301a74"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "9e608181",
     "type": "assign_executor",
     "created_at": "2026-07-23T01:22:21.747416+04:00",
