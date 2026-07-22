@@ -772,11 +772,11 @@ function renderPendingActions() {
         // Swipe handling
         let startX = 0, currentX = 0, swiping = false;
         card.addEventListener('touchstart', (e) => { if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; startX = e.touches[0].clientX; swiping = true; currentX = 0; });
-        card.addEventListener('touchmove', (e) => { if(!swiping) return; if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#dbeafe'; else card.style.background='#fff'; });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#fef3c7'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
             swiping = false;
             if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{deletePendingAction(action.id,card);},300); }
-            else if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{openSubtaskFromPending(action);},300); }
+            else if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{rejectPendingAction(action.id,card);},300); }
             else { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
         });
 
@@ -912,6 +912,26 @@ async function deletePendingAction(actionId, card) {
     } catch(error) {
         toast(error.message || 'Sorğu silinmədi', true);
         buttons.forEach(item => { item.disabled = false; });
+        if(card) { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
+    }
+}
+
+async function rejectPendingAction(actionId, card) {
+    if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
+    try {
+        const response = await fetch(API_BASE + '/api/pending_actions/reject', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId}),
+        });
+        const payload = await response.json();
+        if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'İmtina uğursuz oldu');
+        pendingActions = pendingActions.filter(a => String(a.id) !== String(actionId));
+        if(card) card.remove();
+        if(!pendingActions.length) renderPendingActions();
+        toast('İmtina edildi. İcraçıya göndərildi.', false);
+    } catch(error) {
+        toast(error.message || 'İmtina uğursuz oldu', true);
         if(card) { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
     }
 }

@@ -3757,6 +3757,46 @@ async def handle_delete_pending_action(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
+async def handle_reject_pending_action(request: web.Request) -> web.Response:
+    """Admin rejects a pending action (\u0130mtina) and notifies the executor to edit/resubmit."""
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "message": "Invalid JSON"}, status=400)
+    chat_id = data.get("chat_id") or request.headers.get("X-TG-User-ID", "")
+    if not is_admin(chat_id):
+        return web.json_response({"error": "Unauthorized"}, status=403)
+    action_id = data.get("id")
+    if not action_id:
+        return web.json_response({"success": False, "message": "Sor\u011fu ID-si t\u0259l\u0259b olunur."}, status=400)
+    # Find the action
+    actions = get_pending_actions()
+    action = next((a for a in actions if a.get("id") == str(action_id) and not a.get("resolved")), None)
+    if not action:
+        return web.json_response({"success": False, "message": "Sor\u011fu tap\u0131lmad\u0131."}, status=404)
+    # Mark as resolved with \u0130mtina
+    mark_pending_action_resolved(action_id=str(action_id), choice="\u0130mtina")
+    # Notify the executor
+    action_data = action.get("data") or {}
+    sender_name = action_data.get("sender_name", "")
+    contact_name = action_data.get("contact_name", "")
+    task_text = action_data.get("task_text", "")
+    creator_chat_id = action_data.get("creator_chat_id")
+    # Find executor chat_id
+    target_chat = None
+    if creator_chat_id:
+        target_chat = int(creator_chat_id)
+    elif sender_name:
+        target_chat = get_chat_id_by_name(sender_name)
+    if target_chat and _bot_app:
+        reject_msg = f"\u274c Admin sor\u011funuzu r\u0259dd etdi (\u0130mtina):\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcdd {task_text}\n\n\u270f\ufe0f Z\u0259hm\u0259t olmasa redakt\u0259 edib yenid\u0259n g\u00f6nd\u0259rin."
+        try:
+            await _bot_app.bot.send_message(target_chat, reject_msg)
+        except Exception as e:
+            logger.error(f"Reject notify error: {e}")
+    return web.json_response({"success": True, "message": "\u0130mtina edildi."})
+
+
 async def handle_pending_change_stage(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -5140,6 +5180,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)
+    app_web.router.add_route('OPTIONS', '/api/pending_actions/reject', lambda r: web.Response())
+    app_web.router.add_post("/api/pending_actions/reject", handle_reject_pending_action)
     app_web.router.add_route('OPTIONS', '/api/pending_actions/change_stage', lambda r: web.Response())
     app_web.router.add_post("/api/pending_actions/change_stage", handle_pending_change_stage)
     app_web.router.add_route('OPTIONS', '/api/pending_actions/change_executor', lambda r: web.Response())
