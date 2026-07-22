@@ -4889,7 +4889,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "task_type_id": t.get("task_type_id", 1),
                         "last_note": last_note,
                         "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
-                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, "")
+                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
+                        "voice_url": _voice_urls.get(str(entity_id), "")
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
@@ -4967,8 +4968,12 @@ def send_push_to_all_salary(title, body, url=None):
     for uid in ['7962757442','7262243946','7329891614']:
         send_push_notification(uid, title, body, url)
 
+KOMMO_DRIVE_URL = "https://drive-g.kommo.com"
+_VOICE_URLS_FILE = "voice_urls.json"
+_voice_urls = read_json(_VOICE_URLS_FILE) or {}  # {entity_id: download_url}
+
 async def handle_upload_voice(request: web.Request) -> web.Response:
-    """Upload voice recording: send to Telegram as voice, save file_id link as Kommo note."""
+    """Upload voice to Kommo Files API, attach to entity, return download URL."""
     try:
         import base64, tempfile, os as _os
         data = await request.json()
@@ -4979,31 +4984,49 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         if not entity_id or not audio_b64:
             return web.json_response({"success": False, "error": "entity_id and audio required"}, status=400)
         audio_bytes = base64.b64decode(audio_b64)
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        try:
-            # Send voice to admin TG chat (as storage) and get file_id
-            tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVoice"
-            with open(tmp_path, "rb") as f:
-                resp = requests.post(tg_url, data={"chat_id": ADMIN_CHAT_ID, "caption": f"\ud83c\udf99 S\u0259s ({entity_type}/{entity_id})"}, files={"voice": (filename, f, "audio/ogg")}, timeout=15)
-            if resp.status_code == 200:
-                tg_data = resp.json()
-                file_id = tg_data.get("result", {}).get("voice", {}).get("file_id", "")
-                duration = tg_data.get("result", {}).get("voice", {}).get("duration", 0)
-                # Save as Kommo note with reference
-                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-                note_text = f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({duration}s, {len(audio_bytes)//1024}KB)\nTG file: {file_id}"
-                note_payload = [{"note_type": "common", "params": {"text": note_text}}]
-                _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
-                return web.json_response({"success": True, "message": "S\u0259s yaz\u0131s\u0131 \u0259lav\u0259 olundu"})
-            else:
-                note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-                note_payload = [{"note_type": "common", "params": {"text": f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({len(audio_bytes)//1024}KB)"}}]
-                _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
-                return web.json_response({"success": True, "message": "S\u0259s qeyd kimi \u0259lav\u0259 olundu"})
-        finally:
-            _os.unlink(tmp_path)
+        file_size = len(audio_bytes)
+        auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+        # Step 1: Create upload session
+        sess_resp = requests.post(f"{KOMMO_DRIVE_URL}/v1.0/sessions",
+            headers={**auth_h, "Content-Type": "application/json"},
+            json={"file_name": filename, "file_size": file_size, "content_type": "audio/ogg"},
+            timeout=10)
+        if sess_resp.status_code != 200:
+            return web.json_response({"success": False, "error": f"Session failed: {sess_resp.status_code}"}, status=500)
+        sess_data = sess_resp.json()
+        upload_url = sess_data["upload_url"]
+        max_part = sess_data.get("max_part_size", 524288)
+        # Step 2: Upload file parts
+        offset = 0
+        file_uuid = None
+        download_url = None
+        while offset < file_size:
+            chunk = audio_bytes[offset:offset+max_part]
+            up_resp = requests.post(upload_url,
+                headers={**auth_h, "Content-Type": "application/octet-stream"},
+                data=chunk, timeout=15)
+            if up_resp.status_code != 200:
+                return web.json_response({"success": False, "error": f"Upload failed: {up_resp.status_code}"}, status=500)
+            up_data = up_resp.json()
+            if "next_url" in up_data:
+                upload_url = up_data["next_url"]
+            if "uuid" in up_data:
+                file_uuid = up_data["uuid"]
+                download_url = up_data.get("_links", {}).get("download", {}).get("href", "")
+            offset += max_part
+        if not file_uuid:
+            return web.json_response({"success": False, "error": "No file UUID returned"}, status=500)
+        # Step 3: Attach file to entity
+        attach_url = f"{KOMMO_DRIVE_URL}/v1.0/files/entity/{entity_type}/{entity_id}"
+        requests.put(attach_url, headers={**auth_h, "Content-Type": "application/json"},
+            json=[{"file_uuid": file_uuid}], timeout=10)
+        # Step 4: Also add as note for visibility
+        note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
+        note_payload = [{"note_type": "common", "params": {"text": f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({file_size//1024}KB)"}}]
+        _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
+        _voice_urls[str(entity_id)] = download_url
+        write_json(_VOICE_URLS_FILE, _voice_urls)
+        return web.json_response({"success": True, "message": "S\u0259s yaz\u0131s\u0131 \u0259lav\u0259 olundu", "download_url": download_url, "file_uuid": file_uuid})
     except Exception as e:
         logger.error(f"Upload voice error: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
