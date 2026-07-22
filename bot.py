@@ -4758,6 +4758,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except: pass
                 # Batch fetch leads (get first contact from each)
                 leads_contact_cache = {}
+                leads_stage_cache = {}  # {lead_id: status_id}
                 if lead_ids:
                     lead_params = {f"filter[id][{i}]": lid for i, lid in enumerate(list(lead_ids)[:50])}
                     lead_params.update({"with": "contacts", "limit": 50})
@@ -4765,6 +4766,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=8)
                         if lr.status_code == 200:
                             for lead in lr.json().get("_embedded", {}).get("leads", []):
+                                leads_stage_cache[lead["id"]] = lead.get("status_id", 0)
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
                                 if emb_contacts:
                                     cid = emb_contacts[0]["id"]
@@ -4869,7 +4871,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "task_type_name": task_type_name,
                         "task_type_id": t.get("task_type_id", 1),
                         "last_note": last_note,
-                        "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), ""))
+                        "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
+                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else ""
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))

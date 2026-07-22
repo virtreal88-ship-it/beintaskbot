@@ -1046,6 +1046,7 @@ function renderNotifications() {
             <div class="space-y-1 text-[11px] text-gray-700">
                 <div>👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
                 <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
+                ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
                 ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
                 ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
             </div>
