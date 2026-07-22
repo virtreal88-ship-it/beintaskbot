@@ -3,7 +3,7 @@
     "id": "294fc0f8",
     "type": "change_stage",
     "created_at": "2026-07-22T10:50:44.064634+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Автоконтакт +994503754040",
       "phone": "+994503754040",
@@ -31,7 +31,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-22T10:53:49.343377+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "c8f030c2",
