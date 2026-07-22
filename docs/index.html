@@ -143,7 +143,7 @@
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
+            <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4229224">Cavab gözlənilir</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Texniki Dəstək">Texniki Dəstək</option></select></div>
@@ -449,6 +449,39 @@ function openFlow(f) {
     else { document.getElementById('search-phone-flow').value = ''; nav('step-search'); }
 }
 
+let _contactSearchTimer = null;
+function debounceContactSearch(val) {
+    clearTimeout(_contactSearchTimer);
+    const box = document.getElementById('contact-search-results');
+    const digits = val.replace(/\D/g, '');
+    if(digits.length < 7) { if(box) box.style.display='none'; return; }
+    _contactSearchTimer = setTimeout(async () => {
+        try {
+            const r = await fetch(API_BASE + '/api/search_contacts', {
+                method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+                body: JSON.stringify({phone: val})
+            });
+            const d = await r.json();
+            if(d.success && d.contacts && d.contacts.length > 0) {
+                box.innerHTML = d.contacts.map(c => 
+                    `<div onclick="selectContact('${c.phone}','${(c.name||"").replace(/'/g,"\\'")}')"
+                     style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:12px;">
+                     <div style="font-weight:700;color:#1e293b;">${c.name || 'Adsız'}</div>
+                     <div style="color:#64748b;margin-top:2px;">${c.phone}</div>
+                    </div>`
+                ).join('');
+                box.style.display='block';
+            } else { box.style.display='none'; }
+        } catch(e) { box.style.display='none'; }
+    }, 600);
+}
+function selectContact(phone, name) {
+    document.getElementById('search-phone').value = phone;
+    if(name) document.getElementById('task-client-name').value = name;
+    document.getElementById('contact-search-results').style.display = 'none';
+    gd.phone = phone;
+    saveSessionForms();
+}
 function handleSearchProceed() {
     const phoneEl = document.getElementById('search-phone-flow') || document.getElementById('search-phone');
     const p = phoneEl.value.trim();

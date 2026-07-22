@@ -5028,6 +5028,33 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         logger.error(f"API notifications error: {e}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
 
+async def handle_search_contacts(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        phone = data.get("phone", "").strip()
+        if not phone or len(re.sub(r"[^\d]", "", phone)) < 7:
+            return web.json_response({"success": False, "error": "Telefon nömrəsi qısadır"}, status=400)
+        contacts = search_contact_by_phone(phone)
+        results = []
+        for c in contacts:
+            name = c.get("name", "")
+            phone_val = ""
+            for cf in c.get("custom_fields_values", []) or []:
+                if cf.get("field_code") == "PHONE":
+                    vals = cf.get("values", [])
+                    if vals:
+                        phone_val = vals[0].get("value", "")
+                    break
+            leads = []
+            if c.get("_embedded", {}).get("leads"):
+                for ld in c["_embedded"]["leads"]:
+                    leads.append({"id": ld.get("id")})
+            results.append({"id": c["id"], "name": name, "phone": phone_val, "leads": leads})
+        return web.json_response({"success": True, "contacts": results})
+    except Exception as e:
+        logger.error(f"Search contacts API error: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def serve_webapp(request: web.Request) -> web.Response:
     html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "index.html")
     return web.FileResponse(html_path)
@@ -5201,6 +5228,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/push-subscribe", handle_push_subscribe)
     app_web.router.add_route('OPTIONS', '/api/upload_voice', lambda r: web.Response())
     app_web.router.add_post("/api/upload_voice", handle_upload_voice)
+    app_web.router.add_route('OPTIONS', '/api/search_contacts', lambda r: web.Response())
+    app_web.router.add_post("/api/search_contacts", handle_search_contacts)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
