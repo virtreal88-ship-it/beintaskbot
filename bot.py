@@ -4128,6 +4128,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
                     send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
                 except: pass
+                # Get lead stage for display
+                _lead_stage_name = ""
+                try:
+                    _ld = get_lead_details(int(result.get('entity_id', 0)))
+                    if _ld:
+                        _sid = _ld.get("status_id")
+                        _lead_stage_name = STAGE_NAMES.get(_sid, "")
+                except: pass
                 save_pending_action("assign_executor", {
                     "contact_name": result['contact_name'],
                     "phone": phone,
@@ -4136,6 +4144,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "deadline": deadline_dt.strftime('%d.%m.%Y %H:%M'),
                     "sender_name": sender_name,
                     "assignee_name_raw": assignee_name_raw,
+                    "stage_name": _lead_stage_name,
                     "link": result.get('link', ''),
                     "conf_key": conf_key,
                 }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
