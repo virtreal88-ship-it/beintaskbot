@@ -292,8 +292,12 @@ def mark_pending_action_resolved(
             for key, expected in data_matches.items()
         ):
             continue
+        import traceback as _tb
+        caller = _tb.extract_stack()[-2]
+        logger.info(f"MARK_RESOLVED: action_id={action.get('id')}, type={action.get('type')}, choice={choice}, caller={caller.filename}:{caller.lineno}:{caller.name}")
         action["resolved"] = True
         action["resolved_at"] = datetime.now(tz=BAKU_TZ).isoformat()
+        action["resolved_by"] = f"{caller.filename.split('/')[-1]}:{caller.lineno}"
         if choice:
             action["resolved_choice"] = choice
         if not write_json(_PENDING_ACTIONS_FILE, actions):
@@ -3709,7 +3713,9 @@ async def handle_resolve_action(request: web.Request) -> web.Response:
     choice = data.get("choice")
     kpi_score = data.get("kpi_score", 0)
     if not action_id or not choice:
-        return web.json_response({"success": False, "message": "Sorğu və seçim tələb olunur."}, status=400)
+        return web.json_response({"success": False, "message": "Sorğu v\u0259 se\u00e7im t\u0259l\u0259b olunur."}, status=400)
+    user_agent = request.headers.get("User-Agent", "unknown")
+    logger.info(f"RESOLVE_ACTION: id={action_id}, choice={choice}, chat_id={chat_id}, UA={user_agent[:80]}")
     success, message = resolve_pending_action(str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0)
     return web.json_response({"success": success, "message": message})
 

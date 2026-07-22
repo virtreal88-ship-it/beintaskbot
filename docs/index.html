@@ -918,6 +918,7 @@ async function deletePendingAction(actionId, card) {
 
 async function resolvePendingAction(actionId, choice, button) {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
+    if(choice === 'Təsdiq et' && !confirm('Təsdiq etmək istədiyinizə əminsiniz?')) return;
     const card = button?.closest('section');
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
     buttons.forEach(item => { item.disabled = true; });
