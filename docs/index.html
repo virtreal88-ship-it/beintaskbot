@@ -210,6 +210,12 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-edit"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
+            <div class="flex items-center gap-2 mt-1">
+                <button type="button" id="edit-voice-btn" onclick="toggleVoiceRecord('edit')" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
+                <span id="edit-voice-status" class="text-[10px] text-gray-500"></span>
+                <button type="button" id="edit-voice-delete" onclick="deleteVoiceRecord('edit')" style="display:none" class="text-red-500 text-xs font-bold">❌</button>
+            </div>
+            <audio id="edit-voice-preview" controls style="display:none;height:28px;width:100%" class="mt-1"></audio>
 
             <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
                 <input type="datetime-local" id="edit-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
@@ -566,7 +572,7 @@ async function doFetch(payload, btnId) {
         });
         const j = await r.json();
         if(r.ok && j.success) {
-            if(payload.action === 'task' && _voiceBlob && j.entity_id) {
+            if((payload.action === 'task' || payload.action === 'update_task') && _voiceBlob && j.entity_id) {
                 uploadVoiceNote(j.entity_id, j.entity_type || 'leads');
             }
             if(payload.action === 'task' && !payload.parent_task_id) clearCreateFormState();
@@ -862,6 +868,8 @@ function renderPendingActions() {
 
 async function loadPendingActions(showFeedback = false) {
     if(!isAdmin) return false;
+    const playingPendingAudio = document.querySelector('#pending-actions-container audio');
+    if(playingPendingAudio && !playingPendingAudio.paused) return false;
     const container = document.getElementById('pending-actions-container');
     if(showFeedback && container) {
         container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Yenilənir...</div>';
@@ -1026,6 +1034,9 @@ function filterByDate(tasks) {
 }
 
 function renderNotifications() {
+    // Skip re-render if audio is playing
+    const playingAudio = document.querySelector("#notifications-container audio");
+    if(playingAudio && !playingAudio.paused) return;
     const container = document.getElementById('notifications-container');
     container.innerHTML = '';
     let filtered = mockTasks;
@@ -1809,9 +1820,15 @@ window._STAGE_NAMES = {};
 fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
 
 // Voice recording
-let _voiceRecorder = null, _voiceChunks = [], _voiceBlob = null, _voiceRecording = false;
-function toggleVoiceRecord() {
+let _voiceRecorder = null, _voiceChunks = [], _voiceBlob = null, _voiceRecording = false, _voiceMode = '';
+function toggleVoiceRecord(mode) {
+    _voiceMode = mode || '';
     if (_voiceRecording) { stopVoiceRecord(); return; }
+    const prefix = _voiceMode === 'edit' ? 'edit-voice' : 'voice';
+    const btnId = _voiceMode === 'edit' ? 'edit-voice-btn' : 'voice-record-btn';
+    const previewId = _voiceMode === 'edit' ? 'edit-voice-preview' : 'voice-preview';
+    const delId = _voiceMode === 'edit' ? 'edit-voice-delete' : 'voice-delete-btn';
+    const statusId = _voiceMode === 'edit' ? 'edit-voice-status' : 'voice-status';
     navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
         _voiceRecorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'});
         _voiceChunks = [];
@@ -1819,30 +1836,36 @@ function toggleVoiceRecord() {
         _voiceRecorder.onstop = () => {
             _voiceBlob = new Blob(_voiceChunks, {type: _voiceRecorder.mimeType});
             const url = URL.createObjectURL(_voiceBlob);
-            document.getElementById('voice-preview').src = url;
-            document.getElementById('voice-preview').style.display = 'block';
-            document.getElementById('voice-delete-btn').style.display = 'inline';
-            document.getElementById('voice-status').textContent = Math.round(_voiceBlob.size/1024) + ' KB';
+            document.getElementById(previewId).src = url;
+            document.getElementById(previewId).style.display = 'block';
+            document.getElementById(delId).style.display = 'inline';
+            document.getElementById(statusId).textContent = Math.round(_voiceBlob.size/1024) + ' KB';
             stream.getTracks().forEach(t=>t.stop());
         };
         _voiceRecorder.start();
         _voiceRecording = true;
-        document.getElementById('voice-record-btn').innerHTML = '⏹ Dayandır';
-        document.getElementById('voice-record-btn').classList.add('bg-red-100','border-red-300','text-red-700');
-        document.getElementById('voice-status').textContent = 'Yazılır...';
+        document.getElementById(btnId).innerHTML = '⏹ Dayandır';
+        document.getElementById(btnId).classList.add('bg-red-100','border-red-300','text-red-700');
+        document.getElementById(statusId).textContent = 'Yazılır...';
     }).catch(e => { toast('Mikrofon icazəsi lazımdır', true); });
 }
 function stopVoiceRecord() {
     if (_voiceRecorder && _voiceRecorder.state !== 'inactive') _voiceRecorder.stop();
     _voiceRecording = false;
-    document.getElementById('voice-record-btn').innerHTML = '🎙 Yaz';
-    document.getElementById('voice-record-btn').classList.remove('bg-red-100','border-red-300','text-red-700');
+    const btnId = _voiceMode === 'edit' ? 'edit-voice-btn' : 'voice-record-btn';
+    const statusId = _voiceMode === 'edit' ? 'edit-voice-status' : 'voice-status';
+    document.getElementById(btnId).innerHTML = '🎙 Yaz';
+    document.getElementById(btnId).classList.remove('bg-red-100','border-red-300','text-red-700');
 }
-function deleteVoiceRecord() {
+function deleteVoiceRecord(mode) {
     _voiceBlob = null; _voiceChunks = [];
-    document.getElementById('voice-preview').style.display = 'none';
-    document.getElementById('voice-delete-btn').style.display = 'none';
-    document.getElementById('voice-status').textContent = '';
+    const m = mode || _voiceMode;
+    const previewId = m === 'edit' ? 'edit-voice-preview' : 'voice-preview';
+    const delId = m === 'edit' ? 'edit-voice-delete' : 'voice-delete-btn';
+    const statusId = m === 'edit' ? 'edit-voice-status' : 'voice-status';
+    document.getElementById(previewId).style.display = 'none';
+    document.getElementById(delId).style.display = 'none';
+    document.getElementById(statusId).textContent = '';
 }
 let _completeVoiceRecorder = null, _completeVoiceChunks = [], _completeVoiceBlob = null, _completeVoiceRecording = false;
 function toggleCompleteVoice() {
