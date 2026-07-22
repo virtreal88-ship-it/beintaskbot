@@ -5138,7 +5138,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         attached = False
         try:
             attach_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/files"
-            att_resp = _http.post(attach_url, headers=HEADERS, json=[{"file_uuid": file_uuid}], timeout=10)
+            att_resp = _http.put(attach_url, headers=HEADERS, json=[{"file_uuid": file_uuid}], timeout=10)
             logger.info(f"File attach {attach_url}: {att_resp.status_code}")
             attached = att_resp.status_code in (200, 201, 202)
         except Exception as _ae:
