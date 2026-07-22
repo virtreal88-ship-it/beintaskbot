@@ -3,7 +3,7 @@
     "id": "b78c72cc",
     "type": "change_stage",
     "created_at": "2026-07-22T18:03:42.251886+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nərminköşk",
       "phone": "+994502060677",
@@ -32,7 +32,9 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-22T18:07:37.533363+04:00",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "daabc733",
