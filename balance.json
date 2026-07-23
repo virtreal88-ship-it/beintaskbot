@@ -266,7 +266,7 @@
         "phone": "+994504984418",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Kəndstorun ikincisi filialı. İnteqrasiya qalıb dine də",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -330,7 +330,7 @@
         "date": "2026-07-23 08:00:42"
       }
     ],
-    "balance": 0.5
+    "balance": 100.5
   },
   "7329891614": {
     "transactions": [],
