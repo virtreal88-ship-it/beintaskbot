@@ -3901,7 +3901,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running")
+    return web.Response(status=200, text="Bot is running v141")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -6066,17 +6066,13 @@ from gh_storage import (
     save_push_subscription, get_push_subscription, remove_push_subscription
 )
 
-# Initialize GitHub storage with token from git remote
-import subprocess as _sp
-_gh_token_match = _sp.run(['git', 'config', '--get', 'remote.origin.url'], capture_output=True, text=True)
-_gh_token_url = _gh_token_match.stdout.strip()
-_gh_token_raw = _gh_token_url.split('//')[1].split('@')[0] if '@' in _gh_token_url else ''
-_gh_token = _gh_token_raw.split(':')[-1] if _gh_token_raw else os.environ.get('GH_TOKEN', os.environ.get('GH_STORAGE_TOKEN', ''))
+# Initialize GitHub storage
+import base64 as _b64t
+_gh_token = os.environ.get('GH_TOKEN', os.environ.get('GH_STORAGE_TOKEN', ''))
 if not _gh_token:
-    import base64 as _b64t
     _gh_token = _b64t.b64decode('Z2hwX3B1cVc5czhm' + 'QWoxamhQMTBpUXFo' + 'eEFNU2VhSlliWDBP' + 'ZXVyTA==').decode()
 _init_gh_storage(_gh_token)
-logger.info(f"GH Storage initialized, token length: {len(_gh_token)}, starts with: {_gh_token[:10] if _gh_token else 'EMPTY'}")
+logger.info(f"GH Storage initialized, token length: {len(_gh_token)}")
 
 _EMPLOYEE_NAMES_BY_TG = {
     chat_id: name for chat_id, name in TG_CHAT_TO_EMPLOYEE.items()
