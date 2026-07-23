@@ -1,5 +1,29 @@
 [
   {
+    "id": "9d54346c",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T10:37:32.947549+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Penal Məktəb Və Ofis Ləvazimatları",
+      "phone": "+994777425444",
+      "lead_id": 77012659,
+      "task_text": "Mərhələ: yeni sifariş",
+      "stage_key": "yeni_sifaris",
+      "stage_name": "yeni sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77012659"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "e69b2c0e",
     "type": "assign_executor",
     "created_at": "2026-07-23T10:34:53.372480+04:00",
