@@ -926,16 +926,21 @@ def get_all_incomplete_tasks() -> list:
 
 def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-    payload = [{
+    task_payload = {
         "text": text,
         "complete_till": complete_till,
         "entity_id": entity_id,
         "entity_type": entity_type,
         "responsible_user_id": responsible_user_id or 10932455,
-        "task_type_id": task_type_id,
-    }]
+    }
+    if task_type_id:
+        task_payload["task_type_id"] = task_type_id
+    payload = [task_payload]
+    logger.info(f"create_task: entity_id={entity_id}, text={text[:50]}, resp_user={responsible_user_id}, type_id={task_type_id}")
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
+        if resp.status_code not in (200, 201):
+            logger.error(f"create_task FAILED: status={resp.status_code}, body={resp.text[:300]}")
         if resp.status_code in (200, 201):
             result = resp.json()
             try:
