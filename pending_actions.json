@@ -1,5 +1,29 @@
 [
   {
+    "id": "16d8cd9b",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T14:26:08.482543+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İsmayilov",
+      "phone": "+0703985611",
+      "lead_id": 76996389,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76996389"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "fd0918a7",
     "type": "assign_executor",
     "created_at": "2026-07-23T14:25:51.620847+04:00",
