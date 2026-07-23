@@ -1,5 +1,29 @@
 [
   {
+    "id": "fb27bc70",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T14:33:13.921275+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Mirvari Decor",
+      "phone": "+994778173747",
+      "lead_id": 77010081,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77010081"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "d7a15e30",
     "type": "assign_executor",
     "created_at": "2026-07-23T14:31:32.934972+04:00",
