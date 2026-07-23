@@ -1,5 +1,44 @@
 [
   {
+    "id": "266523e0",
+    "type": "reassign_task",
+    "created_at": "2026-07-23T16:06:15.029070+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Lead #76300029",
+      "phone": "+994554288354",
+      "lead_id": 76300029,
+      "task_id": 93577587,
+      "task_text": "Anbar qalığı öz-özünə vaxt aşırı dəyişir",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Soltan Abbasov → Şamil Əliyev",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Şamil Əliyev",
+      "note": "Müştəri dedi ki Şamil gedəcək ora",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76300029",
+      "conf_key": "3c9dc9b2",
+      "update_data": {
+        "text": "[Şamil Əliyev] Anbar qalığı öz-özünə vaxt aşırı dəyişir",
+        "responsible_user_id": 15532668,
+        "task_type_id": 4232112,
+        "complete_till": 1784812140
+      },
+      "creator_chat_id": 7262243946,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 3577
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "28340f8e",
     "type": "reassign_task",
     "created_at": "2026-07-23T16:04:17.534439+04:00",
