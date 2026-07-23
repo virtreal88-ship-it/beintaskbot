@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v123';
+const CACHE_NAME = 'bein-v138';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

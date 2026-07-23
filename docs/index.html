@@ -29,15 +29,88 @@
         #bottom-action-bar { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
         #complete-panel, #note-panel { animation: slideUp 0.25s ease forwards; }
         @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-        @media (min-width: 768px) {
+        /* Desktop sidebar (hidden below 1024px) */
+        #desktop-sidebar { display:none; }
+        /* Tablet: 768px - 1023px (unchanged) */
+        @media (min-width: 768px) and (max-width: 1023px) {
             body { background:#e5e7eb; }
             .bg-\[\#1a252f\] { max-width:600px; margin:0 auto; border-radius:0 0 16px 16px; }
             #content-area { max-width:600px; margin:0 auto; padding-left:20px; padding-right:20px; box-sizing:border-box; width:600px; }
             .screen { width:100% !important; max-width:100% !important; box-sizing:border-box; }
             .screen input, .screen select, .screen textarea, .screen button, .screen .space-y-3, .screen .bg-white { width:100%; box-sizing:border-box; }
             #tab-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:16px 16px 0 0; }
-            #bottom-action-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:24px 24px 0 0; }
+            #bottom-action-bar { max-width:600px; left:0; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; }
         }
+        /* Desktop: >= 1024px — sidebar navigation layout */
+        @media (min-width: 1024px) {
+            body { background:#f8f9fa; }
+            /* Hide mobile header and bottom tab bar */
+            #mobile-header { display:none !important; }
+            #tab-bar { display:none !important; }
+            /* Fixed left sidebar */
+            #desktop-sidebar {
+                display:flex; flex-direction:column;
+                position:fixed; top:0; left:0; bottom:0; width:240px;
+                background:#1a252f; color:#fff; z-index:45;
+                padding:24px 14px 20px; box-sizing:border-box;
+                box-shadow:2px 0 12px rgba(0,0,0,0.08);
+            }
+            #desktop-sidebar .sidebar-brand { padding:0 12px 20px; border-bottom:1px solid rgba(255,255,255,0.08); margin-bottom:16px; }
+            #desktop-sidebar .sidebar-brand h1 { font-size:18px; font-weight:800; letter-spacing:0.03em; margin:0; color:#fff; }
+            #desktop-sidebar .sidebar-brand span { font-size:11px; color:#94a3b8; display:block; margin-top:2px; }
+            .sidebar-item {
+                display:flex; align-items:center; gap:12px; width:100%;
+                padding:12px 14px; margin-bottom:4px; border:none; background:transparent;
+                color:#cbd5e1; font-size:14px; font-weight:600; text-align:left;
+                border-radius:12px; cursor:pointer; font-family:inherit;
+                transition:background 0.15s ease, color 0.15s ease; position:relative;
+            }
+            .sidebar-item:hover { background:rgba(255,255,255,0.06); color:#fff; }
+            .sidebar-item.active { background:#2481cc; color:#fff; box-shadow:0 2px 8px rgba(36,129,204,0.35); }
+            .sidebar-item .sidebar-icon { font-size:18px; width:24px; text-align:center; flex-shrink:0; }
+            .sidebar-badge {
+                margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
+                min-width:18px; height:18px; border-radius:9px;
+                display:flex; align-items:center; justify-content:center; padding:0 5px;
+            }
+            #sidebar-user {
+                margin-top:auto; padding:12px 14px; border-top:1px solid rgba(255,255,255,0.08);
+                font-size:12px; color:#94a3b8; word-break:break-word;
+            }
+            #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:6px; }
+            /* Main content shifted right of sidebar, centered at max 800px */
+            #content-area {
+                margin-left:240px; width:auto; max-width:none;
+                padding:32px 40px 48px; box-sizing:border-box;
+            }
+            #content-area > .screen { max-width:800px; margin-left:auto; margin-right:auto; }
+            .screen { width:100%; box-sizing:border-box; }
+            .screen input, .screen select, .screen textarea, .screen .space-y-3, .screen .bg-white { box-sizing:border-box; }
+            /* Larger typography on desktop */
+            #content-area .text-\[11px\] { font-size:12px; }
+            #content-area .text-\[10px\] { font-size:11px; }
+            /* Two-column grid for task and pending cards */
+            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container {
+                display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; align-items:start;
+            }
+            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > * { margin:0 !important; }
+            /* Full-width rows inside grid (empty states, section separators) */
+            #notifications-container > div[class*='text-center'],
+            #pending-actions-container > div[class*='text-center'],
+            #balance-history-container > div[class*='text-center'],
+            #balance-history-container > div[class*='mt-4'],
+            #kpi-history-container > div[class*='text-center'] { grid-column:1 / -1; }
+            /* Bottom sheet becomes a centered panel (offset by sidebar width) */
+            #bottom-action-bar { max-width:640px; left:240px; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; box-shadow:0 -8px 40px rgba(0,0,0,0.15); }
+            /* Desktop-only click actions on task cards */
+            .desktop-task-actions { display:flex !important; }
+            /* Hide swipe hints on desktop */
+            .swipe-hint { display:none !important; }
+            /* Show desktop action buttons on pending cards */
+            .desktop-pending-actions { display:flex !important; }
+        }
+        /* Hidden by default (mobile/tablet use swipe gestures) */
+        .desktop-task-actions, .desktop-pending-actions { display:none; }
     </style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
@@ -58,8 +131,32 @@
     </div>
 </div>
 
-<!-- HEADER -->
-<div class="bg-[#1a252f] text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
+<!-- DESKTOP SIDEBAR (>=1024px only) -->
+<nav id="desktop-sidebar" aria-label="Əsas naviqasiya">
+    <div class="sidebar-brand">
+        <h1>Bein Systems</h1>
+        <span>CRM Smart Assistant</span>
+    </div>
+    <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
+        <span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
+    </button>
+    <button id="side-tab-create" class="sidebar-item" onclick="switchTab('tab-create')">
+        <span class="sidebar-icon">➕</span><span>Yeni Tapşırıq</span>
+    </button>
+    <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
+        <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Balans</span>
+    </button>
+    <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
+        <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+    </button>
+    <div id="sidebar-user">
+        <div id="sidebar-user-name"></div>
+        <div id="sidebar-sync"><span class="sync-spinner"></span><span>Yenilənir...</span></div>
+    </div>
+</nav>
+
+<!-- HEADER (mobile/tablet only) -->
+<div id="mobile-header" class="bg-[#1a252f] text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
     <div>
         <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
         <span class="text-[10px] text-gray-400">CRM Smart Assistant</span>
@@ -377,14 +474,20 @@ let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['7962757442','7262243946','7329891614','8835096199'];
-if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; }); }
+if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; const sideLbl = document.getElementById('side-tab-history-label'); if(sideLbl) sideLbl.textContent = 'Maliyyə'; }); }
 document.addEventListener('DOMContentLoaded', () => { });
 
+function setUserDisplayName(name) {
+    const area = document.getElementById('user-display-area');
+    if(area) area.innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
+    const sideName = document.getElementById('sidebar-user-name');
+    if(sideName) sideName.innerHTML = `<span style="color:#34d399;font-weight:700;">${name}</span>`;
+}
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
 
-function showSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.display = 'flex'; s.style.opacity = '1'; } }
-function hideSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.opacity = '0'; setTimeout(() => { s.style.display = 'none'; }, 300); } }
+function showSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.display = 'flex'; s.style.opacity = '1'; } const d = document.getElementById('sidebar-sync'); if(d) { d.style.display = 'flex'; d.style.opacity = '1'; } }
+function hideSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.opacity = '0'; setTimeout(() => { s.style.display = 'none'; }, 300); } const d = document.getElementById('sidebar-sync'); if(d) { d.style.opacity = '0'; setTimeout(() => { d.style.display = 'none'; }, 300); } }
 function showLoader() { document.getElementById('preloader').style.display = 'flex'; }
 function hideLoader() { document.getElementById('preloader').style.display = 'none'; }
 
@@ -397,6 +500,14 @@ function toast(m, err) {
 function setPendingTabVisible() {
     const tab = document.getElementById('tab-pending');
     if(tab) tab.style.display = isAdmin ? 'flex' : 'none';
+    const sideTab = document.getElementById('side-tab-pending');
+    if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
+}
+function setSidebarActive(tabId) {
+    ['tab-tasks','tab-create','tab-history','tab-pending'].forEach(id => {
+        const item = document.getElementById('side-' + id);
+        if(item) item.classList.toggle('active', id === tabId);
+    });
 }
 
 function applyHashRoute() {
@@ -408,7 +519,7 @@ async function initApp() {
     const firstName = tg.initDataUnsafe?.user?.first_name || '';
     const lastName = tg.initDataUnsafe?.user?.last_name || '';
     const name = (firstName + ' ' + lastName).trim();
-    if(name) document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
+    if(name) setUserDisplayName(name);
     initSessionPersistence();
     restoreSessionForms();
     setPendingTabVisible();
@@ -565,7 +676,7 @@ async function syncNotifications(showError = false) {
         const j = await r.json();
         if(!r.ok || !j.success || !j.tasks) throw new Error(j.error || 'Sync failed');
         if(j.user_name) {
-            document.getElementById('user-display-area').innerHTML = `<span class="font-bold text-emerald-400">${j.user_name}</span>`;
+            setUserDisplayName(j.user_name);
         }
         if(j.is_admin) {
             isAdmin = true;
@@ -881,9 +992,23 @@ function renderPendingActions() {
         controls.append(execBtn, stageBtn);
         card.appendChild(controls);
 
-        // Swipe hint
+        // Desktop click actions (≥ 1024px): confirm / reject buttons instead of swipe
+        const desktopControls = document.createElement('div');
+        desktopControls.className = 'desktop-pending-actions gap-2';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        confirmBtn.textContent = '✅ Təsdiq et';
+        confirmBtn.addEventListener('click', () => showPendingConfirmPanel(action));
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'flex-1 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        rejectBtn.textContent = '❌ İmtina';
+        rejectBtn.addEventListener('click', () => { if(confirm('İmtina etmək istədiyinizə əminsiniz?')) { card.style.opacity='0.5'; rejectPendingAction(action.id, card); } });
+        desktopControls.append(confirmBtn, rejectBtn);
+        card.appendChild(desktopControls);
+
+        // Swipe hint (mobile/tablet only)
         const hint = document.createElement('div');
-        hint.className = 'flex justify-between text-[9px] text-gray-300 font-semibold pt-0.5';
+        hint.className = 'swipe-hint flex justify-between text-[9px] text-gray-300 font-semibold pt-0.5';
         hint.innerHTML = '<span>← İmtina</span><span>Təsdiq et →</span>';
         card.appendChild(hint);
         container.appendChild(card);
@@ -948,6 +1073,8 @@ async function loadPendingActions(showFeedback = false) {
         renderPendingActions();
         const badge = document.getElementById('pending-badge');
         if(badge) { if(pendingActions.length > 0) { badge.textContent = pendingActions.length; badge.style.display = 'flex'; } else { badge.style.display = 'none'; } }
+        const sideBadge = document.getElementById('sidebar-pending-badge');
+        if(sideBadge) { if(pendingActions.length > 0) { sideBadge.textContent = pendingActions.length; sideBadge.style.display = 'flex'; } else { sideBadge.style.display = 'none'; } }
         return true;
     } catch(error) {
         if(container) {
@@ -1197,6 +1324,11 @@ function renderNotifications() {
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
                 <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
             </div>
+            <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
+                <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
+                <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
+            </div>
             </div>`;
         card.onclick = () => { };
         // Long-press handler for context menu
@@ -1232,6 +1364,13 @@ function renderNotifications() {
                 wrapper.appendChild(card);
         container.appendChild(wrapper);
     });
+}
+function desktopCompleteTask(taskId) {
+    const t = mockTasks.find(x => x.id === taskId); if(!t) return;
+    const displayDesc = (t.desc || t.text || '').replace(/^\[[^\]]+\]\s*/, '');
+    const assigneeName = t.assigneeName || t.responsible_user_name || '';
+    clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`);
+    showCompletePanel();
 }
 function clickNotification(id, desc, metaText) {
     selectedTaskId = id;
@@ -1428,6 +1567,7 @@ function switchTab(tabId, updateHash = true) {
         const tab = document.getElementById(id);
         if(tab) tab.className = inactiveClass;
     });
+    setSidebarActive(tabId);
     if(tabId === 'tab-tasks') {
         document.getElementById('tab-tasks').className = activeClass;
         nav('screen-notifications');
@@ -1820,7 +1960,9 @@ function showTaskContextMenu(taskId, x, y) {
     // Create menu
     const menu = document.createElement('div');
     menu.id = 'task-context-menu';
-    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:200px;overflow:hidden;';
+    const menuLeft = Math.max(8, Math.min((x || 0) - 80, window.innerWidth - 228));
+    const menuTop = Math.max(8, Math.min((y || 0) - 10, window.innerHeight - 220));
+    menu.style.cssText = 'position:fixed;top:' + menuTop + 'px;left:' + menuLeft + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:200px;overflow:hidden;';
     menu.innerHTML = `
         <button onclick="selectedTaskId=${taskId}; openSubtask(${taskId}); document.getElementById('task-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
             <div>➕ Əlavə tapşırıq</div>
