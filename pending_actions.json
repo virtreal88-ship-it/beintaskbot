@@ -1,5 +1,40 @@
 [
   {
+    "id": "66701daa",
+    "type": "change_stage",
+    "created_at": "2026-07-23T18:46:27.231494+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Qarishqa",
+      "phone": "+994102135104",
+      "lead_id": 75819231,
+      "task_id": 93565271,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Sabah səhər mağazaya gedib, bütün satış qiymətlərini tək tək düzəldib təhvil vermək lazımdır. İmport zamanı satış qiymətlər düz düşməyib.\n\nƏlavə olaraq müştəri istəyirki, bütün məhsullara xüsusiyyətlər əlavə edilsin",
+      "task_price": "",
+      "note": ".",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75819231",
+      "callback_key": "37192ded"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "2a649f41",
     "type": "assign_executor",
     "created_at": "2026-07-23T18:44:45.959195+04:00",
