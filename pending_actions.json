@@ -1,5 +1,40 @@
 [
   {
+    "id": "20ddd987",
+    "type": "change_stage",
+    "created_at": "2026-07-23T18:13:25.506272+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Maqa",
+      "phone": "+994554288354",
+      "lead_id": 76300029,
+      "task_id": 93577587,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Anbar qalığı öz-özünə vaxt aşırı dəyişir",
+      "task_price": "",
+      "note": "Tapşırığın mənə yönləndirilməsi səhvdir. Çünkü mən tapşırığa qeyd etmişdim ki, problem ilə bağlı task yaradılsın və task nəzarətdə saxlanılsın. Mənim müştərinin yanına getməyim bu problemi həll etmir. Task yaradılmalıdır və mümkün qədər tez icra olunmalıdır.bu səbəbdən tapşırığı sonlandırıram və yeni tapşırıq açıb Nizamiyə göndərirəm",
+      "stage_name": "imtina olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76300029",
+      "callback_key": "9c93cea4"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "287c8b7e",
     "type": "assign_executor",
     "created_at": "2026-07-23T18:13:00.693369+04:00",
