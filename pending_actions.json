@@ -1,5 +1,40 @@
 [
   {
+    "id": "02945037",
+    "type": "change_stage",
+    "created_at": "2026-07-23T12:00:44.464430+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Qarishqa",
+      "phone": "+994102135104",
+      "lead_id": 75819231,
+      "task_id": 93584755,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": ".",
+      "task_price": "100",
+      "note": "Uğurlu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75819231",
+      "callback_key": "1c6e50df"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "d89a2ce3",
     "type": "change_stage",
     "created_at": "2026-07-23T11:53:38.016724+04:00",
