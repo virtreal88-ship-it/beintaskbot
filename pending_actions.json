@@ -1,5 +1,40 @@
 [
   {
+    "id": "111bddaf",
+    "type": "change_stage",
+    "created_at": "2026-07-23T16:01:06.676282+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Mirvari Decor Fərid",
+      "phone": "+994778173747",
+      "lead_id": 77010081,
+      "task_id": 93586707,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Danışığımıza baxsan yaxşı olar , kommoda var",
+      "task_price": "",
+      "note": "Tələblər\n1. Sifarişləri əməkdaş telefonla formalaşdırsın, qiymətləri görməsin, admin hamısını görsün\n2. Tədbirin(Sifarişin) tarixlərini qeyd etmək olsun\n3.Xərcləri işləmək olsun\n4.Menyulardan artıqları bağlamaq.\n5.Tiktok reklamındakı kimi rahat əməliyyat edib hesabat əldə etmək\nMinimal qiymətə proqram istəyir, öz qruplarında 60a yaxın istifadəçi var ki hamısı bu müştəri kimi whatsapp qruplarla işləyir. \nQiyməti demək lazımdır",
+      "stage_name": "Təqdimat",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77010081",
+      "callback_key": "ddf1d7f9"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "5c4910ea",
     "type": "assign_executor",
     "created_at": "2026-07-23T14:58:00.413326+04:00",
