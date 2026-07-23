@@ -1,5 +1,33 @@
 [
   {
+    "id": "d9011eb6",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T17:35:48.923693+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Mehellemarket",
+      "phone": "1012135104",
+      "lead_id": 77015885,
+      "task_text": "\"millimarket\" dən \"mehellemarket\" ə məbsulları miqrasiya etmək lazımdır.",
+      "deadline": "23.07.2026 17:35",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77015885",
+      "conf_key": "09c16c67",
+      "creator_chat_id": 7920785774
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "266523e0",
     "type": "reassign_task",
     "created_at": "2026-07-23T16:06:15.029070+04:00",
