@@ -804,13 +804,14 @@ function renderPendingActions() {
         card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 relative overflow-hidden';
         card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
         card.dataset.actionId = action.id;
-        // Swipe handling
+        // Swipe handling: right = confirm panel (stars + Təsdiq et), left = İmtina
         let startX = 0, currentX = 0, swiping = false;
-        card.addEventListener('touchstart', (e) => { if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; startX = e.touches[0].clientX; swiping = true; currentX = 0; });
-        card.addEventListener('touchmove', (e) => { if(!swiping) return; if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION') return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#fee2e2'; else if(currentX < 0) card.style.background='#fef3c7'; else card.style.background='#fff'; });
+        card.addEventListener('touchstart', (e) => { if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION'||e.target.tagName==='BUTTON') return; startX = e.touches[0].clientX; swiping = true; currentX = 0; });
+        card.addEventListener('touchmove', (e) => { if(!swiping) return; if(e.target.tagName==='SELECT'||e.target.tagName==='OPTION'||e.target.tagName==='BUTTON') return; currentX = e.touches[0].clientX - startX; card.style.transform = `translateX(${currentX}px)`; if(currentX > 0) card.style.background='#d1fae5'; else if(currentX < 0) card.style.background='#fee2e2'; else card.style.background='#fff'; });
         card.addEventListener('touchend', () => {
+            if(!swiping) return;
             swiping = false;
-            if(currentX > 100) { card.style.transform='translateX(100%)'; card.style.opacity='0'; setTimeout(()=>{deletePendingAction(action.id,card);},300); }
+            if(currentX > 100) { card.style.transform='translateX(0)'; card.style.background='#fff'; showPendingConfirmPanel(action); }
             else if(currentX < -100) { card.style.transform='translateX(-100%)'; card.style.opacity='0'; setTimeout(()=>{rejectPendingAction(action.id,card);},300); }
             else { card.style.transform='translateX(0)'; card.style.opacity='1'; card.style.background='#fff'; }
         });
@@ -857,47 +858,76 @@ function renderPendingActions() {
             audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+data.voice_url+'"></audio>';
             card.appendChild(audioDiv);
         }
-        // KPI star rating for change_stage
-        if(action.type === 'change_stage') {
-            const kpiRow = document.createElement('div');
-            kpiRow.className = 'flex items-center gap-1 py-2';
-            kpiRow.innerHTML = '<span class="text-xs font-bold text-gray-600 mr-2">KPI:</span>';
-            for(let i = 1; i <= 5; i++) {
-                const star = document.createElement('button');
-                star.className = 'text-xl text-gray-300 transition-colors';
-                star.textContent = '⭐';
-                star.dataset.score = i;
-                star.addEventListener('click', () => {
-                    kpiRow.querySelectorAll('button').forEach((s, idx) => { s.style.opacity = idx < i ? '1' : '0.3'; });
-                    card.dataset.kpiScore = i * 20;
-                });
-                star.style.opacity = '0.3';
-                kpiRow.appendChild(star);
-            }
-            card.appendChild(kpiRow);
-        }
-
-        // Confirm button
+        // Card face buttons: İcraçı dəyiş + Mərhələ dəyiş
         const controls = document.createElement('div');
         controls.className = 'flex gap-2';
-        const confirmBtn = document.createElement('button');
-        confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-        confirmBtn.textContent = 'Təsdiq et';
-        confirmBtn.addEventListener('click', () => {
-            resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
+        const execBtn = document.createElement('button');
+        execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        execBtn.textContent = '👷 İcraçı dəyiş';
+        execBtn.addEventListener('click', () => {
+            showPendingSelectModal('İcraçı seç', ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
+                resolvePendingAction(action.id, choice, execBtn);
+            });
         });
-        controls.appendChild(confirmBtn);
+        const stageBtn = document.createElement('button');
+        stageBtn.className = 'flex-1 bg-violet-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        stageBtn.textContent = '📋 Mərhələ dəyiş';
+        stageBtn.addEventListener('click', () => {
+            const stageOpts = ['danışıqlar','Qiymət təklifi','Təqdimat','yeni sifariş','görüş','quraşdırma','Düşünür'];
+            showPendingSelectModal('Mərhələ seç', stageOpts, (choice) => {
+                resolvePendingAction(action.id, 'stage_change:' + choice, stageBtn);
+            });
+        });
+        controls.append(execBtn, stageBtn);
         card.appendChild(controls);
 
-        // Long press context menu for pending cards
-        let _pLongTimer = null;
-        card.addEventListener('touchstart', (e) => {
-            if(e.target.tagName==='BUTTON'||e.target.tagName==='SELECT') return;
-            _pLongTimer = setTimeout(() => { showPendingContextMenu(action, e.touches[0].clientX, e.touches[0].clientY); }, 500);
-        });
-        card.addEventListener('touchend', () => { clearTimeout(_pLongTimer); });
-        card.addEventListener('touchmove', () => { clearTimeout(_pLongTimer); });
+        // Swipe hint
+        const hint = document.createElement('div');
+        hint.className = 'flex justify-between text-[9px] text-gray-300 font-semibold pt-0.5';
+        hint.innerHTML = '<span>← İmtina</span><span>Təsdiq et →</span>';
+        card.appendChild(hint);
         container.appendChild(card);
+    });
+}
+
+// Swipe-right confirm panel: optional KPI stars + Təsdiq et
+function showPendingConfirmPanel(action) {
+    const existing = document.getElementById('pending-confirm-panel');
+    if(existing) existing.remove();
+    const data = action.data || {};
+    const overlay = document.createElement('div');
+    overlay.id = 'pending-confirm-panel';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;';
+    let selectedStars = 0;
+    const starsHtml = [1,2,3,4,5].map(i => `<button data-star="${i}" style="background:none;border:none;font-size:32px;opacity:0.25;cursor:pointer;padding:4px;transition:opacity .15s;">⭐</button>`).join('');
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:20px 20px 28px;box-shadow:0 -8px 30px rgba(0,0,0,0.2);">
+        <div style="width:40px;height:4px;background:#d1d5db;border-radius:2px;margin:0 auto 16px;"></div>
+        <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:4px;">Təsdiq et</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:14px;">👤 ${(data.contact_name || data.client_name || '—')} · ${(data.sender_name ? '👷 ' + data.sender_name : '')}</div>
+        <div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:4px;">KPI qiyməti (istəyə bağlı — seçməsəniz KPI təsir etmir):</div>
+        <div id="pcp-stars" style="display:flex;justify-content:center;gap:2px;margin-bottom:6px;">${starsHtml}</div>
+        <div id="pcp-stars-label" style="text-align:center;font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:14px;">Ulduz seçilməyib</div>
+        <button id="pcp-confirm" style="width:100%;background:#10b981;color:#fff;font-weight:800;padding:14px;border:none;border-radius:14px;font-size:14px;cursor:pointer;">✅ Təsdiq et</button>
+        <button id="pcp-cancel" style="width:100%;background:#f1f5f9;color:#64748b;font-weight:700;padding:12px;border:none;border-radius:14px;font-size:12px;margin-top:8px;cursor:pointer;">Ləğv et</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if(e.target === overlay) overlay.remove(); });
+    overlay.querySelectorAll('#pcp-stars button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const val = parseInt(btn.dataset.star);
+            selectedStars = (selectedStars === val) ? 0 : val; // tap same star again to deselect
+            overlay.querySelectorAll('#pcp-stars button').forEach(b => { b.style.opacity = parseInt(b.dataset.star) <= selectedStars ? '1' : '0.25'; });
+            const lbl = overlay.querySelector('#pcp-stars-label');
+            lbl.textContent = selectedStars ? `${selectedStars} ulduz (KPI: ${selectedStars * 20}/100)` : 'Ulduz seçilməyib';
+            lbl.style.color = selectedStars ? '#f59e0b' : '#94a3b8';
+        });
+    });
+    overlay.querySelector('#pcp-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#pcp-confirm').addEventListener('click', () => {
+        if(!confirm('Təsdiq etmək istədiyinizə əminsiniz?' + (selectedStars ? ` (KPI: ${selectedStars} ulduz)` : ''))) return;
+        overlay.remove();
+        resolvePendingAction(action.id, 'Təsdiq et', null, selectedStars, true);
     });
 }
 
@@ -971,11 +1001,11 @@ async function rejectPendingAction(actionId, card) {
     }
 }
 
-async function resolvePendingAction(actionId, choice, button) {
+async function resolvePendingAction(actionId, choice, button, stars = 0, skipConfirm = false) {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
-    if(choice === 'Təsdiq et' && !confirm('Təsdiq etmək istədiyinizə əminsiniz?')) return;
+    if(choice === 'Təsdiq et' && !skipConfirm && !confirm('Təsdiq etmək istədiyinizə əminsiniz?')) return;
     showLoader();
-    const card = button?.closest('section');
+    const card = button?.closest('section') || document.querySelector(`section[data-action-id="${actionId}"]`);
     const buttons = card ? Array.from(card.querySelectorAll('button')) : [];
     buttons.forEach(item => { item.disabled = true; });
     if(card) { card.style.opacity='0.5'; card.insertAdjacentHTML('beforeend','<div class="pending-loader" style="text-align:center;padding:8px"><div style="display:inline-block;width:24px;height:24px;border:3px solid #ccc;border-top-color:#2481cc;border-radius:50%;animation:spin 0.6s linear infinite"></div></div>'); }
@@ -983,7 +1013,7 @@ async function resolvePendingAction(actionId, choice, button) {
         const response = await fetch(API_BASE + '/api/pending_actions/resolve', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice, kpi_score: card ? (parseInt(card.dataset.kpiScore) || 0) : 0}),
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice, stars: stars || 0, kpi_score: card ? (parseInt(card.dataset.kpiScore) || 0) : 0}),
         });
         const payload = await response.json();
         if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
@@ -1808,68 +1838,7 @@ function showTaskContextMenu(taskId, x, y) {
         });
     }, 100);
 }
-function showPendingContextMenu(action, x, y) {
-    const existing = document.getElementById('pending-context-menu');
-    if(existing) existing.remove();
-    const menu = document.createElement('div');
-    menu.id = 'pending-context-menu';
-    menu.style.cssText = 'position:fixed;top:' + (y - 10) + 'px;left:' + (x - 80) + 'px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:9998;min-width:220px;overflow:hidden;';
-    const actionJson = JSON.stringify(action).replace(/"/g,'&quot;');
-    menu.innerHTML = `
-        <button onclick="pendingMenuAction('stage','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
-            <div>📋 Mərhələ seç</div>
-            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">sövdələşmənin mərhələsini dəyiş</div>
-        </button>
-        <button onclick="pendingMenuAction('executor','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
-            <div>👷 İcraçı dəyiş</div>
-            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">tapşırığın icraçısını dəyiş</div>
-        </button>
-        <button onclick="openSubtaskFromPending(${actionJson}); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;cursor:pointer;">
-            <div>➕ Əlavə tapşırıq</div>
-            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu sifarişə bağlı əlavə tapşırıq</div>
-        </button>
-        <button onclick="pendingMenuAction('note','${action.id}'); document.getElementById('pending-context-menu').remove();" style="width:100%;text-align:left;padding:12px 16px;border:none;background:none;font-size:13px;font-weight:600;color:#1e293b;cursor:pointer;">
-            <div>📝 Qeyd əlavə et</div>
-            <div style="font-size:11px;color:#94a3b8;font-weight:400;margin-top:2px;">bu tapşırığa bağlı sifarişə qeyd əlavə etmək</div>
-        </button>
-    `;
-    document.body.appendChild(menu);
-    setTimeout(() => {
-        document.addEventListener('click', function closeMenu(e) {
-            if(!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closeMenu); }
-        });
-    }, 100);
-}
-function pendingMenuAction(type, actionId) {
-    const action = pendingActions.find(a => a.id === actionId);
-    if(!action) return;
-    const options = Array.isArray(action.options) ? action.options : [];
-    if(type === 'stage') {
-        const stageOpts = (action.type === 'change_stage') ? options : Object.values(window._STAGE_NAMES || {});
-        showPendingSelectModal('Mərhələ seç', stageOpts, (choice) => {
-            pendingChangeStage(actionId, choice);
-        });
-    } else if(type === 'executor') {
-        showPendingSelectModal('İcraçı seç', ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Texniki Dəstək','Özüm'], (choice) => {
-            const shortMap = {'Şamil Əliyev':'Şamil','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
-            pendingChangeExecutor(actionId, shortMap[choice] || choice);
-        });
-    } else if(type === 'note') {
-        const pData = action.data || {};
-        const taskId = pData.task_id;
-        const leadId = pData.lead_id;
-        if(taskId || leadId) {
-            selectedTaskId = taskId;
-            const desc = pData.task_text || pData.contact_name || '';
-            document.getElementById('bottom-bar-title').textContent = desc;
-            document.getElementById('bottom-bar-meta').textContent = pData.phone || '';
-            const bar = document.getElementById('bottom-action-bar');
-            bar.style.display = 'block'; setTimeout(() => bar.style.transform = 'translateY(0)', 10);
-            document.getElementById('action-buttons').style.display = 'none';
-            showNotePanel();
-        } else { toast('Tapşırıq tapılmadı', true); }
-    }
-}
+// Long-press context menu removed — replaced by İcraçı dəyiş / Mərhələ dəyiş buttons on the card face (v134)
 function showPendingSelectModal(title, items, callback) {
     const existing = document.getElementById('pending-select-modal');
     if(existing) existing.remove();

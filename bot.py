@@ -394,7 +394,65 @@ def _create_stage_task(lead_id: int, stage_key: str, sender_name: str = "") -> b
     ))
 
 
-def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> tuple[bool, str]:
+def _apply_pending_kpi_stars(action_data: dict, stars: int) -> bool:
+    """Attribute optional KPI stars (1-5 → 20-100) to the executor behind a pending action."""
+    try:
+        stars = int(stars or 0)
+    except (TypeError, ValueError):
+        return False
+    if stars <= 0:
+        return False
+    stars = min(stars, 5)
+    score = stars * 20
+    # Determine executor telegram id: creator_chat_id > sender_chat_id > sender_name mapping
+    employee_tg_id = None
+    for key in ("creator_chat_id", "sender_chat_id"):
+        raw = action_data.get(key)
+        try:
+            candidate = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if candidate and candidate != ADMIN_CHAT_ID:
+            employee_tg_id = candidate
+            break
+    if not employee_tg_id:
+        sender_name = action_data.get("sender_name") or ""
+        mapped = NAME_TO_CHAT.get(sender_name)
+        if mapped and int(mapped) != ADMIN_CHAT_ID:
+            employee_tg_id = int(mapped)
+    if not employee_tg_id:
+        logger.info("KPI stars skipped: no executor found in action data")
+        return False
+    task_id = action_data.get("task_id") or 0
+    try:
+        task_id = int(task_id)
+    except (TypeError, ValueError):
+        task_id = 0
+    saved = set_kpi_score(employee_tg_id, task_id, score, corrected_by=ADMIN_CHAT_ID)
+    if not saved:
+        # No existing kpi.json entry for this task — create one directly
+        try:
+            kpi_data = read_json("kpi.json") or {}
+            key = f"{employee_tg_id}_{task_id}"
+            kpi_data[key] = {
+                "sessions": [],
+                "kpi_score": score,
+                "manual_correction": True,
+                "corrected_by": ADMIN_CHAT_ID,
+                "corrected_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "completed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "pending_confirm_stars",
+            }
+            saved = write_json("kpi.json", kpi_data)
+        except Exception as kpi_err:
+            logger.error(f"KPI stars write error: {kpi_err}")
+            return False
+    if saved:
+        logger.info(f"KPI stars applied: employee={employee_tg_id}, task={task_id}, score={score}")
+    return bool(saved)
+
+
+def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, stars: int = 0) -> tuple[bool, str]:
     """Execute one persisted admin action and resolve it only after success."""
     actions = get_pending_actions()
     action = next((item for item in actions if item.get("id") == action_id), None)
@@ -404,7 +462,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
         return False, "Sorğu artıq həll edilib."
     action_options = action.get("options") or []
     if choice not in action_options:
-        if choice != "Təsdiq et":
+        if choice != "Təsdiq et" and not choice.startswith("stage_change:"):
             return False, "Yanlış seçim."
 
     action_type = action.get("type")
@@ -414,6 +472,37 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
     phone = action_data.get("phone") or "—"
     stage_name = action_data.get("stage_name") or "—"
     link = action_data.get("link") or (f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else "")
+
+    # ── Universal stage change: choice="stage_change:{stage_key_or_name}" works for ANY action type ──
+    if choice.startswith("stage_change:"):
+        requested_stage = choice.split(":", 1)[1].strip()
+        status_id = STAGES.get(requested_stage.casefold())
+        if not status_id:
+            status_id = next(
+                (sid for sid, dn in STAGE_NAMES.items() if dn.casefold() == requested_stage.casefold()),
+                None,
+            )
+        if not lead_id:
+            return False, "Lead ID tapılmadı. Köhnə sorğu ola bilər."
+        if not status_id:
+            return False, f"Mərhələ tapılmadı: {requested_stage}"
+        if not update_lead_kommo(
+            int(lead_id),
+            {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+        ):
+            return False, "Kommo mərhələsi dəyişdirilmədi."
+        new_stage_display = STAGE_NAMES.get(int(status_id), requested_stage)
+        if stars:
+            _apply_pending_kpi_stars(action_data, stars)
+        if not mark_pending_action_resolved(action_id=action_id, choice=choice):
+            return False, "Mərhələ dəyişdirildi, lakin sorğu bağlanmadı."
+        _clear_runtime_pending_action(action)
+        _close_pending_telegram_message(
+            action,
+            f"✅ PWA-dan həll edildi: Mərhələ → {new_stage_display}\n👤 {contact_name}\n"
+            f"📞 {phone}\n⏰ {datetime.now(tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+        )
+        return True, f"Mərhələ dəyişdirildi: {new_stage_display}."
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
@@ -437,6 +526,8 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
                     entity_type="leads",
                     task_type_id=int(task_type_id_te) if task_type_id_te else None,
                 )
+            if stars:
+                _apply_pending_kpi_stars(action_data, stars)
             if not mark_pending_action_resolved(action_id=action_id, choice=choice):
                 return False, "Sorğu bağlanmadı."
             _clear_runtime_pending_action(action)
@@ -543,7 +634,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
             _send_telegram_text(creator_chat_id, "✅ Dəyişiklik təsdiq edildi!")
 
     elif action_type == "change_stage":
-        # Təsdiq et = only confirm KPI, do NOT change stage (stage is changed separately via long press)
+        # Təsdiq et = only confirm KPI, do NOT change stage (stage is changed via stage_change: or Mərhələ dəyiş button)
         if choice == "Təsdiq et":
             # Only apply KPI score, no stage change
             if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
@@ -552,7 +643,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
                     set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
             result_message = "Təsdiq edildi."
         else:
-            # Explicit stage selection from long-press menu
+            # Explicit stage selection from options list
             status_id = next(
                 (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
                 None,
@@ -574,6 +665,10 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
 
     else:
         return False, "Naməlum sorğu növü."
+
+    # Optional KPI stars on confirm (swipe-right Təsdiq et panel)
+    if stars and choice == "Təsdiq et":
+        _apply_pending_kpi_stars(action_data, stars)
 
     if not mark_pending_action_resolved(action_id=action_id, choice=choice):
         return False, "Əməliyyat icra olundu, lakin sorğu bağlanmadı."
@@ -3757,11 +3852,16 @@ async def handle_resolve_action(request: web.Request) -> web.Response:
     action_id = data.get("id")
     choice = data.get("choice")
     kpi_score = data.get("kpi_score", 0)
+    stars = data.get("stars", 0)
     if not action_id or not choice:
-        return web.json_response({"success": False, "message": "Sorğu v\u0259 se\u00e7im t\u0259l\u0259b olunur."}, status=400)
+        return web.json_response({"success": False, "message": "Sorğu və seçim tələb olunur."}, status=400)
     user_agent = request.headers.get("User-Agent", "unknown")
-    logger.info(f"RESOLVE_ACTION: id={action_id}, choice={choice}, chat_id={chat_id}, UA={user_agent[:80]}")
-    success, message = resolve_pending_action(str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0)
+    logger.info(f"RESOLVE_ACTION: id={action_id}, choice={choice}, stars={stars}, chat_id={chat_id}, UA={user_agent[:80]}")
+    try:
+        stars = int(stars or 0)
+    except (TypeError, ValueError):
+        stars = 0
+    success, message = resolve_pending_action(str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0, stars=stars)
     return web.json_response({"success": success, "message": message})
 
 
