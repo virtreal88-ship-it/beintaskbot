@@ -1,5 +1,40 @@
 [
   {
+    "id": "4bcd1aa2",
+    "type": "change_stage",
+    "created_at": "2026-07-23T18:06:53.725926+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Mehellemarket",
+      "phone": "1012135104",
+      "lead_id": 77015885,
+      "task_id": 93588179,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "\"millimarket\" dən \"mehellemarket\" ə məbsulları miqrasiya etmək lazımdır.",
+      "task_price": "",
+      "description": "Tapşırıq tamamlandıqdan sonra yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77015885",
+      "callback_key": "e12f5b5c",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 3622
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "5c5168d1",
     "type": "change_stage",
     "created_at": "2026-07-23T18:01:48.059577+04:00",
