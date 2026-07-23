@@ -1,5 +1,40 @@
 [
   {
+    "id": "67e03ac1",
+    "type": "change_stage",
+    "created_at": "2026-07-23T16:01:47.656665+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "2loxma",
+      "phone": "0506028338",
+      "lead_id": 77010295,
+      "task_id": 93584181,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Erkiperdə hesabatlar qarışıb. Bir günün hesabatı digər gündə göstərir. Z hesababtı göstərmir.",
+      "task_price": "",
+      "note": "Yerində görüşdüm, müştərinin hesabatları bağlı problemi var idi. Hesabatlara düzgün baxılma qaydası, çəkin çap edilməsi, saat və tarixin seçilmə qaydası və s. Mövzularda təlimat keçdim. Heç bir problem qalmadı",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77010295",
+      "callback_key": "c45dc089"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "111bddaf",
     "type": "change_stage",
     "created_at": "2026-07-23T16:01:06.676282+04:00",
