@@ -1201,5 +1201,14 @@
     "completed_before_deadline": true,
     "delay_reason": "",
     "completed_at": "2026-07-23 14:13:22"
+  },
+  "7920785774_93565271": {
+    "sessions": [],
+    "kpi_score": 100,
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-07-23 15:45:12",
+    "completed_at": "2026-07-23 15:45:12",
+    "source": "pending_confirm_stars"
   }
 }
