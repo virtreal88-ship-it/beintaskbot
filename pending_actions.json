@@ -3,7 +3,7 @@
     "id": "02945037",
     "type": "change_stage",
     "created_at": "2026-07-23T12:00:44.464430+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Qarishqa",
       "phone": "+994102135104",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-23T12:02:05.148581+04:00",
+    "resolved_by": "bot.py:714",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "d89a2ce3",
