@@ -3,7 +3,7 @@
     "id": "d89a2ce3",
     "type": "change_stage",
     "created_at": "2026-07-23T11:53:38.016724+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Elmin Mirzəyev",
       "phone": "+0515000905",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-23T11:59:19.509519+04:00",
+    "resolved_by": "bot.py:714",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "cd8aa6ff",
