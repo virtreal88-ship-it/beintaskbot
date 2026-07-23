@@ -1,5 +1,40 @@
 [
   {
+    "id": "cd8aa6ff",
+    "type": "change_stage",
+    "created_at": "2026-07-23T11:44:34.070386+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nuru",
+      "phone": "+994554030363",
+      "lead_id": 77004983,
+      "task_id": 93578017,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Yeni user açıb sazla ver. Tarif 20 AZN dəyişəcək. Şamil məlumat verib",
+      "task_price": "",
+      "note": "Təhvil verildi müştəriyə",
+      "stage_name": "quraşdırma",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77004983",
+      "callback_key": "27bab66e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "026314ce",
     "type": "change_stage",
     "created_at": "2026-07-23T10:48:54.826830+04:00",
