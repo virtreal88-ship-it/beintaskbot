@@ -5406,6 +5406,10 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
     """Every 15 minutes, re-notify assignees of open təcili tasks until completed."""
     if not _tecili_tasks:
         return
+    # Only send alarms during working hours 09:00-18:00 Baku
+    now_baku = datetime.now(tz=BAKU_TZ)
+    if now_baku.hour < 9 or now_baku.hour >= 18:
+        return
     for task_id, info in list(_tecili_tasks.items()):
         try:
             resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
