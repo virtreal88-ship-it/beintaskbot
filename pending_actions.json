@@ -1,5 +1,33 @@
 [
   {
+    "id": "287c8b7e",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T18:13:00.693369+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "+994554288354",
+      "lead_id": 76300029,
+      "task_text": "Anbar qalığı dəyişir",
+      "deadline": "24.07.2026 10:00",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76300029",
+      "conf_key": "3ab0c721",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "4bcd1aa2",
     "type": "change_stage",
     "created_at": "2026-07-23T18:06:53.725926+04:00",
