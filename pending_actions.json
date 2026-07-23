@@ -138,7 +138,7 @@
     "id": "746bad99",
     "type": "assign_executor",
     "created_at": "2026-07-23T14:28:42.212969+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "SSDekor.ABŞERON",
       "phone": "+0993715585",
@@ -156,7 +156,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-23T15:49:50.005480+04:00",
+    "resolved_by": "bot.py:572",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "8411cb53",
