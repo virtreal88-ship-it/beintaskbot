@@ -41,7 +41,7 @@
     "id": "2a649f41",
     "type": "assign_executor",
     "created_at": "2026-07-23T18:44:45.959195+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Maqa",
       "phone": "+994554288354",
@@ -63,7 +63,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-23T19:45:23.277143+04:00",
+    "resolved_by": "bot.py:3943",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "20ddd987",
