@@ -417,11 +417,30 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0) -> t
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
-            result_message = "Təsdiq edildi."
+            # Təsdiq et = assign task to admin (Özüm)
+            task_text_te = action_data.get("task_text") or ""
+            stage_key_te = action_data.get("stage_key") or _stage_key_for_name(stage_name)
+            if not task_text_te and stage_key_te:
+                task_text_te = _STAGE_TASK_TEXTS.get(stage_key_te, "")
+            if lead_id and task_text_te:
+                if action_data.get("deadline"):
+                    try:
+                        dl_ts = int(datetime.strptime(action_data["deadline"], "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ).timestamp())
+                    except:
+                        dl_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+                else:
+                    dl_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+                task_type_id_te = action_data.get("task_type_id")
+                create_task(
+                    int(lead_id), task_text_te, dl_ts,
+                    responsible_user_id=10932455,
+                    entity_type="leads",
+                    task_type_id=int(task_type_id_te) if task_type_id_te else None,
+                )
             if not mark_pending_action_resolved(action_id=action_id, choice=choice):
                 return False, "Sorğu bağlanmadı."
             _clear_runtime_pending_action(action)
-            return True, result_message
+            return True, "Tapşırıq sizin adınıza yaradıldı."
         if choice not in ("Ləğv et", "Rədd et"):
             stage_key = action_data.get("stage_key") or _stage_key_for_name(stage_name)
             task_text = _STAGE_TASK_TEXTS.get(stage_key) if stage_key else None
