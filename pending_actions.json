@@ -1,5 +1,40 @@
 [
   {
+    "id": "736d28f3",
+    "type": "change_stage",
+    "created_at": "2026-07-23T09:56:43.424970+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nərminköşk",
+      "phone": "+994502060677",
+      "lead_id": 76090333,
+      "task_id": 93578115,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "İstifadəçi aç ver",
+      "task_price": "",
+      "note": "İstifadəçilər və satış nöqtəsi açılıb təhvil verildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76090333",
+      "callback_key": "525a7dde"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "bd800a46",
     "type": "assign_executor",
     "created_at": "2026-07-23T06:42:12.531963+04:00",
