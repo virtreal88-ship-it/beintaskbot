@@ -284,7 +284,7 @@
     "id": "26dfa629",
     "type": "assign_executor",
     "created_at": "2026-07-23T13:39:40.264092+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "şahin",
       "phone": "+0552222228",
@@ -302,7 +302,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-23T15:55:39.391785+04:00",
+    "resolved_by": "bot.py:572",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b3399dba",
