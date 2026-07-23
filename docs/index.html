@@ -1017,7 +1017,14 @@ function openSubtaskFromPending(action) {
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
         <textarea id="sub-desc" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;">${desc}</textarea>
         <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
-        <input type="datetime-local" id="sub-deadline" required style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <input type="datetime-local" id="sub-deadline" required style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Səs yazısı:</label>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:700;">🎙 Yaz</button>
+            <span id="sub-voice-status" style="font-size:11px;color:#888;"></span>
+            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:700;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
+        </div>
+        <audio id="sub-voice-preview" style="display:none;width:100%;margin-bottom:8px;" controls></audio>
         <div style="display:flex;gap:8px;"><button id="sub-submit-btn" onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1039,6 +1046,7 @@ async function submitSubtaskFromPending(actionId) {
         if(leadId) { body.entity_id = leadId; body.entity_type = 'leads'; }
         const r = await fetch(API_BASE + '/api/action', { method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(body) });
         const j = await r.json(); if(!r.ok||!j.success) throw new Error(j.message||'Xəta');
+        if(_subVoiceBlob && j.entity_id) { await uploadSubVoice(j.entity_id, j.entity_type || 'leads'); }
         toast('Alt tapşırıq yaradıldı', false);
         document.getElementById('subtask-modal').remove();
         loadPendingActions();
@@ -1453,7 +1461,14 @@ function openSubtask(taskId) {
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
         <textarea id="sub-desc" placeholder="Alt tapşırığı yazın..." style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;height:60px;resize:none;"></textarea>
         <label style="font-size:11px;color:#888;font-weight:600;">Deadline:</label>
-        <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
+        <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
+        <label style="font-size:11px;color:#888;font-weight:600;">Səs yazısı:</label>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:700;">🎙 Yaz</button>
+            <span id="sub-voice-status" style="font-size:11px;color:#888;"></span>
+            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:700;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
+        </div>
+        <audio id="sub-voice-preview" style="display:none;width:100%;margin-bottom:8px;" controls></audio>
         <div style="display:flex;gap:8px;"><button onclick="submitSubtask(${taskId})" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1479,6 +1494,7 @@ async function submitSubtask(parentTaskId) {
     try {
         const r = await fetch(API_BASE+'/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const j = await r.json();
+        if(j.success && _subVoiceBlob && j.entity_id) { await uploadSubVoice(j.entity_id, j.entity_type || entityType); }
         toast(j.message||'Yaradıldı!', !j.success);
         if(j.success) await syncNotifications();
     } catch(e) { toast('Xəta!', true); } finally { hideLoader(); }
@@ -1953,6 +1969,56 @@ function deleteVoiceRecord(mode) {
     document.getElementById(previewId).style.display = 'none';
     document.getElementById(delId).style.display = 'none';
     document.getElementById(statusId).textContent = '';
+}
+let _subVoiceRecorder = null, _subVoiceChunks = [], _subVoiceBlob = null, _subVoiceRecording = false;
+function toggleSubVoice() {
+    if (_subVoiceRecording) { stopSubVoice(); return; }
+    navigator.mediaDevices.getUserMedia({audio:true}).then(stream => {
+        _subVoiceRecorder = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'});
+        _subVoiceChunks = [];
+        _subVoiceRecorder.ondataavailable = e => { if(e.data.size>0) _subVoiceChunks.push(e.data); };
+        _subVoiceRecorder.onstop = () => {
+            _subVoiceBlob = new Blob(_subVoiceChunks, {type: _subVoiceRecorder.mimeType});
+            const url = URL.createObjectURL(_subVoiceBlob);
+            document.getElementById('sub-voice-preview').src = url;
+            document.getElementById('sub-voice-preview').style.display = 'block';
+            document.getElementById('sub-voice-del').style.display = 'inline';
+            document.getElementById('sub-voice-status').textContent = Math.round(_subVoiceBlob.size/1024) + ' KB';
+            stream.getTracks().forEach(t=>t.stop());
+        };
+        _subVoiceRecorder.start();
+        _subVoiceRecording = true;
+        document.getElementById('sub-voice-btn').innerHTML = '⏹ Dayandır';
+        document.getElementById('sub-voice-btn').style.background = '#fee2e2';
+        document.getElementById('sub-voice-status').textContent = 'Yazılır...';
+    }).catch(e => { toast('Mikrofon icazəsi lazımdır', true); });
+}
+function stopSubVoice() {
+    if (_subVoiceRecorder && _subVoiceRecorder.state !== 'inactive') _subVoiceRecorder.stop();
+    _subVoiceRecording = false;
+    document.getElementById('sub-voice-btn').innerHTML = '🎙 Yaz';
+    document.getElementById('sub-voice-btn').style.background = '#f3f4f6';
+}
+function deleteSubVoice() {
+    _subVoiceBlob = null; _subVoiceChunks = [];
+    document.getElementById('sub-voice-preview').style.display = 'none';
+    document.getElementById('sub-voice-del').style.display = 'none';
+    document.getElementById('sub-voice-status').textContent = '';
+}
+async function uploadSubVoice(entityId, entityType) {
+    if (!_subVoiceBlob) return;
+    const reader = new FileReader();
+    reader.readAsDataURL(_subVoiceBlob);
+    reader.onloadend = async () => {
+        const b64 = reader.result.split(',')[1];
+        try {
+            await fetch(API_BASE + '/api/upload_voice', {
+                method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+                body: JSON.stringify({entity_id: entityId, entity_type: entityType, audio: b64, filename: 'voice_' + Date.now() + '.ogg'})
+            });
+        } catch(e) { console.error('Sub voice upload failed:', e); }
+        deleteSubVoice();
+    };
 }
 let _completeVoiceRecorder = null, _completeVoiceChunks = [], _completeVoiceBlob = null, _completeVoiceRecording = false;
 function toggleCompleteVoice() {
