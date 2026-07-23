@@ -3,7 +3,7 @@
     "id": "d9011eb6",
     "type": "assign_executor",
     "created_at": "2026-07-23T17:35:48.923693+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Mehellemarket",
       "phone": "1012135104",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-23T17:53:22.507258+04:00",
+    "resolved_by": "bot.py:714",
+    "resolved_choice": "Soltan"
   },
   {
     "id": "266523e0",
