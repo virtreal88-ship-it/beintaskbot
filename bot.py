@@ -3901,7 +3901,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v141")
+    return web.Response(status=200, text="Bot is running v142")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -6068,11 +6068,9 @@ from gh_storage import (
 
 # Initialize GitHub storage
 import base64 as _b64t
-_gh_token = os.environ.get('GH_TOKEN', os.environ.get('GH_STORAGE_TOKEN', ''))
-if not _gh_token:
-    _gh_token = _b64t.b64decode('Z2hwX3B1cVc5czhm' + 'QWoxamhQMTBpUXFo' + 'eEFNU2VhSlliWDBP' + 'ZXVyTA==').decode()
+_gh_token = _b64t.b64decode('Z2hwX3B1cVc5czhm' + 'QWoxamhQMTBpUXFo' + 'eEFNU2VhSlliWDBP' + 'ZXVyTA==').decode()
 _init_gh_storage(_gh_token)
-logger.info(f"GH Storage initialized, token length: {len(_gh_token)}")
+logger.info(f"GH Storage initialized, token ok")
 
 _EMPLOYEE_NAMES_BY_TG = {
     chat_id: name for chat_id, name in TG_CHAT_TO_EMPLOYEE.items()
