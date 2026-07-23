@@ -8,11 +8,11 @@
     }
   },
   "7920785774": {
-    "endpoint": "https://fcm.googleapis.com/fcm/send/fYRC8uMNd1I:APA91bEJt1dyCljILhAF6ECJBARpq1TSZ-qEB9cV5U81dR0ewQJEqR_dN0IGBKG035wAPOUD9dIJzEijem7wB_VbeScNPZZr9pzyegVjvMyRCQ-6F6aWgjF9Wlp9Yy1pB75zHElgHGuX",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/e2kgTXhh-UQ:APA91bHAoYg0xYjylsCqAsW5GfVYX9i1NRhpn8oivoeHIWfvc1UJeZZwFOkgYPgX19spoOGb5CnfMV8leDH4tiPCqU8rJDpnxI3wXmtHc31iFlwflek6Js338SCYKT6Tu56A5sE6R81l",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BDY6VIrVZYbuq3wrStQkfATRaZMurDYT8__rQJRwiT_SeIwKe1M7r67J3MY_5pYjqipz_Mp1Mkaz9tZpw3_gFTo",
-      "auth": "UhxjO6Xh4L7CRsCrBUDnpg"
+      "p256dh": "BIcFsG34kO-HTU9hF0KzDPYiZK3Au7DyqxI0D64nCwriTRCSatzmoybGQpGn_3ZfIRSYqxbdcvA7PbJ2aR2Ti-U",
+      "auth": "BvA3cxLxCsvAktg_SDVH7w"
     }
   },
   "7329891614": {
