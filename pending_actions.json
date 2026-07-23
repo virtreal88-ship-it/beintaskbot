@@ -45,7 +45,7 @@
     "id": "28340f8e",
     "type": "reassign_task",
     "created_at": "2026-07-23T16:04:17.534439+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Lead #76300029",
       "phone": "+994554288354",
@@ -78,7 +78,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-23T16:10:11.599686+04:00",
+    "resolved_by": "bot.py:714",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "67e03ac1",
