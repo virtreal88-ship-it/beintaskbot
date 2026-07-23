@@ -142,11 +142,25 @@ def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
             return int(chat_id_str)
     return None
 
+# Salary employees that share Sahə Meneceri Kommo license
+_SALARY_CHAT_IDS = {7962757442, 7262243946, 7329891614, 7920785774, 8835096199, 1289510272, 6596538872, 1142054888}
+
 def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     users = load_users()
     info = users.get(str(chat_id))
     if info:
-        return info.get("kommo_user_id")
+        uid = info.get("kommo_user_id")
+        if uid:
+            return uid
+    # Fallback for known employees
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    if cid == 1628569350:
+        return 10932455  # Admin
+    if cid in _SALARY_CHAT_IDS:
+        return 15532668  # Sahə Meneceri
     return None
 
 def is_admin(chat_id: int) -> bool:
@@ -161,6 +175,7 @@ def is_admin(chat_id: int) -> bool:
 
 _PENDING_ACTIONS_FILE = "pending_actions.json"
 _TASK_PRIORITIES_FILE = "task_priorities.json"
+_TASK_CREATORS_FILE = "task_creators.json"
 _VALID_TASK_PRIORITIES = {"urgent", "medium", "low"}
 _PENDING_EXECUTOR_NAMES = {
     "Şamil": "Şamil Əliyev",
@@ -731,6 +746,9 @@ TG_CHAT_TO_EMPLOYEE = {
     7329891614: "Hüseyn Səfərov",
     7920785774: "Rasim Əsgərov",
     8835096199: TECHNICAL_SUPPORT_NAME,
+    1289510272: "Sərmayə Əhmədsoy",
+    6596538872: "Asya Agayeva",
+    1142054888: "Nuranə Şirinova",
 }
 
 def get_employee_name_by_chat_id(chat_id: int, default: str = "Əməkdaş") -> str:
@@ -749,6 +767,9 @@ NAME_TO_CHAT = {
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
     TECHNICAL_SUPPORT_NAME: 8835096199,
+    "Sərmayə Əhmədsoy": 1289510272,
+    "Asya Agayeva": 6596538872,
+    "Nuranə Şirinova": 1142054888,
     # Keep historical task markers routable while writing the employee's real name.
     "Texniki tapşırıq": 8835096199,
     "Texniki": 8835096199,
@@ -757,6 +778,9 @@ NAME_TO_CHAT = {
     "Hüseyn": 7329891614,
     "Nizami": 1628569350,
     "Rasim": 7920785774,
+    "Sərmayə": 1289510272,
+    "Asya": 6596538872,
+    "Nuranə": 1142054888,
 }
 
 def get_chat_id_by_name(name: str) -> int | None:
@@ -1079,7 +1103,7 @@ def get_all_incomplete_tasks() -> list:
         pass
     return []
 
-def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1) -> dict | None:
+def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1, creator_name: str = "") -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     task_payload = {
         "text": text,
@@ -1108,6 +1132,16 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
                         oldest = next(iter(_bot_created_tasks))
                         _bot_created_tasks.discard(oldest)
                         _bot_created_tasks_ts.pop(oldest, None)
+                    # Store creator name
+                    if creator_name:
+                        _creators = read_json(_TASK_CREATORS_FILE) or {}
+                        _creators[str(created_id)] = creator_name
+                        # Keep max 500 entries
+                        if len(_creators) > 500:
+                            keys = list(_creators.keys())
+                            for k in keys[:len(keys)-400]:
+                                del _creators[k]
+                        write_json(_TASK_CREATORS_FILE, _creators)
             except Exception:
                 pass
             return result
@@ -2235,7 +2269,8 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
     link = task_data.get("link", "")
     contact_name = task_data["contact_name"]
     phone = task_data["phone"]
-    result = create_task(entity_id, task_text, deadline_ts, responsible_user_id=assignee_id, entity_type=entity_type)
+    _ai_creator = get_employee_name_by_chat_id(query.from_user.id, "")
+    result = create_task(entity_id, task_text, deadline_ts, responsible_user_id=assignee_id, entity_type=entity_type, creator_name=_ai_creator)
     if result:
         result_text = (f"✅ Tapşırıq yaradıldı!\n\n"
                        f"👤 {contact_name}\n📞 {phone}\n"
@@ -3452,7 +3487,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(result["message"])
             return
         deadline_ts = int(deadline_dt.timestamp())
-        res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
+        res = create_task(result["entity_id"], text, deadline_ts, responsible_user_id=result["assignee_id"], entity_type=result["entity_type"], creator_name=creator_name)
         if res:
             msg = f"✅ Tapşırıq yaradıldı!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}\n🔗 {result['link']}"
             await update.message.reply_text(msg, disable_web_page_preview=True)
@@ -3878,7 +3913,7 @@ async def handle_get_pending_actions(request: web.Request) -> web.Response:
     for a in actions:
         eid = str(a.get("data", {}).get("lead_id") or a.get("data", {}).get("entity_id") or "")
         if eid and eid in _voice_urls:
-            a.setdefault("data", {})["voice_url"] = _voice_urls[eid]
+            a.setdefault("data", {})["voice_url"] = f"/api/voice/{eid}"
     return web.json_response(actions)
 
 
@@ -4317,7 +4352,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             # Admin creates directly
             logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
-            res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id)
+            _pwa_creator = get_employee_name_by_chat_id(chat_id, "Admin")
+            res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id, creator_name=_pwa_creator)
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
@@ -5019,6 +5055,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
                 if resp.status_code == 200:
                     raw_tasks.extend(resp.json().get("_embedded", {}).get("tasks", []))
+            _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
             if raw_tasks:
                 # Batch: collect unique contact entity_ids and fetch them in one request
                 contact_ids = set()
@@ -5161,6 +5198,17 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 last_note = _notes_data[0].get("params", {}).get("text", "")
                     except:
                         pass
+                    # Cavabdeh (created_by) - who created the task
+                    _created_by_name = _task_creators_cache.get(str(t.get("id")), "")
+                    if not _created_by_name:
+                        _created_by_id = t.get("created_by")
+                        if _created_by_id:
+                            if _created_by_id == 10932455:
+                                _created_by_name = "Nizami Qas\u0131mov"
+                            elif _created_by_id == 15532668:
+                                _created_by_name = ""  # Unknown employee via bot
+                            else:
+                                _created_by_name = KOMMO_USERS.get(_created_by_id, "")
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
@@ -5181,7 +5229,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "last_note": last_note,
                         "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
                         "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
-                        "voice_url": _voice_urls.get(str(entity_id), "")
+                        "voice_url": f"/api/voice/{entity_id}" if str(entity_id) in _voice_urls else "",
+                        "created_by": _created_by_name
                     })
                 # Sort: overdue first
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
@@ -5288,7 +5337,7 @@ def send_push_to_all_salary(title, body, url=None):
 
 KOMMO_DRIVE_URL = "https://drive-g.kommo.com"
 _VOICE_URLS_FILE = "voice_urls.json"
-_voice_urls = read_json(_VOICE_URLS_FILE) or {}  # {entity_id: download_url}
+_voice_urls = read_json(_VOICE_URLS_FILE) or {}  # {entity_id: {"url": download_url, "uuid": file_uuid}} or legacy str
 
 async def handle_upload_voice(request: web.Request) -> web.Response:
     """Upload voice to Kommo Files API, attach to entity, return download URL."""
@@ -5362,12 +5411,48 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         note_url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
         note_payload = [{"note_type": "common", "params": {"text": f"\ud83c\udf99 S\u0259s yaz\u0131s\u0131 ({file_size//1024}KB)"}}]
         _http.post(note_url, headers=HEADERS, json=note_payload, timeout=8)
-        _voice_urls[str(entity_id)] = download_url
+        _voice_urls[str(entity_id)] = {"url": download_url or "", "uuid": file_uuid}
         write_json(_VOICE_URLS_FILE, _voice_urls)
         return web.json_response({"success": True, "message": "S\u0259s yaz\u0131s\u0131 \u0259lav\u0259 olundu", "download_url": download_url, "file_uuid": file_uuid})
     except Exception as e:
         logger.error(f"Upload voice error: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_voice_proxy(request: web.Request) -> web.Response:
+    """Proxy voice download - fetches fresh URL from Kommo Drive using stored file_uuid."""
+    entity_id = request.match_info.get("entity_id", "")
+    voice_info = _voice_urls.get(entity_id)
+    if not voice_info:
+        return web.Response(status=404)
+    # Support legacy format (plain string URL)
+    if isinstance(voice_info, str):
+        download_url = voice_info
+    else:
+        file_uuid = voice_info.get("uuid", "")
+        download_url = voice_info.get("url", "")
+        # Try to get fresh download link
+        if file_uuid:
+            try:
+                auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                info_resp = requests.get(f"{KOMMO_DRIVE_URL}/v1.0/files/{file_uuid}", headers=auth_h, timeout=8)
+                if info_resp.status_code == 200:
+                    dl = info_resp.json().get("_links", {}).get("download", {}).get("href", "")
+                    if dl:
+                        download_url = dl
+            except:
+                pass
+    if not download_url:
+        return web.Response(status=404)
+    # Fetch and proxy the audio
+    try:
+        auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+        audio_resp = requests.get(download_url, headers=auth_h, timeout=15)
+        if audio_resp.status_code == 200:
+            return web.Response(body=audio_resp.content, content_type="audio/ogg", headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"})
+    except:
+        pass
+    # Fallback: redirect to URL
+    return web.HTTPFound(download_url)
 
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
@@ -5403,6 +5488,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/push-subscribe", handle_push_subscribe)
     app_web.router.add_route('OPTIONS', '/api/upload_voice', lambda r: web.Response())
     app_web.router.add_post("/api/upload_voice", handle_upload_voice)
+    app_web.router.add_get("/api/voice/{entity_id}", handle_voice_proxy)
     app_web.router.add_route('OPTIONS', '/api/search_contacts', lambda r: web.Response())
     app_web.router.add_post("/api/search_contacts", handle_search_contacts)
     app_web.router.add_get("/webapp", serve_webapp)
@@ -6001,6 +6087,8 @@ _EMPLOYEE_TYPES = {
     7962757442: 'salary', 7262243946: 'salary',
     7329891614: 'salary', 7920785774: 'piecework',
     8835096199: 'salary',
+    1289510272: 'salary', 6596538872: 'salary',
+    1142054888: 'salary',
 }
 
 def get_employee_type(telegram_id):

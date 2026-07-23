@@ -966,7 +966,7 @@ function renderPendingActions() {
         if(data.voice_url) {
             const audioDiv = document.createElement('div');
             audioDiv.className = 'mt-2';
-            audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+data.voice_url+'"></audio>';
+            audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+(data.voice_url.startsWith('http')?data.voice_url:API_BASE+data.voice_url)+'"></audio>';
             card.appendChild(audioDiv);
         }
         // Card face buttons: İcraçı dəyiş + Mərhələ dəyiş
@@ -1315,10 +1315,11 @@ function renderNotifications() {
             <div class="space-y-1 text-[11px] text-gray-700">
                 <div>👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
                 <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
+                ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
                 ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
                 ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
                 ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
-                ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+t.voice_url+'" onclick="event.stopPropagation()"></audio></div>' : ''}
+                ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
             </div>
             <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
                 ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
