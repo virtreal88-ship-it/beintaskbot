@@ -1078,5 +1078,14 @@
     "manual_correction": true,
     "corrected_by": 1628569350,
     "corrected_at": "2026-07-23 07:59:18"
+  },
+  "7920785774_93584755": {
+    "sessions": [],
+    "kpi_score": 100,
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-07-23 08:02:03",
+    "completed_at": "2026-07-23 08:02:03",
+    "source": "pending_confirm_stars"
   }
 }
