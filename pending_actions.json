@@ -3,7 +3,7 @@
     "id": "5c5168d1",
     "type": "change_stage",
     "created_at": "2026-07-23T18:01:48.059577+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Mehellemarket",
       "phone": "1012135104",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-23T18:06:17.045211+04:00",
+    "resolved_by": "bot.py:3943",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "d9011eb6",
