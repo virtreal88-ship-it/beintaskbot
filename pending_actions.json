@@ -3,7 +3,7 @@
     "id": "cd8aa6ff",
     "type": "change_stage",
     "created_at": "2026-07-23T11:44:34.070386+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nuru",
       "phone": "+994554030363",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-23T11:48:34.516650+04:00",
+    "resolved_by": "bot.py:506",
+    "resolved_choice": "stage_change:Uğurlu"
   },
   {
     "id": "026314ce",
