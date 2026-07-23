@@ -873,7 +873,7 @@ function renderPendingActions() {
         stageBtn.className = 'flex-1 bg-violet-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
         stageBtn.textContent = '📋 Mərhələ dəyiş';
         stageBtn.addEventListener('click', () => {
-            const stageOpts = ['danışıqlar','Qiymət təklifi','Təqdimat','yeni sifariş','görüş','quraşdırma','Düşünür'];
+            const stageOpts = ['Qiymət təklifi','Təqdimat','Təqdimat olundu','Yeni sifariş','Görüş','Daxili müzakirə','Quraşdırma','Düşünür','Uğurlu','İmtina'];
             showPendingSelectModal('Mərhələ seç', stageOpts, (choice) => {
                 resolvePendingAction(action.id, 'stage_change:' + choice, stageBtn);
             });
@@ -1845,7 +1845,7 @@ function showPendingSelectModal(title, items, callback) {
     const modal = document.createElement('div');
     modal.id = 'pending-select-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;';
-    const _stgClr = {'danışıqlar':'#7ec8e3','Qiymət təklifi':'#ffd700','Təqdimat':'#f5a3d6','Təqdimat olundu':'#a3a3d9','yeni sifariş':'#f5a3d6','görüş':'#f5a020','daxili müzakirə':'#d9a3d9','quraşdırma':'#ff6b6b','Düşünür':'#a0a0a0','uğurlu sifariş':'#4caf50','imtina olundu':'#e53935','Nerazobrannoye':'#90caf9'};
+    const _stgClr = {'Qiymət təklifi':'#ffd700','Təqdimat':'#f5a3d6','Təqdimat olundu':'#a3a3d9','Yeni sifariş':'#f5a3d6','Görüş':'#f5a020','Daxili müzakirə':'#d9a3d9','Quraşdırma':'#ff6b6b','Düşünür':'#a0a0a0','Uğurlu':'#4caf50','İmtina':'#e53935'};
     const _isStg = title.includes('Mərhələ');
     let btns = items.map(i => {
         const dot = _isStg ? `<span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:${_stgClr[i]||'#ccc'};margin-right:14px;flex-shrink:0;"></span>` : '';

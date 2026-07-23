@@ -476,10 +476,19 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     # ── Universal stage change: choice="stage_change:{stage_key_or_name}" works for ANY action type ──
     if choice.startswith("stage_change:"):
         requested_stage = choice.split(":", 1)[1].strip()
-        status_id = STAGES.get(requested_stage.casefold())
+        # Short display names from PWA dropdown -> STAGES keys
+        _stage_alias = {"uğurlu": "ugurlu", "i\u0307mtina": "imtina", "imtina": "imtina"}
+        alias_key = _stage_alias.get(requested_stage.casefold())
+        status_id = STAGES.get(alias_key) if alias_key else STAGES.get(requested_stage.casefold())
         if not status_id:
             status_id = next(
                 (sid for sid, dn in STAGE_NAMES.items() if dn.casefold() == requested_stage.casefold()),
+                None,
+            )
+        if not status_id:
+            # Try partial match
+            status_id = next(
+                (sid for sid, dn in STAGE_NAMES.items() if requested_stage.casefold() in dn.casefold()),
                 None,
             )
         if not lead_id:
