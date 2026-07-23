@@ -314,6 +314,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-21 16:33:18"
+      },
+      {
+        "task_id": 93584755,
+        "executor": "Rasim Əsgərov",
+        "client": "Qarishqa",
+        "phone": "+994102135104",
+        "task_type": "Əlaqə saxla",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": ".",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-07-23 08:00:42"
       }
     ],
     "balance": 0.5
