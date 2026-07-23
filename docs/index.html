@@ -1018,6 +1018,14 @@ async function resolvePendingAction(actionId, choice, button, stars = 0, skipCon
         const payload = await response.json();
         if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
         toast(payload.message || 'Sorğu həll edildi.', false);
+        // If stage_change or executor change: card stays, just refresh display
+        const _execNames = ['\u015eamil','Soltan','H\u00fcseyn','Rasim','Texniki','\u00d6z\u00fcm'];
+        if(choice.startsWith('stage_change:') || _execNames.includes(choice)) {
+            buttons.forEach(item => { item.disabled = false; });
+            if(card) { card.style.opacity='1'; const ldr=card.querySelector('.pending-loader'); if(ldr) ldr.remove(); }
+            await loadPendingActions();
+            return;
+        }
         await Promise.all([loadPendingActions(), syncNotifications()]);
     } catch(error) {
         toast(error.message || 'Sorğu həll edilmədi', true);

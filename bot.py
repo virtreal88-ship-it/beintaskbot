@@ -461,9 +461,10 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     if action.get("resolved"):
         return False, "Sorğu artıq həll edilib."
     action_options = action.get("options") or []
+    _executor_names_set = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "Texniki", "\u00d6z\u00fcm"}
     if choice not in action_options:
-        if choice != "Təsdiq et" and not choice.startswith("stage_change:"):
-            return False, "Yanlış seçim."
+        if choice != "T\u0259sdiq et" and not choice.startswith("stage_change:") and choice not in _executor_names_set:
+            return False, "Yanl\u0131\u015f se\u00e7im."
 
     action_type = action.get("type")
     action_data = action.get("data") or {}
@@ -501,17 +502,48 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         ):
             return False, "Kommo mərhələsi dəyişdirilmədi."
         new_stage_display = STAGE_NAMES.get(int(status_id), requested_stage)
-        if stars:
-            _apply_pending_kpi_stars(action_data, stars)
-        if not mark_pending_action_resolved(action_id=action_id, choice=choice):
-            return False, "Mərhələ dəyişdirildi, lakin sorğu bağlanmadı."
-        _clear_runtime_pending_action(action)
-        _close_pending_telegram_message(
-            action,
-            f"✅ PWA-dan həll edildi: Mərhələ → {new_stage_display}\n👤 {contact_name}\n"
-            f"📞 {phone}\n⏰ {datetime.now(tz=BAKU_TZ).strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
-        )
-        return True, f"Mərhələ dəyişdirildi: {new_stage_display}."
+        # Do NOT resolve the action — only change stage. Card stays until swipe-right Təsdiq et.
+        # Update stage_name in action data for display
+        actions = get_pending_actions()
+        for a in actions:
+            if a.get("id") == action_id:
+                a.setdefault("data", {})["stage_name"] = new_stage_display
+                break
+        write_json(_PENDING_ACTIONS_FILE, actions)
+        return True, f"Mərhələ dəyişdirildi: {new_stage_display}. Sorğu hələ açıqdır."
+
+    # ── Universal executor change: choice is an executor short name, card does NOT close ──
+    _executor_short_names = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "Texniki", "\u00d6z\u00fcm"}
+    if choice in _executor_short_names and action_type != "assign_executor":
+        # Update existing task's responsible user in Kommo
+        task_id = action_data.get("task_id")
+        if choice == "\u00d6z\u00fcm":
+            new_responsible = 10932455
+            new_name = "Nizami Qas\u0131mov"
+        else:
+            full_name = _PENDING_EXECUTOR_NAMES.get(choice)
+            if not full_name:
+                return False, "\u0130cra\u00e7\u0131 tan\u0131nmad\u0131."
+            new_responsible = 15532668
+            new_name = full_name
+        if task_id:
+            update_data = {"responsible_user_id": new_responsible}
+            # Update task text marker
+            try:
+                t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+                if t_resp.status_code == 200:
+                    current_text = t_resp.json().get("text", "")
+                    import re as _re_exec
+                    old_text = _re_exec.sub(r"^\[.*?\]\s*", "", current_text)
+                    if choice != "\u00d6z\u00fcm":
+                        update_data["text"] = f"[{new_name}] {old_text}"
+                    else:
+                        update_data["text"] = old_text
+            except:
+                pass
+            update_task_kommo(task_id, update_data)
+        # Do NOT resolve — card stays
+        return True, f"\u0130cra\u00e7\u0131 d\u0259yi\u015fdirildi: {new_name}. Sor\u011fu h\u0259l\u0259 a\u00e7\u0131qd\u0131r."
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
