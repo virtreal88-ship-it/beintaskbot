@@ -4147,6 +4147,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "stage_name": _lead_stage_name,
                     "link": result.get('link', ''),
                     "conf_key": conf_key,
+                    "creator_chat_id": chat_id,
                 }, ["Şamil", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             # Admin creates directly

@@ -877,16 +877,28 @@ function renderPendingActions() {
             card.appendChild(kpiRow);
         }
 
-        // Simple confirm button only
+        // Controls based on action type
         const controls = document.createElement('div');
-        controls.className = 'flex gap-2';
-        const confirmBtn = document.createElement('button');
-        confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-        confirmBtn.textContent = 'Təsdiq et';
-        confirmBtn.addEventListener('click', () => {
-            resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
-        });
-        controls.appendChild(confirmBtn);
+        if(action.type === 'assign_executor') {
+            controls.className = 'grid grid-cols-2 gap-2';
+            const executors = (action.options || []).filter(o => o !== 'Rədd et' && o !== 'Ləğv et');
+            executors.forEach(name => {
+                const btn = document.createElement('button');
+                btn.className = 'bg-emerald-500 text-white font-bold py-2 px-2 rounded-xl text-[11px]';
+                btn.textContent = name;
+                btn.addEventListener('click', () => resolvePendingAction(action.id, name, btn));
+                controls.appendChild(btn);
+            });
+        } else {
+            controls.className = 'flex gap-2';
+            const confirmBtn = document.createElement('button');
+            confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+            confirmBtn.textContent = 'Təsdiq et';
+            confirmBtn.addEventListener('click', () => {
+                resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
+            });
+            controls.appendChild(confirmBtn);
+        }
         card.appendChild(controls);
 
         // Long press context menu for pending cards
@@ -1884,6 +1896,15 @@ async function pendingChangeStage(actionId, stageName) {
 async function pendingChangeExecutor(actionId, executorName) {
     showLoader();
     try {
+        // For assign_executor type, use resolve (task doesn't exist yet)
+        const action = pendingActions.find(a => a.id === actionId);
+        if(action && action.type === 'assign_executor') {
+            const shortMap = {'Şamil Əliyev':'Şamil','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
+            const choice = shortMap[executorName] || executorName;
+            hideLoader();
+            resolvePendingAction(actionId, choice, null);
+            return;
+        }
         const r = await fetch(API_BASE + '/api/pending_actions/change_executor', {
             method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
             body: JSON.stringify({id: actionId, executor: executorName})
