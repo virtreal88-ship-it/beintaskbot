@@ -1,5 +1,29 @@
 [
   {
+    "id": "5c4910ea",
+    "type": "assign_executor",
+    "created_at": "2026-07-23T14:58:00.413326+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "الشأن",
+      "phone": "+0516202559",
+      "lead_id": 76759095,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76759095"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "eb15b9d0",
     "type": "assign_executor",
     "created_at": "2026-07-23T14:55:35.810429+04:00",
