@@ -5959,12 +5959,18 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
     all_pending = get_all_pending_balances()
     employees = []
     for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
-        employees.append({
+        emp_data = {
             'name': name,
             'tg_id': tg_id,
             'balance': all_bals.get(tg_id, 0),
             'pending_balance': all_pending.get(tg_id, 0),
-        })
+            'type': get_employee_type(tg_id),
+        }
+        if emp_data['type'] == 'salary':
+            kpi = get_kpi_summary(tg_id)
+            emp_data['kpi'] = kpi.get('avg_kpi', 0)
+            emp_data['kpi_tasks'] = kpi.get('total_tasks', 0)
+        employees.append(emp_data)
     recent = get_all_recent_transactions(50)
     recent_fmt = [{
         "employee_id": r.get("telegram_id", 0),

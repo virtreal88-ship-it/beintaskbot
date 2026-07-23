@@ -1583,7 +1583,8 @@ async function loadAdminBalances() {
         let html = (j.employees || []).map(e => {
             const balance = Number(e.balance) || 0;
             const pending = Number(e.pending_balance) || 0;
-            return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="text-right"><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">Balans: ${balance.toFixed(2)} AZN</div><div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div></div></div>`;
+            const kpiLine = e.type === 'salary' ? `<div class="text-[10px] font-bold text-blue-600 mt-0.5">KPI: ${e.kpi || 0}/100 (${e.kpi_tasks || 0} tapşırıq)</div>` : '';
+            return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="text-right">${e.type === 'salary' ? kpiLine : `<div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">Balans: ${balance.toFixed(2)} AZN</div><div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div>`}</div></div>`;
         }).join('');
         if(j.recent && j.recent.length) {
             html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
