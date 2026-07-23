@@ -877,28 +877,16 @@ function renderPendingActions() {
             card.appendChild(kpiRow);
         }
 
-        // Controls based on action type
+        // Confirm button
         const controls = document.createElement('div');
-        if(action.type === 'assign_executor') {
-            controls.className = 'grid grid-cols-2 gap-2';
-            const executors = (action.options || []).filter(o => o !== 'Rədd et' && o !== 'Ləğv et');
-            executors.forEach(name => {
-                const btn = document.createElement('button');
-                btn.className = 'bg-emerald-500 text-white font-bold py-2 px-2 rounded-xl text-[11px]';
-                btn.textContent = name;
-                btn.addEventListener('click', () => resolvePendingAction(action.id, name, btn));
-                controls.appendChild(btn);
-            });
-        } else {
-            controls.className = 'flex gap-2';
-            const confirmBtn = document.createElement('button');
-            confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-            confirmBtn.textContent = 'Təsdiq et';
-            confirmBtn.addEventListener('click', () => {
-                resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
-            });
-            controls.appendChild(confirmBtn);
-        }
+        controls.className = 'flex gap-2';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'flex-1 bg-emerald-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+        confirmBtn.textContent = 'Təsdiq et';
+        confirmBtn.addEventListener('click', () => {
+            resolvePendingAction(action.id, 'Təsdiq et', confirmBtn);
+        });
+        controls.appendChild(confirmBtn);
         card.appendChild(controls);
 
         // Long press context menu for pending cards
