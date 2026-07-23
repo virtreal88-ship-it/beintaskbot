@@ -27,7 +27,7 @@
     "id": "8411cb53",
     "type": "change_stage",
     "created_at": "2026-07-23T14:27:12.828575+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "2loxma",
       "phone": "0506028338",
@@ -56,7 +56,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-23T14:29:04.695347+04:00",
+    "resolved_by": "bot.py:714",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "16d8cd9b",
