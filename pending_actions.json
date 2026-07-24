@@ -1,5 +1,40 @@
 [
   {
+    "id": "ea252d2c",
+    "type": "change_stage",
+    "created_at": "2026-07-24T14:29:56.513288+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Gəncə kafe",
+      "phone": "+994702729090",
+      "lead_id": 73137215,
+      "task_id": 93585613,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Bunun menyusu yazılmalıdır. Özü ilə əlaqə saxla , dediyinə görə böyük menyu deyil. Tərkib daxil yarat ki anbarı izləmək istəyir . Ayın 1 kimi hazır olmaldır",
+      "task_price": "10",
+      "note": "Göndərdiyi menyu yazıldı. Tərkibləri özü dediki sonra baxarıq . Özüm məlumat verməmişəm ki hazırdı menyu.",
+      "stage_name": "imtina olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/73137215",
+      "callback_key": "fcdde0da"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ec4fe1ed",
     "type": "change_stage",
     "created_at": "2026-07-24T13:27:37.986123+04:00",
