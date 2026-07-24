@@ -1259,10 +1259,17 @@
     "sessions": [
       {
         "start_time": "2026-07-24 12:01:56",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-07-24 12:01:58",
+        "actual_minutes": 0.0,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 0,
+    "target_minutes": 45,
+    "actual_minutes": 0,
+    "deadline_ts": 1784894400,
+    "completed_before_deadline": false,
+    "delay_reason": "",
+    "completed_at": "2026-07-24 12:01:58"
   }
 }
