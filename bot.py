@@ -5499,6 +5499,13 @@ async def start_webhook_server():
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+    # Register webhook on startup
+    try:
+        _wh_url = f"https://worker-production-3e3e.up.railway.app/webhook"
+        _wh_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook", json={"url": _wh_url}, timeout=10)
+        logger.info(f"Webhook set: {_wh_resp.status_code} {_wh_resp.text[:100]}")
+    except Exception as _whe:
+        logger.error(f"Failed to set webhook: {_whe}")
 
 
 def _rehydrate_tecili_tasks():
