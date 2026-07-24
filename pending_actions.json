@@ -3,7 +3,7 @@
     "id": "ab2bcdff",
     "type": "change_stage",
     "created_at": "2026-07-24T16:54:01.214103+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Oem Motors",
       "phone": "+994107173635",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-24T17:04:18.736235+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "5a3cf616",
