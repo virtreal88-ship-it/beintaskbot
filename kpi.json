@@ -1164,12 +1164,12 @@
       }
     ],
     "kpi_score": 0,
-    "target_minutes": 30,
+    "target_minutes": 60,
     "actual_minutes": 0,
-    "deadline_ts": null,
+    "deadline_ts": 1784886402,
     "completed_before_deadline": false,
-    "delay_reason": "Çatdıra bilmirəm",
-    "completed_at": "2026-07-24 07:46:42"
+    "delay_reason": "",
+    "completed_at": "2026-07-24 10:29:53"
   },
   "7262243946_93588179": {
     "sessions": [
