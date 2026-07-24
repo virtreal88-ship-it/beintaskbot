@@ -3,7 +3,7 @@
     "id": "ea252d2c",
     "type": "change_stage",
     "created_at": "2026-07-24T14:29:56.513288+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Gəncə kafe",
       "phone": "+994702729090",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-24T14:36:55.057696+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "ec4fe1ed",
