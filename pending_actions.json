@@ -401,7 +401,7 @@
     "id": "111bddaf",
     "type": "change_stage",
     "created_at": "2026-07-23T16:01:06.676282+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Mirvari Decor Fərid",
       "phone": "+994778173747",
@@ -430,7 +430,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-24T12:05:53.375638+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "5c4910ea",
