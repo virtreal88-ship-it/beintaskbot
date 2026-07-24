@@ -3,7 +3,7 @@
     "id": "3dd067a5",
     "type": "change_stage",
     "created_at": "2026-07-24T14:39:12.694262+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rasim",
       "phone": "111111111",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-24T14:43:25.767424+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "299711a9",
