@@ -1,5 +1,29 @@
 [
   {
+    "id": "5a3cf616",
+    "type": "assign_executor",
+    "created_at": "2026-07-24T16:43:29.215147+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Oem Motors",
+      "phone": "+994107173635",
+      "lead_id": 75727581,
+      "task_text": "Mərhələ: quraşdırma",
+      "stage_key": "qurashdirma",
+      "stage_name": "quraşdırma",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75727581"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "615c30e3",
     "type": "change_stage",
     "created_at": "2026-07-24T16:02:00.762185+04:00",
