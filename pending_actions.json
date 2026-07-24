@@ -1,5 +1,40 @@
 [
   {
+    "id": "615c30e3",
+    "type": "change_stage",
+    "created_at": "2026-07-24T16:02:00.762185+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Penal Məktəb Və Ofis Ləvazimatları",
+      "phone": "+994777425444",
+      "lead_id": 77012659,
+      "task_id": 93584787,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Səsə qulaq as\nYerində görüşmək istəyir",
+      "task_price": "",
+      "note": "Təqdimat olundu, müştəri proqramı istəyir. Qiymət endirimi ilə bağlı Nizami ilə danışacaq.\nAvadanlıqlar: 1. datalogic blutuz skaner- 3 əd\n2.rkiper tək ekran - 1 əd\n3.Çek printer - 2 əd\n4. Bar kod printer 1 əd\nÜmumi qiymət 1950 azn demişəm \n2 kassa olacaq, tariflə bağlı qiyməti Nizami ilə danışacaq.",
+      "stage_name": "görüş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77012659",
+      "callback_key": "444669e0"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3dd067a5",
     "type": "change_stage",
     "created_at": "2026-07-24T14:39:12.694262+04:00",
