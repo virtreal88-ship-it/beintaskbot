@@ -1,5 +1,40 @@
 [
   {
+    "id": "ec4fe1ed",
+    "type": "change_stage",
+    "created_at": "2026-07-24T13:27:37.986123+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Elçin Fərzəliyev",
+      "phone": "+994703211959",
+      "lead_id": 76316001,
+      "task_id": 93593565,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Dine | Təqdimat\n\nSəhər 10dan 12yə kimi müsaitdir.",
+      "task_price": "",
+      "note": "CloPos ilə danışıb, 500azn quraşdırma 59+39 (aylıq) -Baha olub onun üçün.\nBizdən istədiyi- 2tərəfli Rkeeper, 3ədəd pronter, Noutbook. 500m2 ərazidə restorandır.\nBizim qiymət ilə Cloposu müqayisə etmək istəyir",
+      "stage_name": "Düşünür",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76316001",
+      "callback_key": "46f12204"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "d917bc49",
     "type": "assign_executor",
     "created_at": "2026-07-24T12:17:32.126728+04:00",
