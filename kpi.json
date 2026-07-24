@@ -1245,5 +1245,14 @@
     "corrected_at": "2026-07-24 10:38:26",
     "completed_at": "2026-07-24 10:38:26",
     "source": "pending_confirm_stars"
+  },
+  "7920785774_93594871": {
+    "sessions": [],
+    "kpi_score": 100,
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-07-24 10:43:24",
+    "completed_at": "2026-07-24 10:43:24",
+    "source": "pending_confirm_stars"
   }
 }
