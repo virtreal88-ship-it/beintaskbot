@@ -1,5 +1,40 @@
 [
   {
+    "id": "56c89d5d",
+    "type": "change_stage",
+    "created_at": "2026-07-24T14:37:53.103557+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Utopiya",
+      "phone": "+994 55 727 84 00",
+      "lead_id": 77022571,
+      "task_id": 93593791,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Pc də problem var idi, təmirə götürmüşdük. Bəxtiyar təmir edib bizə qaytardı. İndi həmən pc ni aparıb utopiya-da qoşmaq və orada olan pc ni götürüb 28 maya gətirmək lazımdır.",
+      "task_price": "",
+      "note": ".",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77022571",
+      "callback_key": "8241231b"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ea252d2c",
     "type": "change_stage",
     "created_at": "2026-07-24T14:29:56.513288+04:00",
