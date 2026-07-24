@@ -336,7 +336,7 @@
         "phone": "111111111",
         "task_type": "Texniki tapşırıq",
         "amount": 80.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Ümumi tapşırıqların cəmi",
         "result_text": ".",
         "kpi": 0,
@@ -344,7 +344,7 @@
         "date": "2026-07-24 10:39:11"
       }
     ],
-    "balance": 100.5
+    "balance": 180.5
   },
   "7329891614": {
     "transactions": [],
