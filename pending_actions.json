@@ -1,5 +1,40 @@
 [
   {
+    "id": "3dd067a5",
+    "type": "change_stage",
+    "created_at": "2026-07-24T14:39:12.694262+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rasim",
+      "phone": "111111111",
+      "lead_id": 77023035,
+      "task_id": 93594871,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Ümumi tapşırıqların cəmi",
+      "task_price": "80",
+      "note": ".",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77023035",
+      "callback_key": "2a7ecb20"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "299711a9",
     "type": "assign_executor",
     "created_at": "2026-07-24T14:37:58.452381+04:00",
