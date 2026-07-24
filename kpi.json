@@ -1254,5 +1254,15 @@
     "corrected_at": "2026-07-24 10:43:24",
     "completed_at": "2026-07-24 10:43:24",
     "source": "pending_confirm_stars"
+  },
+  "7962757442_93584787": {
+    "sessions": [
+      {
+        "start_time": "2026-07-24 12:01:56",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
