@@ -3,7 +3,7 @@
     "id": "8a63e1ff",
     "type": "assign_executor",
     "created_at": "2026-07-25T04:25:43.583329+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Kitab_evi_Eyyublu_Elvin",
       "phone": "",
@@ -21,7 +21,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-25T08:42:04.899641+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "cdafdfce",
