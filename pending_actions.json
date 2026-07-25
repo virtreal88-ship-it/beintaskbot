@@ -1,5 +1,29 @@
 [
   {
+    "id": "8a63e1ff",
+    "type": "assign_executor",
+    "created_at": "2026-07-25T04:25:43.583329+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Kitab_evi_Eyyublu_Elvin",
+      "phone": "",
+      "lead_id": 77023315,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77023315"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "cdafdfce",
     "type": "change_stage",
     "created_at": "2026-07-24T20:22:53.077519+04:00",
