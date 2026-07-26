@@ -1,5 +1,33 @@
 [
   {
+    "id": "eb386b01",
+    "type": "assign_executor",
+    "created_at": "2026-07-26T19:48:57.676797+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Affarestorant",
+      "phone": "+994504465154",
+      "lead_id": 77041343,
+      "task_text": "[Nizami Qasımov:0] Qr kod la bağlı zəng edilməlidir.Masalar haqqında məlumat verib .Masalara uyğun qr kod hazırlanmalıdır və müştəriyə verilməlidir.",
+      "deadline": "27.07.2026 09:00",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77041343",
+      "conf_key": "cf923d62",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "d19e4c69",
     "type": "assign_executor",
     "created_at": "2026-07-26T19:43:49.137863+04:00",
