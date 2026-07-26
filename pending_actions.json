@@ -1,5 +1,33 @@
 [
   {
+    "id": "abedb808",
+    "type": "assign_executor",
+    "created_at": "2026-07-26T17:55:17.706350+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Paradise",
+      "phone": "+994558286293",
+      "lead_id": 77040855,
+      "task_text": "[Soltan Abbasov:0] Ekspeditor hesablarını silmək istəyir və  yalnız 2 hesabının qalmağını istəyir.",
+      "deadline": "27.07.2026 17:55",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77040855",
+      "conf_key": "5b4042d0",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "c28165c7",
     "type": "assign_executor",
     "created_at": "2026-07-26T17:07:36.643234+04:00",
