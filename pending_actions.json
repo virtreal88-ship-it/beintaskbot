@@ -3,7 +3,7 @@
     "id": "58198534",
     "type": "assign_executor",
     "created_at": "2026-07-26T13:51:06.211914+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ferid",
       "phone": "+0552310909",
@@ -21,7 +21,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-26T14:13:24.892516+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "d006d3e8",
