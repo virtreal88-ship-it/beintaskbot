@@ -1,5 +1,40 @@
 [
   {
+    "id": "56ab3577",
+    "type": "change_stage",
+    "created_at": "2026-07-26T22:46:03.079636+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Fantaziya",
+      "phone": "+994507474787",
+      "lead_id": 75927551,
+      "task_id": 93584691,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Zəng edib ki , başımız qarışdı yığa bilmədik falan. Axır istəyir. Deyir yaxınlaşın danışaq.",
+      "task_price": "",
+      "note": "Sifsriş ertələndi. Tasklsr tamamlananda yenidən əçaqə saxlayarıq.",
+      "stage_name": "imtina olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75927551",
+      "callback_key": "97195055"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "eb386b01",
     "type": "assign_executor",
     "created_at": "2026-07-26T19:48:57.676797+04:00",
