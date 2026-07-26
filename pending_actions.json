@@ -30,7 +30,7 @@
     "id": "abedb808",
     "type": "assign_executor",
     "created_at": "2026-07-26T17:55:17.706350+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Paradise",
       "phone": "+994558286293",
@@ -52,7 +52,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-26T18:46:14.939639+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "c28165c7",
