@@ -1,5 +1,29 @@
 [
   {
+    "id": "d19e4c69",
+    "type": "assign_executor",
+    "created_at": "2026-07-26T19:43:49.137863+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Eynur Eliyev",
+      "phone": "",
+      "lead_id": 77041211,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77041211"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "26b48361",
     "type": "assign_executor",
     "created_at": "2026-07-26T18:42:11.731846+04:00",
