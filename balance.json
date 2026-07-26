@@ -342,9 +342,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-07-24 10:39:11"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -180.0,
+        "status": "confirmed",
+        "task_text": "Ödəniş",
+        "result_text": "Ödəniş",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-26 07:41:26"
       }
     ],
-    "balance": 180.5
+    "balance": 0.5
   },
   "7329891614": {
     "transactions": [],
