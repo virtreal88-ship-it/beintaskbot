@@ -99,7 +99,7 @@
     "id": "f570928e",
     "type": "assign_executor",
     "created_at": "2026-07-24T19:40:46.036604+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "İSTANBUL MEBEL GORAN",
       "phone": "",
@@ -117,7 +117,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-26T13:14:26.606318+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "ab2bcdff",
