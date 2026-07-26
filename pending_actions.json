@@ -3,7 +3,7 @@
     "id": "eb386b01",
     "type": "assign_executor",
     "created_at": "2026-07-26T19:48:57.676797+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Affarestorant",
       "phone": "+994504465154",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-26T19:50:51.444996+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Soltan"
   },
   {
     "id": "d19e4c69",
