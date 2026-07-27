@@ -1,5 +1,40 @@
 [
   {
+    "id": "64a39ed7",
+    "type": "change_stage",
+    "created_at": "2026-07-27T13:02:28.531505+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "#Canet_et&et mehsullari",
+      "phone": "+994552805056",
+      "lead_id": 66452128,
+      "task_id": 93608467,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Sabah bura gedib , stoku yazmağa kömək etmək lazımdır. Rasim izah edəcək. Sumqayıtdadır",
+      "task_price": "",
+      "note": "Printer məsləsi həll olundu, stoku yazılası məhsullar vardı ollarda yazıldı. Rasimdə gəlmişdi kömək etdi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/66452128",
+      "callback_key": "49e6544d"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "240cfc2c",
     "type": "assign_executor",
     "created_at": "2026-07-27T12:32:58.182282+04:00",
