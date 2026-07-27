@@ -1,5 +1,29 @@
 [
   {
+    "id": "eeb6bd94",
+    "type": "assign_executor",
+    "created_at": "2026-07-27T18:51:29.418694+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Farid",
+      "phone": "+994552180818",
+      "lead_id": 75617479,
+      "task_text": "Mərhələ: quraşdırma",
+      "stage_key": "qurashdirma",
+      "stage_name": "quraşdırma",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75617479"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "691573d5",
     "type": "assign_executor",
     "created_at": "2026-07-27T13:18:52.880125+04:00",
