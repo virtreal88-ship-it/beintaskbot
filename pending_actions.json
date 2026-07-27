@@ -1,5 +1,33 @@
 [
   {
+    "id": "691573d5",
+    "type": "assign_executor",
+    "created_at": "2026-07-27T13:18:52.880125+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nismo",
+      "phone": "994 50 777 69 55",
+      "lead_id": 77045353,
+      "task_text": "Müştəri üçün serves kitabçası (nümunə qrupunda şəkil var)",
+      "deadline": "27.07.2026 13:18",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77045353",
+      "conf_key": "3557483f",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "64a39ed7",
     "type": "change_stage",
     "created_at": "2026-07-27T13:02:28.531505+04:00",
