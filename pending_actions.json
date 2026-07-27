@@ -144,7 +144,7 @@
     "id": "d89bd6cc",
     "type": "change_stage",
     "created_at": "2026-07-27T12:08:02.344613+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Affarestorant",
       "phone": "+994504465154",
@@ -173,7 +173,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-28T01:29:14.734220+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "56ab3577",
