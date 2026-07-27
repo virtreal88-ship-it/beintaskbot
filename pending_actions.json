@@ -1,5 +1,29 @@
 [
   {
+    "id": "240cfc2c",
+    "type": "assign_executor",
+    "created_at": "2026-07-27T12:32:58.182282+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "elsev təbii günıbaxan yağı",
+      "phone": "",
+      "lead_id": 77045151,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77045151"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "d89bd6cc",
     "type": "change_stage",
     "created_at": "2026-07-27T12:08:02.344613+04:00",
