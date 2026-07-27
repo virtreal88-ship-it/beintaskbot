@@ -1,5 +1,40 @@
 [
   {
+    "id": "d89bd6cc",
+    "type": "change_stage",
+    "created_at": "2026-07-27T12:08:02.344613+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Affarestorant",
+      "phone": "+994504465154",
+      "lead_id": 77041343,
+      "task_id": 93607813,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Qr kod la bağlı zəng edilməlidir.Masalar haqqında məlumat verib .Masalara uyğun qr kod hazırlanmalıdır və müştəriyə verilməlidir.Səsdə qeyd olunub",
+      "task_price": "",
+      "note": "QR kodlar müştərinin istədiyi massalara (Həyət -30 masa, Otaq-10 masa, OtaqA-7masa)  görə seçilib göndərildi. Müştəriyə məlumat verildi.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77041343",
+      "callback_key": "35253555"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "56ab3577",
     "type": "change_stage",
     "created_at": "2026-07-26T22:46:03.079636+04:00",
