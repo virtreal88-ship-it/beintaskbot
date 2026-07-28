@@ -3,7 +3,7 @@
     "id": "1291a36a",
     "type": "assign_executor",
     "created_at": "2026-07-28T17:35:52.005943+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Xəyal Şəki",
       "phone": "+994555254887",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-28T17:36:59.235585+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "6b517f69",
