@@ -1,5 +1,40 @@
 [
   {
+    "id": "2f0765c8",
+    "type": "change_stage",
+    "created_at": "2026-07-28T13:59:18.458056+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tural",
+      "phone": "+994514575757",
+      "lead_id": 75779867,
+      "task_id": 93621939,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "3 gün sonra açılışdı. Müştəri görüş istəyib. Gedib hər şeyin yolunda olub olmadığına baxmaq lazımdır",
+      "task_price": "",
+      "note": "Problemlər həll edildi quraşdırma danışıldı. 885 manat, oul yeşiyi və tərəzi yoxdu. Qalan hır şeydən 1 ədəd. 5 gün quraşdırma istəyir",
+      "stage_name": "imtina olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75779867",
+      "callback_key": "55c6907e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f2af3de7",
     "type": "change_stage",
     "created_at": "2026-07-28T13:10:57.283149+04:00",
