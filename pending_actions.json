@@ -1,5 +1,40 @@
 [
   {
+    "id": "4f2f59e9",
+    "type": "change_stage",
+    "created_at": "2026-07-28T14:01:20.590636+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Oruc",
+      "phone": "+994552459723",
+      "lead_id": 76355367,
+      "task_id": 93621887,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Bununla əlaqə saxla. Proqramı almaq istəyir.",
+      "task_price": "",
+      "note": "Müştəriyə test müddəti təklif edildi, 3 restoranı var. Proqramdan narazıdır. Clopos işlədir. Təklif verildi. Cavab gözlənilir",
+      "stage_name": "imtina olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76355367",
+      "callback_key": "54719bdc"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "2f0765c8",
     "type": "change_stage",
     "created_at": "2026-07-28T13:59:18.458056+04:00",
