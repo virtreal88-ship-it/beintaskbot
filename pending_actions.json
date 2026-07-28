@@ -1,5 +1,40 @@
 [
   {
+    "id": "6b580a8e",
+    "type": "change_stage",
+    "created_at": "2026-07-28T12:39:23.176348+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Adil kitab",
+      "phone": "Adil Emekdas  +994504206610",
+      "lead_id": 77061785,
+      "task_id": 93621607,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Yeni profil istəyir. Gör demo təklif elə. İstəməsə yeni qeydiyyata elə ver",
+      "task_price": "",
+      "note": "Əlaqə saxlanıldı, ödənişdən sonra yeni profil açılacaq",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77061785",
+      "callback_key": "de099231"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3e7cfe69",
     "type": "assign_executor",
     "created_at": "2026-07-28T11:51:46.215813+04:00",
