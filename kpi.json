@@ -1650,5 +1650,15 @@
     "completed_before_deadline": false,
     "delay_reason": "Çatdıra bilmirəm",
     "completed_at": "2026-07-29 08:56:39"
+  },
+  "7262243946_93630407": {
+    "sessions": [
+      {
+        "start_time": "2026-07-29 09:02:26",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
