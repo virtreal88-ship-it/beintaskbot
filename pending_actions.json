@@ -1,5 +1,29 @@
 [
   {
+    "id": "319fad90",
+    "type": "assign_executor",
+    "created_at": "2026-07-29T16:23:28.251510+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "...",
+      "phone": "+994708392707",
+      "lead_id": 76590349,
+      "task_text": "Mərhələ: yeni sifariş",
+      "stage_key": "yeni_sifaris",
+      "stage_name": "yeni sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76590349"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "d0a6ee95",
     "type": "assign_executor",
     "created_at": "2026-07-29T16:23:02.863453+04:00",
