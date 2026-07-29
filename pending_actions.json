@@ -117,7 +117,7 @@
     "id": "d2cb4ae1",
     "type": "assign_executor",
     "created_at": "2026-07-29T05:23:47.345729+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nuru",
       "phone": "+994 70 617 77 16",
@@ -139,7 +139,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-29T10:46:51.013316+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Soltan"
   },
   {
     "id": "b2cc60ea",
