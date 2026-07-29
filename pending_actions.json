@@ -1,5 +1,40 @@
 [
   {
+    "id": "f40309e4",
+    "type": "change_stage",
+    "created_at": "2026-07-29T17:19:08.648920+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994706593393",
+      "phone": "+994706593393",
+      "lead_id": null,
+      "task_id": 93515255,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Qızılgül restoranında quraşdırmadan sonra bəzi əksikliklər qalıb. Rkiper (kassa)çöldə quraşdırılıb lakin lazım, olanda içəriyə daşınması üçün şərait qurulmayıb. İçəridə rkiper və çek printerin qoyulması üçün lan kabel çəkilməlidir",
+      "task_price": "",
+      "note": "Problem həll edildi. Əlavə problem var idi, rkiperlə notebook bir birini görmürdü. Ethernet to lan adapter qoşuldu, məsələ həll edildi.qoşulan avadanlığın pulunu rasim verəcək.",
+      "stage_name": "—",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "",
+      "callback_key": "7c180fee"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3e5ada5b",
     "type": "change_stage",
     "created_at": "2026-07-29T17:09:56.893404+04:00",
