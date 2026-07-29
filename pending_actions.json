@@ -3,7 +3,7 @@
     "id": "d16fa305",
     "type": "reassign_task",
     "created_at": "2026-07-29T16:28:07.472401+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "0702781414",
       "phone": "0702781414",
@@ -36,7 +36,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-29T16:28:48.577969+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "319fad90",
