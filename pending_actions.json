@@ -1,5 +1,40 @@
 [
   {
+    "id": "ead4447f",
+    "type": "change_stage",
+    "created_at": "2026-07-29T17:39:38.301659+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nuru",
+      "phone": "+994 70 617 77 16",
+      "lead_id": 77069537,
+      "task_id": 93629837,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Dine | Təqdimat\n\nQiymətlər barəsində heçnə danışılmasın, təqdimatdan dərxal sonra mənə məlumat verilsin.",
+      "task_price": "",
+      "note": "Telefonu açmır.",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77069537",
+      "callback_key": "21c84f7e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f40309e4",
     "type": "change_stage",
     "created_at": "2026-07-29T17:19:08.648920+04:00",
