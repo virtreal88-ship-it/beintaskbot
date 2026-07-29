@@ -3,7 +3,7 @@
     "id": "3acc8dda",
     "type": "change_stage",
     "created_at": "2026-07-29T15:19:43.487908+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "admin@aziko",
       "phone": "994552902590",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T15:20:04.168770+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "a3f543ea",
