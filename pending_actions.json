@@ -1,5 +1,44 @@
 [
   {
+    "id": "d16fa305",
+    "type": "reassign_task",
+    "created_at": "2026-07-29T16:28:07.472401+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "0702781414",
+      "phone": "0702781414",
+      "lead_id": 76928379,
+      "task_id": 93630041,
+      "task_text": "Quraşdırmanı həyata keçirmək",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Rasim Əsgərov → Soltan Abbasov",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Soltan Abbasov",
+      "note": "Online qoşulub inteqrasiya etmək lazımdır.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76928379",
+      "conf_key": "78849fb7",
+      "update_data": {
+        "text": "[Soltan Abbasov] Quraşdırmanı həyata keçirmək",
+        "responsible_user_id": 15532668,
+        "task_type_id": 1,
+        "complete_till": 1785317820
+      },
+      "creator_chat_id": 7920785774,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 4478
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "319fad90",
     "type": "assign_executor",
     "created_at": "2026-07-29T16:23:28.251510+04:00",
