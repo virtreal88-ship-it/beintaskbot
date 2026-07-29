@@ -3,7 +3,7 @@
     "id": "e15e9308",
     "type": "change_stage",
     "created_at": "2026-07-29T15:59:46.222348+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Togrul",
       "phone": "+994556243444",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T16:10:48.395187+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "0c2f11c3",
