@@ -1,5 +1,33 @@
 [
   {
+    "id": "0d3dbd14",
+    "type": "assign_executor",
+    "created_at": "2026-07-29T13:09:45.640345+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nərmin kiosk",
+      "phone": "0502060677",
+      "lead_id": 76332247,
+      "task_text": "[Şamil Əliyev:0] Qaraçuxurdkı dekanda tərəzi ilə əlaqə yoxdur, yerində baxmaq lazımdır\nDükandakı işçi 0708804828 Amil",
+      "deadline": "29.07.2026 14:09",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Şamil Əliyev",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76332247",
+      "conf_key": "f23acd55",
+      "creator_chat_id": 7262243946
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "712b0ab0",
     "type": "assign_executor",
     "created_at": "2026-07-29T11:38:00.445499+04:00",
