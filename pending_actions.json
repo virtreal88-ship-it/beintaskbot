@@ -1,5 +1,40 @@
 [
   {
+    "id": "c7417dfe",
+    "type": "change_stage",
+    "created_at": "2026-07-29T16:49:25.621754+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Naneli Restoran",
+      "phone": "+0703049454",
+      "lead_id": 76780765,
+      "task_id": 93632833,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Yeni sifarişi rəsmiləşdirmək",
+      "task_price": "",
+      "note": "Bu dəqiqə büdcəmiz yoxdur avadanlıqlar almağa deyir. Avadanlıq ala biləndə zəng edəcəm dedi",
+      "stage_name": "yeni sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76780765",
+      "callback_key": "3dfdfb59"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "7f3f3a9f",
     "type": "change_stage",
     "created_at": "2026-07-29T16:46:19.040960+04:00",
