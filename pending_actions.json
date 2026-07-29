@@ -1,5 +1,40 @@
 [
   {
+    "id": "130a218b",
+    "type": "change_stage",
+    "created_at": "2026-07-29T19:35:37.026645+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nərmin kiosk",
+      "phone": "+994502060677",
+      "lead_id": 76332247,
+      "task_id": 93630553,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Qaraçuxurdkı dekanda tərəzi ilə əlaqə yoxdur, yerində baxmaq lazımdır\nDükandakı işçi 0708804828 Amil",
+      "task_price": "",
+      "note": "Həll edildi. Tərəzi sıfırlandı. İp dəyişildi və problem həll oldu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76332247",
+      "callback_key": "9eb58763"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "95ef5807",
     "type": "change_stage",
     "created_at": "2026-07-29T19:14:28.574924+04:00",
