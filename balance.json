@@ -370,9 +370,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-07-29 12:57:01"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -15.0,
+        "status": "confirmed",
+        "task_text": "Qizilqala",
+        "result_text": "Qizilqala",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-29 13:39:41"
       }
     ],
-    "balance": 100.5
+    "balance": 85.5
   },
   "7329891614": {
     "transactions": [],
