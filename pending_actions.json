@@ -1,5 +1,40 @@
 [
   {
+    "id": "c440b59b",
+    "type": "change_stage",
+    "created_at": "2026-07-29T10:38:40.466089+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rauf Quliyev",
+      "phone": "+0559771186",
+      "lead_id": 76719735,
+      "task_id": 93611443,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Köşk quraşdırma",
+      "task_price": "",
+      "note": "Sayıma görə əlaqə saxlanıldı. Qiymət deyildi. Müştəri özü lazım olanda geri gönüş edəcək",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76719735",
+      "callback_key": "5e55a4e2"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "9347476e",
     "type": "change_stage",
     "created_at": "2026-07-29T10:36:19.869213+04:00",
