@@ -1,5 +1,40 @@
 [
   {
+    "id": "41395385",
+    "type": "change_stage",
+    "created_at": "2026-07-29T11:16:30.428652+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İlqar",
+      "phone": "0999308585",
+      "lead_id": 76989717,
+      "task_id": 93621347,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Tiktokdan maraqlanıb. Ola bilər tam anlamayıb biz nə təklif edirik . Oncə əlaqə saxla , ətraflı izah et . Əhtiyyac olsa görüş",
+      "task_price": "",
+      "note": "Zəng etdim. Təqdimat olunub. Proqramı istəyir. Qiymət təklifi gözləyir",
+      "stage_name": "Təqdimat olundu",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76989717",
+      "callback_key": "75ebe767"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e1d0bd4b",
     "type": "assign_executor",
     "created_at": "2026-07-29T11:15:57.257804+04:00",
