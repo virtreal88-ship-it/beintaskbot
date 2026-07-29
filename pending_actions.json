@@ -3,7 +3,7 @@
     "id": "c440b59b",
     "type": "change_stage",
     "created_at": "2026-07-29T10:38:40.466089+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rauf Quliyev",
       "phone": "+0559771186",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T10:44:36.497852+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "9347476e",
