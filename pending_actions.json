@@ -72,7 +72,7 @@
     "id": "d0a6ee95",
     "type": "assign_executor",
     "created_at": "2026-07-29T16:23:02.863453+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nicat",
       "phone": "+994103724939",
@@ -90,7 +90,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-07-29T16:30:39.882043+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "a2f8b62d",
