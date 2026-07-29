@@ -322,7 +322,7 @@
         "phone": "+994102135104",
         "task_type": "Əlaqə saxla",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": ".",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -372,7 +372,7 @@
         "date": "2026-07-29 12:57:01"
       }
     ],
-    "balance": 0.5
+    "balance": 100.5
   },
   "7329891614": {
     "transactions": [],
