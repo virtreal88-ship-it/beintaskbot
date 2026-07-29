@@ -69,7 +69,7 @@
     "id": "ffc5918f",
     "type": "change_stage",
     "created_at": "2026-07-29T11:12:29.971903+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ramil Ezizov",
       "phone": "+0515726565",
@@ -98,7 +98,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T11:16:59.727430+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "8faee698",
