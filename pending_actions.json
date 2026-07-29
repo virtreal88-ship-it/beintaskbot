@@ -1,5 +1,40 @@
 [
   {
+    "id": "e829d160",
+    "type": "change_stage",
+    "created_at": "2026-07-29T16:57:03.222428+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Farid efere",
+      "phone": "+994552180818",
+      "lead_id": 75617479,
+      "task_id": 93633191,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Qeydlərivi yaz",
+      "task_price": "100",
+      "note": "Uğurlu.\n\nİstehsalat aktiv edildi\n\nƏgər bonus kartlar istəsə 500əd 350₼ demişəm. Şamil bilir hara sifariş etmək lazımdır.",
+      "stage_name": "quraşdırma",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75617479",
+      "callback_key": "ba6a56d0"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "c7417dfe",
     "type": "change_stage",
     "created_at": "2026-07-29T16:49:25.621754+04:00",
