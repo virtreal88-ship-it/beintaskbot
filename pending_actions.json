@@ -1,5 +1,33 @@
 [
   {
+    "id": "a3f543ea",
+    "type": "assign_executor",
+    "created_at": "2026-07-29T15:14:42.555054+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Togrul",
+      "phone": "+994556243444",
+      "lead_id": 65887056,
+      "task_text": "Yumruska semkir filialina satis noqtesi ve yumruska semkir anbar elave etmek lazimdi",
+      "deadline": "29.07.2026 15:14",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/65887056",
+      "conf_key": "36206b83",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "0d3dbd14",
     "type": "assign_executor",
     "created_at": "2026-07-29T13:09:45.640345+04:00",
