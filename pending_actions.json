@@ -1,5 +1,40 @@
 [
   {
+    "id": "0c2f11c3",
+    "type": "change_stage",
+    "created_at": "2026-07-29T15:22:27.365718+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт Ekspediter Yeni Müştəri",
+      "phone": "+994996202525",
+      "lead_id": 59453406,
+      "task_id": 93630407,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "İlk ayın pulunu ödəsin , balansına oturacaq. Əvvəl işləyib bizdə. İndi təkrar işləmək istəyir. Ekspeditor sistemi.",
+      "task_price": "",
+      "note": "Yeni profil (nicat1992) qeydiyyatdan kecdim",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/59453406",
+      "callback_key": "3138327a"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3acc8dda",
     "type": "change_stage",
     "created_at": "2026-07-29T15:19:43.487908+04:00",
