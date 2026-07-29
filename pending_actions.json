@@ -41,7 +41,7 @@
     "id": "9347476e",
     "type": "change_stage",
     "created_at": "2026-07-29T10:36:19.869213+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Avro ehtiyat rayon",
       "phone": "+994993999299",
@@ -70,7 +70,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T10:44:54.810599+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "1615b67b",
