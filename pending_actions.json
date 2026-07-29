@@ -543,7 +543,7 @@
     "id": "f2af3de7",
     "type": "change_stage",
     "created_at": "2026-07-28T13:10:57.283149+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Naneli Restoran",
       "phone": "+994703049454",
@@ -572,7 +572,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T12:04:32.386234+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b1c2c757",
