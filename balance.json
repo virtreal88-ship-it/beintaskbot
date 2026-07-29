@@ -356,6 +356,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-26 07:41:26"
+      },
+      {
+        "task_id": 93633191,
+        "executor": "Rasim Əsgərov",
+        "client": "Farid efere",
+        "phone": "+994552180818",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Qeydlərivi yaz",
+        "result_text": "Uğurlu.\n\nİstehsalat aktiv edildi\n\nƏgər bonus kartlar istəsə 500əd 350₼ demişəm. Şamil bilir hara sifariş etmək lazımdır.",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-07-29 12:57:01"
       }
     ],
     "balance": 0.5
@@ -373,6 +387,18 @@
     "balance": 0
   },
   "7262243946": {
+    "transactions": [],
+    "balance": 0
+  },
+  "1289510272": {
+    "transactions": [],
+    "balance": 0
+  },
+  "6596538872": {
+    "transactions": [],
+    "balance": 0
+  },
+  "1142054888": {
     "transactions": [],
     "balance": 0
   }
