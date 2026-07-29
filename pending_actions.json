@@ -123,7 +123,7 @@
     "id": "ead4447f",
     "type": "change_stage",
     "created_at": "2026-07-29T17:39:38.301659+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nuru",
       "phone": "+994 70 617 77 16",
@@ -152,7 +152,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-29T18:29:49.605730+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "f40309e4",
