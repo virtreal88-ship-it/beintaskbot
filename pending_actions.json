@@ -179,7 +179,7 @@
     "id": "68bf7921",
     "type": "assign_executor",
     "created_at": "2026-07-29T11:06:58.997869+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "admin@aziko",
       "phone": "994552902590",
@@ -201,7 +201,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-29T11:42:03.177996+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "95b6b2ec",
