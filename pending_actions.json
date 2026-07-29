@@ -3,7 +3,7 @@
     "id": "712b0ab0",
     "type": "assign_executor",
     "created_at": "2026-07-29T11:38:00.445499+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "emyasildere",
       "phone": "0702781414",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-07-29T11:40:07.719998+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Rasim"
   },
   {
     "id": "41395385",
