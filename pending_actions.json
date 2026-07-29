@@ -1,5 +1,40 @@
 [
   {
+    "id": "3acc8dda",
+    "type": "change_stage",
+    "created_at": "2026-07-29T15:19:43.487908+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "admin@aziko",
+      "phone": "994552902590",
+      "lead_id": 71427203,
+      "task_id": 93630045,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Müştərinin sayımı olub. Kassa proqramı, bar kod printer, çek printer. Qoşulub. Təlimat etmək lazımdır.",
+      "task_price": "",
+      "note": "Kassadan istifadə qaydası izah elədim, ilkin məlumatlar deyildi, məhsul yaratmağı daxil etməyidə göstərdim",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71427203",
+      "callback_key": "4c5db390"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "a3f543ea",
     "type": "assign_executor",
     "created_at": "2026-07-29T15:14:42.555054+04:00",
