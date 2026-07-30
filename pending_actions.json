@@ -265,7 +265,7 @@
     "id": "130a218b",
     "type": "change_stage",
     "created_at": "2026-07-29T19:35:37.026645+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nərmin kiosk",
       "phone": "+994502060677",
@@ -294,7 +294,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-30T15:04:03.185548+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "95ef5807",
