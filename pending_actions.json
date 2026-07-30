@@ -1,5 +1,40 @@
 [
   {
+    "id": "00470cb7",
+    "type": "change_stage",
+    "created_at": "2026-07-30T17:54:39.088749+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "zoo əcəmi",
+      "phone": "+994708079090",
+      "lead_id": 77077147,
+      "task_id": 93635727,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Artvarium yönləndirilib, sistem quraşdırılması istəyir. Aylıq abonəlik və digər məsələlər danışılmalıdır",
+      "task_price": "",
+      "note": "Quraşdırma edildi.avadanlıqlad var idi. Artvariumdan miqrasiya edildi. İlk ayın və quraşdırmanın ödənişi alındı. Təlimat edildi.",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77077147",
+      "callback_key": "00c31ba1"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "42240df8",
     "type": "assign_executor",
     "created_at": "2026-07-30T15:04:11.193393+04:00",
