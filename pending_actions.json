@@ -1,5 +1,40 @@
 [
   {
+    "id": "8c12be85",
+    "type": "change_stage",
+    "created_at": "2026-07-30T11:15:57.708585+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Admin@paradise",
+      "phone": "+994504489966",
+      "lead_id": 71162083,
+      "task_id": 93621791,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Ekspeditorları ləğv etmək istəyir.",
+      "task_price": "",
+      "note": "Tarif azaldıldı. Müştəriyə məlumat verildi. İstifadəçiləri özü deaktiv etməli idi. Bununla bağlı özü istifadəçiləri deaktiv edəcəyini deyib.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71162083",
+      "callback_key": "7bd3e756"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "20b2318a",
     "type": "assign_executor",
     "created_at": "2026-07-30T10:01:22.737298+04:00",
