@@ -707,7 +707,7 @@
     "id": "35bfaf24",
     "type": "change_stage",
     "created_at": "2026-07-29T16:46:11.690225+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "İlqar.085",
       "phone": "—",
@@ -736,7 +736,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-30T15:05:39.765145+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "d16fa305",
