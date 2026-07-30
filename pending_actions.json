@@ -3,7 +3,7 @@
     "id": "8a8f3faa",
     "type": "change_stage",
     "created_at": "2026-07-30T14:31:30.987240+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Utopiakosmetik",
       "phone": "+994 55 727 84 00",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-07-30T15:00:53.138661+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "632c2949",
