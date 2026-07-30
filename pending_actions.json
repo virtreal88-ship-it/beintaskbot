@@ -1,5 +1,40 @@
 [
   {
+    "id": "632c2949",
+    "type": "change_stage",
+    "created_at": "2026-07-30T12:24:06.304608+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "emyasildere",
+      "phone": "0702781414",
+      "lead_id": 76928379,
+      "task_id": 93630041,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "İnteqrasiya Quraşdırmanı həyata keçirmək",
+      "task_price": "",
+      "note": "İnteqrasiya qoşuldu. Wifidə problem var idi. Qoşulmurdu.Müştərinin bank inteqrasiyası aktiv olmadığı üçün, banka müraciət edəcək. Bu problemi həll etdikdən sonra bank inteqrasiyası ilə birlikdə yenidən qoşacağıq",
+      "stage_name": "quraşdırma",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76928379",
+      "callback_key": "8dd5c8ab"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ece55343",
     "type": "change_stage",
     "created_at": "2026-07-30T11:16:09.557519+04:00",
