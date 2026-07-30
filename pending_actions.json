@@ -1,5 +1,40 @@
 [
   {
+    "id": "ece55343",
+    "type": "change_stage",
+    "created_at": "2026-07-30T11:16:09.557519+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Paradise",
+      "phone": "+994558286293",
+      "lead_id": 77040855,
+      "task_id": 93635999,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Tarifin azalması ilə bağlı müraciət edib.",
+      "task_price": "",
+      "note": "Tarif azaldıldı. Müştəriyə məlumat verildi. İstifadəçiləri özü deaktiv etməli idi. Bununla bağlı özü istifadəçiləri deaktiv edəcəyini deyib.",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77040855",
+      "callback_key": "044cf10c"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "8c12be85",
     "type": "change_stage",
     "created_at": "2026-07-30T11:15:57.708585+04:00",
