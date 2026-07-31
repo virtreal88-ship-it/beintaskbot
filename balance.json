@@ -398,9 +398,23 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-07-29 13:40:23"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -100.0,
+        "status": "confirmed",
+        "task_text": "Depozit",
+        "result_text": "Depozit",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-07-31 12:02:31"
       }
     ],
-    "balance": 0.0
+    "balance": -100.0
   },
   "7329891614": {
     "transactions": [],
