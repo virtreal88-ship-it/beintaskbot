@@ -305,7 +305,7 @@
     "id": "5a14adac",
     "type": "assign_executor",
     "created_at": "2026-07-30T00:13:53.194110+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "İ S İ",
       "phone": "+994507747969",
@@ -323,7 +323,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-08-01T16:06:30.084348+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "67eb563b",
