@@ -1887,7 +1887,7 @@
     "id": "d6fb98b5",
     "type": "assign_executor",
     "created_at": "2026-07-28T01:11:29.862120+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Oruc",
       "phone": "+0552459723",
@@ -1905,7 +1905,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-08-01T16:22:10.922432+04:00",
+    "resolved_by": "bot.py:3978",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "eeb6bd94",
