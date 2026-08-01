@@ -624,7 +624,7 @@
     "id": "f40309e4",
     "type": "change_stage",
     "created_at": "2026-07-29T17:19:08.648920+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Автоконтакт +994706593393",
       "phone": "+994706593393",
@@ -653,7 +653,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-01T16:12:25.238809+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "3e5ada5b",
