@@ -1,5 +1,33 @@
 [
   {
+    "id": "26bb4a1b",
+    "type": "assign_executor",
+    "created_at": "2026-08-02T17:23:18.240502+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Oem Motors",
+      "phone": "+994107173635",
+      "lead_id": 75727581,
+      "task_text": "[Texniki Dəstək:0] Anbar qalığı səhifəsində minimal qiymət və onun totalının əks olunmasını istəyir. Onun üçün çox vacibdir. Mümkün olduğu təqdirdə həyata keçirilər zəhmət olmasa.",
+      "deadline": "09.08.2026 00:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Texniki Dəstək",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75727581",
+      "conf_key": "3e22ef0b",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "4459aa3b",
     "type": "change_stage",
     "created_at": "2026-08-02T16:56:31.767383+04:00",
