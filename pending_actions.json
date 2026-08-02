@@ -3,7 +3,7 @@
     "id": "de0d3b49",
     "type": "assign_executor",
     "created_at": "2026-08-02T15:15:54.632336+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "vahid",
       "phone": "",
@@ -21,7 +21,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-08-02T15:16:20.082228+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "f90c29d2",
