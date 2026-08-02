@@ -1,5 +1,29 @@
 [
   {
+    "id": "862ddb5f",
+    "type": "assign_executor",
+    "created_at": "2026-08-02T15:50:20.347506+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Mebel Fabriki",
+      "phone": "+994557155537",
+      "lead_id": 77013695,
+      "task_text": "Mərhələ: görüş",
+      "stage_key": "gorus",
+      "stage_name": "görüş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77013695"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "2015b096",
     "type": "assign_executor",
     "created_at": "2026-08-02T15:49:50.190888+04:00",
