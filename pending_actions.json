@@ -1,5 +1,33 @@
 [
   {
+    "id": "3cbd5886",
+    "type": "assign_executor",
+    "created_at": "2026-08-02T16:38:58.582790+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": ".",
+      "phone": "+994504455455",
+      "lead_id": 76208877,
+      "task_text": "Ümumi sistem haqda məlumat almaq istəyir, xüsusilə Hesabatlar bölməsi üzrə.",
+      "deadline": "03.08.2026 12:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "Düşünür",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76208877",
+      "conf_key": "a73b52ad",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "5be62c78",
     "type": "assign_executor",
     "created_at": "2026-08-02T16:38:07.791345+04:00",
