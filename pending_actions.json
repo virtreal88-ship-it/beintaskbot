@@ -3,7 +3,7 @@
     "id": "862ddb5f",
     "type": "assign_executor",
     "created_at": "2026-08-02T15:50:20.347506+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Mebel Fabriki",
       "phone": "+994557155537",
@@ -21,7 +21,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-08-02T16:01:39.287302+04:00",
+    "resolved_by": "bot.py:3978",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "2015b096",
