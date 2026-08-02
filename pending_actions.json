@@ -1,5 +1,40 @@
 [
   {
+    "id": "5683760c",
+    "type": "change_stage",
+    "created_at": "2026-08-02T16:46:09.793545+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "marketugur",
+      "phone": "+994519109861",
+      "lead_id": 77102039,
+      "task_id": 93661559,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Bonus kartlarını aktiv etmək lazımdır.100 ədəd bonus kartı mövcuddur.",
+      "task_price": "0",
+      "note": "Hazırdır",
+      "stage_name": "danışıqlar",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77102039",
+      "callback_key": "26e5c695"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3cbd5886",
     "type": "assign_executor",
     "created_at": "2026-08-02T16:38:58.582790+04:00",
