@@ -1,5 +1,40 @@
 [
   {
+    "id": "c2f0b67a",
+    "type": "change_stage",
+    "created_at": "2026-08-03T10:15:00.791720+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "vahid",
+      "phone": "—",
+      "lead_id": 77061883,
+      "task_id": 93666011,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Quraşdırmanı həyata keçirmək",
+      "task_price": "",
+      "note": "Müştəri gəncədədir.880 azn qiymət deyilib ama bunu gəncə nəzərə alınaraq deyilməyib. Avadanlıqlar pc dəst, bar kod printer, skaner, çek printer. Əlavə sayım etmək üçün kömək də istəyir. Qiymət çıxarılmalı və müştəri ilə danışılmışdır. Həftə içi quraşdırma istəyir",
+      "stage_name": "quraşdırma",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77061883",
+      "callback_key": "b66123c4"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f192068d",
     "type": "change_stage",
     "created_at": "2026-08-03T09:41:34.301496+04:00",
