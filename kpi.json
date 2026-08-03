@@ -1937,10 +1937,17 @@
     "sessions": [
       {
         "start_time": "2026-08-03 05:41:30",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-08-03 05:41:31",
+        "actual_minutes": 0.0,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 100,
+    "target_minutes": 60,
+    "actual_minutes": 0,
+    "deadline_ts": 1786219200,
+    "completed_before_deadline": true,
+    "delay_reason": "",
+    "completed_at": "2026-08-03 05:41:31"
   }
 }
