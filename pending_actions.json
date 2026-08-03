@@ -41,7 +41,7 @@
     "id": "c2f0b67a",
     "type": "change_stage",
     "created_at": "2026-08-03T10:15:00.791720+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "vahid",
       "phone": "—",
@@ -70,7 +70,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-03T13:25:40.796433+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "f192068d",
