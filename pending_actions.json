@@ -179,7 +179,7 @@
       "task_text": "Müştəriyə təqdimat keçirmək",
       "task_price": "",
       "note": "Müştəri avtobus parkı işlədir. Girən çıxan maşınların qeydiyyatı, fəaliyyət zamanı qazandırdıqları pul, dəyişilən ehtiyyat hissələri, görülən təmir işləri (yürüyüş km-i ilə birlikdə) qeydiyyata alınsın istəyir. Hər maşın üçün ayrıca bütün məlumatların əks olduğu səhifə və hər maşın üçün ayrıca hesabat",
-      "stage_name": "Təqdimat",
+      "stage_name": "daxili müzakirə",
       "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
       "link": "https://texnikidestek50.kommo.com/leads/detail/77077379",
       "callback_key": "da1de7ba"
