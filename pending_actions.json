@@ -3,7 +3,7 @@
     "id": "da3024f6",
     "type": "assign_executor",
     "created_at": "2026-08-03T02:36:50.087899+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Sarp",
       "phone": "111111111",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-03T09:14:43.011395+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "85add0d6",
