@@ -1,5 +1,40 @@
 [
   {
+    "id": "0bcc5a23",
+    "type": "change_stage",
+    "created_at": "2026-08-04T17:31:43.470799+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Coffenoor",
+      "phone": "+994504455455",
+      "lead_id": 76208877,
+      "task_id": 93666493,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Ümumi sistem haqda məlumat almaq istəyir, xüsusilə Hesabatlar bölməsi üzrə.",
+      "task_price": "",
+      "note": "Məlumat verildi. Sualları cavablandırıldı. Rkiperə qoşub test etmek istəyirdi lakin rkiperdə problem olduğuna görə qaldı. Problemi düzəldib, əlaqə saxlayacaq",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76208877",
+      "callback_key": "f89c1c94"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "8b91214c",
     "type": "change_stage",
     "created_at": "2026-08-04T15:05:24.773025+04:00",
