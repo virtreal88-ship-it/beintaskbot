@@ -1,5 +1,40 @@
 [
   {
+    "id": "8b91214c",
+    "type": "change_stage",
+    "created_at": "2026-08-04T15:05:24.773025+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Utopiakosmetik",
+      "phone": "+994 55 727 84 00",
+      "lead_id": 77022571,
+      "task_id": 93642597,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Yenidən keys də problem var",
+      "task_price": "",
+      "note": "Problem həll edildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77022571",
+      "callback_key": "2a72b97b"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "6d35740b",
     "type": "change_stage",
     "created_at": "2026-08-04T15:05:11.106546+04:00",
