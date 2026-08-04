@@ -1,5 +1,40 @@
 [
   {
+    "id": "c0ce2932",
+    "type": "change_stage",
+    "created_at": "2026-08-04T20:19:58.790795+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tahir",
+      "phone": "+994 50 645 91 11",
+      "lead_id": 77112065,
+      "task_id": 93671627,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Sederekde yeri var. Sumqayita gelecek sabah gorüçəcəyik",
+      "task_price": "",
+      "note": "Ofisdə təqdimat olundu. A4 printer 1 əd, pc dəst 1 əd, mobil çek printer 1əd, quraşdırma - ümumi 1175 azn qoymət deyildi. Əlavə olaraq məhsulların adını verəcək. Biz 300-400 çeşid məhsulu 50 azn-ə yazacağıq. 4-5 gün sonra xəbər verəcək. Yer sədərəkdədir.",
+      "stage_name": "danışıqlar",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77112065",
+      "callback_key": "83dfb153"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "94207a12",
     "type": "change_stage",
     "created_at": "2026-08-04T17:56:44.633927+04:00",
