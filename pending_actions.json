@@ -1,5 +1,40 @@
 [
   {
+    "id": "89de23a7",
+    "type": "change_stage",
+    "created_at": "2026-08-04T17:32:57.047778+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Aytac xanım (Zaur) cehizlik",
+      "phone": "0502439664",
+      "lead_id": 77124763,
+      "task_id": 93682723,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Quraşdırma 350\nAylıq 50\nŞirvan",
+      "task_price": "",
+      "note": "Danışıldı, proqram online təqdimat edildi. Mobil, veb və kassa test üçün 3 günlük verildi. 3 gün sonra geri dönüş edəcək",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77124763",
+      "callback_key": "92617cb9"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "0bcc5a23",
     "type": "change_stage",
     "created_at": "2026-08-04T17:31:43.470799+04:00",
