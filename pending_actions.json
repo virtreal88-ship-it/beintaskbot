@@ -162,7 +162,7 @@
     "id": "8e122689",
     "type": "assign_executor",
     "created_at": "2026-08-03T13:33:03.240300+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "BOSS",
       "phone": "+0705420000",
@@ -180,7 +180,10 @@
       "Texniki",
       "Özüm",
       "Ləğv et"
-    ]
+    ],
+    "resolved_at": "2026-08-04T11:28:57.233417+04:00",
+    "resolved_by": "bot.py:587",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b32bbcf5",
