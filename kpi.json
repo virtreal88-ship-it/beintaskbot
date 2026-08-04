@@ -2077,5 +2077,15 @@
     "manual_correction": true,
     "corrected_by": 1628569350,
     "corrected_at": "2026-08-04 11:06:14"
+  },
+  "7962757442_93666493": {
+    "sessions": [
+      {
+        "start_time": "2026-08-04 13:31:37",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
