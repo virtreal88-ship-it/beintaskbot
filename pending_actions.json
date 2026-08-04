@@ -1,5 +1,40 @@
 [
   {
+    "id": "e42f167e",
+    "type": "change_stage",
+    "created_at": "2026-08-04T09:35:42.909271+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İ S İ",
+      "phone": "+994507747969",
+      "lead_id": 77077365,
+      "task_id": 93660841,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Danışığa bax ,əlaqə saxla",
+      "task_price": "",
+      "note": "Zəng etmədi, mən zəng edirəm götürmür. Mesaj yazmışam geri dönüş yoxdu neçə gündü",
+      "stage_name": "yeni sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77077365",
+      "callback_key": "b0c7323b"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "6fda9cce",
     "type": "change_stage",
     "created_at": "2026-08-04T09:26:58.095331+04:00",
