@@ -1,5 +1,33 @@
 [
   {
+    "id": "a8e631b4",
+    "type": "assign_executor",
+    "created_at": "2026-08-05T16:46:48.602403+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "E. Q. / Yeni müştəri",
+      "phone": "+994993139941",
+      "lead_id": 75117471,
+      "task_text": "Yeni hesab / istifadəçi açmaq istəyir.",
+      "deadline": "06.08.2026 16:46",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75117471",
+      "conf_key": "29b67083",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "83a82251",
     "type": "assign_executor",
     "created_at": "2026-08-05T14:16:22.201993+04:00",
