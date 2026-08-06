@@ -1,5 +1,33 @@
 [
   {
+    "id": "1062f73e",
+    "type": "assign_executor",
+    "created_at": "2026-08-06T12:34:52.701596+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Karvan Market Saray",
+      "phone": "+994556113322",
+      "lead_id": 77141281,
+      "task_text": "[Nizami Qasımov:0] 6cı gün açılış olmalıdır. 5 ci gün əlaqə saxlamaq lazımdır",
+      "deadline": "07.08.2026 10:34",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77141281",
+      "conf_key": "aff9bd6b",
+      "creator_chat_id": 7262243946
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "11dc87c3",
     "type": "change_stage",
     "created_at": "2026-08-06T12:22:21.483322+04:00",
