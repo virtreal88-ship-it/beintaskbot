@@ -5390,8 +5390,11 @@ TG_TO_STATUS_ID = {
 
 
 async def handle_api_gozleme(request: web.Request) -> web.Response:
-    """Return leads in the employee's personal stage of the Əməliyyatlar lövhəsi pipeline,
-    along with their non-completed tasks (filtered by xatırlat müşt. type if found)."""
+    """Return 'xatırlat müşt.' tasks with the SAME payload shape as /api/notifications.
+
+    Admin (Nizami Qasımov) sees every stage of the Gözləmə pipeline; regular
+    employees only see leads sitting in their own personal stage.
+    """
     try:
         tg_user_id_str = request.headers.get("X-TG-User-ID", "")
         try:
@@ -5399,19 +5402,24 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         except (TypeError, ValueError):
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
 
-        user_status_id = TG_TO_STATUS_ID.get(chat_id)
-        if not user_status_id:
-            return web.json_response({"success": True, "items": [], "message": "Bu istifadəçi üçün mərhələ tapılmadı."})
+        kommo_user_id = get_kommo_user_id_for_chat(chat_id)
+        is_admin = kommo_user_id == ADMIN_KOMMO_USER_ID or chat_id == ADMIN_CHAT_ID
 
-        # Fetch leads in this user's stage of the Gözləmə pipeline
+        user_status_id = TG_TO_STATUS_ID.get(chat_id)
+        if not is_admin and not user_status_id:
+            return web.json_response({"success": True, "items": [], "tasks": [], "is_admin": False,
+                                      "message": "Bu istifadəçi üçün mərhələ tapılmadı."})
+
+        # ── Fetch leads of the Gözləmə pipeline ────────────────────────────
         leads_url = f"{KOMMO_BASE_URL}/api/v4/leads"
         leads_params = {
             "filter[pipeline_id]": GOZLEME_PIPELINE_ID,
-            "filter[statuses][0][pipeline_id]": GOZLEME_PIPELINE_ID,
-            "filter[statuses][0][status_id]": user_status_id,
             "with": "contacts",
-            "limit": 50,
+            "limit": 250,
         }
+        if not is_admin:
+            leads_params["filter[statuses][0][pipeline_id]"] = GOZLEME_PIPELINE_ID
+            leads_params["filter[statuses][0][status_id]"] = user_status_id
         try:
             leads_resp = _http.get(leads_url, headers=HEADERS, params=leads_params, timeout=10)
             if leads_resp.status_code != 200:
@@ -5422,46 +5430,65 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
             logger.error(f"Gözləmə leads request error: {exc}")
             return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
 
+        user_display_name = get_employee_name_by_chat_id(chat_id, "")
         if not leads:
-            return web.json_response({"success": True, "items": []})
+            return web.json_response({"success": True, "items": [], "tasks": [],
+                                      "is_admin": is_admin, "user_name": user_display_name})
 
-        xatirlat_type_id = XATIRLAT_TASK_TYPE_ID
-
-        # Build contact name cache from embedded contacts
-        contact_name_cache = {}  # {contact_id: name}
-        for lead in leads:
-            for c in (lead.get("_embedded", {}).get("contacts", []) or []):
-                if c.get("id") and c.get("name"):
-                    contact_name_cache[c["id"]] = c["name"]
-
-        result_items = []
         now_baku = datetime.now(tz=BAKU_TZ)
+        task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+        if not isinstance(task_priorities, dict):
+            task_priorities = {}
+        _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
+        if not isinstance(_task_creators_cache, dict):
+            _task_creators_cache = {}
 
+        _STATUS_TO_NAME_GOZ = {
+            109988184: 'Şamil Əliyev', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov',
+            109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy',
+            109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova',
+        }
+        _SHORT_TO_FULL = {'Şamil': 'Şamil Əliyev', 'Soltan': 'Soltan Abbasov', 'Hüseyn': 'Hüseyn Səfərov',
+                          'Nizami': 'Nizami Qasımov', 'Rasim': 'Rasim Əsgərov', 'Texniki': TECHNICAL_SUPPORT_NAME}
+        _TASK_TYPE_NAMES_GOZ = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
+                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
+                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt."}
+
+        lead_map = {}          # {lead_id: lead}
+        lead_contact_id = {}   # {lead_id: contact_id}
+        contact_ids = set()
         for lead in leads:
-            lead_id = lead.get("id")
-            lead_name = lead.get("name", "")
-
-            # Resolve primary contact name
+            lead_map[lead["id"]] = lead
             emb_contacts = lead.get("_embedded", {}).get("contacts", []) or []
-            contact_name = ""
-            contact_phone = ""
             if emb_contacts:
-                first_cid = emb_contacts[0].get("id")
-                contact_name = contact_name_cache.get(first_cid, "")
-                if not contact_name and first_cid:
-                    try:
-                        cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{first_cid}", headers=HEADERS, timeout=6)
-                        if cr.status_code == 200:
-                            c_data = cr.json()
-                            contact_name = c_data.get("name", "")
-                            contact_name_cache[first_cid] = contact_name
-                            for cf in (c_data.get("custom_fields_values") or []):
-                                if cf.get("field_code") == "PHONE":
-                                    vals = cf.get("values", [])
-                                    if vals: contact_phone = vals[0].get("value", "")
-                    except Exception:
-                        pass
+                cid = emb_contacts[0].get("id")
+                if cid:
+                    lead_contact_id[lead["id"]] = cid
+                    contact_ids.add(cid)
 
+        # ── Batch fetch contacts (name + phone), 50 per request ────────────
+        contacts_cache = {}
+        cid_list = list(contact_ids)
+        for chunk_start in range(0, len(cid_list), 50):
+            chunk = cid_list[chunk_start:chunk_start + 50]
+            id_params = {f"filter[id][{i}]": cid for i, cid in enumerate(chunk)}
+            id_params["limit"] = 50
+            try:
+                cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
+                if cr.status_code == 200:
+                    for c in cr.json().get("_embedded", {}).get("contacts", []):
+                        phone_val = ""
+                        for cf in (c.get("custom_fields_values") or []):
+                            if cf.get("field_code") == "PHONE":
+                                vals = cf.get("values", [])
+                                if vals:
+                                    phone_val = vals[0].get("value", "")
+                        contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+            except Exception:
+                pass
+
+        tasks_list = []
+        for lead_id, lead in lead_map.items():
             # Fetch non-completed tasks for this lead
             try:
                 tasks_resp = _http.get(
@@ -5482,49 +5509,121 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                 logger.warning(f"Gözləmə tasks fetch for lead {lead_id}: {exc}")
                 continue
 
+            lead_name = lead.get("name", "")
+            lead_status_id = lead.get("status_id", 0)
+            cid = lead_contact_id.get(lead_id)
+            contact_name = contacts_cache.get(cid, {}).get("name", "") if cid else ""
+            contact_phone = contacts_cache.get(cid, {}).get("phone", "") if cid else ""
+
+            # Last note of the lead (same as Tapşırıqlar cards)
+            last_note = ""
+            try:
+                _note_resp = _http.get(
+                    f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes",
+                    headers=HEADERS,
+                    params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"},
+                    timeout=8,
+                )
+                if _note_resp.status_code == 200:
+                    _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
+                    if _notes_data:
+                        last_note = _notes_data[0].get("params", {}).get("text", "")
+            except Exception:
+                pass
+
             for task in lead_tasks:
                 if task.get("is_completed"):
                     continue
-                # Filter by xatırlat type if we found it; otherwise include all non-completed tasks
-                if xatirlat_type_id is not None and task.get("task_type_id") != xatirlat_type_id:
+                # Gözləmə tab shows ONLY "xatırlat müşt." tasks
+                if task.get("task_type_id") != XATIRLAT_TASK_TYPE_ID:
                     continue
 
                 deadline_ts = task.get("complete_till", 0)
-                if deadline_ts:
-                    deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ)
-                    is_overdue = deadline_dt < now_baku
+                deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ) if deadline_ts else None
+                is_overdue = deadline_dt < now_baku if deadline_dt else False
+                if deadline_dt:
+                    time_str = deadline_dt.strftime("%d.%m %H:%M")
+                    if is_overdue:
+                        diff = now_baku - deadline_dt
+                        hours = int(diff.total_seconds() // 3600)
+                        if hours > 0:
+                            time_str = f"{hours} saat gecikir"
+                        else:
+                            mins = int(diff.total_seconds() // 60)
+                            time_str = f"{mins} d\u0259q gecikir"
                     deadline_str = deadline_dt.strftime("%d.%m.%Y %H:%M")
                 else:
+                    time_str = ""
                     deadline_str = ""
-                    is_overdue = False
 
-                _STATUS_TO_NAME_GOZ = {109988184: 'Şamil Əliyev', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
-                _goz_assignee = _STATUS_TO_NAME_GOZ.get(lead.get('status_id', 0), '')
-                result_items.append({
-                    "lead_id": lead_id,
-                    "lead_name": lead_name,
-                    "contact_name": contact_name,
-                    "task_id": task.get("id"),
-                    "task_text": task.get("text", ""),
+                task_text = task.get("text", "")
+                _marker_match = re.match(
+                    r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Texniki tapşırıq|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*',
+                    task_text)
+                assignee_name = _marker_match.group(1) if _marker_match else ""
+                if assignee_name in _SHORT_TO_FULL:
+                    assignee_name = _SHORT_TO_FULL[assignee_name]
+                if not assignee_name:
+                    assignee_name = _STATUS_TO_NAME_GOZ.get(lead_status_id, "")
+                if not assignee_name and task.get("responsible_user_id") == ADMIN_KOMMO_USER_ID:
+                    assignee_name = "Nizami Qas\u0131mov"
+
+                # Cavabdeh (created_by)
+                _created_by_name = _task_creators_cache.get(str(task.get("id")), "")
+                if not _created_by_name:
+                    _created_by_id = task.get("created_by")
+                    if _created_by_id:
+                        if _created_by_id == ADMIN_KOMMO_USER_ID:
+                            _created_by_name = "Nizami Qas\u0131mov"
+                        elif _created_by_id == 15532668:
+                            _created_by_name = ""
+                        else:
+                            _created_by_name = KOMMO_USERS.get(_created_by_id, "")
+
+                entity_id = task.get("entity_id") or lead_id
+                tasks_list.append({
+                    "id": task.get("id"),
+                    "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udd14 G\u00f6zl\u0259m\u0259",
+                    "desc": task_text,
+                    "task_text": task_text,
+                    "time": time_str,
                     "deadline": deadline_str,
                     "deadline_ts": deadline_ts,
                     "is_overdue": is_overdue,
-                    "entity_id": task.get("entity_id"),
+                    "entity_id": entity_id,
                     "entity_type": task.get("entity_type", "leads"),
+                    "task_id": task.get("id"),
+                    "lead_id": lead_id,
+                    "lead_name": lead_name,
+                    "contact_name": contact_name,
                     "phone": contact_phone,
+                    "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
+                    "assigneeName": assignee_name,
+                    "assignee_name": assignee_name,
+                    "kommo_link": f"https://texnikidestek50.kommo.com/leads/detail/{lead_id}",
+                    "complete_till": deadline_ts,
+                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "xatırlat müşt."),
+                    "task_type_id": task.get("task_type_id", XATIRLAT_TASK_TYPE_ID),
+                    "last_note": last_note,
+                    "priority": task_priorities.get(str(task.get("id")), task_priorities.get(task.get("id"), "")),
+                    "stage_name": _STATUS_TO_NAME_GOZ.get(lead_status_id, "") or STAGE_NAMES.get(lead_status_id, ""),
                     "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
-                    "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
-                    "assigneeName": _goz_assignee,
+                    "created_by": _created_by_name,
                 })
 
         # Sort: overdue first, then by deadline ascending
-        result_items.sort(key=lambda x: (not x["is_overdue"], x["deadline_ts"] or 9999999999))
+        tasks_list.sort(key=lambda x: (not x["is_overdue"], x["deadline_ts"] or 9999999999))
 
-        return web.json_response({"success": True, "items": result_items})
+        return web.json_response({
+            "success": True,
+            "items": tasks_list,
+            "tasks": tasks_list,
+            "is_admin": is_admin,
+            "user_name": user_display_name,
+        })
     except Exception as exc:
         logger.error(f"handle_api_gozleme error: {exc}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
-
 
 async def handle_search_contacts(request: web.Request) -> web.Response:
     try:

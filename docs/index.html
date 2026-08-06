@@ -226,7 +226,9 @@
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
                 <option value="Nizami Qasımov">Nizami Qasımov</option>
                 <option value="Rasim Əsgərov">Rasim Əsgərov</option>
-                <option value="Texniki Dəstək">Texniki Dəstək</option>
+                <option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option>
+                <option value="Asya Agayeva">Asya Agayeva</option>
+                <option value="Nuranə Şirinova">Nuranə Şirinova</option>
             </select>
             <button onclick="pinFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
@@ -394,18 +396,25 @@
             </div>
             <button onclick="loadGozleme(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
+        <!-- Date filters (same as Tapşırıqlar) -->
+        <div class="grid grid-cols-3 gap-2">
+            <button id="gozleme-filter-today" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('today',this)">Bu gün</button>
+            <button id="gozleme-filter-tomorrow" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('tomorrow',this)">Sabah</button>
+            <button id="gozleme-filter-week" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('week',this)">Bu həftə</button>
+        </div>
         <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
             <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
                 <option value="Şamil Əliyev">Şamil Əliyev</option>
                 <option value="Soltan Abbasov">Soltan Abbasov</option>
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
+                <option value="Nizami Qasımov">Nizami Qasımov</option>
                 <option value="Rasim Əsgərov">Rasim Əsgərov</option>
-                <option value="Texniki Dəstək">Texniki Dəstək</option>
                 <option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option>
                 <option value="Asya Agayeva">Asya Agayeva</option>
                 <option value="Nuranə Şirinova">Nuranə Şirinova</option>
             </select>
+            <button onclick="pinGozlemeFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
         <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
         <div id="gozleme-container" class="space-y-3" style="padding-bottom:20px;"></div>
@@ -1652,7 +1661,7 @@ async function loadKpiHistory() {
         return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${starStr}</span></div><span class="text-xs font-black text-emerald-600">+${amount} AZN</span></div>`;
     }).join('');
 }
-/* ================= GÖZLƏMƏ TAB ================= */
+/* ================= GÖZLƏMƏ TAB (exact copy of Tapşırıqlar behavior) ================= */
 let gozlemeItems = [];
 const GOZLEME_CACHE_KEY = 'cached_gozleme_' + CURRENT_USER_ID;
 function getCachedGozleme() { try { return JSON.parse(localStorage.getItem(GOZLEME_CACHE_KEY)); } catch(e){} return null; }
@@ -1663,7 +1672,7 @@ async function loadGozleme(showFeedback = false) {
         const r = await fetch(API_BASE + '/api/gozleme', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(!r.ok || !j.success) throw new Error(j.error || 'Gözləmə yükləndi');
-        gozlemeItems = j.items || [];
+        gozlemeItems = j.items || j.tasks || [];
         setCachedGozleme(gozlemeItems);
         renderGozleme();
         if(showFeedback) toast('Gözləmə yeniləndi', false);
@@ -1673,61 +1682,146 @@ async function loadGozleme(showFeedback = false) {
     }
 }
 
-let gozlemeFilter = 'all';
+let gozlemeFilter = localStorage.getItem('gozleme_pinned_filter') || 'all';
+let gozlemeDateFilter = '';
 function filterGozleme() { gozlemeFilter = document.getElementById('gozleme-filter-assignee').value; renderGozleme(); }
+function pinGozlemeFilter() {
+    const val = document.getElementById('gozleme-filter-assignee').value;
+    localStorage.setItem('gozleme_pinned_filter', val);
+    toast('📌 ' + (val === 'all' ? 'Filtr sıfırlandı' : val + ' bərkidildi'), false);
+}
+function setGozlemeDateFilter(val, btn) {
+    if(gozlemeDateFilter === val) { gozlemeDateFilter = ''; } else { gozlemeDateFilter = val; }
+    document.querySelectorAll('.gozleme-filter-pill').forEach(b => b.classList.remove('active'));
+    if(gozlemeDateFilter) {
+        const id = gozlemeDateFilter === 'today' ? 'gozleme-filter-today' : gozlemeDateFilter === 'tomorrow' ? 'gozleme-filter-tomorrow' : 'gozleme-filter-week';
+        document.getElementById(id).classList.add('active');
+    }
+    renderGozleme();
+}
+function filterGozlemeByDate(tasks) {
+    if(!gozlemeDateFilter) return tasks;
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
+    if(gozlemeDateFilter === 'today') { return tasks.filter(t => { const d = (t.complete_till || t.deadline_ts || 0) * 1000; return d > 0 && d < todayEnd.getTime(); }); }
+    else if(gozlemeDateFilter === 'tomorrow') { const te = new Date(todayEnd); te.setDate(te.getDate() + 1); return tasks.filter(t => { const d = (t.complete_till || t.deadline_ts || 0) * 1000; return d >= todayEnd.getTime() && d < te.getTime(); }); }
+    else if(gozlemeDateFilter === 'week') { const we = new Date(todayStart); we.setDate(we.getDate() + 7); return tasks.filter(t => { const d = (t.complete_till || t.deadline_ts || 0) * 1000; return d > 0 && d < we.getTime(); }); }
+    return tasks;
+}
+
 function renderGozleme() {
+    // Skip re-render if audio is playing
+    const playingAudio = document.querySelector("#gozleme-container audio");
+    if(playingAudio && !playingAudio.paused) return;
     const container = document.getElementById('gozleme-container');
     const countEl = document.getElementById('gozleme-count');
     if(!container) return;
-    // Show filter for admin
+    // Show filter for admin (or when a pinned filter is active)
     const gfRow = document.getElementById('gozleme-filter-row');
-    if(gfRow && isAdmin) gfRow.style.display = 'flex';
+    if(gfRow && (isAdmin || gozlemeFilter !== 'all')) gfRow.style.display = 'flex';
     container.innerHTML = '';
-    let items = gozlemeItems;
-    if(gozlemeFilter !== 'all') items = items.filter(i => (i.assigneeName || '') === gozlemeFilter);
-    if(!items.length) {
-        container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Gözləmədə tapşırıq yoxdur.</div>';
-        if(countEl) countEl.textContent = '';
+    let filtered = gozlemeItems;
+    if(gozlemeFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || t.assignee_name || '') === gozlemeFilter);
+    filtered = filterGozlemeByDate(filtered);
+    const overdueCount = filtered.filter(t => t.is_overdue).length;
+    if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    if(!filtered.length) {
+        const labels = {today:'Bu gün', tomorrow:'Sabah', week:'Bu həftə'};
+        const msg = gozlemeDateFilter ? `"${labels[gozlemeDateFilter]}" üçün tapşırıq yoxdur.` : 'Gözləmədə tapşırıq yoxdur.';
+        container.innerHTML = `<div class="text-center py-10 text-gray-400 text-xs font-semibold">${msg}</div>`;
         return;
     }
-    const overdueCount = items.filter(i => i.is_overdue).length;
-    if(countEl) countEl.textContent = `Gözləmə (${items.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
-    items.forEach(item => {
-        const isOverdue = item.is_overdue;
-        const borderColor = isOverdue ? 'border-l-red-500' : 'border-l-amber-400';
-        const statusLabel = isOverdue
-            ? `<span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span>`
-            : `<span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span>`;
+    filtered.forEach(t => {
+        // Keep the task available for bottom-bar actions
+        if(!mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
+        const bgAction = document.createElement('div');
+        bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
+        bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
+        wrapper.appendChild(bgAction);
         const card = document.createElement('div');
-        card.className = `bg-white p-3.5 rounded-xl shadow-sm border-l-4 ${borderColor} flex flex-col gap-1.5`;
+        const isOverdue = t.is_overdue;
+        card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-amber-400'}`;
+        card.style.position = 'relative';
+        const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
+        const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
+        let header = '';
+        if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || t.deadline || ''}</span></div>`; }
+        else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || t.deadline || ''}</span></div>`; }
+        const priceMatch = (t.desc || t.task_text || t.text || '').match(/\[[^:\]]+:(\d+)\]/);
+        const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
+        const priorityTags = {
+            urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
+            high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
+            medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
+            low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
+        };
+        const priorityTag = priorityTags[t.priority] || '';
         card.innerHTML = `
-            <div class="flex justify-between items-start">
-                ${statusLabel}
-                <span class="text-[10px] text-gray-400 font-semibold">${item.deadline || ''}</span>
+            ${header}
+            <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
+            <div class="space-y-1 text-[11px] text-gray-700">
+                <div>👤 <b>Müştəri:</b> ${t.contact_name || t.lead_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
+                <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
+                ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
+                ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
+                ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
+                ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
+                ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
             </div>
-            <div class="text-xs font-black text-gray-900 leading-tight">${item.task_text || '—'}</div>
-            <div class="space-y-0.5 text-[11px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${item.contact_name || item.lead_name || '—'}</div>
-                ${item.lead_name && item.contact_name && item.lead_name !== item.contact_name ? '<div>📁 <b>Sövdələşmə:</b> ' + item.lead_name + '</div>' : ''}
+            <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
+                ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
+                <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
             </div>
-            ${item.voice_url ? `<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="${item.voice_url.startsWith('http')?item.voice_url:API_BASE+item.voice_url}" onclick="event.stopPropagation()"></audio></div>` : ''}
-            <div class="flex justify-between items-center mt-2 pt-2 border-t border-gray-100">
-                ${item.kommo_link ? `<a href="${item.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a>` : '<span></span>'}
+            <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
+                <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
+                <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
+            </div>
             </div>`;
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', () => {
-            // Add to mockTasks temporarily so bottom bar actions work
-            if(!mockTasks.find(t => t.id === item.task_id)) {
-                mockTasks.push({id: item.task_id, desc: item.task_text, time: item.deadline, phone: item.phone || '', entity_id: item.entity_id, entity_type: item.entity_type || 'leads', assigneeName: item.assignee_name || '', is_overdue: item.is_overdue});
-            }
-            clickNotification(item.task_id, item.task_text, item.contact_name || item.lead_name || '');
+        card.onclick = () => { };
+        // Long-press handler for context menu
+        let longPressTimer = null;
+        card.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => {
+                e.preventDefault();
+                showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
+            }, 500);
+        }, {passive: false});
+        card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+        card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+        // Swipe
+        let startX = 0, currentX = 0, isSwiping = false;
+        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
+        card.addEventListener('touchmove', (e) => {
+            if(!isSwiping) return;
+            currentX = e.touches[0].clientX - startX;
+            if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
+            if(currentX < -120) currentX = -120 + (currentX+120)*0.2;
+            card.style.transform = `translateX(${currentX}px)`;
+            if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
+            else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
+            else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
+        }, {passive:true});
+        card.addEventListener('touchend', () => {
+            isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
+            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
+            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
+            else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
+            currentX = 0;
         });
-        container.appendChild(card);
+        wrapper.appendChild(card);
+        container.appendChild(wrapper);
     });
 }
 
 async function openGozleme() {
     nav('screen-gozleme');
+    const gfa = document.getElementById('gozleme-filter-assignee');
+    if(gfa && gozlemeFilter !== 'all') gfa.value = gozlemeFilter;
+    if(isAdmin || gozlemeFilter !== 'all') document.getElementById('gozleme-filter-row').style.display = 'flex';
     const cached = getCachedGozleme();
     if(cached) {
         gozlemeItems = cached;
