@@ -4357,6 +4357,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
+                # If xatırlat müşt. task, move lead to assignee's stage in Əməliyyatlar pipeline
+                if task_type_id == XATIRLAT_TASK_TYPE_ID and result.get('entity_type') == 'leads':
+                    _assignee_status = None
+                    _target_chat = get_chat_id_by_name(assignee_name_raw) if assignee_name_raw else None
+                    if _target_chat:
+                        _assignee_status = TG_TO_STATUS_ID.get(int(_target_chat))
+                    if _assignee_status:
+                        try:
+                            _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{result['entity_id']}",
+                                headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _assignee_status}, timeout=8)
+                            logger.info(f"Moved lead {result['entity_id']} to Əməliyyatlar stage {_assignee_status}")
+                        except Exception as _me:
+                            logger.error(f"Failed to move lead to Əməliyyatlar: {_me}")
                 # Also add task text as a note on the entity
                 try:
                     note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
@@ -4523,7 +4536,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     update_contact_kommo(int(contacts_emb[0]["id"]), {"name": edit_client_name})
                 except Exception as e:
                     logger.error(f"Edit client_name update error: {e}")
-            if not update_data and not edit_client_name:
+            _edit_priority = data.get("priority", "").strip()
+            if not update_data and not edit_client_name and not _edit_priority:
                 return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
             # Non-admin changing assignee → send to admin for confirmation
             is_admin_user = is_admin(chat_id)
@@ -4567,9 +4581,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Return conf_key so frontend can attach note to this pending update
                 return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
             # Admin updates directly
+            # Save priority locally (not a Kommo field)
+            priority = data.get("priority", "").strip()
+            if priority:
+                task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+                task_priorities[str(task_id)] = priority
+                write_json(_TASK_PRIORITIES_FILE, task_priorities)
             if not update_data:
-                # Only client_name was changed, no task fields to update
-                return web.json_response({"success": True, "message": "\u2705 M\u00fc\u015ft\u0259ri ad\u0131 yenil\u0259ndi!"})
+                # Only client_name or priority was changed, no Kommo task fields to update
+                return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!"})
             result = update_task_kommo(task_id, update_data)
             if result:
                 link = ""
