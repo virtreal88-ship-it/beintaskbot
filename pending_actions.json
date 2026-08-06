@@ -1,5 +1,40 @@
 [
   {
+    "id": "4527f32e",
+    "type": "change_stage",
+    "created_at": "2026-08-06T15:56:29.353339+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Xanabagi",
+      "phone": "+994707086868",
+      "lead_id": 73164993,
+      "task_id": 93681349,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Dünən əlaqə saxladım, yolda idi. Danışa bilmədik. Təkrar əlaqə saxlamaq lazımdır",
+      "task_price": "",
+      "note": "Danışdım, xankəndidə restoranda, 1 rkiper və 2 printeri var. Online quraşdırma olmalıdır.menyu yazılmalıdır.\n\nQuraşdırma 150 azn\nAylıq ödəniş 55 azn",
+      "stage_name": "ID:109988184",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/73164993",
+      "callback_key": "206a5a5b"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "84ac4944",
     "type": "assign_executor",
     "created_at": "2026-08-06T15:32:20.723138+04:00",
