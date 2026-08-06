@@ -90,16 +90,17 @@
             #content-area .text-\[11px\] { font-size:12px; }
             #content-area .text-\[10px\] { font-size:11px; }
             /* Two-column grid for task and pending cards */
-            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container {
+            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container {
                 display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; align-items:start;
             }
-            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > * { margin:0 !important; }
+            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > * { margin:0 !important; }
             /* Full-width rows inside grid (empty states, section separators) */
             #notifications-container > div[class*='text-center'],
             #pending-actions-container > div[class*='text-center'],
             #balance-history-container > div[class*='text-center'],
             #balance-history-container > div[class*='mt-4'],
-            #kpi-history-container > div[class*='text-center'] { grid-column:1 / -1; }
+            #kpi-history-container > div[class*='text-center'],
+            #gozleme-container > div[class*='text-center'] { grid-column:1 / -1; }
             /* Bottom sheet becomes a centered panel (offset by sidebar width) */
             #bottom-action-bar { max-width:640px; left:240px; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; box-shadow:0 -8px 40px rgba(0,0,0,0.15); }
             /* Desktop-only click actions on task cards */
@@ -145,6 +146,9 @@
     </button>
     <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
         <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Balans</span>
+    </button>
+    <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
+        <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
     </button>
     <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
         <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
@@ -386,6 +390,19 @@
         </div>
         <div id="pending-actions-container" class="space-y-3"></div>
     </div>
+
+    <!-- SCREEN: GÖZLƏMƏ -->
+    <div id="screen-gozleme" class="screen space-y-3">
+        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div>
+                <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Əməliyyatlar lövhəsi — sizin mərhələnizdəki müştərilər</div>
+            </div>
+            <button onclick="loadGozleme(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+        </div>
+        <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
+        <div id="gozleme-container" class="space-y-3" style="padding-bottom:20px;"></div>
+    </div>
 </div>
 
 <!-- BOTTOM SHEET (for completing task) -->
@@ -435,6 +452,9 @@
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Balans</span>
+    </button>
+    <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">🔔</span><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
@@ -504,7 +524,7 @@ function setPendingTabVisible() {
     if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
 }
 function setSidebarActive(tabId) {
-    ['tab-tasks','tab-create','tab-history','tab-pending'].forEach(id => {
+    ['tab-tasks','tab-create','tab-history','tab-gozleme','tab-pending'].forEach(id => {
         const item = document.getElementById('side-' + id);
         if(item) item.classList.toggle('active', id === tabId);
     });
@@ -531,6 +551,7 @@ document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
         syncNotifications();
         if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+        if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
     }
 });
 window.addEventListener('hashchange', applyHashRoute);
@@ -1564,7 +1585,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function switchTab(tabId, updateHash = true) {
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-    ['tab-tasks', 'tab-create', 'tab-history', 'tab-pending'].forEach(id => {
+    ['tab-tasks', 'tab-create', 'tab-history', 'tab-gozleme', 'tab-pending'].forEach(id => {
         const tab = document.getElementById(id);
         if(tab) tab.className = inactiveClass;
     });
@@ -1582,6 +1603,9 @@ function switchTab(tabId, updateHash = true) {
         document.getElementById('tab-history').className = activeClass;
         if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
         else { nav('screen-balance-history'); loadBalanceHistory(); }
+    } else if(tabId === 'tab-gozleme') {
+        document.getElementById('tab-gozleme').className = activeClass;
+        openGozleme();
     } else if(tabId === 'tab-pending') {
         if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
         const pendingTab = document.getElementById('tab-pending');
@@ -1623,6 +1647,79 @@ async function loadKpiHistory() {
         return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
     }).join('');
 }
+/* ================= GÖZLƏMƏ TAB ================= */
+let gozlemeItems = [];
+const GOZLEME_CACHE_KEY = 'cached_gozleme_' + CURRENT_USER_ID;
+function getCachedGozleme() { try { return JSON.parse(localStorage.getItem(GOZLEME_CACHE_KEY)); } catch(e){} return null; }
+function setCachedGozleme(items) { try { localStorage.setItem(GOZLEME_CACHE_KEY, JSON.stringify(items)); } catch(e){} }
+
+async function loadGozleme(showFeedback = false) {
+    try {
+        const r = await fetch(API_BASE + '/api/gozleme', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const j = await r.json();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Gözləmə yükləndi');
+        gozlemeItems = j.items || [];
+        setCachedGozleme(gozlemeItems);
+        renderGozleme();
+        if(showFeedback) toast('Gözləmə yeniləndi', false);
+    } catch(e) {
+        renderGozleme();
+        if(showFeedback) toast('Gözləmə yükləndi', true);
+    }
+}
+
+function renderGozleme() {
+    const container = document.getElementById('gozleme-container');
+    const countEl = document.getElementById('gozleme-count');
+    if(!container) return;
+    container.innerHTML = '';
+    if(!gozlemeItems.length) {
+        container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Gözləmədə tapşırıq yoxdur.</div>';
+        if(countEl) countEl.textContent = '';
+        return;
+    }
+    const overdueCount = gozlemeItems.filter(i => i.is_overdue).length;
+    if(countEl) countEl.textContent = `Gözləmə (${gozlemeItems.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    gozlemeItems.forEach(item => {
+        const isOverdue = item.is_overdue;
+        const borderColor = isOverdue ? 'border-l-red-500' : 'border-l-amber-400';
+        const statusLabel = isOverdue
+            ? `<span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span>`
+            : `<span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span>`;
+        const card = document.createElement('div');
+        card.className = `bg-white p-3.5 rounded-xl shadow-sm border-l-4 ${borderColor} flex flex-col gap-1.5`;
+        card.innerHTML = `
+            <div class="flex justify-between items-start">
+                ${statusLabel}
+                <span class="text-[10px] text-gray-400 font-semibold">${item.deadline || ''}</span>
+            </div>
+            <div class="text-xs font-black text-gray-900 leading-tight">${item.task_text || '—'}</div>
+            <div class="space-y-0.5 text-[11px] text-gray-700">
+                <div>👤 <b>Müştəri:</b> ${item.contact_name || item.lead_name || '—'}</div>
+                ${item.lead_name && item.contact_name && item.lead_name !== item.contact_name ? '<div>📁 <b>Sövdələşmə:</b> ' + item.lead_name + '</div>' : ''}
+            </div>
+            <div class="flex justify-between items-center mt-2 pt-2 border-t border-gray-100">
+                ${item.kommo_link ? `<a href="${item.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a>` : '<span></span>'}
+            </div>`;
+        container.appendChild(card);
+    });
+}
+
+async function openGozleme() {
+    nav('screen-gozleme');
+    const cached = getCachedGozleme();
+    if(cached) {
+        gozlemeItems = cached;
+        renderGozleme();
+    } else if(!gozlemeItems.length) {
+        showLoader();
+    }
+    showSyncIndicator();
+    await loadGozleme(!cached);
+    hideLoader();
+    hideSyncIndicator();
+}
+
 function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
     const phone = task.phone||'';
@@ -1901,6 +1998,7 @@ async function submitMexaric() {
         if(ptrActive && ptrDist > 80) {
             showSyncIndicator();
             if(document.getElementById('screen-pending')?.classList.contains('active')) await loadPendingActions();
+            else if(document.getElementById('screen-gozleme')?.classList.contains('active')) await loadGozleme();
             else await syncNotifications();
             hideSyncIndicator();
         }
