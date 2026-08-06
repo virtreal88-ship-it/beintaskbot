@@ -5272,6 +5272,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     _SHORT_TO_FULL = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki': TECHNICAL_SUPPORT_NAME}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
+                    # Fallback: determine assignee from Əməliyyatlar pipeline stage
+                    if not assignee_name_from_marker and entity_type == 'leads':
+                        _lead_status = leads_stage_cache.get(entity_id, 0)
+                        _STATUS_TO_NAME = {109988184: 'Şamil Əliyev', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
+                        assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
                     _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq", 4232108: "Import"}
@@ -5493,6 +5498,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     deadline_str = ""
                     is_overdue = False
 
+                _STATUS_TO_NAME_GOZ = {109988184: 'Şamil Əliyev', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
+                _goz_assignee = _STATUS_TO_NAME_GOZ.get(lead.get('status_id', 0), '')
                 result_items.append({
                     "lead_id": lead_id,
                     "lead_name": lead_name,
@@ -5507,6 +5514,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "phone": contact_phone,
                     "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
                     "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                    "assigneeName": _goz_assignee,
                 })
 
         # Sort: overdue first, then by deadline ascending

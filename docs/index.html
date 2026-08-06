@@ -394,6 +394,19 @@
             </div>
             <button onclick="loadGozleme(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
+        <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
+            <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
+                <option value="all">Hamısı</option>
+                <option value="Şamil Əliyev">Şamil Əliyev</option>
+                <option value="Soltan Abbasov">Soltan Abbasov</option>
+                <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
+                <option value="Rasim Əsgərov">Rasim Əsgərov</option>
+                <option value="Texniki Dəstək">Texniki Dəstək</option>
+                <option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option>
+                <option value="Asya Agayeva">Asya Agayeva</option>
+                <option value="Nuranə Şirinova">Nuranə Şirinova</option>
+            </select>
+        </div>
         <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
         <div id="gozleme-container" class="space-y-3" style="padding-bottom:20px;"></div>
     </div>
@@ -1660,19 +1673,26 @@ async function loadGozleme(showFeedback = false) {
     }
 }
 
+let gozlemeFilter = 'all';
+function filterGozleme() { gozlemeFilter = document.getElementById('gozleme-filter-assignee').value; renderGozleme(); }
 function renderGozleme() {
     const container = document.getElementById('gozleme-container');
     const countEl = document.getElementById('gozleme-count');
     if(!container) return;
+    // Show filter for admin
+    const gfRow = document.getElementById('gozleme-filter-row');
+    if(gfRow && isAdmin) gfRow.style.display = 'flex';
     container.innerHTML = '';
-    if(!gozlemeItems.length) {
+    let items = gozlemeItems;
+    if(gozlemeFilter !== 'all') items = items.filter(i => (i.assigneeName || '') === gozlemeFilter);
+    if(!items.length) {
         container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Gözləmədə tapşırıq yoxdur.</div>';
         if(countEl) countEl.textContent = '';
         return;
     }
-    const overdueCount = gozlemeItems.filter(i => i.is_overdue).length;
-    if(countEl) countEl.textContent = `Gözləmə (${gozlemeItems.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
-    gozlemeItems.forEach(item => {
+    const overdueCount = items.filter(i => i.is_overdue).length;
+    if(countEl) countEl.textContent = `Gözləmə (${items.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    items.forEach(item => {
         const isOverdue = item.is_overdue;
         const borderColor = isOverdue ? 'border-l-red-500' : 'border-l-amber-400';
         const statusLabel = isOverdue
