@@ -224,7 +224,7 @@
     "id": "a8e631b4",
     "type": "assign_executor",
     "created_at": "2026-08-05T16:46:48.602403+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "E. Q. / Yeni müştəri",
       "phone": "+994993139941",
@@ -246,7 +246,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-06T17:21:08.943697+04:00",
+    "resolved_by": "bot.py:597",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "83a82251",
