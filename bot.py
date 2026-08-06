@@ -4258,13 +4258,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 assignee = "admin"
             else:
                 assignee = "sahe_meneceri"
-            # Prepend the real employee marker to the task text (with optional price).
+            # Price is stored in text if provided (no more [Name] marker - we use pipeline stages)
             price_val = data.get("price", "").strip()
-            if assignee_name_raw:
-                if price_val:
-                    text = f"[{assignee_name_raw}:{price_val}] {text}"
-                else:
-                    text = f"[{assignee_name_raw}] {text}"
+            if price_val:
+                text = f"[{price_val}] {text}"
             deadline_key = data.get("deadline", "today")
             now = datetime.now(tz=BAKU_TZ)
             if deadline_key.startswith('custom:'):
@@ -4358,16 +4355,24 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if res:
                 save_task_priority(res, priority)
                 # If xatırlat müşt. task, move lead to assignee's stage in Əməliyyatlar pipeline
-                if task_type_id == XATIRLAT_TASK_TYPE_ID and result.get('entity_type') == 'leads':
+                if task_type_id == XATIRLAT_TASK_TYPE_ID:
                     _assignee_status = None
                     _target_chat = get_chat_id_by_name(assignee_name_raw) if assignee_name_raw else None
                     if _target_chat:
                         _assignee_status = TG_TO_STATUS_ID.get(int(_target_chat))
-                    if _assignee_status:
+                    _lead_id_to_move = result.get('entity_id') if result.get('entity_type') == 'leads' else None
+                    if not _lead_id_to_move and result.get('entity_type') == 'contacts':
                         try:
-                            _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{result['entity_id']}",
+                            _cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{result['entity_id']}/leads", headers=HEADERS, timeout=8)
+                            if _cr.status_code == 200:
+                                _leads = _cr.json().get('_embedded',{}).get('leads',[])
+                                if _leads: _lead_id_to_move = _leads[0]['id']
+                        except: pass
+                    if _assignee_status and _lead_id_to_move:
+                        try:
+                            _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_to_move}",
                                 headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _assignee_status}, timeout=8)
-                            logger.info(f"Moved lead {result['entity_id']} to Əməliyyatlar stage {_assignee_status}")
+                            logger.info(f"Moved lead {_lead_id_to_move} to Əməliyyatlar stage {_assignee_status}")
                         except Exception as _me:
                             logger.error(f"Failed to move lead to Əməliyyatlar: {_me}")
                 # Also add task text as a note on the entity
@@ -4598,6 +4603,26 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
                     t_data = t_resp.json()
                     entity_id = t_data.get("entity_id", "")
+                    entity_type = t_data.get("entity_type", "leads")
+                    # Move lead to new assignee's stage in Əməliyyatlar pipeline
+                    if assignee_name_raw and entity_id:
+                        _target_chat = get_chat_id_by_name(assignee_name_raw)
+                        _new_status = TG_TO_STATUS_ID.get(int(_target_chat)) if _target_chat else None
+                        _lead_to_move = entity_id if entity_type == "leads" else None
+                        if not _lead_to_move and entity_type == "contacts":
+                            try:
+                                _clr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{entity_id}/leads", headers=HEADERS, timeout=8)
+                                if _clr.status_code == 200:
+                                    _cls = _clr.json().get('_embedded',{}).get('leads',[])
+                                    if _cls: _lead_to_move = _cls[0]['id']
+                            except: pass
+                        if _new_status and _lead_to_move:
+                            try:
+                                _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_to_move}",
+                                    headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _new_status}, timeout=8)
+                                logger.info(f"Edit: moved lead {_lead_to_move} to stage {_new_status}")
+                            except Exception as _me:
+                                logger.error(f"Edit: failed to move lead: {_me}")
                     entity_type = t_data.get("entity_type", "leads")
                     link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
                     # Save note if provided
@@ -5261,14 +5286,37 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             logger.error(f"Notifications fetch error: {e}")
         # Filter by marker for non-admin users
         if kommo_user_id != 10932455:
-            # Find this user's name from NAME_TO_CHAT reverse lookup
-            user_marker_name = None
-            for name, cid in NAME_TO_CHAT.items():
-                if cid == chat_id:
-                    user_marker_name = name
-                    break
-            if user_marker_name:
-                tasks_list = [t for t in tasks_list if t.get("assigneeName", "").lower() == user_marker_name.lower()]
+            # Filter tasks by user's stage in Əməliyyatlar pipeline
+            _user_status = TG_TO_STATUS_ID.get(chat_id)
+            if _user_status:
+                # Get leads on user's stage
+                try:
+                    _stage_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads",
+                        headers=HEADERS, params={
+                            "filter[statuses][0][pipeline_id]": GOZLEME_PIPELINE_ID,
+                            "filter[statuses][0][status_id]": _user_status,
+                            "limit": 250
+                        }, timeout=10)
+                    _user_lead_ids = set()
+                    if _stage_resp.status_code == 200:
+                        for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
+                            _user_lead_ids.add(_l['id'])
+                    # Filter tasks: keep those linked to user's leads (by entity_id for leads, or contact->lead mapping)
+                    def _task_belongs_to_user(task_item):
+                        eid = task_item.get('entity_id')
+                        etype = task_item.get('entity_type', 'contacts')
+                        if etype == 'leads' and eid in _user_lead_ids:
+                            return True
+                        # For contacts: check if any of user's leads has this contact
+                        if etype == 'contacts':
+                            for lid, cid in leads_contact_cache.items():
+                                if cid == eid and lid in _user_lead_ids:
+                                    return True
+                        return False
+                    tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
+                except Exception as _fe:
+                    logger.error(f"Stage filter error: {_fe}")
+                    tasks_list = []
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
