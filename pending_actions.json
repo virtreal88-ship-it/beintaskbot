@@ -1,5 +1,40 @@
 [
   {
+    "id": "11dc87c3",
+    "type": "change_stage",
+    "created_at": "2026-08-06T12:22:21.483322+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Eldar",
+      "phone": "050 310 11 56",
+      "lead_id": 77101513,
+      "task_id": 93660863,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Yerində görüşüb təqdimat etmək lazımdır. Otel işlədir. Hazırlıqlı get",
+      "task_price": "",
+      "note": "Görüş alınmadı, telefonda danışdıq, qiymətləri və digər məlumatlar verildi. Quraşdırma vaxtını uzadıram ki, bizim otel sistemi tam hazır olsun",
+      "stage_name": "ID:109344492",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77101513",
+      "callback_key": "b433fffc"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "97ad64cb",
     "type": "change_stage",
     "created_at": "2026-08-06T12:20:48.948172+04:00",
