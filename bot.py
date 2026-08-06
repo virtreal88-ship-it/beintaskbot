@@ -750,6 +750,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         if _sal_employee_tg and get_employee_type(_sal_employee_tg) == "salary" and stars:
             _sal_amount = stars * 0.5  # 1⭐=0.5, 2⭐=1.0, 3⭐=1.5, 4⭐=2.0, 5⭐=2.5
             _sal_name = _EMPLOYEE_NAMES_BY_TG.get(_sal_employee_tg, "")
+            _star_str = "\u2b50" * stars
             add_balance_transaction(
                 telegram_id=_sal_employee_tg,
                 amount=_sal_amount,
@@ -759,7 +760,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 phone=action_data.get("phone", ""),
                 task_type=action_data.get("task_type_name", ""),
                 task_id=action_data.get("task_id", 0),
-                task_text=f"Tapşırıq təsdiqləndi {'\u2b50' * stars} ({_sal_amount:.2f} AZN)",
+                task_text=f"Tap\u015f\u0131r\u0131q t\u0259sdiql\u0259ndi {_star_str} ({_sal_amount:.2f} AZN)",
             )
     if not mark_pending_action_resolved(action_id=action_id, choice=choice):
         return False, "Əməliyyat icra olundu, lakin sorğu bağlanmadı."
