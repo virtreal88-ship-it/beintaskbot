@@ -440,9 +440,23 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-06 18:07:56"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 60.0,
+        "status": "confirmed",
+        "task_text": "Səhv məxaric olmuşdu",
+        "result_text": "Səhv məxaric olmuşdu",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-08-06 18:20:25"
       }
     ],
-    "balance": -260.0
+    "balance": -200.0
   },
   "7329891614": {
     "transactions": [
