@@ -3,7 +3,7 @@
     "id": "1062f73e",
     "type": "assign_executor",
     "created_at": "2026-08-06T12:34:52.701596+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Karvan Market Saray",
       "phone": "+994556113322",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-06T14:47:09.543944+04:00",
+    "resolved_by": "bot.py:729",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "11dc87c3",
