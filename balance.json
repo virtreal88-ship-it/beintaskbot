@@ -459,9 +459,23 @@
         "kpi": 0,
         "type": "salary_recalc",
         "date": "2026-08-06 18:00:00"
+      },
+      {
+        "task_id": 0,
+        "executor": "Hüseyn Səfərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -60.0,
+        "status": "confirmed",
+        "task_text": "Ödəniş",
+        "result_text": "Ödəniş",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-06 18:19:37"
       }
     ],
-    "balance": 60.0
+    "balance": 0.0
   },
   "7962757442": {
     "transactions": [
