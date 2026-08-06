@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
@@ -2019,7 +2021,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js');
+    const reg = await navigator.serviceWorker.register('sw.js?v=152b');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
