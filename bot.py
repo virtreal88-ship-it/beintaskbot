@@ -557,8 +557,18 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             except:
                 pass
             update_task_kommo(task_id, update_data)
-        # Do NOT resolve — card stays
-        return True, f"\u0130cra\u00e7\u0131 d\u0259yi\u015fdirildi: {new_name}. Sor\u011fu h\u0259l\u0259 a\u00e7\u0131qd\u0131r."
+        # Move lead to new assignee's stage in Əməliyyatlar pipeline
+        _lead_id_exec = action_data.get("lead_id")
+        if _lead_id_exec:
+            _exec_status = TG_TO_STATUS_ID.get(NAME_TO_CHAT.get(new_name, 0))
+            if _exec_status:
+                try:
+                    _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
+                        headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _exec_status}, timeout=8)
+                except: pass
+        # Resolve card (remove from pending)
+        mark_pending_action_resolved(action_id, f"İcraçı: {new_name}")
+        return True, f"İcraçı təyin edildi: {new_name}"
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
@@ -4594,7 +4604,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 write_json(_TASK_PRIORITIES_FILE, task_priorities)
             if not update_data:
                 # Only client_name or priority was changed, no Kommo task fields to update
-                return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!"})
+                # Still need entity_id for voice upload
+                _eid = None
+                _etype = "leads"
+                try:
+                    _tr = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+                    if _tr.status_code == 200:
+                        _td = _tr.json()
+                        _eid = _td.get("entity_id")
+                        _etype = _td.get("entity_type", "leads")
+                except: pass
+                return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!", "entity_id": _eid, "entity_type": _etype})
             result = update_task_kommo(task_id, update_data)
             if result:
                 link = ""
@@ -4632,7 +4652,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=8)
                 except:
                     pass
-                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link})
+                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link, "entity_id": entity_id, "entity_type": entity_type})
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
         elif action == "update_task_deadline":
@@ -5393,6 +5413,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
             # Resolve primary contact name
             emb_contacts = lead.get("_embedded", {}).get("contacts", []) or []
             contact_name = ""
+            contact_phone = ""
             if emb_contacts:
                 first_cid = emb_contacts[0].get("id")
                 contact_name = contact_name_cache.get(first_cid, "")
@@ -5400,8 +5421,13 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     try:
                         cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{first_cid}", headers=HEADERS, timeout=6)
                         if cr.status_code == 200:
-                            contact_name = cr.json().get("name", "")
+                            c_data = cr.json()
+                            contact_name = c_data.get("name", "")
                             contact_name_cache[first_cid] = contact_name
+                            for cf in (c_data.get("custom_fields_values") or []):
+                                if cf.get("field_code") == "PHONE":
+                                    vals = cf.get("values", [])
+                                    if vals: contact_phone = vals[0].get("value", "")
                     except Exception:
                         pass
 
@@ -5450,6 +5476,10 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "deadline": deadline_str,
                     "deadline_ts": deadline_ts,
                     "is_overdue": is_overdue,
+                    "entity_id": task.get("entity_id"),
+                    "entity_type": task.get("entity_type", "leads"),
+                    "phone": contact_phone,
+                    "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
                     "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
                 })
 

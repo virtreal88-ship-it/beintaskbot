@@ -990,27 +990,18 @@ function renderPendingActions() {
             audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+(data.voice_url.startsWith('http')?data.voice_url:API_BASE+data.voice_url)+'"></audio>';
             card.appendChild(audioDiv);
         }
-        // Card face buttons: İcraçı dəyiş + Mərhələ dəyiş
+        // Card face button: İcraçı seç only (Mərhələ dəyiş removed - stage changes automatically with executor)
         const controls = document.createElement('div');
         controls.className = 'flex gap-2';
         const execBtn = document.createElement('button');
         execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-        execBtn.textContent = '👷 İcraçı dəyiş';
+        execBtn.textContent = '👷 İcraçı seç';
         execBtn.addEventListener('click', () => {
             showPendingSelectModal('İcraçı seç', ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
                 resolvePendingAction(action.id, choice, execBtn);
             });
         });
-        const stageBtn = document.createElement('button');
-        stageBtn.className = 'flex-1 bg-violet-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-        stageBtn.textContent = '📋 Mərhələ dəyiş';
-        stageBtn.addEventListener('click', () => {
-            const stageOpts = ['Qiymət təklifi','Təqdimat','Təqdimat olundu','Yeni sifariş','Görüş','Daxili müzakirə','Quraşdırma','Düşünür','Uğurlu','İmtina'];
-            showPendingSelectModal('Mərhələ seç', stageOpts, (choice) => {
-                resolvePendingAction(action.id, 'stage_change:' + choice, stageBtn);
-            });
-        });
-        controls.append(execBtn, stageBtn);
+        controls.append(execBtn);
         card.appendChild(controls);
 
         // Desktop click actions (≥ 1024px): confirm / reject buttons instead of swipe
@@ -1166,9 +1157,8 @@ async function resolvePendingAction(actionId, choice, button, stars = 0, skipCon
         const payload = await response.json();
         if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
         toast(payload.message || 'Sorğu həll edildi.', false);
-        // If stage_change or executor change: card stays, just refresh display
-        const _execNames = ['\u015eamil','Soltan','H\u00fcseyn','Rasim','Texniki','\u00d6z\u00fcm'];
-        if(choice.startsWith('stage_change:') || _execNames.includes(choice)) {
+        // Stage change: card stays (refresh display). Executor choice: card removed.
+        if(choice.startsWith('stage_change:')) {
             buttons.forEach(item => { item.disabled = false; });
             if(card) { card.style.opacity='1'; const ldr=card.querySelector('.pending-loader'); if(ldr) ldr.remove(); }
             await loadPendingActions();
@@ -1698,9 +1688,18 @@ function renderGozleme() {
                 <div>👤 <b>Müştəri:</b> ${item.contact_name || item.lead_name || '—'}</div>
                 ${item.lead_name && item.contact_name && item.lead_name !== item.contact_name ? '<div>📁 <b>Sövdələşmə:</b> ' + item.lead_name + '</div>' : ''}
             </div>
+            ${item.voice_url ? `<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="${item.voice_url.startsWith('http')?item.voice_url:API_BASE+item.voice_url}" onclick="event.stopPropagation()"></audio></div>` : ''}
             <div class="flex justify-between items-center mt-2 pt-2 border-t border-gray-100">
                 ${item.kommo_link ? `<a href="${item.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a>` : '<span></span>'}
             </div>`;
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => {
+            // Add to mockTasks temporarily so bottom bar actions work
+            if(!mockTasks.find(t => t.id === item.task_id)) {
+                mockTasks.push({id: item.task_id, desc: item.task_text, time: item.deadline, phone: item.phone || '', entity_id: item.entity_id, entity_type: item.entity_type || 'leads', assigneeName: item.assignee_name || '', is_overdue: item.is_overdue});
+            }
+            clickNotification(item.task_id, item.task_text, item.contact_name || item.lead_name || '');
+        });
         container.appendChild(card);
     });
 }
