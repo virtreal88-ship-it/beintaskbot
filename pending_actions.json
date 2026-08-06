@@ -1,5 +1,29 @@
 [
   {
+    "id": "c050809c",
+    "type": "assign_executor",
+    "created_at": "2026-08-06T09:56:43.775688+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Sadi Elşad",
+      "phone": "",
+      "lead_id": 77140783,
+      "task_text": "Mərhələ: Təqdimat",
+      "stage_key": "teqdimat",
+      "stage_name": "Təqdimat",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77140783"
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Ləğv et"
+    ]
+  },
+  {
     "id": "d45e3ccc",
     "type": "assign_executor",
     "created_at": "2026-08-05T17:50:50.653706+04:00",
