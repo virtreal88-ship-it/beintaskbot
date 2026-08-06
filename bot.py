@@ -735,7 +735,32 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     # Optional KPI stars on confirm (swipe-right Təsdiq et panel)
     if stars and choice == "Təsdiq et":
         _apply_pending_kpi_stars(action_data, stars)
-
+    # Salary balance: add 1 AZN per confirmed task (3 AZN if 5 stars)
+    if choice == "Təsdiq et":
+        _sal_employee_tg = None
+        for _k in ("sender_chat_id", "employee_chat_id"):
+            _v = action_data.get(_k)
+            if _v and int(_v) != ADMIN_CHAT_ID:
+                _sal_employee_tg = int(_v)
+                break
+        if not _sal_employee_tg:
+            _sn = action_data.get("sender_name", "")
+            _sal_employee_tg = NAME_TO_CHAT.get(_sn)
+            if _sal_employee_tg: _sal_employee_tg = int(_sal_employee_tg)
+        if _sal_employee_tg and get_employee_type(_sal_employee_tg) == "salary" and stars:
+            _sal_amount = stars * 0.5  # 1⭐=0.5, 2⭐=1.0, 3⭐=1.5, 4⭐=2.0, 5⭐=2.5
+            _sal_name = _EMPLOYEE_NAMES_BY_TG.get(_sal_employee_tg, "")
+            add_balance_transaction(
+                telegram_id=_sal_employee_tg,
+                amount=_sal_amount,
+                status="confirmed",
+                executor=_sal_name,
+                client=action_data.get("contact_name", ""),
+                phone=action_data.get("phone", ""),
+                task_type=action_data.get("task_type_name", ""),
+                task_id=action_data.get("task_id", 0),
+                task_text=f"Tapşırıq təsdiqləndi {'\u2b50' * stars} ({_sal_amount:.2f} AZN)",
+            )
     if not mark_pending_action_resolved(action_id=action_id, choice=choice):
         return False, "Əməliyyat icra olundu, lakin sorğu bağlanmadı."
     _clear_runtime_pending_action(action)
@@ -6465,10 +6490,7 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
             'pending_balance': all_pending.get(tg_id, 0),
             'type': get_employee_type(tg_id),
         }
-        if emp_data['type'] == 'salary':
-            kpi = get_kpi_summary(tg_id)
-            emp_data['kpi'] = kpi.get('avg_kpi', 0)
-            emp_data['kpi_tasks'] = kpi.get('total_tasks', 0)
+        # Salary employees now use balance (same as piecework) - no separate KPI display
         employees.append(emp_data)
     recent = get_all_recent_transactions(50)
     recent_fmt = [{
@@ -6495,7 +6517,9 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
         return web.json_response({'success': False}, status=401)
     emp_type = get_employee_type(chat_id)
     summary = get_kpi_summary(chat_id)
-    return web.json_response({'success': True, 'employee_type': emp_type, **summary})
+    # For salary employees, also return balance
+    bal = get_balance(chat_id)
+    return web.json_response({'success': True, 'employee_type': emp_type, 'balance': bal, **summary})
 
 def main():
     global _bot_app

@@ -195,14 +195,10 @@
 
         <!-- Finance Widget (salary employees only) -->
         <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
-            <div class="grid grid-cols-2 gap-4">
+            <div class="flex justify-between items-center">
                 <div>
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Ümumi KPI</div>
-                    <div class="text-2xl font-black mt-1" id="main-finance-kpi">0/100</div>
-                </div>
-                <div class="border-l border-white/25 pl-4">
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Bonus məbləği</div>
-                    <div class="text-2xl font-black mt-1" id="main-finance-bonus">0</div>
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Balans</div>
+                    <div class="text-2xl font-black mt-1" id="main-finance-balance">0.00 AZN</div>
                 </div>
             </div>
         </div>
@@ -283,18 +279,14 @@
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə</span>
         </div>
         <div id="finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
-            <div class="grid grid-cols-2 gap-4">
+            <div class="flex justify-between items-center">
                 <div>
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Ümumi KPI</div>
-                    <div class="text-2xl font-black mt-1" id="finance-kpi">0/100</div>
-                </div>
-                <div class="border-l border-white/25 pl-4">
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Bonus məbləği</div>
-                    <div class="text-2xl font-black mt-1" id="finance-bonus">0</div>
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Balans</div>
+                    <div class="text-2xl font-black mt-1" id="finance-kpi">0.00 AZN</div>
                 </div>
             </div>
         </div>
-        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">KPI Tarixçəsi</div>
+        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Tarixçə</div>
         <div id="kpi-history-container" class="space-y-3"></div>
     </div>
 
@@ -1614,27 +1606,35 @@ function switchTab(tabId, updateHash = true) {
 async function loadKpi() {
     if(employeeType !== 'salary') return;
     try {
-        const r = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        // Salary employees use balance (same as piecework)
+        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(j.success) {
-            kpiData = j;
-            const w = document.getElementById('finance-widget'); if(w) w.style.display = 'block';
-            const s = document.getElementById('finance-kpi'); if(s) s.textContent = (j.avg_kpi || 0) + '/100';
-            const mainWidget = document.getElementById('main-finance-widget'); if(mainWidget) mainWidget.style.display = 'block';
-            const mainKpi = document.getElementById('main-finance-kpi'); if(mainKpi) mainKpi.textContent = (j.avg_kpi || 0) + '/100';
-        }
+        const mainWidget = document.getElementById('main-finance-widget'); if(mainWidget) mainWidget.style.display = 'block';
+        // Load balance from balance API
+        const br = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const bj = await br.json();
+        if(bj.success) { kpiData = bj; }
+        // Show balance
+        const bal = Number(bj.balance) || 0;
+        const balEl = document.getElementById('main-finance-balance');
+        if(balEl) balEl.textContent = bal.toFixed(2) + ' AZN';
+        const histBalEl = document.getElementById('finance-kpi');
+        if(histBalEl) histBalEl.textContent = bal.toFixed(2) + ' AZN';
     } catch(e) {}
 }
 async function loadKpiHistory() {
     const widget = document.getElementById('finance-widget'); if(widget) widget.style.display = 'block';
     await Promise.all([loadKpi(), loadBalance()]);
     const container = document.getElementById('kpi-history-container');
+    // Show balance transactions for salary employees
     const hist = kpiData?.history || [];
-    if(!hist.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ KPI məlumatı yoxdur.</div>'; return; }
+    if(!hist.length) { container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ məlumat yoxdur.</div>'; return; }
     container.innerHTML = hist.map(h => {
         const d = h.date ? new Date(h.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
-        const color = h.kpi_score >= 70 ? 'text-emerald-600' : h.kpi_score >= 40 ? 'text-amber-600' : 'text-red-600';
-        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${h.actual}/${h.target} dəq</span></div><span class="text-xs font-black ${color}">${h.kpi_score}/100</span></div>`;
+        const stars = Math.round((h.kpi_score || 0) / 20);
+        const amount = (stars * 0.5).toFixed(2);
+        const starStr = stars > 0 ? '⭐'.repeat(stars) : '—';
+        return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${starStr}</span></div><span class="text-xs font-black text-emerald-600">+${amount} AZN</span></div>`;
     }).join('');
 }
 /* ================= GÖZLƏMƏ TAB ================= */
@@ -1874,8 +1874,7 @@ async function loadAdminBalances() {
         let html = (j.employees || []).map(e => {
             const balance = Number(e.balance) || 0;
             const pending = Number(e.pending_balance) || 0;
-            const kpiLine = e.type === 'salary' ? `<div class="text-[10px] font-bold text-blue-600 mt-0.5">KPI: ${e.kpi || 0}/100 (${e.kpi_tasks || 0} tapşırıq)</div>` : '';
-            return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="text-right">${e.type === 'salary' ? kpiLine : `<div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">Balans: ${balance.toFixed(2)} AZN</div><div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div>`}</div></div>`;
+            return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="text-right"><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">Balans: ${balance.toFixed(2)} AZN</div>${pending > 0 ? `<div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div>` : ''}</div></div>`;
         }).join('');
         if(j.recent && j.recent.length) {
             html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
