@@ -4390,8 +4390,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
-                # If xatırlat müşt. task, move lead to assignee's stage in Əməliyyatlar pipeline
-                if task_type_id == XATIRLAT_TASK_TYPE_ID:
+                # Move lead to assignee's stage in Əməliyyatlar pipeline
+                if True:
                     _assignee_status = None
                     _target_chat = get_chat_id_by_name(assignee_name_raw) if assignee_name_raw else None
                     if _target_chat:
@@ -4764,6 +4764,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 task_id,
                 {"is_completed": True, "result": {"text": task_result_text}},
             )
+            # Move lead to Успешно (142) in Əməliyyatlar pipeline on completion
+            if result and lead_id:
+                try:
+                    _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
+                        headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": 142}, timeout=8)
+                except Exception as _ue:
+                    logger.error(f"Failed to move lead to Ugurlu: {_ue}")
             stage_msg = ""
             # Also change stage if requested by legacy clients.
             new_stage = data.get("new_stage")
@@ -4893,9 +4900,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Queue piecework earnings for Admin confirmation and persist the
                 # task context needed by the redesigned balance history.
                 try:
-                    price_match = re.match(r"^\[([^:\]]+)(?::(\d+(?:\.\d+)?))?\]\s*(.*)", task_text_full)
-                    if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(2):
-                        amount = float(price_match.group(2))
+                    # Price can be in [Price] or [Name:Price] format
+                    price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
+                    if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
+                        amount = float(price_match.group(1))
                         if amount > 0:
                             add_balance_transaction(
                                 chat_id,
