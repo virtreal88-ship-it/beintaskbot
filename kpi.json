@@ -2241,10 +2241,17 @@
     "sessions": [
       {
         "start_time": "2026-08-07 15:07:47",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-08-07 15:07:50",
+        "actual_minutes": 0.1,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 100,
+    "target_minutes": 120,
+    "actual_minutes": 0.1,
+    "deadline_ts": 1786442220,
+    "completed_before_deadline": true,
+    "delay_reason": "",
+    "completed_at": "2026-08-07 15:07:50"
   }
 }
