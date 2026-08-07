@@ -468,9 +468,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-07 07:25:46"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -220.0,
+        "status": "confirmed",
+        "task_text": "maşının aylıqında 500-220=280 qaldı",
+        "result_text": "maşının aylıqında 500-220=280 qaldı",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-07 09:53:02"
       }
     ],
-    "balance": 220.0
+    "balance": 0.0
   },
   "7329891614": {
     "transactions": [
