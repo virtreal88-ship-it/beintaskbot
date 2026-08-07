@@ -462,7 +462,7 @@
         "phone": "+994102135104",
         "task_type": "Texniki tapşırıq",
         "amount": 320.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "[325] 4 avqust:",
         "result_text": ".",
         "kpi": 0,
@@ -470,7 +470,7 @@
         "date": "2026-08-07 07:25:46"
       }
     ],
-    "balance": -200.0
+    "balance": 120.0
   },
   "7329891614": {
     "transactions": [
