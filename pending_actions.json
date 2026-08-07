@@ -416,7 +416,7 @@
     "id": "c0ce2932",
     "type": "change_stage",
     "created_at": "2026-08-04T20:19:58.790795+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Tahir",
       "phone": "+994 50 645 91 11",
@@ -445,7 +445,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-07T18:21:38.625796+04:00",
+    "resolved_by": "bot.py:765",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "94207a12",
