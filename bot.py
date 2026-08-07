@@ -6633,9 +6633,10 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
         return web.json_response({'success': False}, status=401)
     emp_type = get_employee_type(chat_id)
     summary = get_kpi_summary(chat_id)
-    # For salary employees, also return balance
+    # For salary employees, also return balance and avg stars
     bal = get_balance(chat_id)
-    return web.json_response({'success': True, 'employee_type': emp_type, 'balance': bal, **summary})
+    avg_stars = round(summary.get('avg_kpi', 0) / 20, 1) if summary.get('avg_kpi') else 0
+    return web.json_response({'success': True, 'employee_type': emp_type, 'balance': bal, 'avg_stars': avg_stars, **summary})
 
 def main():
     global _bot_app

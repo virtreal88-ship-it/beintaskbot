@@ -202,6 +202,11 @@
                     <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Balans</div>
                     <div class="text-2xl font-black mt-1" id="main-finance-balance">0.00 AZN</div>
                 </div>
+                <div class="text-right">
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI</div>
+                    <div class="text-lg font-black mt-1" id="main-finance-stars">⭐ 0/5</div>
+                    <div class="text-[10px] opacity-75" id="main-finance-tasks">0 tapşırıq</div>
+                </div>
             </div>
         </div>
 
@@ -1642,6 +1647,13 @@ async function loadKpi() {
         const bal = Number(bj.balance) || 0;
         const balEl = document.getElementById('main-finance-balance');
         if(balEl) balEl.textContent = bal.toFixed(2) + ' AZN';
+        // Show KPI stars and task count
+        const starsEl = document.getElementById('main-finance-stars');
+        const tasksEl = document.getElementById('main-finance-tasks');
+        const avgStars = Number(bj.avg_stars) || 0;
+        const totalTasks = Number(bj.total_tasks) || 0;
+        if(starsEl) starsEl.textContent = '\u2b50 ' + avgStars.toFixed(1) + '/5';
+        if(tasksEl) tasksEl.textContent = totalTasks + ' tap\u015f\u0131r\u0131q';
         const histBalEl = document.getElementById('finance-kpi');
         if(histBalEl) histBalEl.textContent = bal.toFixed(2) + ' AZN';
     } catch(e) {}
