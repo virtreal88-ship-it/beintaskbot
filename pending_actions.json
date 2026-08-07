@@ -1,5 +1,40 @@
 [
   {
+    "id": "a34cd445",
+    "type": "change_stage",
+    "created_at": "2026-08-07T11:45:51.041268+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Farid efere",
+      "phone": "+994552180818",
+      "lead_id": 75617479,
+      "task_id": 93708777,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Fredback al.",
+      "task_price": "",
+      "note": "Danışdım, məlumatı yoxdur",
+      "stage_name": "ID:109988188",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75617479",
+      "callback_key": "86b04613"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4527f32e",
     "type": "change_stage",
     "created_at": "2026-08-06T15:56:29.353339+04:00",
