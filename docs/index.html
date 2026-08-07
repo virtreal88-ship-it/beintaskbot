@@ -1332,7 +1332,7 @@ function renderNotifications() {
         let header = '';
         if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || ''}</span></div>`; }
         else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
-        const priceMatch = (t.desc || t.text || '').match(/\[[^:\]]+:(\d+)\]/);
+        const priceMatch = t.price ? [null, t.price] : (t.desc || t.text || '').match(/\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]/);
         const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
         const priorityTags = {
             urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',

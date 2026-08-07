@@ -4913,7 +4913,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 chat_id,
                                 int(task_id),
                                 amount,
-                                price_match.group(3),
+                                price_match.group(2) or task_text_full,
                                 executor_name=completion_sender,
                                 client=contact_name or "—",
                                 phone=phone or "—",
@@ -4965,7 +4965,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         completion_message += f"\n🔗 {link}"
 
                     raw_task_text = task_data.get("text", "").strip()
-                    task_price_match = re.search(r":(\d+)\]", raw_task_text)
+                    task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
                     callback_key = str(uuid.uuid4())[:8]
                     if _bot_app:
                         _bot_app.bot_data.setdefault("pending_stage_change", {})[callback_key] = {
@@ -5320,10 +5320,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 _created_by_name = ""  # Unknown employee via bot
                             else:
                                 _created_by_name = KOMMO_USERS.get(_created_by_id, "")
+                    # Extract price from [Price] or [Name:Price] marker
+                    _price_m = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", t.get("text", ""))
+                    _task_price = _price_m.group(1) if _price_m else ""
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
                         "desc": task_text,
+                        "price": _task_price,
                         "time": time_str,
                         "is_overdue": is_overdue,
                         "entity_id": entity_id,
