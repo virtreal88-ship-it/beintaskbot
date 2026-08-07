@@ -1,5 +1,40 @@
 [
   {
+    "id": "7dae1098",
+    "type": "change_stage",
+    "created_at": "2026-08-07T19:07:53.564216+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tural",
+      "phone": "+994514575757",
+      "lead_id": 75779867,
+      "task_id": 93622215,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Təmizlik işləri gedir. Quraşdırma üçün xəbər gözləyirik",
+      "task_price": "",
+      "note": "Quraşdırma tamamlandı. Təlimat keçildi, bar kod şablonları və bar kod kağızları sazlandı. Ödəniş alındı 885 azn",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75779867",
+      "callback_key": "a84dadcc"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "2e6c7eeb",
     "type": "change_stage",
     "created_at": "2026-08-07T12:16:14.531387+04:00",
