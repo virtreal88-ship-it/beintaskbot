@@ -1,5 +1,40 @@
 [
   {
+    "id": "2e6c7eeb",
+    "type": "change_stage",
+    "created_at": "2026-08-07T12:16:14.531387+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Farid",
+      "phone": "+994552180818",
+      "lead_id": 75617479,
+      "task_id": 93708881,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Mühasibinin nömrəsi al , onunla danış",
+      "task_price": "",
+      "note": "Aylıq ödəniş bitib ona görə əməliyyat edə bilmirlər. Fəridə deyiblər ki ödəniş etsin sonra işləyəcəklər. Cümədən sonra bu gün getməyi planlaşdırırlar",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75617479",
+      "callback_key": "9e7c9ca6"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "a34cd445",
     "type": "change_stage",
     "created_at": "2026-08-07T11:45:51.041268+04:00",
