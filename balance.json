@@ -364,7 +364,7 @@
         "phone": "+994552180818",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Qeydlərivi yaz",
         "result_text": "Uğurlu.\n\nİstehsalat aktiv edildi\n\nƏgər bonus kartlar istəsə 500əd 350₼ demişəm. Şamil bilir hara sifariş etmək lazımdır.",
         "kpi": 0,
@@ -470,7 +470,7 @@
         "date": "2026-08-07 07:25:46"
       }
     ],
-    "balance": 120.0
+    "balance": 220.0
   },
   "7329891614": {
     "transactions": [
