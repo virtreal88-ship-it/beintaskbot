@@ -986,7 +986,7 @@ function renderPendingActions() {
             (data.stage_name ? `Mərhələ: ${data.stage_name}` : 'Sorğu üçün seçim gözlənilir.');
         appendPendingDetail(details, '👤', 'Müştəri', data.contact_name || data.client_name);
         appendPendingDetail(details, '📝', 'Təsvir', description);
-        if(data.note) appendPendingDetail(details, '💬', 'Qeyd', data.note);
+        if(data.note) appendPendingDetail(details, '💬', 'Son qeyd', data.note);
         appendPendingDetail(details, '📞', 'Telefon', data.phone);
         if(data.task_type_name) appendPendingDetail(details, '📌', 'Növ', data.task_type_name);
         if(data.task_price) appendPendingDetail(details, '💰', 'Məbləğ', `${data.task_price} AZN`);
@@ -1022,6 +1022,19 @@ function renderPendingActions() {
                 resolvePendingAction(action.id, choice, execBtn);
             });
         });
+        // Edit button - only if task_id exists (change_stage type = completed task)
+        if(action.task_id) {
+            const editBtn = document.createElement('button');
+            editBtn.className = 'flex-1 bg-gray-100 text-gray-700 font-bold py-2.5 px-3 rounded-xl text-[12px] border border-gray-200';
+            editBtn.textContent = '\u270f\ufe0f Redakt\u0259';
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const t = mockTasks.find(n => String(n.task_id || n.id) === String(action.task_id));
+                if(t) { selectedTaskId = t.id || t.task_id; handleBarAction('edit'); }
+                else { toast('Tap\u015f\u0131r\u0131q siyah\u0131da tap\u0131lmad\u0131.', true); }
+            });
+            controls.append(editBtn);
+        }
         controls.append(execBtn);
         card.appendChild(controls);
 
@@ -1350,7 +1363,7 @@ function renderNotifications() {
                 ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
                 ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
                 ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
-                ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
+                ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
                 ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
             </div>
             <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
@@ -1780,7 +1793,7 @@ function renderGozleme() {
                 ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
                 ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
                 ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
-                ${t.last_note ? '<div>📝 <b>Qeyd:</b> '+t.last_note+'</div>' : ''}
+                ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
                 ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
             </div>
             <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
