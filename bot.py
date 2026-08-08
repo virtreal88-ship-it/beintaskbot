@@ -612,7 +612,6 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 full_name = _PENDING_EXECUTOR_NAMES.get(choice)
                 if not full_name:
                     return False, "İcraçı tanınmadı."
-                task_text = f"[{full_name}] {task_text}"
                 responsible_user_id = 15532668
             # Use stored deadline or default 2h
             if action_data.get("deadline"):
@@ -632,6 +631,16 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 task_type_id=int(task_type_id) if task_type_id else None,
             ):
                 return False, "Kommo-da tapşırıq yaradılmadı."
+            # Move lead to assignee's stage in Əməliyyatlar pipeline
+            _ae_name = "Nizami Qasımov" if choice == "Özüm" else (_PENDING_EXECUTOR_NAMES.get(choice) or "")
+            _target_chat_ae = get_chat_id_by_name(_ae_name) if _ae_name else None
+            if _target_chat_ae:
+                _ae_status = TG_TO_STATUS_ID.get(int(_target_chat_ae))
+                if _ae_status:
+                    try:
+                        _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
+                            headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _ae_status}, timeout=8)
+                    except: pass
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
