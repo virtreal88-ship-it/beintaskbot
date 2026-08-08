@@ -1,5 +1,40 @@
 [
   {
+    "id": "278e0917",
+    "type": "change_stage",
+    "created_at": "2026-08-08T09:30:04.906299+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rasim",
+      "phone": "+994102135104",
+      "lead_id": 75819231,
+      "task_id": 93716161,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Marşrut: Sumqayıt, QusarVirpark, Qusar bazarı, SDK, Xaçmaz (Lollipop mağazası), Xaçmaz (Erel), Sumqayıt.\n\nXərclər: Yol girişi – 16 manat, Yemək – 10 manat.",
+      "task_price": "150",
+      "note": ".",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75819231",
+      "callback_key": "5b563043"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "2d83cfaf",
     "type": "change_stage",
     "created_at": "2026-08-08T00:48:11.964545+04:00",
