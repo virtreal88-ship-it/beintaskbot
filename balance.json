@@ -576,9 +576,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-07 20:57:10"
+      },
+      {
+        "task_id": 93682723,
+        "executor": "Şamil Əliyev",
+        "client": "Aytac xanım (Zaur) cehizlik",
+        "phone": "0502439664",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-08 12:44:34"
       }
     ],
-    "balance": 2.5
+    "balance": 3.5
   },
   "8835096199": {
     "transactions": [
