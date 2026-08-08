@@ -1,5 +1,40 @@
 [
   {
+    "id": "025a7921",
+    "type": "change_stage",
+    "created_at": "2026-08-08T12:29:47.735246+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994553005252",
+      "phone": "+994553005252",
+      "lead_id": 77163051,
+      "task_id": 93716455,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Təqdimat Gözləyir. İstehsalat +2 user aylıq 90 AZN.",
+      "task_price": "",
+      "note": "GÖRÜŞ BİTDİ. PROQRAMI BƏYƏNDİLƏR. MƏLUMATLARI GÖNDƏRƏCƏKLƏR YENİ PROFİL AÇIB BAŞLAYACAĞIQ İŞLƏMƏYƏ",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77163051",
+      "callback_key": "ad2665ae"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4e52e2a2",
     "type": "assign_executor",
     "created_at": "2026-08-08T10:04:05.695656+04:00",
