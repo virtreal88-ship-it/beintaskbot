@@ -628,9 +628,23 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-06 18:07:43"
+      },
+      {
+        "task_id": 93716455,
+        "executor": "Soltan Abbasov",
+        "client": "Автоконтакт +994553005252",
+        "phone": "+994553005252",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-08 12:43:31"
       }
     ],
-    "balance": 0.0
+    "balance": 2.5
   },
   "1289510272": {
     "transactions": [],
