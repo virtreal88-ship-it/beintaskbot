@@ -482,6 +482,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-07 09:53:02"
+      },
+      {
+        "task_id": 93716161,
+        "executor": "Rasim Əsgərov",
+        "client": "Rasim",
+        "phone": "+994102135104",
+        "task_type": "Texniki tapşırıq",
+        "amount": 150.0,
+        "status": "pending",
+        "task_text": "Marşrut: Sumqayıt, QusarVirpark, Qusar bazarı, SDK, Xaçmaz (Lollipop mağazası), Xaçmaz (Erel), Sumqayıt.",
+        "result_text": ".",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-08 05:30:03"
       }
     ],
     "balance": 0.0
