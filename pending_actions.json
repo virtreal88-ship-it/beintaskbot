@@ -1,5 +1,40 @@
 [
   {
+    "id": "1d4267ed",
+    "type": "change_stage",
+    "created_at": "2026-08-09T16:52:49.527313+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "vahid",
+      "phone": "—",
+      "lead_id": 77061883,
+      "task_id": 93717601,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "musteri altıncı gün  yazib:  Siz bu gün bizim tukana avadanlıq gətirməliydiniz, noldu ?",
+      "task_price": "",
+      "note": "Danışıldı sabah Rasim gedir quraşdırmaya",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77061883",
+      "callback_key": "4489b651"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "9f26cc04",
     "type": "assign_executor",
     "created_at": "2026-08-09T16:52:23.468652+04:00",
