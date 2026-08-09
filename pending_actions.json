@@ -1,5 +1,33 @@
 [
   {
+    "id": "9f26cc04",
+    "type": "assign_executor",
+    "created_at": "2026-08-09T16:52:23.468652+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "",
+      "lead_id": 77061883,
+      "task_text": "Quraşdırma və sayım ilə bağlı təlimat. Həmçinin sayım prosesinə nəzarət etmək lazımdır",
+      "deadline": "10.08.2026 10:52",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Rasim Əsgərov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77061883",
+      "conf_key": "6bee7d53",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "180bb65d",
     "type": "assign_executor",
     "created_at": "2026-08-09T02:37:24.781983+04:00",
