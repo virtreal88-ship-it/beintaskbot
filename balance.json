@@ -754,9 +754,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-10 12:21:24"
+      },
+      {
+        "task_id": 0,
+        "executor": "Soltan Abbasov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 17.5,
+        "status": "confirmed",
+        "task_text": "Karvan",
+        "result_text": "Karvan",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-08-10 18:02:29"
       }
     ],
-    "balance": 2.5
+    "balance": 20.0
   },
   "1289510272": {
     "transactions": [],
