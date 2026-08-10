@@ -684,6 +684,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-08 12:43:31"
+      },
+      {
+        "task_id": 93726027,
+        "executor": "Soltan Abbasov",
+        "client": "Orxan Tərəzi",
+        "phone": "Terezi  +994552100068",
+        "task_type": "Texniki tapşırıq",
+        "amount": 10.0,
+        "status": "pending",
+        "task_text": "Vitrin üçün barkod printer götür",
+        "result_text": "Götürdüm",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-10 10:19:05"
       }
     ],
     "balance": 2.5
