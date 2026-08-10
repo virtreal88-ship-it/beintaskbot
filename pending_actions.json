@@ -1,5 +1,40 @@
 [
   {
+    "id": "20cc4747",
+    "type": "change_stage",
+    "created_at": "2026-08-10T18:14:06.999495+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "E. Q. / Yeni müştəri",
+      "phone": "+994993139941",
+      "lead_id": 75117471,
+      "task_id": 93692487,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Yeni hesab / istifadəçi açmaq istəyir.\nTelefonla danışdım telefonla , 8-i Bakıya qayıdacaq, dəqiqləşdirəcək profil adını.\nZəng etdim götürmədi. 1ci gün təkrar əlaqə saxlayacam",
+      "task_price": "",
+      "note": "Vaxtı yoxdu yaxın zamanlarda, işləri qaydasına qoyub zəng edəcək. Bizim proqramla işləyib. İndi öz işində istifadə etmək istəyir.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75117471",
+      "callback_key": "466ef30f"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "faa49017",
     "type": "change_stage",
     "created_at": "2026-08-10T16:21:26.627457+04:00",
