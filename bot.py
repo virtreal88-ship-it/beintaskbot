@@ -6489,7 +6489,7 @@ _KPI_TARGET_TIMES = {
 }
 
 _EMPLOYEE_TYPES = {
-    7962757442: 'salary', 7262243946: 'salary',
+    7962757442: 'salary', 7262243946: 'piecework',
     7329891614: 'salary', 7920785774: 'piecework',
     8835096199: 'salary',
     1289510272: 'salary', 6596538872: 'salary',
