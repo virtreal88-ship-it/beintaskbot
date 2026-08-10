@@ -1,5 +1,40 @@
 [
   {
+    "id": "faa49017",
+    "type": "change_stage",
+    "created_at": "2026-08-10T16:21:26.627457+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994703101516",
+      "phone": "+994703101516",
+      "lead_id": 75216071,
+      "task_id": 93725795,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Ekspeditor sistemi ətraflı təlimat olunmalıdır. Və düzgün saxlanmalıdır",
+      "task_price": "30",
+      "note": "Müştəri narazıdır,\n1. Təlim edilməyib,təhvil verilib sonra ixah edilməyib\n2.Ekspediter adında hərf səhvi var, ekspediterə məhdudiyyət tətbiq edilməyib.\n3. Menecerə bütün icazlər açıqdır, bağlanmalıdır.\n4. Sifarişlər təsdiq prinsipi ilə işləməlidir, dəyişiklik etmək lazımdır, əməliyyatlara dəyişiklik etməsi - 1günlük icazə verilsin",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75216071",
+      "callback_key": "d79f6e6d"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "fb9dd7b4",
     "type": "change_stage",
     "created_at": "2026-08-10T14:41:35.624859+04:00",
