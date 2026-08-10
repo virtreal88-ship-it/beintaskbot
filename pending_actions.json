@@ -1,5 +1,44 @@
 [
   {
+    "id": "50da6104",
+    "type": "reassign_task",
+    "created_at": "2026-08-10T12:14:57.456157+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "chayland",
+      "phone": "994508855985",
+      "lead_id": 77040539,
+      "task_id": 93607387,
+      "task_text": "Dine de sifarişin hansı masadan silindiyi və hansı ofisiantın sildiyini görmək istəyir. Bunun bağlı task aç, nəzarətdə saxla və sonda müştəriyə məlumat ver",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Soltan Abbasov → Şamil Əliyev",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Şamil Əliyev",
+      "note": ".",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77040539",
+      "conf_key": "a39b79c9",
+      "update_data": {
+        "text": "[Şamil Əliyev] Dine de sifarişin hansı masadan silindiyi və hansı ofisiantın sildiyini görmək istəyir. Bunun bağlı task aç, nəzarətdə saxla və sonda müştəriyə məlumat ver",
+        "responsible_user_id": 15532668,
+        "task_type_id": 4232112,
+        "complete_till": 1786368600
+      },
+      "creator_chat_id": 7262243946,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 5428
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "0c4d1124",
     "type": "change_stage",
     "created_at": "2026-08-09T21:02:54.626191+04:00",
