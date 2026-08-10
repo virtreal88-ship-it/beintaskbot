@@ -552,6 +552,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-10 18:01:50"
+      },
+      {
+        "task_id": 93731329,
+        "executor": "Rasim Əsgərov",
+        "client": "vahid",
+        "phone": "—",
+        "task_type": "Quraşdırma",
+        "amount": 210.0,
+        "status": "pending",
+        "task_text": ".",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-10 18:34:51"
       }
     ],
     "balance": -60.0
