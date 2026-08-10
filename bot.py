@@ -543,20 +543,21 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             new_name = full_name
         if task_id:
             update_data = {"responsible_user_id": new_responsible}
-            # Update task text marker
-            try:
-                t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                if t_resp.status_code == 200:
-                    current_text = t_resp.json().get("text", "")
-                    import re as _re_exec
-                    old_text = _re_exec.sub(r"^\[.*?\]\s*", "", current_text)
-                    if choice != "\u00d6z\u00fcm":
-                        update_data["text"] = f"[{new_name}] {old_text}"
-                    else:
-                        update_data["text"] = old_text
-            except:
-                pass
             update_task_kommo(task_id, update_data)
+            # Notify new assignee about the transfer
+            _new_chat = NAME_TO_CHAT.get(new_name)
+            if _new_chat and _new_chat != ADMIN_CHAT_ID:
+                _client = action_data.get("contact_name", "")
+                _task_desc = action_data.get("task_text", "")
+                _link = action_data.get("link", "")
+                try:
+                    import asyncio
+                    asyncio.ensure_future(_bot_app.bot.send_message(
+                        _new_chat,
+                        f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {_task_desc}\n\ud83d\udc64 {_client}\n\ud83d\udd17 {_link}",
+                        parse_mode="Markdown", disable_web_page_preview=True))
+                    send_push_notification(str(_new_chat), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client} - {_task_desc}')
+                except: pass
         # Move lead to new assignee's stage in Əməliyyatlar pipeline
         _lead_id_exec = action_data.get("lead_id")
         if _lead_id_exec:
@@ -631,9 +632,21 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 task_type_id=int(task_type_id) if task_type_id else None,
             ):
                 return False, "Kommo-da tapşırıq yaradılmadı."
-            # Move lead to assignee's stage in Əməliyyatlar pipeline
-            _ae_name = "Nizami Qasımov" if choice == "Özüm" else (_PENDING_EXECUTOR_NAMES.get(choice) or "")
+            # Notify new assignee
+            _ae_name = "Nizami Qas\u0131mov" if choice == "\u00d6z\u00fcm" else (_PENDING_EXECUTOR_NAMES.get(choice) or "")
             _target_chat_ae = get_chat_id_by_name(_ae_name) if _ae_name else None
+            if _target_chat_ae and int(_target_chat_ae) != ADMIN_CHAT_ID:
+                _client_ae = action_data.get("contact_name", "")
+                _link_ae = action_data.get("link", "")
+                try:
+                    import asyncio
+                    asyncio.ensure_future(_bot_app.bot.send_message(
+                        int(_target_chat_ae),
+                        f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae}\n\ud83d\udd17 {_link_ae}",
+                        parse_mode="Markdown", disable_web_page_preview=True))
+                    send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}')
+                except: pass
+            # Move lead to assignee's stage in \u018fm\u0259liyyatlar pipeline
             if _target_chat_ae:
                 _ae_status = TG_TO_STATUS_ID.get(int(_target_chat_ae))
                 if _ae_status:
