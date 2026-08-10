@@ -2316,5 +2316,15 @@
     "manual_correction": true,
     "corrected_by": 1628569350,
     "corrected_at": "2026-08-10 10:55:22"
+  },
+  "7962757442_93692487": {
+    "sessions": [
+      {
+        "start_time": "2026-08-10 14:13:59",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
