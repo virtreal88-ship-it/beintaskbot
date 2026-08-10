@@ -1,5 +1,40 @@
 [
   {
+    "id": "c3a473e0",
+    "type": "change_stage",
+    "created_at": "2026-08-10T21:58:48.810145+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İqbal Karvan",
+      "phone": "+994552111240",
+      "lead_id": 77083137,
+      "task_id": 93729531,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Prefiks",
+      "task_price": "0",
+      "note": "Çəkili məhsulları yenidən barkodlamaq lazəmdır, sabah açılışdır",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77083137",
+      "callback_key": "920d93d0"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b97eb253",
     "type": "change_stage",
     "created_at": "2026-08-10T18:14:46.225847+04:00",
