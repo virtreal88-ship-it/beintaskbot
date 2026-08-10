@@ -3,7 +3,7 @@
     "id": "c3a473e0",
     "type": "change_stage",
     "created_at": "2026-08-10T21:58:48.810145+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "İqbal Karvan",
       "phone": "+994552111240",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-10T22:00:48.935059+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b97eb253",
