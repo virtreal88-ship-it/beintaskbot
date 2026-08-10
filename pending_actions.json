@@ -1,5 +1,40 @@
 [
   {
+    "id": "b97eb253",
+    "type": "change_stage",
+    "created_at": "2026-08-10T18:14:46.225847+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Sadi Elşad",
+      "phone": "—",
+      "lead_id": 77140783,
+      "task_id": 93726821,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Müştəriyə təqdimat keçirmək",
+      "task_price": "",
+      "note": "Geri dönüş edəcəyini dedi, lakin aylıq ödənişə tamamilə ilə qarşıdı. Böyük ehtimal proqramı almayacaq",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77140783",
+      "callback_key": "149d3523"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "20cc4747",
     "type": "change_stage",
     "created_at": "2026-08-10T18:14:06.999495+04:00",
