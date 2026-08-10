@@ -618,9 +618,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-08 12:44:34"
+      },
+      {
+        "task_id": 93716277,
+        "executor": "Şamil Əliyev",
+        "client": "Nərminköşk",
+        "phone": "+994502060677",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-10 10:55:24"
       }
     ],
-    "balance": 3.5
+    "balance": 4.5
   },
   "8835096199": {
     "transactions": [
