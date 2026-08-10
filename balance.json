@@ -734,7 +734,7 @@
         "phone": "Terezi  +994552100068",
         "task_type": "Texniki tapşırıq",
         "amount": 10.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Vitrin üçün barkod printer götür",
         "result_text": "Götürdüm",
         "kpi": 0,
@@ -770,7 +770,7 @@
         "date": "2026-08-10 18:02:29"
       }
     ],
-    "balance": 20.0
+    "balance": 30.0
   },
   "1289510272": {
     "transactions": [],
