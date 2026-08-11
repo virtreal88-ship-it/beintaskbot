@@ -1,5 +1,40 @@
 [
   {
+    "id": "e163f886",
+    "type": "change_stage",
+    "created_at": "2026-08-11T16:50:21.620493+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rauf Quliyev",
+      "phone": "+0559771186",
+      "lead_id": 76719735,
+      "task_id": 93736051,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "təqdimat istəyir proqramı daha dəqiq öyrənmək",
+      "task_price": "",
+      "note": "Əlaqə saxladım, alış qaiməsi , silinmələr, inventarizasiyalar, anbaar qalığı. Maliyyə borclar izah edildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76719735",
+      "callback_key": "20873026"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "6318d455",
     "type": "assign_executor",
     "created_at": "2026-08-11T16:28:29.791206+04:00",
