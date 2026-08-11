@@ -782,9 +782,23 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-10 18:02:29"
+      },
+      {
+        "task_id": 0,
+        "executor": "Soltan Abbasov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 10.0,
+        "status": "confirmed",
+        "task_text": "Avtopro əlavə",
+        "result_text": "Avtopro əlavə",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-08-11 08:02:20"
       }
     ],
-    "balance": 30.0
+    "balance": 40.0
   },
   "1289510272": {
     "transactions": [],
