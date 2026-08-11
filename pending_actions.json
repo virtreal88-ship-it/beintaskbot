@@ -1,5 +1,40 @@
 [
   {
+    "id": "b75c7212",
+    "type": "change_stage",
+    "created_at": "2026-08-11T15:36:44.970412+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Xanabagi",
+      "phone": "+994707086868",
+      "lead_id": 73164993,
+      "task_id": 93704203,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Özün quraşdırma et",
+      "task_price": "",
+      "note": "bir neçə günə əlaqə saxlayacağını dedi. əlaqə saxlamadığı üçün mən əlaqə saxlamağa çalışdım lakin əlaqə qura bilmədim",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/73164993",
+      "callback_key": "0d7c939f"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b954b84b",
     "type": "change_stage",
     "created_at": "2026-08-11T13:02:10.154298+04:00",
