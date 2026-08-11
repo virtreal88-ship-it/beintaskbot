@@ -34,7 +34,7 @@
     "id": "5c449beb",
     "type": "assign_executor",
     "created_at": "2026-08-11T16:17:40.534092+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "ocaq",
       "phone": "+994552767970",
@@ -56,7 +56,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-11T16:31:15.761571+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "b75c7212",
