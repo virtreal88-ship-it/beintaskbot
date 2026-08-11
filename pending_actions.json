@@ -1,5 +1,40 @@
 [
   {
+    "id": "6b89f4e8",
+    "type": "change_stage",
+    "created_at": "2026-08-11T17:31:52.068964+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Samir",
+      "phone": "+994503230222",
+      "lead_id": 77296415,
+      "task_id": 93737361,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "İmkan olsa bu gün əlaqə saxla , denən mən təqdimat edəcəm. Sahəsini soruş ki ona uyğun təqdimat edəsən. İmkan olsa camtasia qoş.",
+      "task_price": "10",
+      "note": "Görüş bitdi, əlaqə saxlayıb məlumatları götürmək, sistemi formalaşdırmaq və iş başlamaq lazımdır,\nEkspediter sistemi olacaq, admin+ekspediter",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77296415",
+      "callback_key": "d9f71f2e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "fc612169",
     "type": "change_stage",
     "created_at": "2026-08-11T17:02:33.035459+04:00",
