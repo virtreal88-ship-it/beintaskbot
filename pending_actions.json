@@ -3,7 +3,7 @@
     "id": "b233262c",
     "type": "assign_executor",
     "created_at": "2026-08-11T11:29:57.727099+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Grand",
       "phone": "+994512308999",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-11T11:30:43.282775+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "64b4fc8b",
