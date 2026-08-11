@@ -1,5 +1,33 @@
 [
   {
+    "id": "5c449beb",
+    "type": "assign_executor",
+    "created_at": "2026-08-11T16:17:40.534092+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "ocaq",
+      "phone": "+994552767970",
+      "lead_id": 77297467,
+      "task_text": "[-6] Sistemi sıfırlamaq istəyir tamamilə. Əlaqə saxlayın zəhmət olmasa təsdiqləsin Fərid bəyə deyək",
+      "deadline": "11.08.2026 16:30",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77297467",
+      "conf_key": "337be1b6",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "b75c7212",
     "type": "change_stage",
     "created_at": "2026-08-11T15:36:44.970412+04:00",
