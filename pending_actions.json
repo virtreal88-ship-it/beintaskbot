@@ -1,5 +1,33 @@
 [
   {
+    "id": "6318d455",
+    "type": "assign_executor",
+    "created_at": "2026-08-11T16:28:29.791206+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "terteryaglama",
+      "phone": "+994 50 862 56 56",
+      "lead_id": 71137043,
+      "task_text": "[0] Məhsullar xaric bütün əməliyyatlar sıfırlansın istəyir",
+      "deadline": "11.08.2026 16:59",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71137043",
+      "conf_key": "d344b285",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "5c449beb",
     "type": "assign_executor",
     "created_at": "2026-08-11T16:17:40.534092+04:00",
