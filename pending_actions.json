@@ -3,7 +3,7 @@
     "id": "fc612169",
     "type": "change_stage",
     "created_at": "2026-08-11T17:02:33.035459+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "ocaq",
       "phone": "+994552767970",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-11T17:28:29.383269+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "e163f886",
