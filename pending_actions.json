@@ -141,7 +141,7 @@
     "id": "b97eb253",
     "type": "change_stage",
     "created_at": "2026-08-10T18:14:46.225847+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Sadi Elşad",
       "phone": "—",
@@ -170,7 +170,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-11T11:53:42.740182+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "20cc4747",
