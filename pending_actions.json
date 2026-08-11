@@ -3,7 +3,7 @@
     "id": "275f45c3",
     "type": "assign_executor",
     "created_at": "2026-08-11T11:36:16.247331+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rauf Quliyev",
       "phone": "+0559771186",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-11T11:53:20.154054+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "b233262c",
