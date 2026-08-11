@@ -1,5 +1,33 @@
 [
   {
+    "id": "b233262c",
+    "type": "assign_executor",
+    "created_at": "2026-08-11T11:29:57.727099+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Grand",
+      "phone": "+994512308999",
+      "lead_id": 74322715,
+      "task_text": "İşçisinə təqdimat keçmək lazımdır",
+      "deadline": "11.08.2026 11:23",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74322715",
+      "conf_key": "db4d09b2",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "64b4fc8b",
     "type": "change_stage",
     "created_at": "2026-08-10T22:34:53.334676+04:00",
