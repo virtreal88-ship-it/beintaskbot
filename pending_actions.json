@@ -103,7 +103,7 @@
     "id": "b75c7212",
     "type": "change_stage",
     "created_at": "2026-08-11T15:36:44.970412+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Xanabagi",
       "phone": "+994707086868",
@@ -132,7 +132,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-11T17:00:36.043958+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b954b84b",
