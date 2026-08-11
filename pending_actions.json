@@ -1,5 +1,40 @@
 [
   {
+    "id": "b954b84b",
+    "type": "change_stage",
+    "created_at": "2026-08-11T13:02:10.154298+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nusrət",
+      "phone": "+994555800808",
+      "lead_id": 76596055,
+      "task_id": 93727337,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Sabah dükanda 28 də saat 10:30 da görüş olacaq. Dükana gələcək.",
+      "task_price": "",
+      "note": "Müştəri ilə görüşdüm.28 mayda dəmiryolu vağzalında köşk işlədir. 1 ədəd rkiper viva , 1 ədəd çek printer 80t, 1 ədəd skaner 9620d və ya 3620s. Avadanlıqlar konkret bu modellər olmalıdır. Ümumi qiymət 1250 azn. 2 gün sonra zəng edəcək quraşdırma üçün",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76596055",
+      "callback_key": "ca017958"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "275f45c3",
     "type": "assign_executor",
     "created_at": "2026-08-11T11:36:16.247331+04:00",
