@@ -179,7 +179,7 @@
     "id": "20cc4747",
     "type": "change_stage",
     "created_at": "2026-08-10T18:14:06.999495+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "E. Q. / Yeni müştəri",
       "phone": "+994993139941",
@@ -208,7 +208,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-11T11:54:07.436202+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "faa49017",
