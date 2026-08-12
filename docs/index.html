@@ -514,7 +514,7 @@ const PERSISTED_FORM_IDS = [
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
-const SALARY_IDS = ['7962757442','7262243946','7329891614','8835096199'];
+const SALARY_IDS = ['7962757442','7329891614','8835096199','1289510272','6596538872','1142054888'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; const sideLbl = document.getElementById('side-tab-history-label'); if(sideLbl) sideLbl.textContent = 'Maliyyə'; }); }
 document.addEventListener('DOMContentLoaded', () => { });
 
