@@ -490,7 +490,7 @@
         "phone": "+994102135104",
         "task_type": "Texniki tapşırıq",
         "amount": 150.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Marşrut: Sumqayıt, QusarVirpark, Qusar bazarı, SDK, Xaçmaz (Lollipop mağazası), Xaçmaz (Erel), Sumqayıt.",
         "result_text": ".",
         "kpi": 0,
@@ -624,7 +624,7 @@
         "date": "2026-08-12 21:20:00"
       }
     ],
-    "balance": -80.0
+    "balance": 70.0
   },
   "7329891614": {
     "transactions": [
