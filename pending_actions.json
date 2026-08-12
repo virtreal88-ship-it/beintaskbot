@@ -3,7 +3,7 @@
     "id": "56959e98",
     "type": "change_stage",
     "created_at": "2026-08-13T01:20:02.618925+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "İlqar.085",
       "phone": "—",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-13T01:21:06.439808+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b4502708",
