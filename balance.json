@@ -894,6 +894,20 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-11 18:18:51"
+      },
+      {
+        "task_id": 93748147,
+        "executor": "Soltan Abbasov",
+        "client": "Elnur Miras restoran",
+        "phone": "0558262505",
+        "task_type": "Təqdimat",
+        "amount": 10.0,
+        "status": "pending",
+        "task_text": "Təlimat olunmalıdır. Bulvar ərazisində",
+        "result_text": "İlkin təlimat edildi, yorğun idi, dedi ki ydımda qalmır, obyektdə internet yox idi.şbkəsiz versiyanı izah etdim",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-12 12:17:58"
       }
     ],
     "balance": 346.0
