@@ -608,6 +608,20 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-12 09:27:38"
+      },
+      {
+        "task_id": 93723871,
+        "executor": "Rasim Əsgərov",
+        "client": "İlqar.085",
+        "phone": "—",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Musteri:Mənə geriş edən olacaq? ",
+        "result_text": ". Uğurlu\n\nBonus kartlar:\n100əd - 100₼\n500əd - 400₼\n1000əd - 700₼",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-12 21:20:00"
       }
     ],
     "balance": -80.0
