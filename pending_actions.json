@@ -1,5 +1,40 @@
 [
   {
+    "id": "b4502708",
+    "type": "change_stage",
+    "created_at": "2026-08-12T16:18:00.903350+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Elnur Miras restoran",
+      "phone": "0558262505",
+      "lead_id": 77324827,
+      "task_id": 93748147,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Təlimat olunmalıdır. Bulvar ərazisində",
+      "task_price": "10",
+      "note": "İlkin təlimat edildi, yorğun idi, dedi ki ydımda qalmır, obyektdə internet yox idi.şbkəsiz versiyanı izah etdim",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77324827",
+      "callback_key": "bbb9e3e7"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "81789953",
     "type": "change_stage",
     "created_at": "2026-08-11T18:02:43.825067+04:00",
