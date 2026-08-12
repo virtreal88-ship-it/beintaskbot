@@ -1,5 +1,40 @@
 [
   {
+    "id": "56959e98",
+    "type": "change_stage",
+    "created_at": "2026-08-13T01:20:02.618925+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İlqar.085",
+      "phone": "—",
+      "lead_id": 76954583,
+      "task_id": 93723871,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Musteri:Mənə geriş edən olacaq? \n\nAyın 31-i quraşdırma olmalı idi",
+      "task_price": "100",
+      "note": ". Uğurlu\n\nBonus kartlar:\n100əd - 100₼\n500əd - 400₼\n1000əd - 700₼",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76954583",
+      "callback_key": "305cfe89"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b4502708",
     "type": "change_stage",
     "created_at": "2026-08-12T16:18:00.903350+04:00",
