@@ -922,6 +922,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-12 12:17:58"
+      },
+      {
+        "task_id": 93750919,
+        "executor": "Soltan Abbasov",
+        "client": "Samir",
+        "phone": "+994503230222",
+        "task_type": "Quraşdırma",
+        "amount": 50.0,
+        "status": "pending",
+        "task_text": "Satış olundu. Quraşdırma 200 , aylıq 50 - 1 ekspeditor.",
+        "result_text": "Quraşdırma edildi, ekspediter icazələri tətbiq edildi, ilkin təlimat həm özünə həm də ekspediterə keçildi.\nBundan sonra müştəri qiymət növləri, məhsul qiymətlərini göndərəcək, mühasibə təlim keçilməlidir, əməliyyatlar üçün qısa videolar göndəriləcək.",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-13 16:44:36"
       }
     ],
     "balance": 346.0
