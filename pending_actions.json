@@ -3,7 +3,7 @@
     "id": "a4233e6d",
     "type": "assign_executor",
     "created_at": "2026-08-13T11:17:33.008032+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Bilinmir",
       "phone": "+994774055482",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-13T11:34:22.619709+04:00",
+    "resolved_by": "bot.py:4040",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "56959e98",
