@@ -1,5 +1,33 @@
 [
   {
+    "id": "a4233e6d",
+    "type": "assign_executor",
+    "created_at": "2026-08-13T11:17:33.008032+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Bilinmir",
+      "phone": "+994774055482",
+      "lead_id": 77352475,
+      "task_text": "Pos terminalda Token dəyişilməsi ilə bağlı ünvan istəyir, yalnış nömrə veriblər zənnimizcə. Nağıyev Orxan Etibar oğlu- adını veriblər onlara.",
+      "deadline": "13.08.2026 12:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77352475",
+      "conf_key": "fdfc376a",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "56959e98",
     "type": "change_stage",
     "created_at": "2026-08-13T01:20:02.618925+04:00",
