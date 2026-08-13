@@ -3,7 +3,7 @@
     "id": "de9a4767",
     "type": "assign_executor",
     "created_at": "2026-08-13T11:52:46.044765+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Nugmas",
       "phone": "+994506223252",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-13T11:56:22.274728+04:00",
+    "resolved_by": "bot.py:791",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "a4233e6d",
