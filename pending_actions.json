@@ -1,5 +1,33 @@
 [
   {
+    "id": "b3adb208",
+    "type": "assign_executor",
+    "created_at": "2026-08-13T12:00:42.320959+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Sədərək",
+      "phone": "0551050200",
+      "lead_id": 75518837,
+      "task_text": "Hesab nömrəsi 0551050200 bu nömrə təyin edilsin zəhmət olmasa",
+      "deadline": "13.08.2026 13:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75518837",
+      "conf_key": "2782cef5",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "de9a4767",
     "type": "assign_executor",
     "created_at": "2026-08-13T11:52:46.044765+04:00",
