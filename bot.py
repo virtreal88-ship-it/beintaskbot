@@ -124,28 +124,8 @@ logger = logging.getLogger("bot")
 
 # ─── User Registration Storage ───────────────────────────────────────────────
 _USER_DB_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
-_users_gh_loaded = False
-
-def _ensure_users_from_gh():
-    global _users_gh_loaded
-    if _users_gh_loaded:
-        return
-    # Only try GitHub if gh_storage is initialized
-    from gh_storage import _GH_TOKEN
-    if not _GH_TOKEN:
-        return
-    _users_gh_loaded = True
-    if not os.path.exists(_USER_DB_LOCAL):
-        try:
-            data = read_json("users.json")
-            if data:
-                with open(_USER_DB_LOCAL, "w") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
 
 def load_users() -> dict:
-    _ensure_users_from_gh()
     if os.path.exists(_USER_DB_LOCAL):
         try:
             with open(_USER_DB_LOCAL, "r") as f:
@@ -5057,11 +5037,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         _creator_name = _creators_data.get(str(task_id), "")
                         _creator_chat = NAME_TO_CHAT.get(_creator_name) if _creator_name else None
                         if _creator_chat and int(_creator_chat) != int(chat_id) and int(_creator_chat) != admin_chat:
+                            _c_cn = contact_name or "\u2014"
+                            _c_td = task_desc_display or "\u2014"
+                            _c_ph = phone or "\u2014"
                             _creator_msg = (f"\u2705 Sizin yaratd\u0131\u011f\u0131n\u0131z tap\u015f\u0131r\u0131q tamamland\u0131:\n\n"
-                                f"\ud83d\udc64 {contact_name or '\u2014'}\n"
-                                f"\ud83d\udcdd {task_desc_display or '\u2014'}\n"
+                                f"\ud83d\udc64 {_c_cn}\n"
+                                f"\ud83d\udcdd {_c_td}\n"
                                 f"\ud83d\udc77 \u0130cra\u00e7\u0131: {completion_sender}\n"
-                                f"\ud83d\udcde {phone or '\u2014'}")
+                                f"\ud83d\udcde {_c_ph}")
                             if link: _creator_msg += f"\n\ud83d\udd17 {link}"
                             _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                                 json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
