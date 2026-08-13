@@ -758,9 +758,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-10 10:55:24"
+      },
+      {
+        "task_id": 93755317,
+        "executor": "Şamil Əliyev",
+        "client": "Nugmas",
+        "phone": "+994506223252",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-13 17:46:14"
       }
     ],
-    "balance": 4.5
+    "balance": 7.0
   },
   "8835096199": {
     "transactions": [
