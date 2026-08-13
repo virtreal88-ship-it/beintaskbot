@@ -2459,5 +2459,15 @@
     "corrected_at": "2026-08-13 08:07:33",
     "completed_at": "2026-08-13 08:07:33",
     "source": "pending_confirm_stars"
+  },
+  "7962757442_93755317": {
+    "sessions": [
+      {
+        "start_time": "2026-08-13 15:35:03",
+        "end_time": null,
+        "actual_minutes": null,
+        "paused": false
+      }
+    ]
   }
 }
