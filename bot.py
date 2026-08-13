@@ -123,17 +123,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("bot")
 
 # ─── User Registration Storage ───────────────────────────────────────────────
-USER_DB_FILE = os.environ.get("USER_DB_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json"))
+USER_DB_FILE = "users.json"
 
 def load_users() -> dict:
-    if os.path.exists(USER_DB_FILE):
-        with open(USER_DB_FILE, "r") as f:
-            return json.load(f)
-    return {}
+    try:
+        data = read_json(USER_DB_FILE)
+        return data if data else {}
+    except Exception:
+        return {}
 
 def save_users(data: dict):
-    with open(USER_DB_FILE, "w") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        write_json(USER_DB_FILE, data)
+    except Exception as e:
+        logger.error(f"save_users error: {e}")
 
 def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
     users = load_users()
@@ -5021,6 +5024,23 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         }, ["Təsdiq et"] + [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
                     except Exception as notify_error:
                         logger.error(f"Completion notification error: {notify_error}")
+                    # Notify cavabdeh (task creator) that the task is completed
+                    try:
+                        _creators_data = read_json(_TASK_CREATORS_FILE) or {}
+                        _creator_name = _creators_data.get(str(task_id), "")
+                        _creator_chat = NAME_TO_CHAT.get(_creator_name) if _creator_name else None
+                        if _creator_chat and int(_creator_chat) != int(chat_id) and int(_creator_chat) != admin_chat:
+                            _creator_msg = (f"\u2705 Sizin yaratd\u0131\u011f\u0131n\u0131z tap\u015f\u0131r\u0131q tamamland\u0131:\n\n"
+                                f"\ud83d\udc64 {contact_name or '\u2014'}\n"
+                                f"\ud83d\udcdd {task_desc_display or '\u2014'}\n"
+                                f"\ud83d\udc77 \u0130cra\u00e7\u0131: {completion_sender}\n"
+                                f"\ud83d\udcde {phone or '\u2014'}")
+                            if link: _creator_msg += f"\n\ud83d\udd17 {link}"
+                            _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
+                            send_push_notification(str(_creator_chat), '\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131', f'{contact_name} - {task_desc_display}')
+                    except Exception as _cav_err:
+                        logger.warning(f"Cavabdeh notification error: {_cav_err}")
               except Exception as notif_block_err:
                 logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
               localStorage_key = f'timer_{task_id}'
