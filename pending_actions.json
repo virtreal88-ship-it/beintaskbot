@@ -3,7 +3,7 @@
     "id": "de8c09c8",
     "type": "assign_executor",
     "created_at": "2026-08-13T21:45:25.696612+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "narsan",
       "phone": "994516904196",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-13T21:45:52.495077+04:00",
+    "resolved_by": "bot.py:801",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "3b11aadd",
