@@ -1,5 +1,40 @@
 [
   {
+    "id": "3b11aadd",
+    "type": "change_stage",
+    "created_at": "2026-08-13T20:44:37.822116+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Samir",
+      "phone": "+994503230222",
+      "lead_id": 77296415,
+      "task_id": 93750919,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Satış olundu. Quraşdırma 200 , aylıq 50 - 1 ekspeditor.",
+      "task_price": "50",
+      "note": "Quraşdırma edildi, ekspediter icazələri tətbiq edildi, ilkin təlimat həm özünə həm də ekspediterə keçildi.\nBundan sonra müştəri qiymət növləri, məhsul qiymətlərini göndərəcək, mühasibə təlim keçilməlidir, əməliyyatlar üçün qısa videolar göndəriləcək.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77296415",
+      "callback_key": "8acdc1a9"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "c1f84ef1",
     "type": "change_stage",
     "created_at": "2026-08-13T20:42:30.180048+04:00",
