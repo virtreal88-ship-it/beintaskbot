@@ -104,7 +104,7 @@
     "id": "e33ab622",
     "type": "change_stage",
     "created_at": "2026-08-13T19:40:11.301588+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Grand",
       "phone": "+994512308999",
@@ -133,7 +133,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-13T21:46:31.417156+04:00",
+    "resolved_by": "bot.py:801",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "4917baea",
