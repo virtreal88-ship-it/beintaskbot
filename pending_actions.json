@@ -1,5 +1,40 @@
 [
   {
+    "id": "c1f84ef1",
+    "type": "change_stage",
+    "created_at": "2026-08-13T20:42:30.180048+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Vibro-Beton-İnşaat-MMC",
+      "phone": "—",
+      "lead_id": 77162987,
+      "task_id": 93749011,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Saat 15:00a razılaşdıq, dedi ki iclasdayam, hələ ki qalıb, ümumi proses izah edilib, sualları qalıb",
+      "task_price": "",
+      "note": "Ayın sonuna kimi profildən istifadə etmək istəyir, müqavilə bağlansın gəlln aydan ödəniş edəcək.\nBəzi əməliyyatlar ona qaranlıq qalıb, yenə köməkli formada işləyəcək",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77162987",
+      "callback_key": "849a76ea"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e33ab622",
     "type": "change_stage",
     "created_at": "2026-08-13T19:40:11.301588+04:00",
