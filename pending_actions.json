@@ -1,5 +1,33 @@
 [
   {
+    "id": "de9a4767",
+    "type": "assign_executor",
+    "created_at": "2026-08-13T11:52:46.044765+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nugmas",
+      "phone": "+994506223252",
+      "lead_id": 74963073,
+      "task_text": "Səyyarlara qrup rəhbərləri təyin ediləcək. Emin və Mahir adında. Oların da ayrıca istifadəçi hesabları yaradılmalıdır. Qrup rehberi oz seyyarlari uzre butun hesabati gore  bilsin. Meselen :\nQrup rehberi Emin\nSeyyar 2\nSeyyar 5\nSeyyar 8\nSeyyar 9\n Qrup rehberi Mahir\nSeyyar 4\nSeyyar 7\nQeyd: her iki qrup rehberi olarin portfelinde olmayan seyyarlarin satis ve borclari gore bilmesin",
+      "deadline": "13.08.2026 15:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74963073",
+      "conf_key": "d5990971",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "a4233e6d",
     "type": "assign_executor",
     "created_at": "2026-08-13T11:17:33.008032+04:00",
