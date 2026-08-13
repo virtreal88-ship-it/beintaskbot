@@ -772,9 +772,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-13 17:46:14"
+      },
+      {
+        "task_id": 93735863,
+        "executor": "Şamil Əliyev",
+        "client": "Grand",
+        "phone": "+994512308999",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-13 17:46:30"
       }
     ],
-    "balance": 7.0
+    "balance": 9.5
   },
   "8835096199": {
     "transactions": [
