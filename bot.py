@@ -123,20 +123,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("bot")
 
 # ─── User Registration Storage ───────────────────────────────────────────────
-USER_DB_FILE = "users.json"
+_USER_DB_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+_users_gh_loaded = False
+
+def _ensure_users_from_gh():
+    global _users_gh_loaded
+    if _users_gh_loaded:
+        return
+    # Only try GitHub if gh_storage is initialized
+    from gh_storage import _GH_TOKEN
+    if not _GH_TOKEN:
+        return
+    _users_gh_loaded = True
+    if not os.path.exists(_USER_DB_LOCAL):
+        try:
+            data = read_json("users.json")
+            if data:
+                with open(_USER_DB_LOCAL, "w") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
 def load_users() -> dict:
-    try:
-        data = read_json(USER_DB_FILE)
-        return data if data else {}
-    except Exception:
-        return {}
+    _ensure_users_from_gh()
+    if os.path.exists(_USER_DB_LOCAL):
+        try:
+            with open(_USER_DB_LOCAL, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 def save_users(data: dict):
     try:
-        write_json(USER_DB_FILE, data)
+        with open(_USER_DB_LOCAL, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    try:
+        write_json("users.json", data)
     except Exception as e:
-        logger.error(f"save_users error: {e}")
+        logger.error(f"save_users gh error: {e}")
 
 def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
     users = load_users()
