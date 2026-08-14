@@ -1,5 +1,33 @@
 [
   {
+    "id": "196389f8",
+    "type": "assign_executor",
+    "created_at": "2026-08-14T12:52:14.121817+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nizami",
+      "phone": "+994502072240",
+      "lead_id": 58997950,
+      "task_text": "[0] Test üçündür.",
+      "deadline": "15.08.2026 12:51",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/58997950",
+      "conf_key": "17495c73",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "17d0ef45",
     "type": "change_stage",
     "created_at": "2026-08-14T12:24:53.671940+04:00",
