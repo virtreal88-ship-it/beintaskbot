@@ -1,5 +1,33 @@
 [
   {
+    "id": "ae77b56d",
+    "type": "assign_executor",
+    "created_at": "2026-08-14T11:41:30.137665+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "admin@bekir",
+      "phone": "+994502163191",
+      "lead_id": 75830489,
+      "task_text": "Akul Mobildə satışın sifarişi sənədində cari qalığın görünməsi üçün funksionallıq istəyir. webdə onun üçün yaradılıb , lakin indi mobildə istəyir. Zəhmət olmasa əlaqə saxlayın, ehtiyac yaranarsa task yaradaq.",
+      "deadline": "14.08.2026 15:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75830489",
+      "conf_key": "27dc5225",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "e5a9e7f3",
     "type": "change_stage",
     "created_at": "2026-08-14T10:31:02.344978+04:00",
