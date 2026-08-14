@@ -642,6 +642,32 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 task_type_id=int(task_type_id) if task_type_id else None,
             ):
                 return False, "Kommo-da tapşırıq yaradılmadı."
+            # Store creator (cavabdeh) in task_creators.json
+            _sender_name_ae = action_data.get("sender_name", "")
+            if _sender_name_ae:
+                try:
+                    _cr = read_json(_TASK_CREATORS_FILE) or {}
+                    _new_tasks = get_entity_tasks(int(lead_id), "leads")
+                    if _new_tasks:
+                        _new_tasks.sort(key=lambda t: t.get("id", 0), reverse=True)
+                        _cr[str(_new_tasks[0]["id"])] = _sender_name_ae
+                        write_json(_TASK_CREATORS_FILE, _cr)
+                except Exception:
+                    pass
+            # Notify creator (cavabdeh) that task was assigned
+            _sender_chat_ae = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_ae)
+            if _sender_chat_ae and int(_sender_chat_ae) != ADMIN_CHAT_ID:
+                _client_ae2 = action_data.get("contact_name", "")
+                _assigned_to = _PENDING_EXECUTOR_NAMES.get(choice) or choice
+                try:
+                    import asyncio
+                    asyncio.ensure_future(_bot_app.bot.send_message(
+                        int(_sender_chat_ae),
+                        f"\u2705 Sizin tapşırığınız təyin edildi:\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae2}\n\ud83d\udc77 İcraçı: {_assigned_to}",
+                        parse_mode="Markdown", disable_web_page_preview=True))
+                    send_push_notification(str(_sender_chat_ae), '\u2705 Tapşırıq təyin edildi', f'{_client_ae2} - {_assigned_to}')
+                except Exception:
+                    pass
             # Notify new assignee
             _ae_name = "Nizami Qas\u0131mov" if choice == "\u00d6z\u00fcm" else (_PENDING_EXECUTOR_NAMES.get(choice) or "")
             _target_chat_ae = get_chat_id_by_name(_ae_name) if _ae_name else None
