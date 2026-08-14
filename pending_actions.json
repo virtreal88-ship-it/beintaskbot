@@ -204,7 +204,7 @@
     "id": "c1f84ef1",
     "type": "change_stage",
     "created_at": "2026-08-13T20:42:30.180048+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Vibro-Beton-İnşaat-MMC",
       "phone": "—",
@@ -233,7 +233,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-14T12:37:19.723655+04:00",
+    "resolved_by": "bot.py:801",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "e33ab622",
