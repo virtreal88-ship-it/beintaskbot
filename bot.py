@@ -577,9 +577,24 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                     _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
                         headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _exec_status}, timeout=8)
                 except: pass
+        # Notify cavabdeh (creator) about executor assignment
+        _sender_name_uc = action_data.get("sender_name", "")
+        _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
+        if _sender_chat_uc and int(_sender_chat_uc) != ADMIN_CHAT_ID:
+            _client_uc = action_data.get("contact_name", "")
+            _task_uc = action_data.get("task_text", "")
+            try:
+                import asyncio
+                asyncio.ensure_future(_bot_app.bot.send_message(
+                    int(_sender_chat_uc),
+                    f"\u2705 Sizin tap\u015f\u0131r\u0131\u011f\u0131n\u0131z t\u0259yin edildi:\n\n\ud83d\udcdd {_task_uc}\n\ud83d\udc64 {_client_uc}\n\ud83d\udc77 \u0130cra\u00e7\u0131: {new_name}",
+                    parse_mode="Markdown", disable_web_page_preview=True))
+                send_push_notification(str(_sender_chat_uc), '\u2705 Tap\u015f\u0131r\u0131q t\u0259yin edildi', f'{_client_uc} - {new_name}')
+            except Exception:
+                pass
         # Resolve card (remove from pending)
-        mark_pending_action_resolved(action_id, f"İcraçı: {new_name}")
-        return True, f"İcraçı təyin edildi: {new_name}"
+        mark_pending_action_resolved(action_id, f"\u0130cra\u00e7\u0131: {new_name}")
+        return True, f"\u0130cra\u00e7\u0131 t\u0259yin edildi: {new_name}"
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
