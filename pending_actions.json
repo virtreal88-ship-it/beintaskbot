@@ -1,5 +1,40 @@
 [
   {
+    "id": "e5a9e7f3",
+    "type": "change_stage",
+    "created_at": "2026-08-14T10:31:02.344978+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "narsan",
+      "phone": "994516904196",
+      "lead_id": 58657552,
+      "task_id": 93759929,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Admin@narsan profilindən ekspediter@narsan-ı deaktiv etmək",
+      "task_price": "",
+      "note": "Hazır",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/58657552",
+      "callback_key": "9418a022"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "5d32ef76",
     "type": "assign_executor",
     "created_at": "2026-08-14T09:38:16.696247+04:00",
