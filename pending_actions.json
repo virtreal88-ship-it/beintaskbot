@@ -1,5 +1,33 @@
 [
   {
+    "id": "5d32ef76",
+    "type": "assign_executor",
+    "created_at": "2026-08-14T09:38:16.696247+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "admin@ozibox",
+      "phone": "994502330013",
+      "lead_id": 77400827,
+      "task_text": "Ozibox hesabı istifadəçi yaratmağımızı istəyir lakin istifadəçi 5-cidir. Onun tarif planı da 4-dür. Özü də qeyd etdi ki bizim danışıq 84.60 manat müqabilində 6 istifadəçi şəklində olub.\nƏgər abonəlik haqqını artırmırsa, zəhmət olmasa tarif planını dəyişərdiniz. İstifadəçini yaradardıq. Əksi təqdirdə müştəri ilə əlaqə saxlamağınızı xahiş edirik",
+      "deadline": "14.08.2026 15:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77400827",
+      "conf_key": "5c94c49d",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "de8c09c8",
     "type": "assign_executor",
     "created_at": "2026-08-13T21:45:25.696612+04:00",
