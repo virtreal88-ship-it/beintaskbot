@@ -72,7 +72,7 @@
     "id": "ae77b56d",
     "type": "assign_executor",
     "created_at": "2026-08-14T11:41:30.137665+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "admin@bekir",
       "phone": "+994502163191",
@@ -94,7 +94,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-14T14:14:54.213763+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "e5a9e7f3",
