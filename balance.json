@@ -800,9 +800,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-14 08:35:57"
+      },
+      {
+        "task_id": 93759929,
+        "executor": "Şamil Əliyev",
+        "client": "narsan",
+        "phone": "994516904196",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-14 08:36:28"
       }
     ],
-    "balance": 12.0
+    "balance": 13.0
   },
   "8835096199": {
     "transactions": [
