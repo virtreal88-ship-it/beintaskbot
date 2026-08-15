@@ -3,7 +3,7 @@
     "id": "c0801a88",
     "type": "assign_executor",
     "created_at": "2026-08-15T12:18:38.788983+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "R.Aliyev",
       "phone": "994504000409",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-15T12:51:58.777342+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "196389f8",
