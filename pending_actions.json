@@ -1,5 +1,33 @@
 [
   {
+    "id": "c0801a88",
+    "type": "assign_executor",
+    "created_at": "2026-08-15T12:18:38.788983+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "R.Aliyev",
+      "phone": "994504000409",
+      "lead_id": 67531714,
+      "task_text": "Admin@lollipop sorşur ki, \n\"bizim terminalları sistem üzərindən ötürmək üçün integrasiya olunmasın istəyirik. Yəni ki, integrasiyasız akul sistemindən post terminallarının bir signal, bir düyməsi klik eləmək üçün bir funksiya varmı? Yəni, integrasiya olunmasın da, sadəcə formada var belə bir şey ki, bir kliklə emr verilsin ki, programla post terminal işə düşsün.\"\n\nZəhmət olmasa ilk iş günü əlaqə saxlayın.",
+      "deadline": "17.08.2026 15:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/67531714",
+      "conf_key": "13c79b68",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "196389f8",
     "type": "assign_executor",
     "created_at": "2026-08-14T12:52:14.121817+04:00",
