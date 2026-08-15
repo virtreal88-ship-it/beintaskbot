@@ -560,7 +560,7 @@
         "phone": "—",
         "task_type": "Quraşdırma",
         "amount": 210.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": ".",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -624,7 +624,7 @@
         "date": "2026-08-12 21:20:00"
       }
     ],
-    "balance": 70.0
+    "balance": 280.0
   },
   "7329891614": {
     "transactions": [
