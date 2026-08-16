@@ -1,5 +1,40 @@
 [
   {
+    "id": "f2bcdef9",
+    "type": "change_stage",
+    "created_at": "2026-08-16T10:33:48.255445+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "huququ",
+      "phone": "+994706742858",
+      "lead_id": 77106667,
+      "task_id": 93729757,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Yeni profili açıb import edib təlimat etmək lazımdır. Məlumatlar 1c dən çıxarılıb.  Müştəridən 50 AZN ödəniş al. Sonda + 150 AZN. İnteqsiya daxildir qiymətə. Aylıq 39 AZN olacaq",
+      "task_price": "",
+      "note": "icra olunmadı, müşrəti caspos inteqrasiyası alınmadığına görə imtina etdi.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77106667",
+      "callback_key": "5ade5f78"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "c0801a88",
     "type": "assign_executor",
     "created_at": "2026-08-15T12:18:38.788983+04:00",
