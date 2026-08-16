@@ -2561,10 +2561,17 @@
     "sessions": [
       {
         "start_time": "2026-08-16 06:33:44",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-08-16 06:33:45",
+        "actual_minutes": 0.0,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 100,
+    "target_minutes": 120,
+    "actual_minutes": 0,
+    "deadline_ts": 1786963620,
+    "completed_before_deadline": true,
+    "delay_reason": "",
+    "completed_at": "2026-08-16 06:33:45"
   }
 }
