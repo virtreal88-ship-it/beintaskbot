@@ -1,5 +1,33 @@
 [
   {
+    "id": "cc3421fc",
+    "type": "assign_executor",
+    "created_at": "2026-08-18T12:46:42.863189+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "• Ayxan",
+      "phone": "+994605200004",
+      "lead_id": 65100640,
+      "task_text": "Hesab: Kosk1  . İos mobildə (pwa) Maliyyə bölməsində Korrektlərin gətirilməsini istəyir",
+      "deadline": "21.08.2026 12:46",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/65100640",
+      "conf_key": "3cdbae4a",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "7e7e0f6e",
     "type": "change_stage",
     "created_at": "2026-08-18T11:15:32.017790+04:00",
