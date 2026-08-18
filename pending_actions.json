@@ -1,5 +1,33 @@
 [
   {
+    "id": "12e54edd",
+    "type": "assign_executor",
+    "created_at": "2026-08-18T10:43:27.373351+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "0514400373",
+      "lead_id": 77435107,
+      "task_text": "quraşdırma 300 azn aylıq 55 azn. 1 əd terminal,2 əd çek printer,qr menu, mobil terminal, masalara qr, dine mobil təhvil verilməlidir. avadanlıq var.",
+      "deadline": "18.08.2026 11:00",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77435107",
+      "conf_key": "6dd29c6b",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "f2bcdef9",
     "type": "change_stage",
     "created_at": "2026-08-16T10:33:48.255445+04:00",
