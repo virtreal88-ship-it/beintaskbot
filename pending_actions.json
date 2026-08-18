@@ -31,7 +31,7 @@
     "id": "b24568d0",
     "type": "assign_executor",
     "created_at": "2026-08-18T20:01:09.824550+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Yr Tarqovu",
       "phone": "+994 55 838 48 48",
@@ -53,7 +53,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-18T21:55:34.214251+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "225aef7c",
