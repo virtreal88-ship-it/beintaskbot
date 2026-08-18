@@ -616,7 +616,7 @@
         "phone": "—",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Musteri:Mənə geriş edən olacaq? ",
         "result_text": ". Uğurlu\n\nBonus kartlar:\n100əd - 100₼\n500əd - 400₼\n1000əd - 700₼",
         "kpi": 0,
@@ -638,7 +638,7 @@
         "date": "2026-08-15 11:24:21"
       }
     ],
-    "balance": 0.0
+    "balance": 100.0
   },
   "7329891614": {
     "transactions": [
