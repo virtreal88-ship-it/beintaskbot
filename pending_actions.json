@@ -1,5 +1,40 @@
 [
   {
+    "id": "1c7ed8fd",
+    "type": "change_stage",
+    "created_at": "2026-08-18T11:14:33.099581+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "A",
+      "phone": "—",
+      "lead_id": 77150843,
+      "task_id": 93749109,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Əlaqə saxla",
+      "task_price": "",
+      "note": "bü müştəri zəngləri açmır və mesajlara cavab vermir",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77150843",
+      "callback_key": "6c5e7500"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "97bc3de6",
     "type": "change_stage",
     "created_at": "2026-08-18T11:12:44.252286+04:00",
