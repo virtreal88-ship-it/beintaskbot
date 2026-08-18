@@ -1,5 +1,33 @@
 [
   {
+    "id": "b24568d0",
+    "type": "assign_executor",
+    "created_at": "2026-08-18T20:01:09.824550+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Yr Tarqovu",
+      "phone": "+994 55 838 48 48",
+      "lead_id": 75049167,
+      "task_text": "[0] Yerdəyişmə etmək istədikdə bütün anbarların məhsulları çıxır və məhsullar bölməsində də eyni problem var.",
+      "deadline": "19.08.2026 19:49",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Şamil Əliyev",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75049167",
+      "conf_key": "953460fc",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "225aef7c",
     "type": "assign_executor",
     "created_at": "2026-08-18T17:08:13.203282+04:00",
