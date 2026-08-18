@@ -1006,9 +1006,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-13 16:44:36"
+      },
+      {
+        "task_id": 0,
+        "executor": "Soltan Abbasov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Mədaxil",
+        "amount": 10.0,
+        "status": "confirmed",
+        "task_text": "Təqdimat ekspeditor 1 saat",
+        "result_text": "Təqdimat ekspeditor 1 saat",
+        "kpi": 0,
+        "type": "mədaxil",
+        "date": "2026-08-18 06:26:48"
       }
     ],
-    "balance": 346.0
+    "balance": 356.0
   },
   "1289510272": {
     "transactions": [],
