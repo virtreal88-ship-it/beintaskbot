@@ -697,9 +697,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-11 16:20:22"
+      },
+      {
+        "task_id": 93764135,
+        "executor": "Hüseyn Səfərov",
+        "client": "bekir admin",
+        "phone": "+994502163191",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-18 12:13:11"
       }
     ],
-    "balance": 5.0
+    "balance": 6.0
   },
   "7962757442": {
     "transactions": [
