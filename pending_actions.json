@@ -1,5 +1,40 @@
 [
   {
+    "id": "7e7e0f6e",
+    "type": "change_stage",
+    "created_at": "2026-08-18T11:15:32.017790+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "0513891101",
+      "phone": "0513891101",
+      "lead_id": 76896923,
+      "task_id": 93521873,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Tərəziyə görə qalıq borcu qalıb. Köçürmə etməli idi. Proqramdan bax denən ödəsin. Vaxtı çoxdan keçib.",
+      "task_price": "",
+      "note": "ödəniş edilib. malikdədir ödəniş",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76896923",
+      "callback_key": "e3cd17c5"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "1c7ed8fd",
     "type": "change_stage",
     "created_at": "2026-08-18T11:14:33.099581+04:00",
