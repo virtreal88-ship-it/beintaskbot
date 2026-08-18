@@ -1,5 +1,33 @@
 [
   {
+    "id": "4f89e3e2",
+    "type": "assign_executor",
+    "created_at": "2026-08-18T20:04:11.933606+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "İlqar",
+      "phone": "+994 55 4141416",
+      "lead_id": 77350555,
+      "task_text": "[0] Müştəri qeyd edir ki ,kartdan karta ödənişi zamanı həmin ödəniş çekdə çıxmır .Nağdsız2 və ya başqa formada çıxmağını istəyir.",
+      "deadline": "19.08.2026 20:04",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77350555",
+      "conf_key": "bee3d4bf",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "b24568d0",
     "type": "assign_executor",
     "created_at": "2026-08-18T20:01:09.824550+04:00",
