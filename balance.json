@@ -842,9 +842,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-18 08:21:00"
+      },
+      {
+        "task_id": 93521873,
+        "executor": "Şamil Əliyev",
+        "client": "0513891101",
+        "phone": "0513891101",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-18 09:16:11"
       }
     ],
-    "balance": 15.5
+    "balance": 18.0
   },
   "8835096199": {
     "transactions": [
