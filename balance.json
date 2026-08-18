@@ -1070,7 +1070,7 @@
         "phone": "+994503230222",
         "task_type": "Quraşdırma",
         "amount": 50.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Satış olundu. Quraşdırma 200 , aylıq 50 - 1 ekspeditor.",
         "result_text": "Quraşdırma edildi, ekspediter icazələri tətbiq edildi, ilkin təlimat həm özünə həm də ekspediterə keçildi.\nBundan sonra müştəri qiymət növləri, məhsul qiymətlərini göndərəcək, mühasibə təlim keçilməlidir, əməliyyatlar üçün qısa videolar göndəriləcək.",
         "kpi": 0,
@@ -1092,7 +1092,7 @@
         "date": "2026-08-18 06:26:48"
       }
     ],
-    "balance": 356.0
+    "balance": 406.0
   },
   "1289510272": {
     "transactions": [],
