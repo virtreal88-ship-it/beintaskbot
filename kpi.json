@@ -2671,13 +2671,16 @@
         "paused": false
       }
     ],
-    "kpi_score": 100,
+    "kpi_score": 40,
     "target_minutes": 30,
     "actual_minutes": 0,
     "deadline_ts": 1787083140,
     "completed_before_deadline": true,
     "delay_reason": "",
-    "completed_at": "2026-08-18 07:14:30"
+    "completed_at": "2026-08-18 07:14:30",
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-08-18 09:17:09"
   },
   "7962757442_93521873": {
     "sessions": [
