@@ -870,9 +870,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-18 09:17:10"
+      },
+      {
+        "task_id": 93763993,
+        "executor": "Şamil Əliyev",
+        "client": "Mircəfər",
+        "phone": "+994505854888",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐ (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-18 09:17:48"
       }
     ],
-    "balance": 19.0
+    "balance": 20.0
   },
   "8835096199": {
     "transactions": [
