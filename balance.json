@@ -650,9 +650,23 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-19 08:23:02"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -150.0,
+        "status": "confirmed",
+        "task_text": "tort ilqar + neqliyyatlar",
+        "result_text": "tort ilqar + neqliyyatlar",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-19 08:23:22"
       }
     ],
-    "balance": 150.0
+    "balance": 0.0
   },
   "7329891614": {
     "transactions": [
