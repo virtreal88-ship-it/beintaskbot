@@ -1084,7 +1084,7 @@
         "phone": "0558262505",
         "task_type": "Təqdimat",
         "amount": 10.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Təlimat olunmalıdır. Bulvar ərazisində",
         "result_text": "İlkin təlimat edildi, yorğun idi, dedi ki ydımda qalmır, obyektdə internet yox idi.şbkəsiz versiyanı izah etdim",
         "kpi": 0,
@@ -1120,7 +1120,7 @@
         "date": "2026-08-18 06:26:48"
       }
     ],
-    "balance": 406.0
+    "balance": 416.0
   },
   "1289510272": {
     "transactions": [],
