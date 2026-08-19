@@ -1,5 +1,40 @@
 [
   {
+    "id": "e04348dd",
+    "type": "change_stage",
+    "created_at": "2026-08-19T11:42:02.834074+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "sushisakura",
+      "phone": "0514400373",
+      "lead_id": 77435107,
+      "task_id": 93790549,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "quraşdırma 300 azn aylıq 55 azn. 1 əd terminal,2 əd çek printer,qr menu, mobil terminal, masalara qr, dine mobil təhvil verilməlidir. avadanlıq var.",
+      "task_price": "",
+      "note": "Proqram təhvil verilib, sahibkarın telefonuna mobil app yazmaq qalıb",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77435107",
+      "callback_key": "e5dd3fb5"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4f89e3e2",
     "type": "assign_executor",
     "created_at": "2026-08-18T20:04:11.933606+04:00",
