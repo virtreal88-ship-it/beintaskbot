@@ -1,5 +1,40 @@
 [
   {
+    "id": "8f40c1b3",
+    "type": "change_stage",
+    "created_at": "2026-08-20T10:36:36.888179+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "d r",
+      "phone": "—",
+      "lead_id": 77105851,
+      "task_id": 93764163,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "baytarlıq aptek. xecne yoxdur.",
+      "task_price": "",
+      "note": "müştəri nisyə almaq istəyir. satış baş tutmadı",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77105851",
+      "callback_key": "f15446db"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "6689c405",
     "type": "assign_executor",
     "created_at": "2026-08-19T16:48:12.188201+04:00",
