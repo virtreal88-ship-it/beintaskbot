@@ -1,5 +1,40 @@
 [
   {
+    "id": "0e815672",
+    "type": "change_stage",
+    "created_at": "2026-08-20T21:49:50.343422+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "BDU Bufet",
+      "phone": "+994558078887",
+      "lead_id": 74585159,
+      "task_id": 93801591,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Getmədən öncə Şamil ilə əlaqə saxla",
+      "task_price": "",
+      "note": "Görüş oldu, məhsulların siyahısını göndərəcək. 6cı gün quraşdırılma etməliyik.\nƏvvəlcə ödəniş ilə bağlı razılaşma olmalıdır. İndi ödəniş edə bilmirlər. 1aya verə biləcəklər",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74585159",
+      "callback_key": "43c289f4"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "367fe828",
     "type": "change_stage",
     "created_at": "2026-08-20T19:57:37.717960+04:00",
