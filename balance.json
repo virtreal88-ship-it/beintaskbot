@@ -926,9 +926,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-18 09:17:48"
+      },
+      {
+        "task_id": 93795275,
+        "executor": "Şamil Əliyev",
+        "client": "Yr Tarqovu",
+        "phone": "+994558384848",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-20 09:29:46"
       }
     ],
-    "balance": 20.0
+    "balance": 22.5
   },
   "8835096199": {
     "transactions": [
