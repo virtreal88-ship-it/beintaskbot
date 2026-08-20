@@ -1,5 +1,33 @@
 [
   {
+    "id": "3eef4d37",
+    "type": "assign_executor",
+    "created_at": "2026-08-20T13:01:18.506405+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Support 03",
+      "phone": "+994102135103",
+      "lead_id": 74547175,
+      "task_text": "Alış səhifəsində filtir edərkən əməkdaş seçmək mümkün olsun, həmçinin alış qaimısində əməkdaş əlavə etmək olsun",
+      "deadline": "20.08.2026 13:01",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74547175",
+      "conf_key": "523e03ee",
+      "creator_chat_id": 7920785774
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "ec699aac",
     "type": "change_stage",
     "created_at": "2026-08-20T10:37:22.403682+04:00",
