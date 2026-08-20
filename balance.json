@@ -1146,6 +1146,20 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-18 06:26:48"
+      },
+      {
+        "task_id": 93802071,
+        "executor": "Soltan Abbasov",
+        "client": "admin@bolmarket",
+        "phone": "994553160909",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Avadanlıq gedəcək. Bluetoothlu printer yeni gələn, noutbuk və quraşdırma. Marketdi. Qalan avadanlıqlar var. Məbləğ 795 AZN",
+        "result_text": "Quraşdırma edildi\n1. Tərəziyə qoşulma(tərəzidən lan kabel ilə Switch-ə, ordan da kompyuterə lan ilə birləşmə edilib), wifi qəbuledici də var.\n2.İnternet çox zəif idi. \n3. Standart sistem verdiyi(4*2) şablon ilə işləyirlər. Nə vitrin şablonu var, nə də fərqli şablon. \n4.Tərəzi şablonu əlavə etdim.\n5. Əlavə 3₼ lan kabel istifadə etdim",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-20 17:47:42"
       }
     ],
     "balance": 416.0
