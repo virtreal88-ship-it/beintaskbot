@@ -1,5 +1,33 @@
 [
   {
+    "id": "2f5227af",
+    "type": "assign_executor",
+    "created_at": "2026-08-20T22:10:10.579981+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "BDU Bufet",
+      "phone": "+994558078887",
+      "lead_id": 74585159,
+      "task_text": "[0] Sabah Məhsulları göndərməlidirlər.Qiymət ilə bağlı Şamil ilə danışmalı idilər. Ödənişi bir ay sonra edə biləcəklər.\nDəqiqləşdirib 6cı gün quraşdırma edilməlidir",
+      "deadline": "21.08.2026 11:09",
+      "sender_name": "Soltan Abbasov",
+      "assignee_name_raw": "Şamil Əliyev",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74585159",
+      "conf_key": "b28c4df6",
+      "creator_chat_id": 7262243946
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "0e815672",
     "type": "change_stage",
     "created_at": "2026-08-20T21:49:50.343422+04:00",
