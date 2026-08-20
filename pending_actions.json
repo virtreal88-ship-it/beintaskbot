@@ -1,5 +1,40 @@
 [
   {
+    "id": "ec699aac",
+    "type": "change_stage",
+    "created_at": "2026-08-20T10:37:22.403682+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Yr Tarqovu",
+      "phone": "+994558384848",
+      "lead_id": 75049167,
+      "task_id": 93795275,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "[0] Yerdəyişmə etmək istədikdə bütün anbarların məhsulları çıxır və məhsullar bölməsində də eyni problem var.",
+      "task_price": "",
+      "note": "həll edildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75049167",
+      "callback_key": "142218e9"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "8f40c1b3",
     "type": "change_stage",
     "created_at": "2026-08-20T10:36:36.888179+04:00",
