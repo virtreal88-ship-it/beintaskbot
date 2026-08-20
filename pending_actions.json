@@ -1,5 +1,40 @@
 [
   {
+    "id": "367fe828",
+    "type": "change_stage",
+    "created_at": "2026-08-20T19:57:37.717960+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nərminköşk",
+      "phone": "+994502060677",
+      "lead_id": 76090333,
+      "task_id": 93812451,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Tərəzi",
+      "task_price": "20",
+      "note": "Uğurlu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76090333",
+      "callback_key": "8ce4ca07"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3eef4d37",
     "type": "assign_executor",
     "created_at": "2026-08-20T13:01:18.506405+04:00",
