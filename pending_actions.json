@@ -1,5 +1,40 @@
 [
   {
+    "id": "260b6eb3",
+    "type": "change_stage",
+    "created_at": "2026-08-21T13:17:03.667793+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rufet_expert",
+      "phone": "+0502017868",
+      "lead_id": 77467565,
+      "task_id": 93816739,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "Whatsapp dan yazdım geri donmədi. Zəng et",
+      "task_price": "",
+      "note": "5000 azn-ə cloposdan bir dəfəlik lisenziya alıb. texniki dəstək və update daxil. satış baş tutmadı",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77467565",
+      "callback_key": "d6e1a0d8"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "06368715",
     "type": "assign_executor",
     "created_at": "2026-08-21T13:04:36.613772+04:00",
