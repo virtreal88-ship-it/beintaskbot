@@ -141,7 +141,7 @@
     "id": "9d15d0de",
     "type": "assign_executor",
     "created_at": "2026-08-21T12:07:43.031519+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "",
       "phone": "+0557413380",
@@ -163,7 +163,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-21T16:55:24.328998+04:00",
+    "resolved_by": "bot.py:4091",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "3446ac8e",
