@@ -1,5 +1,33 @@
 [
   {
+    "id": "3446ac8e",
+    "type": "assign_executor",
+    "created_at": "2026-08-21T11:44:45.052690+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "M",
+      "phone": "+994557136311",
+      "lead_id": 75106375,
+      "task_text": "[0] Müştəri qeyd edir ki ,anbar qalığında artkod və barkodlarda kopyala butonu olsun.",
+      "deadline": "22.08.2026 23:59",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75106375",
+      "conf_key": "83caddda",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "da5cc68e",
     "type": "assign_executor",
     "created_at": "2026-08-21T11:44:11.498544+04:00",
