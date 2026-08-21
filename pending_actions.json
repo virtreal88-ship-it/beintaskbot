@@ -1,5 +1,33 @@
 [
   {
+    "id": "06368715",
+    "type": "assign_executor",
+    "created_at": "2026-08-21T13:04:36.613772+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "+0515251432",
+      "lead_id": 77445691,
+      "task_text": "3mk kruqunda kamera avadanlıqları mağazasıdı. görüşüb təqdimat etmək lazımdır.22.08.2026-da əlaqə saxla vaxt təyin et",
+      "deadline": "21.08.2026 13:30",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Rasim Əsgərov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77445691",
+      "conf_key": "e0e5c40e",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "5705e0bd",
     "type": "change_stage",
     "created_at": "2026-08-21T12:33:20.700845+04:00",
