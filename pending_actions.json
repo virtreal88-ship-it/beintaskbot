@@ -3,7 +3,7 @@
     "id": "b599f973",
     "type": "change_stage",
     "created_at": "2026-08-21T19:52:07.083222+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Masterorxan",
       "phone": "+994705703434",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-21T19:55:34.180240+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b96fa61e",
