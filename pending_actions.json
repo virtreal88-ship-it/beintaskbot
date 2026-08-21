@@ -1,5 +1,33 @@
 [
   {
+    "id": "9d15d0de",
+    "type": "assign_executor",
+    "created_at": "2026-08-21T12:07:43.031519+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "+0557413380",
+      "lead_id": 77445871,
+      "task_text": "Quraşdırm+sayt ilə inteqrasiya ümumi 700 azn. Bu gün üçün quraşdırma",
+      "deadline": "21.08.2026 12:15",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77445871",
+      "conf_key": "51594479",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "3446ac8e",
     "type": "assign_executor",
     "created_at": "2026-08-21T11:44:45.052690+04:00",
