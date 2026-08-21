@@ -1,5 +1,33 @@
 [
   {
+    "id": "da5cc68e",
+    "type": "assign_executor",
+    "created_at": "2026-08-21T11:44:11.498544+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "",
+      "phone": "+994558219058",
+      "lead_id": 70993268,
+      "task_text": "Menyu yazılsın bu gün və quraşdırılma edilsin 6cı gün",
+      "deadline": "21.08.2026 11:43",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Soltan Abbasov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/70993268",
+      "conf_key": "a8adf102",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "2f5227af",
     "type": "assign_executor",
     "created_at": "2026-08-20T22:10:10.579981+04:00",
