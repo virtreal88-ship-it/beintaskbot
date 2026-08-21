@@ -1,5 +1,40 @@
 [
   {
+    "id": "b599f973",
+    "type": "change_stage",
+    "created_at": "2026-08-21T19:52:07.083222+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Masterorxan",
+      "phone": "+994705703434",
+      "lead_id": 77359315,
+      "task_id": 93759719,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Danışıldı. 14 avqust üçün görüş təyin edildi.\n\n3 filialı olan maşın yağları satan mağazalardı.\n\nBir mağaza:\nQuraşdırma: 300₼\nAylıq: 50/₼",
+      "task_price": "",
+      "note": "Test edirlər. 3 filialda qoşulib, xüsusi nəzarət edirəm. Hər mərhələdə qeydıərimi yazacam in şəə Allah",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77359315",
+      "callback_key": "289d5b53"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b96fa61e",
     "type": "assign_executor",
     "created_at": "2026-08-21T17:53:09.310652+04:00",
