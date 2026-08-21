@@ -3,7 +3,7 @@
     "id": "727a946c",
     "type": "assign_executor",
     "created_at": "2026-08-21T13:35:26.945183+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Tural Ehtiyyat hissələri",
       "phone": "+0557413380",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-21T16:55:16.005831+04:00",
+    "resolved_by": "bot.py:4091",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "260b6eb3",
