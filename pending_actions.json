@@ -1,5 +1,40 @@
 [
   {
+    "id": "fa5fea1f",
+    "type": "change_stage",
+    "created_at": "2026-08-21T23:25:00.146503+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rauf",
+      "phone": "+994504443877",
+      "lead_id": 75664035,
+      "task_id": 93763157,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "4 avgust tekrar tiktoka yazib. Maraglanır. Nomre ilə əlagə saxlamaga isteyib.",
+      "task_price": "",
+      "note": "Müştəri cavab vermir. Bir müddət sonra əlaqə saxlamaq olar",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75664035",
+      "callback_key": "82ab3c96"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "b599f973",
     "type": "change_stage",
     "created_at": "2026-08-21T19:52:07.083222+04:00",
