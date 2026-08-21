@@ -1,5 +1,40 @@
 [
   {
+    "id": "9f3206f4",
+    "type": "change_stage",
+    "created_at": "2026-08-21T17:16:18.623260+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт Şamil Uniset",
+      "phone": "+994558219058",
+      "lead_id": 70993268,
+      "task_id": 93819799,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Menyu yazılsın bu gün və quraşdırılma edilsin 6cı gün",
+      "task_price": "",
+      "note": "Menyu yaratdım və Sultan bəyə təhvil verildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/70993268",
+      "callback_key": "78ad56c5"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "727a946c",
     "type": "assign_executor",
     "created_at": "2026-08-21T13:35:26.945183+04:00",
