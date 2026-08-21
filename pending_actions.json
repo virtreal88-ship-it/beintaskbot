@@ -1,5 +1,33 @@
 [
   {
+    "id": "b96fa61e",
+    "type": "assign_executor",
+    "created_at": "2026-08-21T17:53:09.310652+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Cinar",
+      "phone": "994777660809",
+      "lead_id": 77479983,
+      "task_text": "[0] Çek printerində problem var.Çek çoxlu sayda çıxarır və dayanmır.Yanına adam gedib çekə baxmalıdır.",
+      "deadline": "22.08.2026 17:46",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77479983",
+      "conf_key": "4aca8542",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "9f3206f4",
     "type": "change_stage",
     "created_at": "2026-08-21T17:16:18.623260+04:00",
