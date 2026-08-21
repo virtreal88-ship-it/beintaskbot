@@ -1,5 +1,40 @@
 [
   {
+    "id": "5705e0bd",
+    "type": "change_stage",
+    "created_at": "2026-08-21T12:33:20.700845+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994554591103",
+      "phone": "+994554591103",
+      "lead_id": 77470427,
+      "task_id": 93810821,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Mermer qranit istehsalatı. Sabah səhər 10-11 arası.",
+      "task_price": "",
+      "note": "Görüşün nəticəsi, \nAylıq ödəniş əsas müdiri qane etmədi. Ona görə sistemdə qeydiyyatdan keçib yoxlamaq üçün 3gen istifadə etməyi təklif etdim.\n3gündən sonra təkrar əlaqə saxlamaq lazımdır",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77470427",
+      "callback_key": "62b3a4bc"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "9d15d0de",
     "type": "assign_executor",
     "created_at": "2026-08-21T12:07:43.031519+04:00",
