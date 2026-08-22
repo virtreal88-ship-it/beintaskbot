@@ -34,7 +34,7 @@
     "id": "22448200",
     "type": "assign_executor",
     "created_at": "2026-08-22T10:06:18.485245+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "gamezone",
       "phone": "0552597290",
@@ -56,7 +56,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-22T14:11:05.462212+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Şamil"
   },
   {
     "id": "fa5fea1f",
