@@ -1,5 +1,33 @@
 [
   {
+    "id": "47fb2cf3",
+    "type": "assign_executor",
+    "created_at": "2026-08-22T22:09:43.148046+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "cayocagi",
+      "phone": "994102411773",
+      "lead_id": 77486571,
+      "task_text": "Çek printer kabellərini çəkmək əlavə çek printerin qiymətini demək",
+      "deadline": "22.08.2026 22:09",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77486571",
+      "conf_key": "cd1c3e37",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "2087490a",
     "type": "assign_executor",
     "created_at": "2026-08-22T16:27:46.588260+04:00",
