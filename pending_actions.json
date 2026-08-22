@@ -65,7 +65,7 @@
     "id": "fa5fea1f",
     "type": "change_stage",
     "created_at": "2026-08-21T23:25:00.146503+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rauf",
       "phone": "+994504443877",
@@ -94,7 +94,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-22T14:11:27.234074+04:00",
+    "resolved_by": "bot.py:4091",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "b599f973",
