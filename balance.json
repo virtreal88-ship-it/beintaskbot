@@ -753,9 +753,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-18 12:13:11"
+      },
+      {
+        "task_id": 93819799,
+        "executor": "Hüseyn Səfərov",
+        "client": "Автоконтакт Şamil Uniset",
+        "phone": "+994558219058",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-22 10:12:05"
       }
     ],
-    "balance": 6.0
+    "balance": 8.5
   },
   "7962757442": {
     "transactions": [
