@@ -1,5 +1,40 @@
 [
   {
+    "id": "73e5351b",
+    "type": "change_stage",
+    "created_at": "2026-08-22T15:04:03.701415+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт Şamil Uniset",
+      "phone": "+994558219058",
+      "lead_id": 70993268,
+      "task_id": 93816033,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "[100] Sabah Məhsulları göndərməlidirlər.Qiymət ilə bağlı Şamil ilə danışmalı idilər. Ödənişi bir ay sonra edə biləcəklər.\nDəqiqləşdirib 6cı gün quraşdırma edilməlidir",
+      "task_price": "",
+      "note": "Quraşdırma edildi, telefona yazıldı təlim olundu.\n565+25₼ (ethernet switch) ödəniş etdi, 500₼ borcu qaldı.1ci ayın ödənişini də etdi. Ancaq test üçün 3-5gün versək yaxşı olar",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/70993268",
+      "callback_key": "3330b933"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "5ba3f5f3",
     "type": "assign_executor",
     "created_at": "2026-08-22T14:56:59.975650+04:00",
