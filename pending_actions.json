@@ -1,5 +1,33 @@
 [
   {
+    "id": "5ba3f5f3",
+    "type": "assign_executor",
+    "created_at": "2026-08-22T14:56:59.975650+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "TamarinSport",
+      "phone": "+994553566969",
+      "lead_id": 76476261,
+      "task_text": "Müştəri deyir ki, anbar qalığında problemlər var düz gəlmir, 2-3 dəfə sayım etmişik, bizim nə vaxtımız var, nə də gücümüz. Online olan iş də deyil. Zəhmət olmasa bilən bir əməkdaş göndərin. Mən alışa gedəcəm bilmirəm anbarımda nə var nə yox.",
+      "deadline": "24.08.2026 15:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76476261",
+      "conf_key": "09f40526",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "8735261c",
     "type": "assign_executor",
     "created_at": "2026-08-22T11:31:02.810367+04:00",
