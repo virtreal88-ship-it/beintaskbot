@@ -1,5 +1,33 @@
 [
   {
+    "id": "91c03e86",
+    "type": "assign_executor",
+    "created_at": "2026-08-22T16:04:36.280012+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Restoran",
+      "phone": "+994553721992",
+      "lead_id": 77484985,
+      "task_text": "müştəri ilə danışıldı proqram haqqında şifahi məlumat verildi. 1ci gün fiziki görüş təyin edildi.icraçı təyin edilməlidir ki, 1ci gün görüşə gedsin",
+      "deadline": "22.08.2026 16:30",
+      "sender_name": "Şamil Əliyev",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77484985",
+      "conf_key": "124cebe5",
+      "creator_chat_id": 7962757442
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "82b453db",
     "type": "change_stage",
     "created_at": "2026-08-22T15:06:21.940959+04:00",
