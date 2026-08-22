@@ -1,5 +1,33 @@
 [
   {
+    "id": "2087490a",
+    "type": "assign_executor",
+    "created_at": "2026-08-22T16:27:46.588260+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Efere",
+      "phone": "+994 70 360 80 38",
+      "lead_id": 77484255,
+      "task_text": "Ümumiyyətlə anbarda olmayan malın, xammalın hərəkəti mümkün olmasın. Qalıq mənfiyə getməsin. İstehsalat sənədi daxil",
+      "deadline": "29.08.2026 16:27",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77484255",
+      "conf_key": "0331503e",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "91c03e86",
     "type": "assign_executor",
     "created_at": "2026-08-22T16:04:36.280012+04:00",
