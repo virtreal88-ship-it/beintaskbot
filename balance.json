@@ -1160,9 +1160,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-20 17:47:42"
+      },
+      {
+        "task_id": 0,
+        "executor": "Soltan Abbasov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -400.0,
+        "status": "confirmed",
+        "task_text": "Ayın 10 günün pulunu beindən götürməliyəm",
+        "result_text": "Ayın 10 günün pulunu beindən götürməliyəm",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-22 08:44:48"
       }
     ],
-    "balance": 516.0
+    "balance": 116.0
   },
   "1289510272": {
     "transactions": [],
