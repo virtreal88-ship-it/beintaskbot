@@ -1,5 +1,40 @@
 [
   {
+    "id": "82b453db",
+    "type": "change_stage",
+    "created_at": "2026-08-22T15:06:21.940959+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Efere",
+      "phone": "+994 70 360 80 38",
+      "lead_id": 77484255,
+      "task_id": 93825937,
+      "sender_name": "Şamil Əliyev",
+      "task_text": "admin@efere\n1.Müştəri online platformadan gələn zakazları da kassada satışa vurur . Ancaq bunun hesabatının fərqlənməsini istəyir. Bu satışın fərqlənməsi üçün kassada funksionallıq istəyir. Şərh onu qane etmir.\n2.Kassada kartdan-karta seçimini təsdiq etdikdə Pulqabı bölməsindən istənilən hesabı seçmək mümkün deyil, hesab seçimi verməsi üçün yeni funksionallıq lazımdır.\n3.İstehsalat-Mehsullar- (məhsula daxil oluruq)-(modifikasiyadan terkibler)-search   <- burada terkib axdarışı hissəsi işləmir, gətirmir tərkibi\n4. İstehsalatda yaranan bəzi məhsullar Məhsullar və Xidmətlər bölməsində çıxır, amma İstehsalatın məhsullar bölməsində çıxmır. Kassaya da düşmür nə barkod, nə adla\n5. Maliyyə- Korrektlər hesab seçimi etdikdə çıxan hesablara say limiti var bəziləri görünmür.",
+      "task_price": "",
+      "note": "1-2-3 bəndlər tapşırıq olaraq yaradıldı\n4. məhsulların anbarda hərəkəti yox idi. bu səbəbdən görünmürdü\n5-cü bənd yoxlanıldı. test hesabında 16 ədəd fərqli pul hesabı açıldı. korrekt və  həmçinin digər sənədlərdə yoxlanıldı. bütün pul hesabları siyahıda görünür.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77484255",
+      "callback_key": "2c7b1d64"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "73e5351b",
     "type": "change_stage",
     "created_at": "2026-08-22T15:04:03.701415+04:00",
