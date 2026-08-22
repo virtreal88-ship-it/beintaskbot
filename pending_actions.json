@@ -1,5 +1,33 @@
 [
   {
+    "id": "22448200",
+    "type": "assign_executor",
+    "created_at": "2026-08-22T10:06:18.485245+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "gamezone",
+      "phone": "0552597290",
+      "lead_id": 77483793,
+      "task_text": "Əməkdaş yaxınlaşmalıdır admin@gamezone",
+      "deadline": "22.08.2026 15:06",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77483793",
+      "conf_key": "77c9586c",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "fa5fea1f",
     "type": "change_stage",
     "created_at": "2026-08-21T23:25:00.146503+04:00",
