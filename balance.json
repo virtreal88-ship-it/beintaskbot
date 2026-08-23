@@ -1188,6 +1188,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-22 08:44:48"
+      },
+      {
+        "task_id": 93829115,
+        "executor": "Soltan Abbasov",
+        "client": "BDU Bufet",
+        "phone": "+994558078887",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Quraşdırm edilib,məbləğ görünmürdü deyə yeni task açdım",
+        "result_text": "Dünən quraşdırma edilib",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-23 07:29:04"
       }
     ],
     "balance": 116.0
