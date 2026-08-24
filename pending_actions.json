@@ -1,5 +1,40 @@
 [
   {
+    "id": "7b1c8cbf",
+    "type": "change_stage",
+    "created_at": "2026-08-24T15:18:56.693515+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Cinar",
+      "phone": "994777660809",
+      "lead_id": 77479983,
+      "task_id": 93834289,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Çek printerində problem var.Çek çoxlu sayda çıxarır və dayanmır.Yanına adam gedib çekə baxmalıdır.",
+      "task_price": "0",
+      "note": ".",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77479983",
+      "callback_key": "2b0917b2"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "a796cbd8",
     "type": "change_stage",
     "created_at": "2026-08-24T15:18:43.668861+04:00",
