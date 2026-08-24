@@ -887,7 +887,7 @@
     "id": "3446ac8e",
     "type": "assign_executor",
     "created_at": "2026-08-21T11:44:45.052690+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "M",
       "phone": "+994557136311",
@@ -909,7 +909,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-24T17:04:19.874192+04:00",
+    "resolved_by": "bot.py:623",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "da5cc68e",
