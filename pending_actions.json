@@ -1,5 +1,33 @@
 [
   {
+    "id": "a3f76273",
+    "type": "assign_executor",
+    "created_at": "2026-08-24T15:04:37.564080+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "admin@nismo",
+      "phone": "+994517866662",
+      "lead_id": 77493755,
+      "task_text": "Mühasib hesabı yaardılmasını istəyir, abonəliyini artıracaqmı? Əlaqə saxlayın zəhmət olmasa , razılaşarsa hesab açaq biz.",
+      "deadline": "24.08.2026 20:00",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77493755",
+      "conf_key": "613feee4",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "af334efd",
     "type": "assign_executor",
     "created_at": "2026-08-24T14:51:37.763432+04:00",
