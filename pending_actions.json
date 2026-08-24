@@ -474,7 +474,7 @@
     "id": "5ba3f5f3",
     "type": "assign_executor",
     "created_at": "2026-08-22T14:56:59.975650+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "TamarinSport",
       "phone": "+994553566969",
@@ -496,7 +496,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-24T16:56:31.653806+04:00",
+    "resolved_by": "bot.py:623",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "8735261c",
