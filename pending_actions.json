@@ -131,7 +131,7 @@
     "id": "91c03e86",
     "type": "assign_executor",
     "created_at": "2026-08-22T16:04:36.280012+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Restoran",
       "phone": "+994553721992",
@@ -153,7 +153,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-24T12:30:04.104702+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Rasim"
   },
   {
     "id": "82b453db",
