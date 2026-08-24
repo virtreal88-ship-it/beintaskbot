@@ -1,5 +1,40 @@
 [
   {
+    "id": "5e643955",
+    "type": "change_stage",
+    "created_at": "2026-08-24T16:13:57.583289+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Cavid Ceyranbatan",
+      "phone": "+994 70 390 93 11",
+      "lead_id": 77493529,
+      "task_id": 93834701,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Çətinliyi var sistemdə",
+      "task_price": "",
+      "note": "Əlaqə saxlayıb köməklik edildi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77493529",
+      "callback_key": "a6d74996"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "35a0c28a",
     "type": "change_stage",
     "created_at": "2026-08-24T15:19:38.847820+04:00",
