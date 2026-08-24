@@ -1,5 +1,33 @@
 [
   {
+    "id": "af334efd",
+    "type": "assign_executor",
+    "created_at": "2026-08-24T14:51:37.763432+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "müştəri",
+      "phone": "0514571643",
+      "lead_id": 77493713,
+      "task_text": "[0] Bizim proqramla maraqlanır qeydiyyatdan keçmək istəyir.",
+      "deadline": "25.08.2026 14:51",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77493713",
+      "conf_key": "bcb1b8da",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "dd6de2bd",
     "type": "assign_executor",
     "created_at": "2026-08-24T14:02:24.194921+04:00",
