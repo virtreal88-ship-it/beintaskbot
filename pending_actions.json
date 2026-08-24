@@ -152,7 +152,7 @@
     "id": "a3f76273",
     "type": "assign_executor",
     "created_at": "2026-08-24T15:04:37.564080+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "admin@nismo",
       "phone": "+994517866662",
@@ -174,7 +174,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-24T16:55:34.212394+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "af334efd",
