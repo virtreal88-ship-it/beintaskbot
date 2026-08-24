@@ -348,7 +348,7 @@
     "id": "2087490a",
     "type": "assign_executor",
     "created_at": "2026-08-22T16:27:46.588260+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Efere",
       "phone": "+994 70 360 80 38",
@@ -370,7 +370,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-24T17:05:17.649992+04:00",
+    "resolved_by": "bot.py:623",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "91c03e86",
