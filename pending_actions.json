@@ -79,7 +79,7 @@
     "id": "7b1c8cbf",
     "type": "change_stage",
     "created_at": "2026-08-24T15:18:56.693515+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Cinar",
       "phone": "994777660809",
@@ -108,7 +108,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-24T16:57:19.966151+04:00",
+    "resolved_by": "bot.py:842",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "a796cbd8",
