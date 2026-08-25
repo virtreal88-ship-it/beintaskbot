@@ -1210,7 +1210,7 @@
         "phone": "0506779660",
         "task_type": "Quraşdırma",
         "amount": 60.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Rafiqin tanışı. Rafiq ilə dəqiqləşdirmək lazımdı maliyyə məsələsini",
         "result_text": "Axşam məhsulları göndərəcək. Bazanı sistemə lavı edib quraşdırma etmək lazım olacaq. 300+50(aylıq) danışdım.aparatlsrı var.",
         "kpi": 0,
@@ -1218,7 +1218,7 @@
         "date": "2026-08-25 11:57:36"
       }
     ],
-    "balance": 216.0
+    "balance": 276.0
   },
   "1289510272": {
     "transactions": [],
