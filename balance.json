@@ -1202,6 +1202,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-23 07:29:04"
+      },
+      {
+        "task_id": 93903599,
+        "executor": "Soltan Abbasov",
+        "client": "Cansu",
+        "phone": "0506779660",
+        "task_type": "Quraşdırma",
+        "amount": 60.0,
+        "status": "pending",
+        "task_text": "Rafiqin tanışı. Rafiq ilə dəqiqləşdirmək lazımdı maliyyə məsələsini",
+        "result_text": "Axşam məhsulları göndərəcək. Bazanı sistemə lavı edib quraşdırma etmək lazım olacaq. 300+50(aylıq) danışdım.aparatlsrı var.",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-25 11:57:36"
       }
     ],
     "balance": 116.0
