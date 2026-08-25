@@ -1196,7 +1196,7 @@
         "phone": "+994558078887",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Quraşdırm edilib,məbləğ görünmürdü deyə yeni task açdım",
         "result_text": "Dünən quraşdırma edilib",
         "kpi": 0,
@@ -1218,7 +1218,7 @@
         "date": "2026-08-25 11:57:36"
       }
     ],
-    "balance": 116.0
+    "balance": 216.0
   },
   "1289510272": {
     "transactions": [],
