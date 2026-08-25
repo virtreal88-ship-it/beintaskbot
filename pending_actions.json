@@ -1,5 +1,44 @@
 [
   {
+    "id": "dda4e272",
+    "type": "reassign_task",
+    "created_at": "2026-08-25T13:13:20.900937+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Restoran",
+      "phone": "+994553721992",
+      "lead_id": 77484985,
+      "task_id": 93834285,
+      "task_text": "müştəri ilə danışıldı proqram haqqında şifahi məlumat verildi. 1ci gün fiziki görüş təyin edildi.icraçı təyin edilməlidir ki, 1ci gün görüşə gedsin",
+      "task_type_name": "",
+      "stage_name": "İcraçı: Rasim Əsgərov → Soltan Abbasov",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Soltan Abbasov",
+      "note": "Cavab vermir. Hər ehtimala 1 2 daat aralıqla yığ",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77484985",
+      "conf_key": "5f2c2b1f",
+      "update_data": {
+        "text": "[Soltan Abbasov] müştəri ilə danışıldı proqram haqqında şifahi məlumat verildi. 1ci gün fiziki görüş təyin edildi.icraçı təyin edilməlidir ki, 1ci gün görüşə gedsin",
+        "responsible_user_id": 15532668,
+        "task_type_id": 1,
+        "complete_till": 1787401800
+      },
+      "creator_chat_id": 7920785774,
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 7153
+    },
+    "options": [
+      "Təsdiq et",
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "5e643955",
     "type": "change_stage",
     "created_at": "2026-08-24T16:13:57.583289+04:00",
