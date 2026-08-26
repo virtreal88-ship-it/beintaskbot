@@ -692,6 +692,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-26 13:47:46"
+      },
+      {
+        "task_id": 94056946,
+        "executor": "Rasim Əsgərov",
+        "client": "Masterorxan",
+        "phone": "+994705703434",
+        "task_type": "Quraşdırma",
+        "amount": 300.0,
+        "status": "pending",
+        "task_text": "3 filial qoşuldu. Özüm nəzarət edirəm. Hər filialına 3 dəfə gedəcəm.",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-26 16:15:10"
       }
     ],
     "balance": -100.0
