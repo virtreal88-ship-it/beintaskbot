@@ -587,8 +587,9 @@ async function loadSamilWorkspace(showFeedback = false) {
         const timeout = setTimeout(() => controller.abort(), 12000);
         showSyncIndicator();
         try {
-            const response = await fetch(API_BASE + '/api/samil/overview', {
-                headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
+            const response = await fetch(API_BASE + '/api/samil/overview?_ts=' + Date.now(), {
+                cache: 'no-store',
+                headers: {'X-TG-User-ID': CURRENT_USER_ID, 'Cache-Control': 'no-cache'}, signal: controller.signal
             });
             const payload = await response.json().catch(() => ({}));
             if(!response.ok || !payload.success) throw new Error(payload.error || 'Məlumat yüklənmədi');
@@ -2366,7 +2367,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=166-samil-workspace');
+    const reg = await navigator.serviceWorker.register('sw.js?v=167-samil-workspace');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
