@@ -460,6 +460,15 @@
     <div id="complete-panel" style="display:none;">
         <label for="complete-note-text" class="text-xs font-bold text-gray-600 block mb-2">Sövdələşmə qeydi (nəticə):</label>
         <textarea id="complete-note-text" placeholder="Nəticəni yazın..." class="w-full min-h-[200px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3" style="flex:1;"></textarea>
+        <div id="samil-completion-stage-selector" style="display:none;" class="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
+            <label for="completion-pipeline-select" class="text-xs font-bold text-violet-900 block mb-2">Mərhələ seçimi (məcburi)</label>
+            <select id="completion-pipeline-select" onchange="renderSamilCompletionStages()" class="w-full p-2.5 text-sm text-gray-700 bg-white border border-violet-200 rounded-lg outline-none mb-2">
+                <option value="samil">Şamil Əliyev</option>
+                <option value="operations">Əməliyyatlar lövhəsi</option>
+            </select>
+            <select id="completion-stage-select" class="w-full p-2.5 text-sm text-gray-700 bg-white border border-violet-200 rounded-lg outline-none" required></select>
+            <div class="text-[10px] text-violet-700 mt-2">Yalnız «Uğurla tamamlandı» seçildikdə Admin təsdiqi tələb olunur.</div>
+        </div>
         <div class="mb-3">
             <div class="flex items-center gap-2">
                 <button type="button" id="complete-voice-btn" onclick="toggleCompleteVoice()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Səs yaz</button>
@@ -534,6 +543,21 @@ const SAMIL_ALL_STAGES = [
     ['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],
     ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
+const SAMIL_COMPLETION_PIPELINES = {
+    samil: {label:'Şamil Əliyev', stages:SAMIL_ALL_STAGES},
+    operations: {label:'Əməliyyatlar lövhəsi', stages:[
+        ['samil','Şamil Əliyev'],['soltan','Soltan Abbasov'],['huseyn','Hüseyn Səfərov'],
+        ['nizami','Nizami Qasımov'],['rasim','Rasim Əsgərov'],['sermaye','Sərmayə Əhmədsoy'],
+        ['asya','Asya Agayeva'],['nurane','Nuranə Şirinova'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
+    ]}
+};
+function renderSamilCompletionStages() {
+    const pipeline = document.getElementById('completion-pipeline-select');
+    const stage = document.getElementById('completion-stage-select');
+    if(!pipeline || !stage) return;
+    const config = SAMIL_COMPLETION_PIPELINES[pipeline.value] || SAMIL_COMPLETION_PIPELINES.samil;
+    stage.innerHTML = '<option value="">Mərhələni seçin</option>' + config.stages.map(([key,label]) => `<option value="${key}">${label}</option>`).join('');
+}
 let samilDeals = [];
 let samilDealsByStage = {};
 let samilStageCounts = {};
@@ -591,9 +615,14 @@ function groupSamilDealsByStage(deals) {
 function applySamilWorkspace(payload) {
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
-    samilDeals = Array.isArray(payload.deals) ? payload.deals : [];
+    const normalizeDeal = deal => {
+        const dealName = String(deal?.name || '').trim();
+        const contactName = String(deal?.contact_name || '').trim();
+        return {...deal, name:'', contact_name: contactName === dealName ? '' : contactName};
+    };
+    samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
     samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
-        ? payload.deals_by_stage
+        ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal) : []]))
         : groupSamilDealsByStage(samilDeals);
     SAMIL_UI_STAGES.forEach(([key]) => {
         if(!Array.isArray(samilDealsByStage[key])) samilDealsByStage[key] = samilDeals.filter(deal => deal.stage_key === key);
@@ -1692,6 +1721,11 @@ function showCompletePanel() {
     document.getElementById('action-buttons').style.display = 'none';
     document.getElementById('complete-panel').style.display = 'block';
     document.getElementById('postpone-fast-menu').style.display = 'none';
+    const selector = document.getElementById('samil-completion-stage-selector');
+    if(selector) {
+        selector.style.display = IS_SAMIL ? 'block' : 'none';
+        if(IS_SAMIL) renderSamilCompletionStages();
+    }
     const note = document.getElementById('complete-note-text');
     if(note) setTimeout(() => note.focus(), 100);
 }
@@ -1701,6 +1735,9 @@ async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
+    const completionPipeline = IS_SAMIL ? document.getElementById('completion-pipeline-select')?.value : '';
+    const completionStage = IS_SAMIL ? document.getElementById('completion-stage-select')?.value : '';
+    if(IS_SAMIL && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
     const completedId = task.id;
     const btn = document.getElementById('btn-confirm-complete');
     const origText = btn ? btn.innerHTML : '';
@@ -1710,7 +1747,7 @@ async function confirmComplete() {
         const r = await fetch(API_BASE + '/api/action', {
             method:'POST',
             headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
-            body:JSON.stringify({action:'complete_task', task_id:completedId, phone:task.phone||'', note:noteText})
+            body:JSON.stringify({action:'complete_task', task_id:completedId, phone:task.phone||'', note:noteText, completion_pipeline:completionPipeline, completion_stage:completionStage})
         });
         const j = await r.json();
         if(!r.ok || !j.success) { toast(j.error || j.message || 'Tapşırıq tamamlanmadı', true); return; }

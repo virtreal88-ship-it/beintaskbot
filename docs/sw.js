@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v169-preload-deals';
+const CACHE_NAME = 'bein-v171-hide-deal-name';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

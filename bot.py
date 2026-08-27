@@ -724,9 +724,10 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             status_id = action_data.get("status_id")
             if not lead_id or not status_id:
                 return False, "Mərhələ məlumatı natamamdır."
+            target_pipeline_id = int(action_data.get("pipeline_id") or PIPELINE_ID)
             if not update_lead_kommo(
                 int(lead_id),
-                {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+                {"status_id": int(status_id), "pipeline_id": target_pipeline_id},
             ):
                 return False, "Kommo mərhələsi dəyişdirilmədi."
             stage_key = action_data.get("stage_key") or _stage_key_for_status(int(status_id))
@@ -1103,6 +1104,32 @@ def get_pipeline_id_for_chat(chat_id=None) -> int:
 
 def get_pipeline_stages_for_chat(chat_id=None) -> tuple[dict, dict]:
     return (SAMIL_STAGES, SAMIL_STAGE_NAMES) if is_samil_chat(chat_id) else (STAGES, STAGE_NAMES)
+
+
+def get_samil_completion_stage(pipeline_key: str, stage_key: str) -> tuple[int, int, str] | None:
+    """Resolve Şamil's required completion-stage choice across both permitted pipelines."""
+    if pipeline_key == "samil":
+        status_id = SAMIL_STAGES.get(stage_key)
+        if status_id:
+            return SAMIL_PIPELINE_ID, int(status_id), SAMIL_STAGE_NAMES.get(int(status_id), stage_key)
+        return None
+    if pipeline_key == "operations":
+        operation_stages = {
+            "samil": (109988184, "Şamil Əliyev"),
+            "soltan": (109988188, "Soltan Abbasov"),
+            "huseyn": (109988192, "Hüseyn Səfərov"),
+            "nizami": (109988196, "Nizami Qasımov"),
+            "rasim": (109988200, "Rasim Əsgərov"),
+            "sermaye": (109988204, "Sərmayə Əhmədsoy"),
+            "asya": (109988208, "Asya Agayeva"),
+            "nurane": (109988212, "Nuranə Şirinova"),
+            "ugurlu": (142, "Uğurla tamamlandı"),
+            "imtina": (143, "İmtina olundu"),
+        }
+        stage = operation_stages.get(stage_key)
+        if stage:
+            return GOZLEME_PIPELINE_ID, int(stage[0]), stage[1]
+    return None
 
 
 def get_lead_details(lead_id: int) -> dict | None:
@@ -2706,8 +2733,9 @@ async def confirm_transition_callback(update: Update, context: ContextTypes.DEFA
         lead_id = pending["lead_id"]
         status_id = pending["status_id"]
         stage = pending["stage"]
-        update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
-        stage_display = STAGE_NAMES.get(status_id, stage)
+        target_pipeline_id = int(pending.get("pipeline_id") or PIPELINE_ID)
+        update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": target_pipeline_id})
+        stage_display = pending.get("stage_name") or STAGE_NAMES.get(status_id, stage)
         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
         try:
             await query.edit_message_text(
@@ -4936,6 +4964,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             delay_reason = data.get("delay_reason", "")
             task_type_id = int(task_data.get("task_type_id", 1) or 1)
             task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
+            samil_completion_stage = None
+            if is_samil_chat(chat_id):
+                selected_pipeline = str(data.get("completion_pipeline", "")).strip()
+                selected_stage = str(data.get("completion_stage", "")).strip()
+                samil_completion_stage = get_samil_completion_stage(selected_pipeline, selected_stage)
+                if not samil_completion_stage:
+                    return web.json_response({"success": False, "error": "Mərhələ seçin: Şamil Əliyev və ya Əməliyyatlar lövhəsi."})
 
             # Salary KPI is deterministic: on/before the Kommo deadline = 100,
             # after the deadline = 0. Admin can correct it afterward.
@@ -4960,14 +4995,70 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 task_id,
                 {"is_completed": True, "result": {"text": task_result_text}},
             )
-            # Move lead to Успешно (142) in Əməliyyatlar pipeline on completion
-            if result and lead_id:
-                try:
-                    _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
-                        headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": 142}, timeout=8)
-                except Exception as _ue:
-                    logger.error(f"Failed to move lead to Ugurlu: {_ue}")
             stage_msg = ""
+            if result and lead_id:
+                if samil_completion_stage:
+                    target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
+                    target_pipeline_name = "Şamil Əliyev" if target_pipeline_id == SAMIL_PIPELINE_ID else "Əməliyyatlar lövhəsi"
+                    if target_status_id == 142:
+                        # Only successful completion requires Admin approval; all other choices move immediately.
+                        conf_key = str(uuid.uuid4())[:8]
+                        completion_sender = get_employee_name_by_chat_id(chat_id, "Şamil Əliyev")
+                        deadline_display = (
+                            datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                            if task_deadline_ts else "—"
+                        )
+                        task_desc = re.sub(r"^\[[^\]]+\]\s*", "", task_data.get("text", "")).strip() or "—"
+                        admin_chat = get_chat_id_for_kommo_user(ADMIN_KOMMO_USER_ID) or ADMIN_CHAT_ID
+                        sent = None
+                        if _bot_app and admin_chat:
+                            _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                                "lead_id": int(lead_id), "status_id": int(target_status_id),
+                                "stage": selected_stage, "stage_name": target_stage_name,
+                                "pipeline_id": int(target_pipeline_id), "sender_chat_id": int(chat_id),
+                                "phone": phone or "—",
+                            }
+                            try:
+                                keyboard = InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"),
+                                    InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
+                                ]])
+                                sent = await _bot_app.bot.send_message(
+                                    int(admin_chat),
+                                    f"🔄 *{completion_sender}* uğurla tamamlanmanı təsdiqə göndərdi:\n\n"
+                                    f"👤 {contact_name or '—'}\n📝 {task_desc}\n📞 {phone or '—'}\n"
+                                    f"⏰ {deadline_display}\n📌 {target_pipeline_name}: {target_stage_name}\n🔗 {link}",
+                                    parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True,
+                                )
+                            except Exception as exc:
+                                logger.error(f"Şamil completion confirmation send error: {exc}")
+                        save_pending_action("confirm_stage", {
+                            "contact_name": contact_name or "—", "phone": phone or "—", "lead_id": int(lead_id),
+                            "status_id": int(target_status_id), "stage_name": target_stage_name,
+                            "stage_key": selected_stage, "pipeline_id": int(target_pipeline_id),
+                            "sender_name": completion_sender, "sender_chat_id": int(chat_id), "conf_key": conf_key,
+                            "link": link, "telegram_chat_id": admin_chat,
+                            "telegram_message_id": sent.message_id if sent else None,
+                        }, ["Təsdiq et", "Rədd et"])
+                        send_push_to_admin(
+                            f"{completion_sender}: {contact_name or '—'} → {target_stage_name}",
+                            title="🔄 Uğurla tamamlandı — təsdiq", url="#pending",
+                        )
+                        stage_msg = "\n📌 Uğurla tamamlandı: Admin təsdiqi gözlənilir"
+                    elif update_lead_kommo(
+                        int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
+                    ):
+                        stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
+                    else:
+                        logger.error("Şamil completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
+                        stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
+                else:
+                    # Existing behaviour for every employee other than Şamil.
+                    try:
+                        _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
+                            headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": 142}, timeout=8)
+                    except Exception as _ue:
+                        logger.error(f"Failed to move lead to Ugurlu: {_ue}")
             # Also change stage if requested by legacy clients.
             new_stage = data.get("new_stage")
             logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={phone}, result={bool(result)}")
@@ -5119,7 +5210,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
 
                 admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
                 logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}")
-                if admin_chat:
+                if admin_chat and not is_samil_chat(chat_id):
                     deadline_display = (
                         datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
                         if task_deadline_ts else "—"
@@ -5463,7 +5554,8 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
                 first_contact_id = int(lead_contacts[0].get("id"))
             except (TypeError, ValueError):
                 pass
-        contact = contacts.get(first_contact_id or 0, {"name": lead.get("name", ""), "custom_fields_values": []})
+        # Never fall back to the deal title: Müştəri must contain only the contact name.
+        contact = contacts.get(first_contact_id or 0, {"name": "", "custom_fields_values": []})
         phone = ""
         for field in contact.get("custom_fields_values", []) or []:
             if field.get("field_code") == "PHONE" and field.get("values"):
@@ -5471,7 +5563,7 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
                 break
         status_id = lead.get("status_id", 0)
         deals.append({
-            "id": lead_id, "name": lead.get("name", ""),
+            "id": lead_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": SAMIL_STAGE_NAMES.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone,
