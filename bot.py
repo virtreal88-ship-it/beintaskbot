@@ -107,6 +107,9 @@ STAGE_NAMES = {
     142: "uğurlu sifariş",
     143: "imtina olundu",
 }
+# Notify Admin only when a Sövdələşmələr deal moves to "Nömrə alınıb".
+# Kommo status ID verified from the pipeline configuration.
+NOTIFY_STAGE_ID = 108537924
 KOMMO_USERS = {
     10932455: "Nizami Qasımov",
     15531960: "Soltan Abbasov",
@@ -3998,6 +4001,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 return web.Response(status=200, text="OK")
             else:
                 del _bot_changed_leads[lead_id]
+        # Notify only the target stage; ignore all other Sövdələşmələr stage changes.
+        if new_status_id != NOTIFY_STAGE_ID:
+            logger.info(f"Webhook ignored: stage {new_status_id} is not Nömrə alınıb")
+            return web.Response(status=200, text="OK")
         # Deduplicate: same lead+stage within 60s = duplicate webhook
         import time as _time2
         _dedup_key = (lead_id, new_status_id)
@@ -4010,10 +4017,6 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         for k in list(_webhook_stage_dedup.keys()):
             if _webhook_stage_dedup[k] < _cutoff:
                 del _webhook_stage_dedup[k]
-        # Suppressed stages - no notification
-        suppressed = {STAGES["imtina"], STAGES["danisiqlar"], STAGES["dusunur"]}
-        if new_status_id in suppressed:
-            return web.Response(status=200, text="OK")
         # Get lead details
         lead = get_lead_details(lead_id)
         lead_name = lead.get("name", "Adsız") if lead else "Adsız"
