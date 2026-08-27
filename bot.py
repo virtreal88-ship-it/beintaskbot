@@ -5382,38 +5382,45 @@ def _samil_marker_name(task_text: str) -> str:
 
 
 async def build_samil_overview(stage_key: str | None = None) -> dict:
-    """Load Şamil's data, optionally limited to one deal stage.
-
-    The deals screen passes a stage; notifications and Gözləmə pass None so
-    their existing cross-stage behaviour remains unchanged.
-    """
+    """Load the complete Şamil pipeline once for instant local stage switching."""
     if stage_key is not None and stage_key not in SAMIL_STAGES:
         stage_key = "sorgular"
-    selected_status_id = SAMIL_STAGES.get(stage_key) if stage_key else None
-    # These independent, bounded requests run together.  Contact names are
-    # represented by the deal name here, avoiding a slow request per contact.
-    leads_request = asyncio.create_task(_kommo_get_async(
-        f"{KOMMO_BASE_URL}/api/v4/leads",
-        params={
-            "filter[pipeline_id]": SAMIL_PIPELINE_ID,
-            "with": "contacts",
-            "limit": 50 if selected_status_id else 250,
-            **({
-                "filter[statuses][0][pipeline_id]": SAMIL_PIPELINE_ID,
-                "filter[statuses][0][status_id]": selected_status_id,
-            } if selected_status_id else {}),
-        },
-        timeout=8,
-    ))
+
+    async def _load_all_samil_leads() -> list[dict]:
+        """Fetch every page from the pipeline so no stage is loaded on demand."""
+        all_leads: list[dict] = []
+        page = 1
+        while True:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/leads",
+                params={
+                    "filter[pipeline_id]": SAMIL_PIPELINE_ID,
+                    "with": "contacts",
+                    "limit": 250,
+                    "page": page,
+                },
+                timeout=8,
+            )
+            # Kommo can respond with 204 when a page beyond the last one is requested.
+            if response.status_code == 204:
+                break
+            if response.status_code != 200:
+                raise RuntimeError(f"Şamil leads fetch failed: {response.status_code}")
+            batch = response.json().get("_embedded", {}).get("leads", []) or []
+            all_leads.extend(batch)
+            if len(batch) < 250:
+                break
+            page += 1
+        return all_leads
+
+    # Both requests are independent and start at the same time.
+    leads_request = asyncio.create_task(_load_all_samil_leads())
     tasks_request = asyncio.create_task(_kommo_get_async(
         f"{KOMMO_BASE_URL}/api/v4/tasks",
         params={"filter[is_completed]": 0, "filter[responsible_user_id]": 15532668, "limit": 250},
         timeout=8,
     ))
-    leads_response = await leads_request
-    if leads_response.status_code != 200:
-        raise RuntimeError(f"Şamil leads fetch failed: {leads_response.status_code}")
-    leads = leads_response.json().get("_embedded", {}).get("leads", []) or []
+    leads = await leads_request
 
     status_to_key = {status_id: key for key, status_id in SAMIL_STAGES.items()}
     stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in SAMIL_STAGES}
@@ -5474,6 +5481,11 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
     deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
+    deals_by_stage = {key: [] for key in SAMIL_STAGES}
+    for deal in deals:
+        stage_deals = deals_by_stage.get(deal.get("stage_key"))
+        if stage_deals is not None:
+            stage_deals.append(deal)
 
     tasks_response = await tasks_request
     if tasks_response.status_code != 200:
@@ -5564,25 +5576,24 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
     normal_tasks.sort(key=lambda item: (not item["is_overdue"], item["complete_till"] or 9999999999))
     reminder_tasks.sort(key=lambda item: (not item["is_overdue"], item["complete_till"] or 9999999999))
     return {
-        "tasks": normal_tasks, "gozleme": reminder_tasks, "deals": deals, "stage_counts": stage_counts,
+        "tasks": normal_tasks, "gozleme": reminder_tasks, "deals": deals,
+        "deals_by_stage": deals_by_stage, "stage_counts": stage_counts,
         "user_name": get_employee_name_by_chat_id(SAMIL_CHAT_ID, "Şamil Əliyev"),
-        "stage_key": stage_key,
+        "stage_key": None,
     }
 
 
 async def handle_api_samil_overview(request: web.Request) -> web.Response:
-    """Return one selected-stage data set for Şamil's PWA."""
+    """Return the fully preloaded Şamil workspace for instant stage switching."""
     try:
         chat_id = int(request.headers.get("X-TG-User-ID", ""))
     except (TypeError, ValueError):
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
     if not is_samil_chat(chat_id):
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    stage_key = request.rel_url.query.get("stage_key", "all")
-    # The deals screen sends a concrete stage. Other Şamil tabs use "all".
-    overview_stage = None if stage_key == "all" else stage_key
+    # Stage filtering is deliberately performed in the browser after one full prefetch.
     try:
-        overview = await build_samil_overview(overview_stage)
+        overview = await build_samil_overview()
         return web.json_response({"success": True, **overview, "is_admin": False})
     except Exception as exc:
         logger.error("Şamil overview error: %s", exc)

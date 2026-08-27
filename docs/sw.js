@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v168-cors-fix';
+const CACHE_NAME = 'bein-v169-preload-deals';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

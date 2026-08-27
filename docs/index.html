@@ -535,6 +535,7 @@ const SAMIL_ALL_STAGES = [
     ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
 let samilDeals = [];
+let samilDealsByStage = {};
 let samilStageCounts = {};
 let samilStageFilter = 'sorgular';
 let samilWorkspaceRequest = null;
@@ -579,10 +580,36 @@ function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stri
 function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
 function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
 
+function groupSamilDealsByStage(deals) {
+    const grouped = Object.fromEntries(SAMIL_UI_STAGES.map(([key]) => [key, []]));
+    (Array.isArray(deals) ? deals : []).forEach(deal => {
+        if(grouped[deal.stage_key]) grouped[deal.stage_key].push(deal);
+    });
+    return grouped;
+}
+
+function applySamilWorkspace(payload) {
+    mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+    gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
+    samilDeals = Array.isArray(payload.deals) ? payload.deals : [];
+    samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
+        ? payload.deals_by_stage
+        : groupSamilDealsByStage(samilDeals);
+    SAMIL_UI_STAGES.forEach(([key]) => {
+        if(!Array.isArray(samilDealsByStage[key])) samilDealsByStage[key] = samilDeals.filter(deal => deal.stage_key === key);
+    });
+    samilStageCounts = payload.stage_counts || {};
+    SAMIL_UI_STAGES.forEach(([key]) => {
+        if(!Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = samilDealsByStage[key].length;
+    });
+    if(payload.user_name) setUserDisplayName(payload.user_name);
+}
+
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
     if(!IS_SAMIL) return false;
-    const stageParam = requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage) ? requestedStage : 'all';
-    if(requestedStage) samilStageFilter = stageParam;
+    if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
+    // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
+    const stageParam = 'all';
     if(samilWorkspaceRequest) return samilWorkspaceRequest;
     samilWorkspaceRequest = (async () => {
         const controller = new AbortController();
@@ -596,14 +623,10 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
             });
             const payload = await response.json().catch(() => ({}));
             if(!response.ok || !payload.success) throw new Error(payload.error || 'Məlumat yüklənmədi');
-            mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-            gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
-            samilDeals = Array.isArray(payload.deals) ? payload.deals : [];
-            samilStageCounts = payload.stage_counts || {};
+            applySamilWorkspace(payload);
             setCachedTasks(mockTasks);
             setCachedGozleme(gozlemeItems);
             setCachedSamilWorkspace(payload);
-            if(payload.user_name) setUserDisplayName(payload.user_name);
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
             if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
@@ -624,12 +647,9 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
 
 function restoreSamilWorkspaceFromCache() {
     const cached = getCachedSamilWorkspace();
-    if(!cached || cached.stage_key !== samilStageFilter) return false;
-    mockTasks = Array.isArray(cached.tasks) ? cached.tasks : [];
-    gozlemeItems = Array.isArray(cached.gozleme) ? cached.gozleme : [];
-    samilDeals = Array.isArray(cached.deals) ? cached.deals : [];
-    samilStageCounts = cached.stage_counts || {};
-    if(cached.user_name) setUserDisplayName(cached.user_name);
+    // Köhnə versiyalar yalnız bir mərhələnin məlumatını yadda saxlayırdı; onları istifadə etməyək.
+    if(!cached || (cached.stage_key && cached.stage_key !== 'all')) return false;
+    applySamilWorkspace(cached);
     return true;
 }
 
@@ -1537,11 +1557,11 @@ function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 }
 
-async function setSamilStageFilter(stageKey) {
+function setSamilStageFilter(stageKey) {
     if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
     samilStageFilter = stageKey;
+    // Mərhələlərarası keçid şəbəkəyə sorğu göndərmir: bütün siyahı əvvəlcədən yüklənib.
     renderSamilDeals();
-    await loadSamilWorkspace(false, stageKey);
 }
 
 function renderSamilDeals() {
@@ -1550,8 +1570,12 @@ function renderSamilDeals() {
     const count = document.getElementById('samil-deals-count');
     if(!nav || !container || !count) return;
     const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
-    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, Number(samilStageCounts[key]) || (key === samilStageFilter ? samilDeals.length : 0))).join('');
-    const filtered = samilDeals;
+    const localCount = key => (Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0);
+    const stageTotal = key => Number.isFinite(Number(samilStageCounts[key])) ? Number(samilStageCounts[key]) : localCount(key);
+    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    const filtered = Array.isArray(samilDealsByStage[samilStageFilter])
+        ? samilDealsByStage[samilStageFilter]
+        : samilDeals.filter(deal => deal.stage_key === samilStageFilter);
     const activeLabel = (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
     count.textContent = `${activeLabel}: ${filtered.length} sövdələşmə`;
     if(!filtered.length) {
@@ -1610,7 +1634,8 @@ async function openSamilDeals() {
     } else {
         renderSamilDeals();
     }
-    await loadSamilWorkspace(false, samilStageFilter);
+    // Ekran dərhal lokal məlumatdan açılır; yenilənmə arxa planda bütün mərhələləri yeniləyir.
+    loadSamilWorkspace(false);
 }
 
 function desktopCompleteTask(taskId) {
@@ -2371,7 +2396,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=168-cors-fix');
+    const reg = await navigator.serviceWorker.register('sw.js?v=169-preload-deals');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
