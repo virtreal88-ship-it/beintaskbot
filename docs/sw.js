@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v165-samil-isolation';
+const CACHE_NAME = 'bein-v166-samil-workspace';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

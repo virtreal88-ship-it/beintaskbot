@@ -5319,6 +5319,189 @@ async def handle_api_action(request: web.Request) -> web.Response:
         logger.error(f"API action error: {e}\n{traceback.format_exc()}")
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
 
+async def _kommo_get_async(url: str, *, params: dict | None = None, timeout: int = 8):
+    """Run a blocking Kommo GET outside the aiohttp event loop."""
+    return await asyncio.to_thread(requests.get, url, headers=HEADERS, params=params, timeout=timeout)
+
+
+def _format_samil_deadline(deadline_ts: int | float | None, now: datetime) -> tuple[str, str, bool]:
+    """Return the compact task deadline, full deadline and overdue flag."""
+    try:
+        ts = int(deadline_ts or 0)
+    except (TypeError, ValueError):
+        ts = 0
+    if not ts:
+        return "", "", False
+    deadline_dt = datetime.fromtimestamp(ts, tz=BAKU_TZ)
+    is_overdue = deadline_dt < now
+    compact = deadline_dt.strftime("%d.%m %H:%M")
+    if is_overdue:
+        diff = now - deadline_dt
+        hours = int(diff.total_seconds() // 3600)
+        compact = f"{hours} saat gecikir" if hours > 0 else f"{int(diff.total_seconds() // 60)} dəq gecikir"
+    return compact, deadline_dt.strftime("%d.%m.%Y %H:%M"), is_overdue
+
+
+def _samil_marker_name(task_text: str) -> str:
+    """Normalize the optional employee marker at the beginning of a task."""
+    match = re.match(
+        r'^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Texniki tapşırıq|Şamil|Soltan|Hüseyn|Nizami|Rasim|Sərmayə|Asya|Nuranə|Texniki)(?::[\d.]+)?\]\s*',
+        task_text or "",
+    )
+    if not match:
+        return ""
+    return {
+        "Şamil": "Şamil Əliyev", "Soltan": "Soltan Abbasov", "Hüseyn": "Hüseyn Səfərov",
+        "Nizami": "Nizami Qasımov", "Rasim": "Rasim Əsgərov", "Sərmayə": "Sərmayə Əhmədsoy",
+        "Asya": "Asya Agayeva", "Nuranə": "Nuranə Şirinova", "Texniki": TECHNICAL_SUPPORT_NAME,
+    }.get(match.group(1), match.group(1))
+
+
+async def build_samil_overview() -> dict:
+    """Load Şamil's funnel once and derive deals, active tasks and reminders."""
+    # These independent, bounded requests run together.  Contact names are
+    # represented by the deal name here, avoiding a slow request per contact.
+    leads_request = asyncio.create_task(_kommo_get_async(
+        f"{KOMMO_BASE_URL}/api/v4/leads",
+        params={"filter[pipeline_id]": SAMIL_PIPELINE_ID, "with": "contacts", "limit": 250},
+        timeout=8,
+    ))
+    tasks_request = asyncio.create_task(_kommo_get_async(
+        f"{KOMMO_BASE_URL}/api/v4/tasks",
+        params={"filter[is_completed]": 0, "filter[responsible_user_id]": 15532668, "limit": 250},
+        timeout=8,
+    ))
+    leads_response = await leads_request
+    if leads_response.status_code != 200:
+        raise RuntimeError(f"Şamil leads fetch failed: {leads_response.status_code}")
+    leads = leads_response.json().get("_embedded", {}).get("leads", []) or []
+
+    status_to_key = {status_id: stage_key for stage_key, status_id in SAMIL_STAGES.items()}
+    stage_counts = {stage_key: 0 for stage_key in SAMIL_STAGES}
+    lead_by_id: dict[int, dict] = {}
+    lead_by_contact_id: dict[int, dict] = {}
+    for lead in leads:
+        try:
+            lead_id = int(lead.get("id"))
+        except (TypeError, ValueError):
+            continue
+        lead_by_id[lead_id] = lead
+        stage_key = status_to_key.get(lead.get("status_id"), "")
+        if stage_key:
+            stage_counts[stage_key] += 1
+        for contact in lead.get("_embedded", {}).get("contacts", []) or []:
+            try:
+                contact_id = int(contact.get("id"))
+            except (TypeError, ValueError):
+                continue
+            lead_by_contact_id.setdefault(contact_id, lead)
+
+    contacts = {}
+    deals = []
+    for lead_id, lead in lead_by_id.items():
+        lead_contacts = lead.get("_embedded", {}).get("contacts", []) or []
+        first_contact_id = None
+        if lead_contacts:
+            try:
+                first_contact_id = int(lead_contacts[0].get("id"))
+            except (TypeError, ValueError):
+                pass
+        contact = contacts.get(first_contact_id or 0, {"name": lead.get("name", ""), "phone": ""})
+        status_id = lead.get("status_id", 0)
+        deals.append({
+            "id": lead_id,
+            "name": lead.get("name", ""),
+            "stage_key": status_to_key.get(status_id, ""),
+            "stage_name": SAMIL_STAGE_NAMES.get(status_id, "Naməlum mərhələ"),
+            "contact_name": contact.get("name", ""),
+            "phone": contact.get("phone", ""),
+            "updated_at": lead.get("updated_at", 0),
+            "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+        })
+    deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
+
+    tasks_response = await tasks_request
+    if tasks_response.status_code != 200:
+        raise RuntimeError(f"Şamil tasks fetch failed: {tasks_response.status_code}")
+
+    now = datetime.now(tz=BAKU_TZ)
+    normal_tasks: list[dict] = []
+    reminder_tasks: list[dict] = []
+    task_type_names = {
+        1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
+        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt.",
+    }
+    for task in tasks_response.json().get("_embedded", {}).get("tasks", []) or []:
+        try:
+            entity_id = int(task.get("entity_id"))
+        except (TypeError, ValueError):
+            continue
+        entity_type = task.get("entity_type", "contacts")
+        lead = lead_by_id.get(entity_id) if entity_type == "leads" else lead_by_contact_id.get(entity_id)
+        if not lead:
+            continue
+        task_text = task.get("text", "")
+        marker_name = _samil_marker_name(task_text)
+        if marker_name and marker_name != "Şamil Əliyev":
+            continue
+        task_type_id = task.get("task_type_id", 1)
+        if task_type_id == 4229224:
+            continue
+        lead_id = int(lead["id"])
+        lead_contacts = lead.get("_embedded", {}).get("contacts", []) or []
+        first_contact_id = None
+        if lead_contacts:
+            try:
+                first_contact_id = int(lead_contacts[0].get("id"))
+            except (TypeError, ValueError):
+                pass
+        contact = contacts.get(first_contact_id or 0, {"name": lead.get("name", ""), "phone": ""})
+        deadline_ts = task.get("complete_till", 0)
+        compact_deadline, full_deadline, is_overdue = _format_samil_deadline(deadline_ts, now)
+        price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", task_text)
+        item = {
+            "id": task.get("id"), "task_id": task.get("id"),
+            "title": "⚠️ Gecikmiş tapşırıq" if is_overdue else "📋 Aktiv tapşırıq",
+            "desc": task_text, "task_text": task_text,
+            "price": price_match.group(1) if price_match else "",
+            "time": compact_deadline, "deadline": full_deadline, "deadline_ts": deadline_ts,
+            "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
+            "lead_id": lead_id, "lead_name": lead.get("name", ""),
+            "contact_name": contact.get("name", ""), "phone": contact.get("phone", ""),
+            "responsible": "Şamil Əliyev", "assigneeName": "Şamil Əliyev", "assignee_name": "Şamil Əliyev",
+            "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
+            "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
+            "last_note": "", "priority": "",
+            "stage_name": SAMIL_STAGE_NAMES.get(lead.get("status_id", 0), ""),
+            "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "", "created_by": "",
+        }
+        (reminder_tasks if task_type_id == XATIRLAT_TASK_TYPE_ID else normal_tasks).append(item)
+
+    normal_tasks.sort(key=lambda item: (not item["is_overdue"], item["complete_till"] or 9999999999))
+    reminder_tasks.sort(key=lambda item: (not item["is_overdue"], item["complete_till"] or 9999999999))
+    return {
+        "tasks": normal_tasks, "gozleme": reminder_tasks, "deals": deals, "stage_counts": stage_counts,
+        "user_name": get_employee_name_by_chat_id(SAMIL_CHAT_ID, "Şamil Əliyev"),
+    }
+
+
+async def handle_api_samil_overview(request: web.Request) -> web.Response:
+    """Return one compact, complete data set for Şamil's PWA."""
+    try:
+        chat_id = int(request.headers.get("X-TG-User-ID", ""))
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_samil_chat(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    try:
+        overview = await build_samil_overview()
+        return web.json_response({"success": True, **overview, "is_admin": False})
+    except Exception as exc:
+        logger.error("Şamil overview error: %s", exc)
+        return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
+
+
 async def handle_api_notifications(request: web.Request) -> web.Response:
     """Return active tasks for the requesting user."""
     try:
@@ -5326,6 +5509,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         chat_id = int(tg_user_id) if tg_user_id else None
         if not chat_id:
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
+        if is_samil_chat(chat_id):
+            overview = await build_samil_overview()
+            return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
+                                      "user_name": overview["user_name"]})
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
@@ -5614,7 +5801,11 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         is_admin = kommo_user_id == ADMIN_KOMMO_USER_ID or chat_id == ADMIN_CHAT_ID
 
         if is_samil_chat(chat_id):
-            return web.json_response({"success": True, "items": [], "count": 0})
+            overview = await build_samil_overview()
+            reminders = overview["gozleme"]
+            return web.json_response({"success": True, "items": reminders, "tasks": reminders,
+                                      "count": len(reminders), "is_admin": False,
+                                      "user_name": overview["user_name"]})
         user_status_id = TG_TO_STATUS_ID.get(chat_id)
         if not is_admin and not user_status_id:
             return web.json_response({"success": True, "items": [], "tasks": [], "is_admin": False,
@@ -6047,12 +6238,14 @@ async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
+    app_web.router.add_get("/api/samil/overview", handle_api_samil_overview)
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)

@@ -92,17 +92,18 @@
             #content-area .text-\[11px\] { font-size:12px; }
             #content-area .text-\[10px\] { font-size:11px; }
             /* Two-column grid for task and pending cards */
-            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container {
+            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container, #samil-deals-container {
                 display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; align-items:start;
             }
-            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > * { margin:0 !important; }
+            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > *, #samil-deals-container > * { margin:0 !important; }
             /* Full-width rows inside grid (empty states, section separators) */
             #notifications-container > div[class*='text-center'],
             #pending-actions-container > div[class*='text-center'],
             #balance-history-container > div[class*='text-center'],
             #balance-history-container > div[class*='mt-4'],
             #kpi-history-container > div[class*='text-center'],
-            #gozleme-container > div[class*='text-center'] { grid-column:1 / -1; }
+            #gozleme-container > div[class*='text-center'],
+            #samil-deals-container > div[class*='text-center'] { grid-column:1 / -1; }
             /* Bottom sheet becomes a centered panel (offset by sidebar width) */
             #bottom-action-bar { max-width:640px; left:240px; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; box-shadow:0 -8px 40px rgba(0,0,0,0.15); }
             /* Desktop-only click actions on task cards */
@@ -142,6 +143,9 @@
     </div>
     <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
         <span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
+    </button>
+    <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
+        <span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
     </button>
     <button id="side-tab-create" class="sidebar-item" onclick="switchTab('tab-create')">
         <span class="sidebar-icon">➕</span><span>Yeni</span>
@@ -240,6 +244,20 @@
 
         <!-- Tasks container -->
         <div id="notifications-container" class="space-y-3" style="padding-bottom:20px;"></div>
+    </div>
+
+    <!-- SCREEN: ŞAMIL DEALS -->
+    <div id="screen-samil-deals" class="screen space-y-3">
+        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div>
+                <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Mərhələ üzrə müştərilər</div>
+            </div>
+            <button onclick="loadSamilWorkspace(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+        </div>
+        <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Şamilin mərhələləri"></div>
+        <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
+        <div id="samil-deals-container" class="space-y-3" style="padding-bottom:20px;"></div>
     </div>
 
     <!-- SCREEN: CREATE TASK -->
@@ -468,6 +486,9 @@
     <button id="tab-tasks" onclick="switchTab('tab-tasks')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]">
         <span class="text-lg">📋</span><span class="mt-0.5">Tapşırıqlar</span>
     </button>
+    <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">🗂️</span><span class="mt-0.5">Mərhələlər</span>
+    </button>
     <button id="tab-create" onclick="switchTab('tab-create')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">➕</span><span class="mt-0.5">Yeni</span>
     </button>
@@ -509,6 +530,10 @@ const SAMIL_UI_STAGES = [
     ['geri_donusler','Geri dönüşlər'],['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],
     ['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
+let samilDeals = [];
+let samilStageCounts = {};
+let samilStageFilter = 'all';
+let samilWorkspaceRequest = null;
 function applySamilUi() {
     if(!IS_SAMIL) return;
     const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
@@ -520,9 +545,11 @@ function applySamilUi() {
         const el = document.getElementById(id);
         if(el) { el.innerHTML = '<option value="Şamil Əliyev">Şamil Əliyev</option>'; el.value = 'Şamil Əliyev'; }
     });
-    ['filter-row','gozleme-filter-row','side-tab-gozleme'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    ['tab-samil-deals','side-tab-samil-deals'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='flex'; });
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
+const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
     'task-client-name','search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
@@ -545,6 +572,58 @@ function setUserDisplayName(name) {
 }
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
+function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
+function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
+
+async function loadSamilWorkspace(showFeedback = false) {
+    if(!IS_SAMIL) return false;
+    if(samilWorkspaceRequest) return samilWorkspaceRequest;
+    samilWorkspaceRequest = (async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 12000);
+        showSyncIndicator();
+        try {
+            const response = await fetch(API_BASE + '/api/samil/overview', {
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
+            });
+            const payload = await response.json().catch(() => ({}));
+            if(!response.ok || !payload.success) throw new Error(payload.error || 'Məlumat yüklənmədi');
+            mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+            gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
+            samilDeals = Array.isArray(payload.deals) ? payload.deals : [];
+            samilStageCounts = payload.stage_counts || {};
+            setCachedTasks(mockTasks);
+            setCachedGozleme(gozlemeItems);
+            setCachedSamilWorkspace(payload);
+            if(payload.user_name) setUserDisplayName(payload.user_name);
+            if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
+            if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
+            if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
+            if(showFeedback) toast('Məlumatlar yeniləndi', false);
+            return true;
+        } catch(error) {
+            if(showFeedback) toast(error.name === 'AbortError' ? 'Server cavab vermir. Yenidən cəhd edin.' : 'Məlumatlar yüklənmədi', true);
+            return false;
+        } finally {
+            clearTimeout(timeout);
+            samilWorkspaceRequest = null;
+            hideLoader();
+            hideSyncIndicator();
+        }
+    })();
+    return samilWorkspaceRequest;
+}
+
+function restoreSamilWorkspaceFromCache() {
+    const cached = getCachedSamilWorkspace();
+    if(!cached) return false;
+    mockTasks = Array.isArray(cached.tasks) ? cached.tasks : [];
+    gozlemeItems = Array.isArray(cached.gozleme) ? cached.gozleme : [];
+    samilDeals = Array.isArray(cached.deals) ? cached.deals : [];
+    samilStageCounts = cached.stage_counts || {};
+    if(cached.user_name) setUserDisplayName(cached.user_name);
+    return true;
+}
 
 function showSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.display = 'flex'; s.style.opacity = '1'; } const d = document.getElementById('sidebar-sync'); if(d) { d.style.display = 'flex'; d.style.opacity = '1'; } }
 function hideSyncIndicator() { const s = document.getElementById('sync-indicator'); if(s) { s.style.opacity = '0'; setTimeout(() => { s.style.display = 'none'; }, 300); } const d = document.getElementById('sidebar-sync'); if(d) { d.style.opacity = '0'; setTimeout(() => { d.style.display = 'none'; }, 300); } }
@@ -564,7 +643,7 @@ function setPendingTabVisible() {
     if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
 }
 function setSidebarActive(tabId) {
-    ['tab-tasks','tab-create','tab-history','tab-gozleme','tab-pending'].forEach(id => {
+    ['tab-tasks','tab-samil-deals','tab-create','tab-history','tab-gozleme','tab-pending'].forEach(id => {
         const item = document.getElementById('side-' + id);
         if(item) item.classList.toggle('active', id === tabId);
     });
@@ -590,9 +669,13 @@ async function initApp() {
 
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
-        syncNotifications();
-        if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
-        if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
+        if(IS_SAMIL) {
+            loadSamilWorkspace();
+        } else {
+            syncNotifications();
+            if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+            if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
+        }
     }
 });
 window.addEventListener('hashchange', applyHashRoute);
@@ -733,6 +816,7 @@ function showSuccessScreen(msg, link, isInfo) {
 function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
 
 async function syncNotifications(showError = false) {
+    if(IS_SAMIL) return loadSamilWorkspace(showError);
     try {
         const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
@@ -914,6 +998,14 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications() {
     nav('screen-notifications');
+    if(IS_SAMIL) {
+        const restored = restoreSamilWorkspaceFromCache();
+        if(restored) renderNotifications(); else showLoader();
+        await loadSamilWorkspace(!restored);
+        loadBalance();
+        loadKpi();
+        return;
+    }
     const fa = document.getElementById('filter-assignee');
     if(fa && currentFilter !== 'all') fa.value = currentFilter;
     if(isAdmin || currentFilter !== 'all') document.getElementById('filter-row').style.display = 'flex';
@@ -1433,6 +1525,63 @@ function renderNotifications() {
         container.appendChild(wrapper);
     });
 }
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+}
+
+function setSamilStageFilter(stageKey) {
+    samilStageFilter = stageKey;
+    renderSamilDeals();
+}
+
+function renderSamilDeals() {
+    const nav = document.getElementById('samil-stage-nav');
+    const container = document.getElementById('samil-deals-container');
+    const count = document.getElementById('samil-deals-count');
+    if(!nav || !container || !count) return;
+    const allCount = samilDeals.length;
+    const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
+    nav.innerHTML = stageButton('all', 'Hamısı', allCount) + SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, Number(samilStageCounts[key]) || 0)).join('');
+    const filtered = samilStageFilter === 'all' ? samilDeals : samilDeals.filter(deal => deal.stage_key === samilStageFilter);
+    const activeLabel = samilStageFilter === 'all' ? 'Bütün mərhələlər' : (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
+    count.textContent = `${activeLabel}: ${filtered.length} sövdələşmə`;
+    if(!filtered.length) {
+        container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Bu mərhələdə sövdələşmə yoxdur.</div>';
+        return;
+    }
+    container.innerHTML = filtered.map(deal => {
+        const updated = deal.updated_at ? new Date(Number(deal.updated_at) * 1000).toLocaleDateString('az-AZ', {day:'2-digit', month:'2-digit', year:'numeric'}) : '';
+        const leadName = escapeHtml(deal.name || deal.contact_name || 'Adsız sövdələşmə');
+        const clientName = escapeHtml(deal.contact_name || '—');
+        const phone = escapeHtml(deal.phone || '');
+        const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ');
+        const link = escapeHtml(deal.kommo_link || '#');
+        return `<article class="bg-white p-3.5 rounded-xl border-l-4 border-l-violet-500 border border-gray-100 shadow-sm">
+            <div class="flex items-start justify-between gap-3 mb-2">
+                <div class="text-xs font-black text-gray-900 leading-tight">${leadName}</div>
+                <span class="shrink-0 bg-violet-50 text-violet-700 text-[10px] font-black px-2 py-0.5 rounded-md">${stageName}</span>
+            </div>
+            <div class="space-y-1 text-[11px] text-gray-700">
+                <div>👤 <b>Müştəri:</b> ${clientName}${phone ? ' (' + phone + ')' : ''}</div>
+                ${updated ? '<div>🕒 <b>Yenilənib:</b> ' + updated + '</div>' : ''}
+            </div>
+            <div class="mt-3 pt-2 border-t border-gray-100"><a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline">🔗 Kommo CRM</a></div>
+        </article>`;
+    }).join('');
+}
+
+async function openSamilDeals() {
+    if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+    nav('screen-samil-deals');
+    if(!samilDeals.length) {
+        const restored = restoreSamilWorkspaceFromCache();
+        if(restored) renderSamilDeals(); else showLoader();
+    } else {
+        renderSamilDeals();
+    }
+    await loadSamilWorkspace(false);
+}
+
 function desktopCompleteTask(taskId) {
     const t = mockTasks.find(x => x.id === taskId); if(!t) return;
     const displayDesc = (t.desc || t.text || '').replace(/^\[[^\]]+\]\s*/, '');
@@ -1631,7 +1780,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function switchTab(tabId, updateHash = true) {
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-    ['tab-tasks', 'tab-create', 'tab-history', 'tab-gozleme', 'tab-pending'].forEach(id => {
+    ['tab-tasks', 'tab-samil-deals', 'tab-create', 'tab-history', 'tab-gozleme', 'tab-pending'].forEach(id => {
         const tab = document.getElementById(id);
         if(tab) tab.className = inactiveClass;
     });
@@ -1640,6 +1789,11 @@ function switchTab(tabId, updateHash = true) {
         document.getElementById('tab-tasks').className = activeClass;
         nav('screen-notifications');
         openNotifications();
+    } else if(tabId === 'tab-samil-deals') {
+        if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+        const dealsTab = document.getElementById('tab-samil-deals');
+        if(dealsTab) dealsTab.className = activeClass;
+        openSamilDeals();
     } else if(tabId === 'tab-create') {
         document.getElementById('tab-create').className = activeClass;
         editingTaskId = null;
@@ -1670,9 +1824,7 @@ function switchTab(tabId, updateHash = true) {
 async function loadKpi() {
     if(employeeType !== 'salary') return;
     try {
-        // Salary employees use balance (same as piecework)
-        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
-        const j = await r.json();
+        // KPI is independent of the task feed; do not trigger a second CRM sync here.
         const mainWidget = document.getElementById('main-finance-widget'); if(mainWidget) mainWidget.style.display = 'block';
         // Load balance from balance API
         const br = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
@@ -1866,6 +2018,12 @@ function renderGozleme() {
 
 async function openGozleme() {
     nav('screen-gozleme');
+    if(IS_SAMIL) {
+        const restored = gozlemeItems.length > 0 || restoreSamilWorkspaceFromCache();
+        if(restored) renderGozleme(); else showLoader();
+        await loadSamilWorkspace(!restored);
+        return;
+    }
     const gfa = document.getElementById('gozleme-filter-assignee');
     if(gfa && gozlemeFilter !== 'all') gfa.value = gozlemeFilter;
     if(isAdmin || gozlemeFilter !== 'all') document.getElementById('gozleme-filter-row').style.display = 'flex';
@@ -2182,7 +2340,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=152b');
+    const reg = await navigator.serviceWorker.register('sw.js?v=166-samil-workspace');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
