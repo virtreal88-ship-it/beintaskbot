@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v167-samil-stage-filter';
+const CACHE_NAME = 'bein-v168-cors-fix';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

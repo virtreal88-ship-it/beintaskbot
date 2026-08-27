@@ -591,7 +591,8 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
         try {
             const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&_ts=' + Date.now(), {
                 cache: 'no-store',
-                headers: {'X-TG-User-ID': CURRENT_USER_ID, 'Cache-Control': 'no-cache'}, signal: controller.signal
+                // `cache: 'no-store'` already prevents stale data without triggering a CORS preflight for Cache-Control.
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
             });
             const payload = await response.json().catch(() => ({}));
             if(!response.ok || !payload.success) throw new Error(payload.error || 'Məlumat yüklənmədi');
@@ -2370,7 +2371,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=167-samil-workspace');
+    const reg = await navigator.serviceWorker.register('sw.js?v=168-cors-fix');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
