@@ -526,9 +526,13 @@ function getUserId() {
 const CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '7962757442';
 const SAMIL_UI_STAGES = [
-    ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],
-    ['geri_donusler','Geri dönüşlər'],['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],
-    ['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
+    ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['geri_donusler','Geri dönüşlər'],
+    ['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],['gorusler','Görüşlər'],['qurashdirma','Quraşdırma']
+];
+const SAMIL_ALL_STAGES = [
+    ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['geri_donusler','Geri dönüşlər'],
+    ['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],
+    ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
 let samilDeals = [];
 let samilStageCounts = {};
@@ -1550,26 +1554,48 @@ function renderSamilDeals() {
         return;
     }
     container.innerHTML = filtered.map(deal => {
-        const updated = deal.updated_at ? new Date(Number(deal.updated_at) * 1000).toLocaleDateString('az-AZ', {day:'2-digit', month:'2-digit', year:'numeric'}) : '';
-        const leadName = escapeHtml(deal.name || deal.contact_name || 'Adsız sövdələşmə');
-        const clientName = escapeHtml(deal.contact_name || '—');
-        const phone = escapeHtml(deal.phone || '');
-        const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ');
-        const link = escapeHtml(deal.kommo_link || '#');
-        return `<article class="bg-white p-3.5 rounded-xl border-l-4 border-l-violet-500 border border-gray-100 shadow-sm">
-            <div class="flex items-start justify-between gap-3 mb-2">
-                <div class="text-xs font-black text-gray-900 leading-tight">${leadName}</div>
-                <span class="shrink-0 bg-violet-50 text-violet-700 text-[10px] font-black px-2 py-0.5 rounded-md">${stageName}</span>
-            </div>
+        const clientName = escapeHtml(deal.contact_name || '—'), phone = escapeHtml(deal.phone || '—');
+        const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ'), link = escapeHtml(deal.kommo_link || '#');
+        const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+        const note = escapeHtml(deal.last_note || '—'), task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
+        const audio = deal.voice_url ? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>` : '<span class="text-gray-400">—</span>';
+        return `<article class="samil-deal-card bg-white p-3.5 rounded-xl border-l-4 border-l-violet-500 border border-gray-100 shadow-sm" data-deal-id="${deal.id}">
+            <div class="flex items-start justify-between gap-3 mb-2"><span class="text-[10px] text-gray-400 font-bold">Sövdələşmə məlumatı</span><span class="shrink-0 bg-violet-50 text-violet-700 text-[10px] font-black px-2 py-0.5 rounded-md">${stageName}</span></div>
             <div class="space-y-1 text-[11px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${clientName}${phone ? ' (' + phone + ')' : ''}</div>
-                ${updated ? '<div>🕒 <b>Yenilənib:</b> ' + updated + '</div>' : ''}
-            </div>
-            <div class="mt-3 pt-2 border-t border-gray-100"><a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline">🔗 Kommo CRM</a></div>
+                <div>👤 <b>Müştəri:</b> ${clientName}</div><div>📞 <b>Telefon:</b> ${phone}</div>
+                <div>📝 <b>Son qeyd:</b> ${note}</div><div>📋 <b>Tapşırıq:</b> ${task}</div>
+                <div>🕒 <b>Yaradılıb:</b> ${created}</div><div>⏰ <b>Dedlayn:</b> ${escapeHtml(deal.deadline || '—')}</div>
+                <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
+            </div><div class="mt-3 pt-2 border-t border-gray-100"><a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a></div>
         </article>`;
     }).join('');
+    filtered.forEach(deal => {
+        const card = container.querySelector(`[data-deal-id="${deal.id}"]`); let timer;
+        card.addEventListener('touchstart', e => { timer = setTimeout(() => { e.preventDefault(); showDealContextMenu(deal, e.touches[0].clientX, e.touches[0].clientY); }, 500); }, {passive:false});
+        card.addEventListener('touchend', () => clearTimeout(timer)); card.addEventListener('touchmove', () => clearTimeout(timer));
+    });
 }
 
+async function samilDealAction(payload) {
+    const r = await fetch(API_BASE + '/api/action', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
+    const d = await r.json().catch(() => ({})); if(!d.success) throw new Error(d.error || d.message || 'Əməliyyat uğursuz oldu'); return d;
+}
+function showDealContextMenu(deal, x, y) {
+    const old = document.getElementById('deal-context-menu'); if(old) old.remove();
+    const menu = document.createElement('div'); menu.id = 'deal-context-menu';
+    menu.style.cssText = `position:fixed;top:${Math.max(8,Math.min((y||0)-10,innerHeight-190))}px;left:${Math.max(8,Math.min((x||0)-80,innerWidth-230))}px;background:#fff;border-radius:12px;box-shadow:0 4px 20px #0002;z-index:9998;min-width:210px;overflow:hidden`;
+    menu.innerHTML = `<button data-m="edit">✏️ Redaktə et</button><button data-m="task">➕ Tapşırıq əlavə et</button><button data-m="note">📝 Qeyd əlavə et</button>`;
+    menu.querySelectorAll('button').forEach(b => { b.style.cssText='display:block;width:100%;text-align:left;padding:13px 16px;border:0;border-bottom:1px solid #e2e8f0;background:#fff;font-size:13px;font-weight:600'; b.onclick=()=>{menu.remove(); showDealModal(deal,b.dataset.m);}; });
+    document.body.appendChild(menu); setTimeout(() => document.addEventListener('click', function close(e){if(!menu.contains(e.target)){menu.remove();document.removeEventListener('click',close)}},{once:true}), 100);
+}
+function showDealModal(deal, mode) {
+    const modal = document.createElement('div'); modal.id='deal-modal'; modal.style.cssText='position:fixed;inset:0;background:#0006;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    const title = mode==='edit'?'Redaktə et':mode==='task'?'Tapşırıq əlavə et':'Qeyd əlavə et';
+    const body = mode==='edit' ? `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>` : `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>${mode==='task'?'<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">':''}`;
+    modal.innerHTML=`<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
+    document.body.appendChild(modal); modal.querySelector('#deal-modal-cancel').onclick=()=>modal.remove();
+    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); await loadSamilWorkspace(false);}catch(e){toast(e.message,true)}};
+}
 async function openSamilDeals() {
     if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
     nav('screen-samil-deals');
