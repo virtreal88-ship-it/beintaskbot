@@ -503,6 +503,25 @@ function getUserId() {
     return tgId;
 }
 const CURRENT_USER_ID = getUserId();
+const IS_SAMIL = CURRENT_USER_ID === '7962757442';
+const SAMIL_UI_STAGES = [
+    ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],
+    ['geri_donusler','Geri dönüşlər'],['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],
+    ['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
+];
+function applySamilUi() {
+    if(!IS_SAMIL) return;
+    const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
+    const stageSelect = document.querySelector('#screen-stage-select .space-y-2');
+    if(stageSelect) stageSelect.innerHTML = stageCards;
+    const dealStages = document.querySelector('#screen-deal-create .space-y-2');
+    if(dealStages) dealStages.innerHTML = stageCards;
+    ['task-assignee-select','edit-assignee-select'].forEach(id => {
+        const el = document.getElementById(id);
+        if(el) { el.innerHTML = '<option value="Şamil Əliyev">Şamil Əliyev</option>'; el.value = 'Şamil Əliyev'; }
+    });
+    ['filter-row','gozleme-filter-row','side-tab-gozleme'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+}
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
@@ -563,6 +582,7 @@ async function initApp() {
     if(name) setUserDisplayName(name);
     initSessionPersistence();
     restoreSessionForms();
+    applySamilUi();
     setPendingTabVisible();
     await openNotifications();
     applyHashRoute();
@@ -828,6 +848,7 @@ async function submitEditNote() {
 }
 
 function submitTask() {
+    if(IS_SAMIL) gd.assigneeName = 'Şamil Əliyev';
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
     const textInput = textEl.value.trim();
     if(editingTaskId) {
@@ -873,6 +894,7 @@ function submitTask() {
 }
 
 function submitDeal() {
+    if(IS_SAMIL && !gd.stage) gd.stage = 'yeni_sifarisler';
     const hs = document.getElementById('deal-subtask-toggle').checked;
     doFetch({action: 'create_deal', phone: gd.phone, customer_name: document.getElementById('deal-customer-name').value.trim(), stage: gd.stage || 'yeni_sifaris', create_subtask: hs, subtask_text: hs ? document.getElementById('deal-subtask-text').value.trim() : ''}, 'deal-submit-btn');
 }
@@ -882,7 +904,7 @@ function submitNoteFlow() {
 }
 function stageNextStep1() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } nav('screen-stage-assignee'); }
 function stageNextStep2() { if(!gd.assignee) { toast('İcraçı seçin!', true); return; } nav('screen-stage-deadline'); }
-function submitStage() { if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
+function submitStage() { if(IS_SAMIL) gd.assignee = 'shamil'; if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
 function submitClose() {
     const c = document.getElementById('job-comment').value.trim();
     if(!c) { document.getElementById('job-comment-error').style.display = 'block'; return; }

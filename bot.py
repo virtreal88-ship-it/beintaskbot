@@ -62,6 +62,18 @@ llm_client = OpenAI(
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
+SAMIL_CHAT_ID = 7962757442
+SAMIL_PIPELINE_ID = int(os.environ.get("SAMIL_PIPELINE_ID", "14357580"))
+SAMIL_STAGES = {
+    "nerazobrannoye": 110897252, "sorgular": 110897256, "danisiqlar": 110897260,
+    "geri_donusler": 110897264, "cavab_gozlenilir": 110897336, "yeni_sifarisler": 110897340,
+    "gorusler": 110897344, "qurashdirma": 110897348, "ugurlu": 142, "imtina": 143,
+}
+SAMIL_STAGE_NAMES = {
+    110897252: "Nerazobrannoye", 110897256: "sorğular", 110897260: "danışıqlar",
+    110897264: "geri dönüşlər", 110897336: "cavab gözlənilir", 110897340: "yeni sifarişlər",
+    110897344: "görüşlər", 110897348: "quraşdırma", 142: "Uğurla tamamlandı", 143: "İmtina olundu",
+}
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
 TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
@@ -1078,6 +1090,21 @@ def get_contact_details(contact_id: int) -> dict | None:
         logger.error(f"Contact details error: {e}")
     return None
 
+def is_samil_chat(chat_id) -> bool:
+    try:
+        return int(chat_id) == SAMIL_CHAT_ID
+    except (TypeError, ValueError):
+        return False
+
+
+def get_pipeline_id_for_chat(chat_id=None) -> int:
+    return SAMIL_PIPELINE_ID if is_samil_chat(chat_id) else PIPELINE_ID
+
+
+def get_pipeline_stages_for_chat(chat_id=None) -> tuple[dict, dict]:
+    return (SAMIL_STAGES, SAMIL_STAGE_NAMES) if is_samil_chat(chat_id) else (STAGES, STAGE_NAMES)
+
+
 def get_lead_details(lead_id: int) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
     try:
@@ -1336,9 +1363,37 @@ def create_contact_kommo(name: str, phone: str, custom_fields: list = None, resp
         logger.error(f"Create contact error: {e}")
     return None
 
-def get_leads_by_status(status_id: int) -> list:
+def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
+    lead = get_lead_details(int(lead_id))
+    return bool(lead and int(lead.get("pipeline_id", 0) or 0) == int(pipeline_id))
+
+
+def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
+    return (not is_samil_chat(chat_id)) or lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
+
+
+def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
+    if not is_samil_chat(chat_id):
+        return True
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{int(task_id)}", headers=HEADERS, timeout=8)
+        if resp.status_code != 200:
+            return False
+        task = resp.json()
+        entity_id = task.get("entity_id")
+        if not entity_id:
+            return False
+        if task.get("entity_type", "leads") == "leads":
+            return lead_allowed_for_chat(int(entity_id), chat_id)
+        contact = get_contact_details(int(entity_id))
+        return any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (contact or {}).get("_embedded", {}).get("leads", []))
+    except Exception:
+        return False
+
+
+def get_leads_by_status(status_id: int, chat_id: int = None) -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/leads"
-    params = {"filter[statuses][0][pipeline_id]": PIPELINE_ID, "filter[statuses][0][status_id]": status_id, "limit": 50}
+    params = {"filter[statuses][0][pipeline_id]": get_pipeline_id_for_chat(chat_id), "filter[statuses][0][status_id]": status_id, "limit": 50}
     try:
         resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
         if resp.status_code == 200:
@@ -1560,12 +1615,12 @@ def execute_tool_search_contact(phone: str) -> str:
         results.append(format_contact_info(full_contact, notes, tasks))
     return "\n\n".join(results)
 
-def create_lead_for_contact(contact_id: int, contact_name: str) -> int | None:
-    """Create a pipeline deal linked to a contact and return the new lead ID."""
+def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None) -> int | None:
+    """Create a deal linked to a contact in the requested pipeline."""
     payload = [{
         "name": contact_name or str(contact_id),
         "_embedded": {"contacts": [{"id": int(contact_id)}]},
-        "pipeline_id": PIPELINE_ID,
+        "pipeline_id": int(pipeline_id or PIPELINE_ID),
     }]
     headers = {
         "Authorization": f"Bearer {KOMMO_TOKEN}",
@@ -1591,8 +1646,8 @@ def create_lead_for_contact(contact_id: int, contact_name: str) -> int | None:
     return None
 
 
-def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "") -> dict:
-    """Resolve the task entity, creating a contact and/or linked deal when needed."""
+def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "", chat_id: int = None) -> dict:
+    """Resolve the task entity, creating or selecting a deal in the user's allowed pipeline."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
         contact_display_name = client_name or phone
@@ -1617,9 +1672,12 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         update_contact_kommo(contact_id, {"name": client_name})
         contact_name = client_name
     leads = (full_contact or {}).get("_embedded", {}).get("leads", [])
+    allowed_pipeline = get_pipeline_id_for_chat(chat_id)
+    if is_samil_chat(chat_id):
+        leads = [lead for lead in leads if int(lead.get("pipeline_id", 0) or 0) == allowed_pipeline]
     lead_id = leads[0].get("id") if leads else None
     if not lead_id:
-        lead_id = create_lead_for_contact(contact_id, contact_name)
+        lead_id = create_lead_for_contact(contact_id, contact_name, allowed_pipeline)
         if not lead_id:
             return {"success": False, "message": "❌ Müştəri üçün sövdələşmə yaradıla bilmədi."}
         logger.info("Auto-created lead %s for contact %s", lead_id, contact_id)
@@ -1668,21 +1726,25 @@ def execute_tool_add_note(phone: str, text: str) -> str:
     return "❌ Qeyd əlavə edilərkən xəta baş verdi."
 
 def execute_tool_change_stage(phone: str, stage: str, chat_id: int) -> dict:
-    """Returns result. Non-admin users need confirmation."""
+    """Return a stage change only when the deal belongs to the caller's pipeline."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
         return {"success": False, "message": f"❌ '{phone}' nömrəli müştəri tapılmadı."}
     contact = contacts[0]
     full_c = get_contact_details(contact["id"])
     leads = (full_c or {}).get("_embedded", {}).get("leads", [])
+    allowed_pipeline = get_pipeline_id_for_chat(chat_id)
+    if is_samil_chat(chat_id):
+        leads = [lead for lead in leads if int(lead.get("pipeline_id", 0) or 0) == allowed_pipeline]
     if not leads:
-        return {"success": False, "message": "❌ Müştərinin sövdələşməsi tapılmadı."}
+        return {"success": False, "message": "❌ Bu müştərinin Şamil vоронкаsında sövdələşməsi tapılmadı." if is_samil_chat(chat_id) else "❌ Müştərinin sövdələşməsi tapılmadı."}
     lead_id = leads[0]["id"]
-    status_id = STAGES.get(stage)
+    stage_map, _ = get_pipeline_stages_for_chat(chat_id)
+    status_id = stage_map.get(stage)
     if not status_id:
         return {"success": False, "message": f"❌ Naməlum mərhələ: {stage}"}
     return {
-        "success": True, "needs_confirmation": not is_admin(chat_id),
+        "success": True, "needs_confirmation": not is_admin(chat_id) and not is_samil_chat(chat_id),
         "lead_id": lead_id, "status_id": status_id, "stage": stage,
         "contact_name": contact.get("name", "Adsız"), "phone": phone
     }
@@ -2027,7 +2089,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
             return f"⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.\n👤 {result['contact_name']} → {stage_display}"
         else:
             # Admin: execute immediately
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
             stage_display = STAGE_NAMES.get(result["status_id"], result["stage"])
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
             return f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}\n🔗 {link}"
@@ -3550,7 +3612,7 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
             }
             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
             admin_chat = get_chat_id_for_kommo_user(10932455)
             sent = None
             if admin_chat:
@@ -3567,8 +3629,8 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
         else:
             # Admin: execute
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
-            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
+            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
             link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
             await update.message.reply_text(f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}\n🔗 {link}", disable_web_page_preview=True)
     elif action == "task":
@@ -3885,7 +3947,20 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         old_status_id = int(old_status_id) if old_status_id else 0
         new_status_id = int(new_status_id)
         pipeline_id = int(pipeline_id) if pipeline_id else 0
-        if pipeline_id != PIPELINE_ID:
+        if pipeline_id not in (PIPELINE_ID, SAMIL_PIPELINE_ID):
+            return web.Response(status=200, text="OK")
+        if pipeline_id == SAMIL_PIPELINE_ID:
+            shamil_chat = NAME_TO_CHAT.get("Şamil Əliyev")
+            if shamil_chat and _bot_app:
+                shamil_stage = SAMIL_STAGE_NAMES.get(new_status_id, "Naməlum")
+                shamil_lead = get_lead_details(lead_id) or {}
+                shamil_msg = (f"🔄 Sizin vоронкаda mərhələ dəyişdi:\n\n"
+                              f"👤 {shamil_lead.get('name', lead_id)}\n📋 {shamil_lead.get('name', '')}\n📌 {shamil_stage}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}")
+                try:
+                    await _bot_app.bot.send_message(shamil_chat, shamil_msg, disable_web_page_preview=True)
+                    send_push_notification(str(shamil_chat), "🔄 Mərhələ dəyişdi", f"{shamil_lead.get('name', lead_id)} — {shamil_stage}")
+                except Exception:
+                    pass
             return web.Response(status=200, text="OK")
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
@@ -4198,6 +4273,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
     phone = data.get("phone", "")
     try:
         if action == "info":
+            if is_samil_chat(chat_id):
+                contacts = search_contact_by_phone(phone)
+                full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
+                if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
+                    return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Şamil."}, status=403)
             result = execute_tool_get_lead_info(phone)
             return web.json_response({"success": True, "message": result})
         elif action == "add_note":
@@ -4206,6 +4286,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Qeyd m\u0259tni bo\u015fdur."})
             task_id_note = data.get("task_id")
             if task_id_note:
+                if not task_allowed_for_chat(task_id_note, chat_id):
+                    return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Şamil."}, status=403)
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
                     t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
@@ -4216,10 +4298,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         note_payload = [{"note_type": "common", "params": {"text": text}}]
                         _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
                 except: pass
+            if phone and not task_id_note and is_samil_chat(chat_id):
+                contacts = search_contact_by_phone(phone)
+                full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
+                if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
+                    return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Şamil."}, status=403)
             result = execute_tool_add_note(phone, text) if (phone and not task_id_note) else "OK"
             # Subtask
             if data.get("create_subtask") and data.get("subtask_text"):
-                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
+                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "shamil" if is_samil_chat(chat_id) else "soltan", chat_id=chat_id)
                 if isinstance(st_result, dict) and st_result.get("success"):
                     now = datetime.now(tz=BAKU_TZ)
                     deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
@@ -4364,7 +4451,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
             creator_name = get_employee_name_by_chat_id(chat_id, "")
             # A shared Sahə Meneceri Kommo identity must never hide the real
             # employee in the marker or the admin confirmation.
-            if not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
+            if is_samil_chat(chat_id):
+                assignee_name_raw = "Şamil Əliyev"
+            elif not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
                 assignee_name_raw = creator_name or KOMMO_USERS.get(15532668, "Əməkdaş")
             # Routing: Nizami = admin's own tasks, everyone else = Sahə Meneceri
             if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
@@ -4403,7 +4492,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
             else:
                 client_name_input = data.get("client_name", "").strip()
-                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input)
+                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input, chat_id=chat_id)
             if isinstance(result, str):
                 return web.json_response({"success": False, "error": result})
             if not result.get("success"):
@@ -4523,7 +4612,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 # Non-admin needs confirmation in both Telegram and the PWA.
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                stage_display = STAGE_NAMES.get(result["status_id"], stage)
+                stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
                 conf_key = str(uuid.uuid4())[:8]
                 if _bot_app:
                     _bot_app.bot_data[f"confirm_{conf_key}"] = {
@@ -4554,8 +4643,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 url="#pending",
                 )
                 return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
-            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
+            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
             # Notify admin
             admin_chat = get_chat_id_for_kommo_user(10932455)
             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
@@ -4586,11 +4675,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": result.get("message", "Xəta")})
             if result.get("needs_confirmation"):
                 return web.json_response({"success": False, "error": "Admin təsdiqi lazımdır. Botdan istifadə edin."})
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": PIPELINE_ID})
-            stage_display = STAGE_NAMES.get(result["status_id"], stage)
+            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
+            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
             # Subtask
             if data.get("create_subtask") and data.get("subtask_text"):
-                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "soltan")
+                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "shamil" if is_samil_chat(chat_id) else "soltan", chat_id=chat_id)
                 if isinstance(st_result, dict) and st_result.get("success"):
                     now = datetime.now(tz=BAKU_TZ)
                     deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
@@ -4602,6 +4691,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
+            if not task_allowed_for_chat(task_id, chat_id):
+                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Şamil."}, status=403)
             update_data = {}
             if data.get("text"):
                 update_data["text"] = data["text"]
@@ -4764,6 +4855,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             reason = data.get("reason", "")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
+            if not task_allowed_for_chat(task_id, chat_id):
+                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Şamil."}, status=403)
             now = datetime.now(tz=BAKU_TZ)
             if time_preset == "+2h":
                 new_dl = now + timedelta(hours=2)
@@ -4798,6 +4891,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_id = data.get("task_id")
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
+            if not task_allowed_for_chat(task_id, chat_id):
+                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Şamil."}, status=403)
             try:
                 task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
                 if task_resp.status_code != 200:
@@ -5240,18 +5335,22 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         # If admin requests, fetch BOTH admin's own tasks AND Sahə Meneceri tasks
         url = f"{KOMMO_BASE_URL}/api/v4/tasks"
         tasks_list = []
-        fetch_ids = [15532668] if kommo_user_id != 10932455 else [10932455, 15532668]
+        fetch_ids = [None] if is_samil_chat(chat_id) else ([15532668] if kommo_user_id != 10932455 else [10932455, 15532668])
         raw_tasks = []
         task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
         if not isinstance(task_priorities, dict):
             task_priorities = {}
         try:
             for fid in fetch_ids:
-                params = {"filter[is_completed]": 0, "filter[responsible_user_id]": fid, "limit": 50}
+                params = {"limit": 250}
+                if not is_samil_chat(chat_id):
+                    params.update({"filter[is_completed]": 0, "filter[responsible_user_id]": fid})
                 resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
                 if resp.status_code == 200:
                     raw_tasks.extend(resp.json().get("_embedded", {}).get("tasks", []))
             _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
+            if is_samil_chat(chat_id):
+                raw_tasks = [t for t in raw_tasks if task_allowed_for_chat(t.get("id"), chat_id)]
             if raw_tasks:
                 # Batch: collect unique contact entity_ids and fetch them in one request
                 contact_ids = set()
@@ -5292,7 +5391,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params_c, timeout=8)
                         if lr.status_code == 200:
                             for ld in lr.json().get("_embedded", {}).get("leads", []):
-                                st_name = STAGE_NAMES.get(ld.get("status_id", 0), "")
+                                st_name = get_pipeline_stages_for_chat(chat_id)[1].get(ld.get("status_id", 0), "")
                                 for lc in ld.get("_embedded", {}).get("contacts", []):
                                     if lc["id"] in contact_ids and lc["id"] not in contact_lead_stage:
                                         contact_lead_stage[lc["id"]] = st_name
@@ -5436,7 +5535,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "task_type_id": t.get("task_type_id", 1),
                         "last_note": last_note,
                         "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
-                        "stage_name": STAGE_NAMES.get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
+                        "stage_name": get_pipeline_stages_for_chat(chat_id)[1].get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
                         "voice_url": f"/api/voice/{entity_id}" if str(entity_id) in _voice_urls else "",
                         "created_by": _created_by_name
                     })
@@ -5514,6 +5613,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         is_admin = kommo_user_id == ADMIN_KOMMO_USER_ID or chat_id == ADMIN_CHAT_ID
 
+        if is_samil_chat(chat_id):
+            return web.json_response({"success": True, "items": [], "count": 0})
         user_status_id = TG_TO_STATUS_ID.get(chat_id)
         if not is_admin and not user_status_id:
             return web.json_response({"success": True, "items": [], "tasks": [], "is_admin": False,
@@ -5936,6 +6037,12 @@ async def handle_voice_proxy(request: web.Request) -> web.Response:
     # Fallback: redirect to URL
     return web.HTTPFound(download_url)
 
+async def handle_api_stages(request: web.Request) -> web.Response:
+    chat_id = request.headers.get("X-TG-User-ID", "")
+    _, names = get_pipeline_stages_for_chat(chat_id)
+    return web.json_response({"pipeline_id": get_pipeline_id_for_chat(chat_id), "stages": {str(k): v for k, v in names.items()}})
+
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
@@ -5963,7 +6070,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/balance/credit", handle_api_balance_credit)
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
-    app_web.router.add_get("/api/stages", lambda r: web.json_response({"stages": {str(v): STAGE_NAMES.get(v, k) for k, v in STAGES.items()}}))
+    app_web.router.add_get("/api/stages", handle_api_stages)
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())
@@ -6163,21 +6270,52 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(tz=BAKU_TZ)
     today_start = now.replace(hour=0, minute=0, second=0)
     today_end = now.replace(hour=23, minute=59, second=59)
-    # Get all tasks for today (both admin's and Sahə Meneceri's)
+    # Get all tasks for today
     all_tasks = get_tasks(today_start, today_end)
     all_tasks = [t for t in all_tasks if t.get('task_type_id') != 4229224]
-    # Employee name -> chat_id mapping
-    _EMPLOYEE_NAMES = {
+    # Build lead_id -> status_id map from Əməliyyatlar pipeline
+    _digest_lead_stages = {}
+    try:
+        _dl_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS,
+            params={"filter[pipeline_id]": GOZLEME_PIPELINE_ID, "limit": 250}, timeout=15)
+        if _dl_resp.status_code == 200:
+            for _dl in _dl_resp.json().get("_embedded", {}).get("leads", []):
+                _digest_lead_stages[_dl["id"]] = _dl.get("status_id")
+    except Exception:
+        pass
+    # STATUS_TO_CHAT: reverse of TG_TO_STATUS_ID
+    _STATUS_TO_CHAT = {v: k for k, v in TG_TO_STATUS_ID.items()}
+    # All employees
+    _DIGEST_EMPLOYEES = {
         7962757442: "\u015eamil \u018fliyev",
         7262243946: "Soltan Abbasov",
         7329891614: "H\u00fcseyn S\u0259f\u0259rov",
         7920785774: "Rasim \u018fsg\u0259rov",
+        1289510272: "S\u0259rmay\u0259 \u018fhm\u0259dsoy",
+        6596538872: "Asya Agayeva",
+        1142054888: "Nuran\u0259 \u015eirinova",
     }
-    # Send to each employee their tasks (by marker in text)
-    for emp_chat_id, emp_name in _EMPLOYEE_NAMES.items():
-        # Filter tasks by marker [Name] in text
-        first_name = emp_name.split()[0]
-        emp_tasks = [t for t in all_tasks if re.search(rf'\[{re.escape(emp_name)}(?::\d+)?\]', t.get('text', '')) or re.search(rf'\[{re.escape(first_name)}(?::\d+)?\]', t.get('text', ''))]
+    for emp_chat_id, emp_name in _DIGEST_EMPLOYEES.items():
+        emp_status = TG_TO_STATUS_ID.get(emp_chat_id)
+        # Filter tasks: linked to leads on this employee's stage
+        emp_tasks = []
+        for t in all_tasks:
+            t_entity_id = t.get("entity_id")
+            t_entity_type = t.get("entity_type", "leads")
+            if t_entity_type == "leads" and t_entity_id:
+                if _digest_lead_stages.get(t_entity_id) == emp_status:
+                    emp_tasks.append(t)
+            elif t_entity_type == "contacts" and t_entity_id:
+                # Check if any linked lead is on employee's stage
+                try:
+                    _c_detail = get_contact_details(t_entity_id)
+                    if _c_detail:
+                        for _cl in _c_detail.get("_embedded", {}).get("leads", []):
+                            if _digest_lead_stages.get(_cl.get("id")) == emp_status:
+                                emp_tasks.append(t)
+                                break
+                except Exception:
+                    pass
         if emp_tasks:
             msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131* \u2014 bug\u00fcnk\u00fc tap\u015f\u0131r\u0131qlar ({len(emp_tasks)}):\n\n"
             for i, t in enumerate(emp_tasks, 1):
