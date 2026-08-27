@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bein-v166-samil-workspace';
+const CACHE_NAME = 'bein-v167-samil-stage-filter';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

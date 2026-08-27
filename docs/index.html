@@ -253,7 +253,7 @@
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">Mərhələ üzrə müştərilər</div>
             </div>
-            <button onclick="loadSamilWorkspace(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+            <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Şamilin mərhələləri"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
@@ -536,7 +536,7 @@ const SAMIL_ALL_STAGES = [
 ];
 let samilDeals = [];
 let samilStageCounts = {};
-let samilStageFilter = 'all';
+let samilStageFilter = 'sorgular';
 let samilWorkspaceRequest = null;
 function applySamilUi() {
     if(!IS_SAMIL) return;
@@ -579,15 +579,17 @@ function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stri
 function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
 function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
 
-async function loadSamilWorkspace(showFeedback = false) {
+async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
     if(!IS_SAMIL) return false;
+    const stageParam = requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage) ? requestedStage : 'all';
+    if(requestedStage) samilStageFilter = stageParam;
     if(samilWorkspaceRequest) return samilWorkspaceRequest;
     samilWorkspaceRequest = (async () => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 12000);
         showSyncIndicator();
         try {
-            const response = await fetch(API_BASE + '/api/samil/overview?_ts=' + Date.now(), {
+            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&_ts=' + Date.now(), {
                 cache: 'no-store',
                 headers: {'X-TG-User-ID': CURRENT_USER_ID, 'Cache-Control': 'no-cache'}, signal: controller.signal
             });
@@ -621,7 +623,7 @@ async function loadSamilWorkspace(showFeedback = false) {
 
 function restoreSamilWorkspaceFromCache() {
     const cached = getCachedSamilWorkspace();
-    if(!cached) return false;
+    if(!cached || cached.stage_key !== samilStageFilter) return false;
     mockTasks = Array.isArray(cached.tasks) ? cached.tasks : [];
     gozlemeItems = Array.isArray(cached.gozleme) ? cached.gozleme : [];
     samilDeals = Array.isArray(cached.deals) ? cached.deals : [];
@@ -1534,9 +1536,11 @@ function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 }
 
-function setSamilStageFilter(stageKey) {
+async function setSamilStageFilter(stageKey) {
+    if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
     samilStageFilter = stageKey;
     renderSamilDeals();
+    await loadSamilWorkspace(false, stageKey);
 }
 
 function renderSamilDeals() {
@@ -1544,11 +1548,10 @@ function renderSamilDeals() {
     const container = document.getElementById('samil-deals-container');
     const count = document.getElementById('samil-deals-count');
     if(!nav || !container || !count) return;
-    const allCount = samilDeals.length;
     const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
-    nav.innerHTML = stageButton('all', 'Hamısı', allCount) + SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, Number(samilStageCounts[key]) || 0)).join('');
-    const filtered = samilStageFilter === 'all' ? samilDeals : samilDeals.filter(deal => deal.stage_key === samilStageFilter);
-    const activeLabel = samilStageFilter === 'all' ? 'Bütün mərhələlər' : (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
+    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, Number(samilStageCounts[key]) || (key === samilStageFilter ? samilDeals.length : 0))).join('');
+    const filtered = samilDeals;
+    const activeLabel = (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
     count.textContent = `${activeLabel}: ${filtered.length} sövdələşmə`;
     if(!filtered.length) {
         container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Bu mərhələdə sövdələşmə yoxdur.</div>';
@@ -1606,7 +1609,7 @@ async function openSamilDeals() {
     } else {
         renderSamilDeals();
     }
-    await loadSamilWorkspace(false);
+    await loadSamilWorkspace(false, samilStageFilter);
 }
 
 function desktopCompleteTask(taskId) {
