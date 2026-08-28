@@ -3,7 +3,7 @@
     "id": "9dc3919e",
     "type": "assign_executor",
     "created_at": "2026-08-28T17:31:04.828540+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Masterorxan",
       "phone": "+994705703434",
@@ -25,7 +25,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-28T18:07:23.301130+04:00",
+    "resolved_by": "bot.py:858",
+    "resolved_choice": "Hüseyn"
   },
   {
     "id": "84712583",
