@@ -1328,9 +1328,23 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-08-28 11:35:08"
+      },
+      {
+        "task_id": 0,
+        "executor": "Soltan Abbasov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -400.0,
+        "status": "confirmed",
+        "task_text": "Ödəniş",
+        "result_text": "Ödəniş",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-28 11:36:23"
       }
     ],
-    "balance": 400.0
+    "balance": 0.0
   },
   "1289510272": {
     "transactions": [],
