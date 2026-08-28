@@ -3,7 +3,7 @@
     "id": "73bb33b4",
     "type": "change_stage",
     "created_at": "2026-08-28T15:29:39.080458+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ümumi",
       "phone": "+994102135105",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-28T15:32:42.424459+04:00",
+    "resolved_by": "bot.py:858",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "d7bd3b4a",
