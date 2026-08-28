@@ -1280,7 +1280,7 @@
         "phone": "+994102135105",
         "task_type": "Texniki tapşırıq",
         "amount": 270.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "[210] Təqdimat 1saatl 10₼?",
         "result_text": ".",
         "kpi": 0,
@@ -1288,7 +1288,7 @@
         "date": "2026-08-28 11:29:36"
       }
     ],
-    "balance": 216.0
+    "balance": 486.0
   },
   "1289510272": {
     "transactions": [],
