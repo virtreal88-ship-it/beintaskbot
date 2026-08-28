@@ -134,7 +134,7 @@
     "id": "d7bd3b4a",
     "type": "change_stage",
     "created_at": "2026-08-28T11:30:41.900836+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Cansu",
       "phone": "0506779660",
@@ -163,7 +163,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-28T18:09:22.103768+04:00",
+    "resolved_by": "bot.py:4197",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "e8eff3e3",
