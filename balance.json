@@ -700,7 +700,7 @@
         "phone": "+994705703434",
         "task_type": "Quraşdırma",
         "amount": 300.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "3 filial qoşuldu. Özüm nəzarət edirəm. Hər filialına 3 dəfə gedəcəm.",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -708,7 +708,7 @@
         "date": "2026-08-26 16:15:10"
       }
     ],
-    "balance": -100.0
+    "balance": 200.0
   },
   "7329891614": {
     "transactions": [
