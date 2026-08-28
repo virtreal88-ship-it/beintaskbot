@@ -1,5 +1,40 @@
 [
   {
+    "id": "d7bd3b4a",
+    "type": "change_stage",
+    "created_at": "2026-08-28T11:30:41.900836+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Cansu",
+      "phone": "0506779660",
+      "lead_id": 77520545,
+      "task_id": 93999815,
+      "sender_name": "Soltan Abbasov",
+      "task_text": "Axşama excəl göndərəcək. İmport etmək lazımdır",
+      "task_price": "",
+      "note": "Sistem yazıldı təlim edildi.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77520545",
+      "callback_key": "661322c8"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "e8eff3e3",
     "type": "assign_executor",
     "created_at": "2026-08-27T17:51:27.459112+04:00",
