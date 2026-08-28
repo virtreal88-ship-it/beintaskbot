@@ -1,5 +1,33 @@
 [
   {
+    "id": "9dc3919e",
+    "type": "assign_executor",
+    "created_at": "2026-08-28T17:31:04.828540+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Masterorxan",
+      "phone": "+994705703434",
+      "lead_id": 71859409,
+      "task_text": "Posda tərəf-müqabili yaradanda modifikasiya əlavə etmək olsun, daha sonra müştərilər siyahısında o modifikasiyaya uyğun axtarış edilməlidir.",
+      "deadline": "29.08.2026 17:30",
+      "sender_name": "Rasim Əsgərov",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71859409",
+      "conf_key": "799590db",
+      "creator_chat_id": 7920785774
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "84712583",
     "type": "assign_executor",
     "created_at": "2026-08-28T16:25:11.612081+04:00",
