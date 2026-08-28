@@ -1,5 +1,33 @@
 [
   {
+    "id": "4768959d",
+    "type": "assign_executor",
+    "created_at": "2026-08-28T18:08:31.506751+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Calmera",
+      "phone": "994708192725",
+      "lead_id": 77777028,
+      "task_text": "[0] Vergi aparatının inteqrasiyasını istəyir.",
+      "deadline": "29.08.2026 18:04",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77777028",
+      "conf_key": "f18101d3",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "9dc3919e",
     "type": "assign_executor",
     "created_at": "2026-08-28T17:31:04.828540+04:00",
