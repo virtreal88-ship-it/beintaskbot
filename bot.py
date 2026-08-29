@@ -583,15 +583,21 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                         parse_mode="Markdown", disable_web_page_preview=True))
                     send_push_notification(str(_new_chat), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client} - {_task_desc}')
                 except: pass
-        # Move lead to new assignee's stage in Əməliyyatlar pipeline
+        # Route Şamil to his personal pipeline/sorğular; keep existing routing for others.
         _lead_id_exec = action_data.get("lead_id")
         if _lead_id_exec:
-            _exec_status = TG_TO_STATUS_ID.get(NAME_TO_CHAT.get(new_name, 0))
+            if new_name == "Şamil Əliyev":
+                _exec_pipeline = SAMIL_PIPELINE_ID
+                _exec_status = SAMIL_STAGES["sorgular"]
+            else:
+                _exec_pipeline = GOZLEME_PIPELINE_ID
+                _exec_status = TG_TO_STATUS_ID.get(NAME_TO_CHAT.get(new_name, 0))
             if _exec_status:
                 try:
                     _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
-                        headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _exec_status}, timeout=8)
-                except: pass
+                        headers=HEADERS, json={"pipeline_id": _exec_pipeline, "status_id": _exec_status}, timeout=8)
+                except Exception as exc:
+                    logger.warning("Failed to route assigned deal: %s", exc)
         # Notify cavabdeh (creator) about executor assignment
         _sender_name_uc = action_data.get("sender_name", "")
         _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
@@ -712,14 +718,49 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                         parse_mode="Markdown", disable_web_page_preview=True))
                     send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}')
                 except: pass
-            # Move lead to assignee's stage in \u018fm\u0259liyyatlar pipeline
+            # Route the deal after assignment. Şamil must always receive it in
+            # his own pipeline at the exact `sorgular` stage.
             if _target_chat_ae:
-                _ae_status = TG_TO_STATUS_ID.get(int(_target_chat_ae))
+                if _ae_name == "Şamil Əliyev":
+                    _ae_pipeline = SAMIL_PIPELINE_ID
+                    _ae_status = SAMIL_STAGES["sorgular"]
+                else:
+                    _ae_pipeline = GOZLEME_PIPELINE_ID
+                    _ae_status = TG_TO_STATUS_ID.get(int(_target_chat_ae))
                 if _ae_status:
-                    try:
-                        _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
-                            headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _ae_status}, timeout=8)
-                    except: pass
+                    route_result = update_lead_kommo(
+                        int(lead_id),
+                        {"pipeline_id": _ae_pipeline, "status_id": _ae_status},
+                    )
+                    if not route_result:
+                        logger.error(
+                            "Failed to route assigned deal: lead=%s pipeline=%s status=%s",
+                            lead_id, _ae_pipeline, _ae_status,
+                        )
+                        return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
+                    if _ae_name == "Şamil Əliyev":
+                        # Explicit notification is intentional: the stage-change
+                        # webhook may be delayed or suppressed as bot-initiated.
+                        _shamil_msg = (
+                            "📥 Şamil Əliyev bölməsinə yeni sövdələşmə daxil oldu!\n\n"
+                            f"👤 {_client_ae or 'Adsız'}\n"
+                            f"📝 {task_text}\n"
+                            f"📞 {action_data.get('phone', '')}\n"
+                            f"📌 Mərhələ: sorğular\n"
+                            f"🔗 {_link_ae}"
+                        )
+                        try:
+                            asyncio.ensure_future(_bot_app.bot.send_message(
+                                int(_target_chat_ae), _shamil_msg,
+                                disable_web_page_preview=True,
+                            ))
+                            send_push_notification(
+                                str(_target_chat_ae),
+                                "📥 Yeni sövdələşmə: sorğular",
+                                f"{_client_ae or 'Adsız'} — {task_text}",
+                            )
+                        except Exception as exc:
+                            logger.warning("Şamil notification failed: %s", exc)
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
@@ -5511,8 +5552,10 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
     leads_request = asyncio.create_task(_load_all_samil_leads())
     tasks_request = asyncio.create_task(_kommo_get_async(
         f"{KOMMO_BASE_URL}/api/v4/tasks",
-        params={"filter[is_completed]": 0, "filter[responsible_user_id]": 15532668, "limit": 250},
-        timeout=8,
+        # Apply responsible-user filtering locally; nested task filters can
+        # intermittently return an empty response from Kommo.
+        params={"filter[is_completed]": 0, "limit": 250},
+        timeout=10,
     ))
     leads = await leads_request
 
@@ -5588,7 +5631,11 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
 
     # Attach the latest open task (description/deadline) and latest lead note.
     task_by_lead = {}
-    for task in tasks_response.json().get("_embedded", {}).get("tasks", []) or []:
+    _samil_tasks = [
+        task for task in (tasks_response.json().get("_embedded", {}).get("tasks", []) or [])
+        if task.get("responsible_user_id") == 15532668 and not task.get("is_completed")
+    ]
+    for task in _samil_tasks:
         entity_id = task.get("entity_id")
         entity_type = task.get("entity_type", "contacts")
         related_lead = lead_by_id.get(int(entity_id)) if entity_type == "leads" and entity_id else lead_by_contact_id.get(int(entity_id)) if entity_id else None
@@ -5622,7 +5669,7 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
         3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
         4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt.",
     }
-    for task in tasks_response.json().get("_embedded", {}).get("tasks", []) or []:
+    for task in _samil_tasks:
         try:
             entity_id = int(task.get("entity_id"))
         except (TypeError, ValueError):
@@ -5709,25 +5756,33 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
-        # Get tasks for this user (incomplete)
+        # Get tasks for this user (incomplete).
+        # Fetch active tasks once and filter locally. Nested Kommo task filters
+        # can return an empty/invalid response; the previous code swallowed that
+        # error and made every user see an empty task list.
         now = datetime.now(tz=BAKU_TZ)
-        # Always fetch tasks for Sahə Meneceri (15532668) - all employee tasks are there with markers
-        # If admin requests, fetch BOTH admin's own tasks AND Sahə Meneceri tasks
         url = f"{KOMMO_BASE_URL}/api/v4/tasks"
         tasks_list = []
-        fetch_ids = [None] if is_samil_chat(chat_id) else ([15532668] if kommo_user_id != 10932455 else [10932455, 15532668])
+        allowed_responsible_ids = ({10932455, 15532668} if kommo_user_id == 10932455 else {15532668})
         raw_tasks = []
         task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
         if not isinstance(task_priorities, dict):
             task_priorities = {}
         try:
-            for fid in fetch_ids:
-                params = {"limit": 250}
-                if not is_samil_chat(chat_id):
-                    params.update({"filter[is_completed]": 0, "filter[responsible_user_id]": fid})
-                resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-                if resp.status_code == 200:
-                    raw_tasks.extend(resp.json().get("_embedded", {}).get("tasks", []))
+            params = {"filter[is_completed]": 0, "limit": 250}
+            resp = _http.get(url, headers=HEADERS, params=params, timeout=10)
+            if resp.status_code == 200:
+                raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
+                if not isinstance(raw_tasks, list):
+                    raw_tasks = []
+            else:
+                logger.error("Notifications task fetch failed: status=%s body=%s", resp.status_code, resp.text[:300])
+            if not is_samil_chat(chat_id):
+                raw_tasks = [
+                    t for t in raw_tasks
+                    if t.get("responsible_user_id") in allowed_responsible_ids
+                    and not t.get("is_completed")
+                ]
             _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
             if is_samil_chat(chat_id):
                 raw_tasks = [t for t in raw_tasks if task_allowed_for_chat(t.get("id"), chat_id)]
