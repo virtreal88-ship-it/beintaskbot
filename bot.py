@@ -5995,22 +5995,32 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     if _stage_resp.status_code == 200:
                         for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
                             _user_lead_ids.add(_l['id'])
-                    # Filter tasks: keep those linked to user's leads (by entity_id for leads, or contact->lead mapping)
+                    # Keep tasks linked to the employee's Operations-stage leads. If the
+                    # optional stage lookup fails, do not erase the tasks already fetched.
+                    # A marker is also accepted because shared Kommo licenses are used by
+                    # several employees.
+                    _employee_name = get_employee_name_by_chat_id(chat_id, "")
                     def _task_belongs_to_user(task_item):
                         eid = task_item.get('entity_id')
                         etype = task_item.get('entity_type', 'contacts')
+                        marker_name = task_item.get('assigneeName', '')
+                        if marker_name == _employee_name:
+                            return True
                         if etype == 'leads' and eid in _user_lead_ids:
                             return True
-                        # For contacts: check if any of user's leads has this contact
                         if etype == 'contacts':
                             for lid, cid in leads_contact_cache.items():
                                 if cid == eid and lid in _user_lead_ids:
                                     return True
                         return False
-                    tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
+                    # An empty result is valid only when Kommo successfully returned an
+                    # empty stage. On API failure, preserve the previously fetched list.
+                    if _stage_resp.status_code == 200:
+                        tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
                 except Exception as _fe:
                     logger.error(f"Stage filter error: {_fe}")
-                    tasks_list = []
+                    # Fail open here: the responsible-user filter above is safer than
+                    # showing nobody any task because a secondary leads request failed.
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:

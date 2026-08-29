@@ -891,9 +891,14 @@ async function syncNotifications(showError = false) {
         } else {
             isAdmin = false;
             localStorage.removeItem('is_admin');
+            // Employee views must never inherit an Admin's pinned assignee filter.
+            currentFilter = 'all';
+            localStorage.removeItem('pinned_filter');
+            const assigneeFilter = document.getElementById('filter-assignee');
+            if(assigneeFilter) assigneeFilter.value = 'all';
             setPendingTabVisible();
         }
-        let tasks = j.tasks;
+        let tasks = Array.isArray(j.tasks) ? j.tasks : [];
         if(Object.keys(_completedTaskIds).length > 0) tasks = tasks.filter(t => !_completedTaskIds[t.id]);
         mockTasks = tasks;
         setCachedTasks(tasks);
