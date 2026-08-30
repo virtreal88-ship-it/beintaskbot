@@ -1,5 +1,40 @@
 [
   {
+    "id": "b4ce277b",
+    "type": "change_stage",
+    "created_at": "2026-08-30T18:27:13.361332+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tural Ehtiyyat hissələri",
+      "phone": "+0557413380",
+      "lead_id": 77445871,
+      "task_id": 94194818,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Sayt inteqrasiya",
+      "task_price": "100",
+      "note": "Uğurlu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77445871",
+      "callback_key": "b011ae20"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "13ffbce1",
     "type": "change_stage",
     "created_at": "2026-08-29T10:42:32.418725+04:00",
