@@ -1,5 +1,40 @@
 [
   {
+    "id": "1a817798",
+    "type": "change_stage",
+    "created_at": "2026-08-30T20:27:16.189799+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Ləziz restoran",
+      "phone": "+994505394934",
+      "lead_id": 77784610,
+      "task_id": 94186760,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Görüş istəyir. Cloposdan keçir",
+      "task_price": "100",
+      "note": "300 quraşdırma aylıq 49₼.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77784610",
+      "callback_key": "79d3993e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4dd0379e",
     "type": "assign_executor",
     "created_at": "2026-08-30T18:32:49.569869+04:00",
