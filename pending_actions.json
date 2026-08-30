@@ -3,7 +3,7 @@
     "id": "1a817798",
     "type": "change_stage",
     "created_at": "2026-08-30T20:27:16.189799+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Ləziz restoran",
       "phone": "+994505394934",
@@ -32,7 +32,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-30T20:34:33.838877+04:00",
+    "resolved_by": "bot.py:4238",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "4dd0379e",
