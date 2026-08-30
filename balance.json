@@ -748,6 +748,20 @@
         "kpi": 0,
         "type": "mədaxil",
         "date": "2026-08-28 11:34:55"
+      },
+      {
+        "task_id": 94194818,
+        "executor": "Rasim Əsgərov",
+        "client": "Tural Ehtiyyat hissələri",
+        "phone": "+0557413380",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Sayt inteqrasiya",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-30 14:27:11"
       }
     ],
     "balance": 0.0
