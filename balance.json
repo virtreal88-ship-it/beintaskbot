@@ -762,6 +762,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-30 14:27:11"
+      },
+      {
+        "task_id": 94186760,
+        "executor": "Rasim Əsgərov",
+        "client": "Ləziz restoran",
+        "phone": "+994505394934",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Görüş istəyir. Cloposdan keçir",
+        "result_text": "300 quraşdırma aylıq 49₼.",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-30 16:27:14"
       }
     ],
     "balance": 0.0
