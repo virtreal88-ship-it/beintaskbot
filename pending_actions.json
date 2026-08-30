@@ -1,5 +1,33 @@
 [
   {
+    "id": "4dd0379e",
+    "type": "assign_executor",
+    "created_at": "2026-08-30T18:32:49.569869+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Yeni Müştəri",
+      "phone": "994503007973",
+      "lead_id": 77791078,
+      "task_text": "Sistem yazdırmaq istəyir, buna görə də danışmaq lazımdır. Sadəcə üz-üzə danışılmağını istəyir.",
+      "deadline": "30.08.2026 23:58",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77791078",
+      "conf_key": "096ce49e",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "b4ce277b",
     "type": "change_stage",
     "created_at": "2026-08-30T18:27:13.361332+04:00",
