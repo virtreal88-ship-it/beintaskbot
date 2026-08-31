@@ -547,7 +547,7 @@
     "id": "90b288bd",
     "type": "change_stage",
     "created_at": "2026-08-26T11:33:56.804784+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "sadiq imanov",
       "phone": "+994504537646",
@@ -576,7 +576,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-08-31T13:04:34.012011+04:00",
+    "resolved_by": "bot.py:899",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "dda4e272",
