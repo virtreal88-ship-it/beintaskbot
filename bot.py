@@ -5833,6 +5833,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         url = f"{KOMMO_BASE_URL}/api/v4/tasks"
         tasks_list = []
         allowed_responsible_ids = ({10932455, 15532668} if kommo_user_id == 10932455 else {15532668})
+        # Kommo may serialize numeric IDs as strings in some responses.
+        allowed_responsible_ids = {str(value) for value in allowed_responsible_ids}
         raw_tasks = []
         task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
         if not isinstance(task_priorities, dict):
@@ -5849,8 +5851,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             if not is_samil_chat(chat_id):
                 raw_tasks = [
                     t for t in raw_tasks
-                    if t.get("responsible_user_id") in allowed_responsible_ids
-                    and not t.get("is_completed")
+                    if str(t.get("responsible_user_id", "")) in allowed_responsible_ids
+                    and str(t.get("is_completed", False)).lower() not in {"true", "1", "yes"}
                 ]
             _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
             if is_samil_chat(chat_id):
@@ -6084,7 +6086,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         return False
                     # An empty result is valid only when Kommo successfully returned an
                     # empty stage. On API failure, preserve the previously fetched list.
-                    if _stage_resp.status_code == 200:
+                    if _stage_resp.status_code == 200 and _user_lead_ids:
+                        # Keep the responsible-user matches when Kommo returns no
+                        # stage leads (for example for contact-linked tasks).
                         tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
                 except Exception as _fe:
                     logger.error(f"Stage filter error: {_fe}")

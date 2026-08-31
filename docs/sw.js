@@ -1,18 +1,25 @@
-const CACHE_NAME = 'bein-v171-hide-deal-name';
+const CACHE_NAME = 'beintaskbot-v2026-08-31-2';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))));
-  self.clients.claim();
+  e.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  // Task data must always come from the API, never from the PWA cache.
+  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+
   e.respondWith(
     fetch(e.request).then(r => {
-      if(r.ok && e.request.method === 'GET') {
+      if (r.ok && url.origin === self.location.origin) {
         const clone = r.clone();
         caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
       }
@@ -70,3 +77,7 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
+// Bump this file's URL in the deployment when publishing a new version.
+//# sourceURL=sw.js
+

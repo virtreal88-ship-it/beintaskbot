@@ -876,7 +876,10 @@ function resumeEdit() { document.getElementById('screen-success').style.display 
 async function syncNotifications(showError = false) {
     if(IS_SAMIL) return loadSamilWorkspace(showError);
     try {
-        const r = await fetch(API_BASE + '/api/notifications', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const r = await fetch(API_BASE + '/api/notifications?_ts=' + Date.now(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
         const j = await r.json();
         if(!r.ok || !j.success || !j.tasks) throw new Error(j.error || 'Sync failed');
         if(j.user_name) {
@@ -2441,7 +2444,7 @@ function urlBase64ToUint8Array(base64String) {
 async function initPush() {
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=169-preload-deals');
+    const reg = await navigator.serviceWorker.register('sw.js?v=170-task-cache-fix');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
