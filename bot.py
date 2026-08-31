@@ -202,6 +202,16 @@ _PENDING_ACTIONS_FILE = "pending_actions.json"
 _TASK_PRIORITIES_FILE = "task_priorities.json"
 _TASK_CREATORS_FILE = "task_creators.json"
 _VALID_TASK_PRIORITIES = {"urgent", "medium", "low"}
+
+
+def task_created_by_samil(task_id) -> bool:
+    """Return whether the task creator is the second administrator, Şamil."""
+    try:
+        creators = read_json(_TASK_CREATORS_FILE) or {}
+        creator = str(creators.get(str(task_id), "")).strip().casefold()
+        return creator in {"şamil", "şamil əliyev"}
+    except Exception:
+        return False
 _PENDING_EXECUTOR_NAMES = {
     "Şamil": "Şamil Əliyev",
     "Soltan": "Soltan Abbasov",
@@ -633,11 +643,16 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 else:
                     dl_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
                 task_type_id_te = action_data.get("task_type_id")
+                # Keep the original creator on tasks assigned to Admin too.
+                # This prevents Şamil-created tasks from entering Nizami's
+                # confirmation flow when another employee completes them.
+                _creator_name_te = action_data.get("sender_name", "")
                 create_task(
                     int(lead_id), task_text_te, dl_ts,
                     responsible_user_id=10932455,
                     entity_type="leads",
                     task_type_id=int(task_type_id_te) if task_type_id_te else None,
+                    creator_name=_creator_name_te,
                 )
             if stars:
                 _apply_pending_kpi_stars(action_data, stars)
@@ -669,24 +684,30 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             else:
                 deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
             task_type_id = action_data.get("task_type_id")
-            if not create_task(
+            # Preserve the original creator on the exact task returned by Kommo.
+            # This is essential for Şamil-created tasks: their completion must be
+            # reported to Şamil, not sent to Nizami for confirmation.
+            _sender_name_ae = action_data.get("sender_name", "")
+            _created_task_ae = create_task(
                 int(lead_id),
                 task_text,
                 deadline_ts,
                 responsible_user_id=responsible_user_id,
                 entity_type="leads",
                 task_type_id=int(task_type_id) if task_type_id else None,
-            ):
+                creator_name=_sender_name_ae,
+            )
+            if not _created_task_ae:
                 return False, "Kommo-da tapşırıq yaradılmadı."
-            # Store creator (cavabdeh) in task_creators.json
-            _sender_name_ae = action_data.get("sender_name", "")
+            # Keep a compatibility fallback for legacy Kommo responses that do
+            # not expose the created task ID in the response payload.
             if _sender_name_ae:
                 try:
-                    _cr = read_json(_TASK_CREATORS_FILE) or {}
-                    _new_tasks = get_entity_tasks(int(lead_id), "leads")
-                    if _new_tasks:
-                        _new_tasks.sort(key=lambda t: t.get("id", 0), reverse=True)
-                        _cr[str(_new_tasks[0]["id"])] = _sender_name_ae
+                    _created_task_id_ae = (_created_task_ae.get("_embedded", {})
+                                          .get("tasks", [{}])[0].get("id"))
+                    if _created_task_id_ae:
+                        _cr = read_json(_TASK_CREATORS_FILE) or {}
+                        _cr[str(_created_task_id_ae)] = _sender_name_ae
                         write_json(_TASK_CREATORS_FILE, _cr)
                 except Exception:
                     pass
@@ -1022,6 +1043,8 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 _bot_created_tasks: set = set()
 _bot_created_tasks_ts: dict = {}  # {task_id: timestamp} for time-based expiry
 _notified_task_webhooks: dict = {}  # {task_id: timestamp} - prevent duplicate webhook notifications
+# Completion notification override for the synchronous AI completion flow.
+_last_completed_task_creator_chat_id: int | None = None
 # Bot-initiated lead stage changes (suppress webhook echo)
 _bot_updated_tasks: dict = {}  # {task_id: timestamp} - suppress update webhook echo
 _bot_changed_leads: dict = {}  # {lead_id: timestamp}
@@ -1765,7 +1788,9 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         "entity_id": entity_id, "entity_type": entity_type,
         "link": link, "task_text": text,
         "assignee_id": assignee_id, "assignee_name": assignee_name,
-        "phone": phone, "date": date, "time": time_str
+        "phone": phone, "date": date, "time": time_str,
+        "creator_chat_id": chat_id,
+        "creator_name": get_employee_name_by_chat_id(chat_id, "") if chat_id else ""
     }
 
 def execute_tool_add_note(phone: str, text: str) -> str:
@@ -1821,6 +1846,8 @@ def execute_tool_change_stage(phone: str, stage: str, chat_id: int) -> dict:
     }
 
 def execute_tool_complete_task(phone: str) -> str:
+    global _last_completed_task_creator_chat_id
+    _last_completed_task_creator_chat_id = None
     contacts = search_contact_by_phone(phone)
     if not contacts:
         return f"❌ '{phone}' nömrəli müştəri tapılmadı."
@@ -1846,6 +1873,8 @@ def execute_tool_complete_task(phone: str) -> str:
     # Complete the most recent task (closest deadline)
     open_tasks.sort(key=lambda t: t.get("complete_till", 0))
     task = open_tasks[0]
+    # Tasks created by Şamil report completion to Şamil instead of Nizami.
+    _creator_is_samil = task_created_by_samil(task.get("id"))
     deadline_ts = task.get("complete_till", 0)
     deadline_str = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
     responsible_id = task.get("responsible_user_id", 0)
@@ -1853,6 +1882,8 @@ def execute_tool_complete_task(phone: str) -> str:
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else ""
     res = update_task_kommo(task["id"], {"is_completed": True, "result": {"text": "Tamamlandı"}})
     if res:
+        if _creator_is_samil:
+            _last_completed_task_creator_chat_id = SAMIL_CHAT_ID
         result = (f"✅ Tapşırıq tamamlandı!\n\n"
                   f"👤 {contact_name}\n"
                   f"📞 {contact_phone}\n"
@@ -2057,7 +2088,8 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                 dt = datetime.strptime(f"{result['date']} {result['time']}", "%d.%m.%Y %H:%M").replace(tzinfo=BAKU_TZ)
                 complete_till = int(dt.timestamp())
                 res = create_task(result["entity_id"], result["task_text"], complete_till,
-                                  responsible_user_id=result["assignee_id"], entity_type=result["entity_type"])
+                                  responsible_user_id=result["assignee_id"], entity_type=result["entity_type"],
+                                  creator_name=result.get("creator_name", ""))
                 if res:
                     msg = (f"✅ Tapşırıq yaradıldı!\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n"
                            f"📝 {result['task_text']}\n⏰ {result['date']} {result['time']}\n"
@@ -2293,8 +2325,11 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                     await query.edit_message_text(result_msg)
                 except:
                     pass
-                # Notify admin
-                admin_chat = get_chat_id_for_kommo_user(10932455)
+                # Notify the task creator for Şamil-created tasks; otherwise
+                # preserve the existing Nizami notification behavior.
+                _creator_is_samil_reply = task_created_by_samil(task_id)
+                _creator_chat_reply = SAMIL_CHAT_ID if _creator_is_samil_reply else None
+                admin_chat = _creator_chat_reply or get_chat_id_for_kommo_user(10932455)
                 sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
                 task_phone = task_info.get("phone", "")
                 # Get contact name from entity
@@ -2308,7 +2343,8 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 link_for_notif = f"{KOMMO_BASE_URL}/leads/detail/{task_entity_id}" if task_entity_type == "leads" and task_entity_id else ""
                 if admin_chat and admin_chat != chat_id:
                     try:
-                        notif_text = (f"✅ *{sender_name}* tapşırığı tamamladı:\n\n"
+                        _recipient_label = "tapşırıq yaradıcısı" if _creator_is_samil_reply else "Admin"
+                        notif_text = (f"✅ *{sender_name}* tapşırığı tamamladı ({_recipient_label} üçün):\n\n"
                                       f"👤 {contact_name_for_notif}\n📞 {task_phone}\n"
                                       f"📝 {task_info.get('task_text', '')}\n💬 {user_text}")
                         if link_for_notif:
@@ -2385,17 +2421,23 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                 except:
                     pass
             add_to_history(chat_id, "assistant", result_text)
-            # Notify admin about any confirmed action
+            # Notify Nizami about confirmed actions, except completion of a
+            # Şamil-created task, which is routed to Şamil.
             admin_chat = get_chat_id_for_kommo_user(10932455)
+            notification_chat = (
+                _last_completed_task_creator_chat_id
+                if fn_name == "complete_task" and _last_completed_task_creator_chat_id
+                else admin_chat
+            )
             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-            if admin_chat and admin_chat != chat_id:
+            if notification_chat and notification_chat != chat_id:
                 action_labels = {"complete_task": "✅ tamamladı", "add_note": "📝 qeyd əlavə etdi", "change_stage": "🔄 mərhələ dəyişdi", "create_task": "📋 tapşırıq yaratdı"}
                 action_label = action_labels.get(fn_name, fn_name)
                 # Get phone from args for reply context
                 notif_phone = fn_args.get("phone", "")
                 try:
                     sent_admin = await context.bot.send_message(
-                        admin_chat,
+                        notification_chat,
                         f"📢 *{sender_name}* {action_label}:\n{result_text[:500]}",
                         parse_mode="Markdown", disable_web_page_preview=True
                     )
@@ -2407,7 +2449,7 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
                             full_c = get_contact_details(c["id"])
                             leads = (full_c or {}).get("_embedded", {}).get("leads", [])
                             if leads:
-                                store_message_lead(admin_chat, sent_admin.message_id, leads[0]["id"], c.get("name", ""), notif_phone)
+                                store_message_lead(notification_chat, sent_admin.message_id, leads[0]["id"], c.get("name", ""), notif_phone)
                 except:
                     pass
     except Exception as e:
@@ -2703,7 +2745,8 @@ async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     deadline_ts = int(deadline_dt.timestamp())
     result = create_task(pending["entity_id"], pending["task_text"], deadline_ts,
-                         responsible_user_id=pending["assignee_id"], entity_type=pending["entity_type"])
+                         responsible_user_id=pending["assignee_id"], entity_type=pending["entity_type"],
+                         creator_name=pending.get("creator_name", ""))
     if result:
         msg = (f"✅ Tapşırıq yaradıldı!\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n"
                f"📝 {pending['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n"
@@ -5035,6 +5078,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             except Exception as kpi_err:
                 logger.error(f"KPI processing error in complete_task: {kpi_err}\n{traceback.format_exc()}")
 
+            # Determine the creator before any completion-stage branch. This
+            # must be available not only in the final notification block, but
+            # also when legacy/new_stage handling runs first.
+            _task_creator_is_samil = task_created_by_samil(task_id)
             result = update_task_kommo(
                 task_id,
                 {"is_completed": True, "result": {"text": task_result_text}},
@@ -5044,8 +5091,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if samil_completion_stage:
                     target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
                     target_pipeline_name = "Şamil Əliyev" if target_pipeline_id == SAMIL_PIPELINE_ID else "Əməliyyatlar lövhəsi"
-                    if target_status_id == 142:
+                    if target_status_id == 142 and not _task_creator_is_samil:
                         # Only successful completion requires Admin approval; all other choices move immediately.
+                        # Şamil-created tasks bypass Nizami's approval flow.
                         conf_key = str(uuid.uuid4())[:8]
                         completion_sender = get_employee_name_by_chat_id(chat_id, "Şamil Əliyev")
                         deadline_display = (
@@ -5115,7 +5163,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     if stage_result.get("success"):
                         lead_id = stage_result["lead_id"]
                         contact_name = stage_result.get("contact_name", "")
-                        if stage_result.get("needs_confirmation"):
+                        if stage_result.get("needs_confirmation") and not _task_creator_is_samil:
                             admin_chat = get_chat_id_for_kommo_user(10932455)
                             sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
                             stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
@@ -5162,7 +5210,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                         lead_id = leads[0]["id"]
                     except: pass
                     if lead_id and status_id:
-                        if is_admin(chat_id):
+                        if is_admin(chat_id) or _task_creator_is_samil:
                             update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
                             stage_display = STAGE_NAMES.get(status_id, new_stage)
                             stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
@@ -5218,6 +5266,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
                 stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
 
+            # A task created by Şamil is handled by his admin account; do not
+            # send its completion to Nizami for confirmation.
             if not is_admin(chat_id):  # Admin doesn't need self-confirmation
               try:
                 logger.info("complete_task: ENTERING notification block")
@@ -5253,8 +5303,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     logger.error(f"Pending balance transaction error: {balance_error}")
 
                 admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
-                logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}")
-                if admin_chat and not is_samil_chat(chat_id):
+                logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_samil}")
+
+                # Tasks created by Şamil must never create a confirmation request
+                # for Nizami. They are reported to Şamil as a regular completion
+                # notification below. All other employee-created tasks keep the
+                # existing Nizami confirmation flow.
+                if admin_chat and not is_samil_chat(chat_id) and not _task_creator_is_samil:
                     deadline_display = (
                         datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
                         if task_deadline_ts else "—"
@@ -5326,26 +5381,29 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         }, ["Təsdiq et"] + [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
                     except Exception as notify_error:
                         logger.error(f"Completion notification error: {notify_error}")
-                    # Notify cavabdeh (task creator) that the task is completed
-                    try:
-                        _creators_data = read_json(_TASK_CREATORS_FILE) or {}
-                        _creator_name = _creators_data.get(str(task_id), "")
-                        _creator_chat = NAME_TO_CHAT.get(_creator_name) if _creator_name else None
-                        if _creator_chat and int(_creator_chat) != int(chat_id) and int(_creator_chat) != admin_chat:
-                            _c_cn = contact_name or "\u2014"
-                            _c_td = task_desc_display or "\u2014"
-                            _c_ph = phone or "\u2014"
-                            _creator_msg = (f"\u2705 Sizin yaratd\u0131\u011f\u0131n\u0131z tap\u015f\u0131r\u0131q tamamland\u0131:\n\n"
-                                f"\ud83d\udc64 {_c_cn}\n"
-                                f"\ud83d\udcdd {_c_td}\n"
-                                f"\ud83d\udc77 \u0130cra\u00e7\u0131: {completion_sender}\n"
-                                f"\ud83d\udcde {_c_ph}")
-                            if link: _creator_msg += f"\n\ud83d\udd17 {link}"
-                            _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                                json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
-                            send_push_notification(str(_creator_chat), '\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131', f'{contact_name} - {task_desc_display}')
-                    except Exception as _cav_err:
-                        logger.warning(f"Cavabdeh notification error: {_cav_err}")
+
+                # Notify the task creator independently of the Admin confirmation
+                # flow. In particular, Şamil receives his own tasks' completion
+                # notice, even though Nizami receives no confirmation request.
+                try:
+                    _creators_data = read_json(_TASK_CREATORS_FILE) or {}
+                    _creator_name = _creators_data.get(str(task_id), "")
+                    _creator_chat = SAMIL_CHAT_ID if _task_creator_is_samil else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
+                    if _creator_chat and int(_creator_chat) != int(chat_id):
+                        _c_cn = contact_name or "—"
+                        _c_td = task_desc_display or "—"
+                        _c_ph = phone or "—"
+                        _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
+                            f"👤 {_c_cn}\n"
+                            f"📝 {_c_td}\n"
+                            f"👷 İcraçı: {completion_sender}\n"
+                            f"📞 {_c_ph}")
+                        if link: _creator_msg += f"\n🔗 {link}"
+                        _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                            json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
+                        send_push_notification(str(_creator_chat), '✅ Tapşırıq tamamlandı', f'{contact_name} - {task_desc_display}')
+                except Exception as _cav_err:
+                    logger.warning(f"Cavabdeh notification error: {_cav_err}")
               except Exception as notif_block_err:
                 logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
               localStorage_key = f'timer_{task_id}'
