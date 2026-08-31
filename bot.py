@@ -77,7 +77,7 @@ SAMIL_STAGE_NAMES = {
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
 TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
-_UPD_MARKER = {"Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": ("Texniki Dəstək", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
+_UPD_MARKER = {"Şamil": ("Şamil Əliyev", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
 
 STAGES = {
     "nerazobrannoye": 66107683,
@@ -168,7 +168,7 @@ def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
     return None
 
 # Salary employees that share Sahə Meneceri Kommo license
-_SALARY_CHAT_IDS = {7962757442, 7262243946, 7329891614, 7920785774, 8835096199, 1289510272, 6596538872, 1142054888}
+_SALARY_CHAT_IDS = {7962757442, 7262243946, 7329891614, 7920785774, 1289510272, 6596538872, 1142054888}
 
 def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     users = load_users()
@@ -217,7 +217,6 @@ _PENDING_EXECUTOR_NAMES = {
     "Soltan": "Soltan Abbasov",
     "Hüseyn": "Hüseyn Səfərov",
     "Rasim": "Rasim Əsgərov",
-    "Texniki": TECHNICAL_SUPPORT_NAME,
 }
 
 
@@ -511,7 +510,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     if action.get("resolved"):
         return False, "Sorğu artıq həll edilib."
     action_options = action.get("options") or []
-    _executor_names_set = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "Texniki", "\u00d6z\u00fcm"}
+    _executor_names_set = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "\u00d6z\u00fcm"}
     if choice not in action_options:
         if choice != "T\u0259sdiq et" and not choice.startswith("stage_change:") and choice not in _executor_names_set:
             return False, "Yanl\u0131\u015f se\u00e7im."
@@ -563,7 +562,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         return True, f"Mərhələ dəyişdirildi: {new_stage_display}. Sorğu hələ açıqdır."
 
     # ── Universal executor change: choice is an executor short name, card does NOT close ──
-    _executor_short_names = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "Texniki", "\u00d6z\u00fcm"}
+    _executor_short_names = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "\u00d6z\u00fcm"}
     if choice in _executor_short_names and action_type != "assign_executor":
         # Update existing task's responsible user in Kommo
         task_id = action_data.get("task_id")
@@ -936,7 +935,6 @@ TG_CHAT_TO_EMPLOYEE = {
     7262243946: "Soltan Abbasov",
     7329891614: "Hüseyn Səfərov",
     7920785774: "Rasim Əsgərov",
-    8835096199: TECHNICAL_SUPPORT_NAME,
     1289510272: "Sərmayə Əhmədsoy",
     6596538872: "Asya Agayeva",
     1142054888: "Nuranə Şirinova",
@@ -957,7 +955,6 @@ NAME_TO_CHAT = {
     "Hüseyn Səfərov": 7329891614,
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
-    TECHNICAL_SUPPORT_NAME: 8835096199,
     "Sərmayə Əhmədsoy": 1289510272,
     "Asya Agayeva": 6596538872,
     "Nuranə Şirinova": 1142054888,
@@ -2896,7 +2893,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         )
         return
     # All employees go to Sahə Meneceri with marker; admin goes to admin
-    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
+    _ASSIGNEE_MARKER = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -2953,7 +2950,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
+    _ASSIGNEE_MARKER_DL = {"shamil": "Şamil Əliyev", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -4409,7 +4406,21 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             try: deadline_ts = int(data.get("deadline_ts") or (datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
             except (TypeError, ValueError): deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
-            result = create_task(lead_id, text, deadline_ts, responsible_user_id=15532668, entity_type="leads", creator_name="Şamil Əliyev")
+            executor = str(data.get("executor") or "Şamil Əliyev").strip()
+            executor_ids = {
+                "Nizami Qasımov": 10932455,
+                "Soltan Abbasov": 15531960,
+                "Şamil Əliyev": 15532668,
+                "Hüseyn Səfərov": 15532668,
+                "Rasim Əsgərov": 15532668,
+                "Sərmayə Əhmədsoy": 15532668,
+                "Asya Agayeva": 15532668,
+                "Nuranə Şirinova": 15532668,
+            }
+            responsible_user_id = executor_ids.get(executor)
+            if not responsible_user_id:
+                return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
+            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name="Şamil Əliyev")
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
         elif action == "info":
             if is_samil_chat(chat_id):
@@ -7222,7 +7233,6 @@ _KPI_TARGET_TIMES = {
 _EMPLOYEE_TYPES = {
     7962757442: 'salary', 7262243946: 'piecework',
     7329891614: 'salary', 7920785774: 'piecework',
-    8835096199: 'salary',
     1289510272: 'salary', 6596538872: 'salary',
     1142054888: 'salary',
 }
