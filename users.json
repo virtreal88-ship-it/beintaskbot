@@ -1,27 +1,27 @@
 {
   "7962757442": {
     "kommo_user_id": 15532668,
-    "role": "Satış meneceri",
+    "role": "Əməkdaş",
     "name": "Şamil Əliyev"
   },
   "1628569350": {
     "kommo_user_id": 10932455,
-    "role": "Admin (Texniki Destek)",
-    "name": "Texniki Destek"
+    "role": "Əməkdaş",
+    "name": "Nizami Qasımov"
   },
   "7262243946": {
     "kommo_user_id": 15531960,
-    "role": "Texnik",
+    "role": "Əməkdaş",
     "name": "Soltan Abbasov"
   },
   "7329891614": {
     "kommo_user_id": 15532668,
-    "role": "Sahə meneceri",
-    "name": "Hüseyn"
+    "role": "Əməkdaş",
+    "name": "Hüseyn Səfərov"
   },
   "7920785774": {
     "kommo_user_id": 15532668,
-    "role": "Sahə meneceri",
+    "role": "Əməkdaş",
     "name": "Rasim Əsgərov"
   },
   "8835096199": {
@@ -31,6 +31,17 @@
   },
   "1289510272": {
     "role": "Əməkdaş",
-    "name": "Sərmayə"
+    "name": "Sərmayə Əhmədsoy",
+    "kommo_user_id": 15532668
+  },
+  "6596538872": {
+    "role": "Əməkdaş",
+    "name": "Asya Agayeva",
+    "kommo_user_id": 15532668
+  },
+  "1142054888": {
+    "role": "Əməkdaş",
+    "name": "Nuranə Şirinova",
+    "kommo_user_id": 15532668
   }
 }
