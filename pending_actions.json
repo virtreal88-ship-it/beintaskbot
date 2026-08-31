@@ -1,5 +1,40 @@
 [
   {
+    "id": "42ba7a1d",
+    "type": "change_stage",
+    "created_at": "2026-08-31T14:27:54.803553+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994514400019",
+      "phone": "+994514400019",
+      "lead_id": 77323835,
+      "task_id": 93985813,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Elvin bunun mallarını hazırlayıb saxlasın. Ayın axırı quraşdırma olacaq.",
+      "task_price": "",
+      "note": "hazırdır",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77323835",
+      "callback_key": "c781a812"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f3019966",
     "type": "reassign_task",
     "created_at": "2026-08-31T11:04:03.925145+04:00",
