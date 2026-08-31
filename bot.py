@@ -140,14 +140,78 @@ logger = logging.getLogger("bot")
 # ─── User Registration Storage ───────────────────────────────────────────────
 _USER_DB_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 
+# Telegram identities are fixed employee accounts. They must remain usable after
+# every deploy/restart without requiring the employee to send /start again.
+_KNOWN_EMPLOYEE_REGISTRATIONS = {
+    1628569350: ("Nizami Qasımov", 10932455),
+    7962757442: ("Şamil Əliyev", 15532668),
+    7262243946: ("Soltan Abbasov", 15531960),
+    7329891614: ("Hüseyn Səfərov", 15532668),
+    7920785774: ("Rasim Əsgərov", 15532668),
+    1289510272: ("Sərmayə Əhmədsoy", 15532668),
+    6596538872: ("Asya Agayeva", 15532668),
+    1142054888: ("Nuranə Şirinova", 15532668),
+}
+
 def load_users() -> dict:
+    """Load registrations from durable storage, with a local cache fallback.
+
+    The deployment filesystem is ephemeral, so local users.json alone cannot be
+    the source of truth. Merge the durable copy with the local cache so a fresh
+    deploy does not make registered employees appear unregistered.
+    """
+    local_users = {}
     if os.path.exists(_USER_DB_LOCAL):
         try:
             with open(_USER_DB_LOCAL, "r") as f:
-                return json.load(f)
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    local_users = loaded
         except Exception:
             pass
-    return {}
+
+    durable_users = {}
+    try:
+        loaded = read_json("users.json") or {}
+        if isinstance(loaded, dict):
+            durable_users = loaded
+    except Exception as exc:
+        logger.warning(f"users.json durable load failed: {exc}")
+
+    # Keep existing local values, while restoring any registrations that only
+    # exist in the durable data branch after a redeploy.
+    users = dict(durable_users)
+    users.update(local_users)
+    if users and users != local_users:
+        try:
+            with open(_USER_DB_LOCAL, "w") as f:
+                json.dump(users, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    return users
+
+def ensure_known_employee_registrations() -> None:
+    """Seed fixed employee accounts once, so /start is never needed per deploy."""
+    users = load_users()
+    changed = False
+    for chat_id, (name, kommo_user_id) in _KNOWN_EMPLOYEE_REGISTRATIONS.items():
+        key = str(chat_id)
+        current = users.get(key)
+        if not isinstance(current, dict):
+            current = {}
+        expected = {
+            "role": "Əməkdaş",
+            "name": name,
+            "kommo_user_id": kommo_user_id,
+        }
+        if any(current.get(field) != value for field, value in expected.items()):
+            current.update(expected)
+            users[key] = current
+            changed = True
+    if changed:
+        save_users(users)
+        logger.info("Known employee registrations restored for startup")
+
 
 def save_users(data: dict):
     try:
@@ -7403,6 +7467,7 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
 def main():
     global _bot_app
     async def post_init(application: Application) -> None:
+        ensure_known_employee_registrations()
         await start_webhook_server()
         try:
             _rehydrate_tecili_tasks()
