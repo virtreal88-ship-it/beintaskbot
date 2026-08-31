@@ -1080,9 +1080,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-20 09:29:46"
+      },
+      {
+        "task_id": 0,
+        "executor": "Şamil Əliyev",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -22.5,
+        "status": "confirmed",
+        "task_text": "Ödəniş",
+        "result_text": "Ödəniş",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-08-31 15:06:37"
       }
     ],
-    "balance": 22.5
+    "balance": 0.0
   },
   "8835096199": {
     "transactions": [
