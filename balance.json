@@ -865,9 +865,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-22 10:12:05"
+      },
+      {
+        "task_id": 93985813,
+        "executor": "Hüseyn Səfərov",
+        "client": "Автоконтакт +994514400019",
+        "phone": "+994514400019",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-08-31 14:51:55"
       }
     ],
-    "balance": 8.5
+    "balance": 11.0
   },
   "7962757442": {
     "transactions": [
