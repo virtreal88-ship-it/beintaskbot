@@ -122,7 +122,7 @@
     "id": "4dd0379e",
     "type": "assign_executor",
     "created_at": "2026-08-30T18:32:49.569869+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Yeni Müştəri",
       "phone": "994503007973",
@@ -144,7 +144,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-08-31T12:41:19.602437+04:00",
+    "resolved_by": "bot.py:4238",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "b4ce277b",
