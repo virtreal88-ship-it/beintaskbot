@@ -893,9 +893,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-31 14:51:55"
+      },
+      {
+        "task_id": 94199218,
+        "executor": "Hüseyn Səfərov",
+        "client": "Автоконтакт +994504930181",
+        "phone": "+994504930181",
+        "task_type": "",
+        "amount": 2.5,
+        "status": "confirmed",
+        "task_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi ⭐⭐⭐⭐⭐ (2.50 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-01 14:26:39"
       }
     ],
-    "balance": 11.0
+    "balance": 13.5
   },
   "7962757442": {
     "transactions": [
