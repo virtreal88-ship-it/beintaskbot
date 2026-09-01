@@ -31,7 +31,7 @@
     "id": "997efddc",
     "type": "change_stage",
     "created_at": "2026-09-01T17:40:10.612413+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Автоконтакт +994504930181",
       "phone": "+994504930181",
@@ -60,7 +60,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-01T18:26:40.727184+04:00",
+    "resolved_by": "bot.py:1002",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "f7c2e8bd",
