@@ -1,5 +1,33 @@
 [
   {
+    "id": "f7c2e8bd",
+    "type": "assign_executor",
+    "created_at": "2026-09-01T14:42:23.199904+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Tural Alhuseynov Nugmas",
+      "phone": "994506223252",
+      "lead_id": 74963073,
+      "task_text": "sənədin bloklanma funksionallığı(admin ödənişi təsdiq edəndən sonra dəyişdirilə bilir)",
+      "deadline": "01.09.2026 14:42",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "uğurlu sifariş",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/74963073",
+      "conf_key": "64bc96e7",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "4e3f64ab",
     "type": "change_stage",
     "created_at": "2026-09-01T13:56:51.727072+04:00",
