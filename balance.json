@@ -776,6 +776,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-08-30 16:27:14"
+      },
+      {
+        "task_id": 94210201,
+        "executor": "Rasim Əsgərov",
+        "client": "Автоконтакт +994775224222",
+        "phone": "+994775224222",
+        "task_type": "Quraşdırma",
+        "amount": 150.0,
+        "status": "pending",
+        "task_text": "Ələt, balıq satışı",
+        "result_text": "Uğurlu. Təlimatlar edildi. Satış etməyə başlayıblar. Cəmi: 1650₼\n850₼ ödədilər. Qalanını 15.09 tarixində",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-01 09:56:48"
       }
     ],
     "balance": 0.0
