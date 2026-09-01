@@ -1,5 +1,33 @@
 [
   {
+    "id": "92223b0d",
+    "type": "assign_executor",
+    "created_at": "2026-09-01T17:44:46.141776+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Aqil",
+      "phone": "+994504930181",
+      "lead_id": 77789202,
+      "task_text": "02.09.26 avadanlığı bakıya çatdırmaq lazımdı.Sadəcə təhvil veriləcək. Aqilin adamı orda olacaq onnan əlaqə saxla, konumi Rasimə atıram.bu nömrəyə yığarsan buna verəssən 051 404 33 65",
+      "deadline": "02.09.2026 12:00",
+      "sender_name": "Hüseyn Səfərov",
+      "assignee_name_raw": "Rasim Əsgərov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77789202",
+      "conf_key": "f01a4b10",
+      "creator_chat_id": 7329891614
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "997efddc",
     "type": "change_stage",
     "created_at": "2026-09-01T17:40:10.612413+04:00",
