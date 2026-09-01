@@ -1,5 +1,40 @@
 [
   {
+    "id": "997efddc",
+    "type": "change_stage",
+    "created_at": "2026-09-01T17:40:10.612413+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994504930181",
+      "phone": "+994504930181",
+      "lead_id": 77806896,
+      "task_id": 94199218,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "Malları yığılsın , satış icra olunsun",
+      "task_price": "",
+      "note": "Malları hazırladım, satışa yazdım. Avadanlığı rasim çatdıracaq bakıya",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77806896",
+      "callback_key": "bc72c81f"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f7c2e8bd",
     "type": "assign_executor",
     "created_at": "2026-09-01T14:42:23.199904+04:00",
