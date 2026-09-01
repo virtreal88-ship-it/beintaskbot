@@ -64,15 +64,34 @@ llm_client = OpenAI(
 PIPELINE_ID = 8329347
 SAMIL_CHAT_ID = 7962757442
 SAMIL_PIPELINE_ID = int(os.environ.get("SAMIL_PIPELINE_ID", "14357580"))
+# Şamil's current pipeline snapshot. Do not alter other pipeline mappings here.
 SAMIL_STAGES = {
-    "nerazobrannoye": 110897252, "sorgular": 110897256, "danisiqlar": 110897260,
-    "geri_donusler": 110897264, "cavab_gozlenilir": 110897336, "yeni_sifarisler": 110897340,
-    "gorusler": 110897344, "qurashdirma": 110897348, "ugurlu": 142, "imtina": 143,
+    "nerazobrannoye": 110897252,
+    "sorgular": 110897256,
+    "danisiqlar": 110897260,
+    "yeni_sifaris": 111109080,
+    "geri_donusler": 110897264,
+    "soyuq_zeng": 110897348,
+    "cavab_gozlenilir": 110897336,
+    "gorusler": 110897344,
+    "qurashdirma": 111109084,
+    "muzakire": 111109104,
+    "ugurlu": 142,
+    "imtina": 143,
 }
 SAMIL_STAGE_NAMES = {
-    110897252: "Nerazobrannoye", 110897256: "sorğular", 110897260: "danışıqlar",
-    110897264: "geri dönüşlər", 110897336: "cavab gözlənilir", 110897340: "yeni sifarişlər",
-    110897344: "görüşlər", 110897348: "quraşdırma", 142: "Uğurla tamamlandı", 143: "İmtina olundu",
+    110897252: "Неразобранное",
+    110897256: "sorgular",
+    110897260: "danişıqlar",
+    111109080: "yeni sifariş",
+    110897264: "geri donüşlər",
+    110897348: "soyuq zəng",
+    110897336: "cavab gözlənilir",
+    110897344: "görüşlər",
+    111109084: "quraşdırma",
+    111109104: "müzakirə",
+    142: "Успешно реализовано",
+    143: "Закрыто и не реализовано",
 }
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
@@ -5616,6 +5635,87 @@ async def _kommo_get_async(url: str, *, params: dict | None = None, timeout: int
     return await asyncio.to_thread(requests.get, url, headers=HEADERS, params=params, timeout=timeout)
 
 
+async def _samil_load_all(url: str, embedded_key: str, params: dict | None = None) -> list[dict]:
+    """Load all pages for Şamil data without changing other API consumers."""
+    rows: list[dict] = []
+    page = 1
+    while True:
+        try:
+            response = await _kommo_get_async(url, params={**(params or {}), "page": page, "limit": 250}, timeout=12)
+        except Exception as exc:
+            logger.warning("Şamil %s page %s unavailable: %s", embedded_key, page, exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Şamil %s page %s failed: %s", embedded_key, page, response.status_code)
+            break
+        payload = response.json()
+        batch = payload.get("_embedded", {}).get(embedded_key, []) or []
+        rows.extend(row for row in batch if isinstance(row, dict))
+        if len(batch) < 250 and not payload.get("_links", {}).get("next"):
+            break
+        page += 1
+    return rows
+
+
+async def _load_samil_contacts(contact_ids: set[int]) -> dict[int, dict]:
+    """Fetch linked contacts in batches, preserving every phone field."""
+    result: dict[int, dict] = {}
+    ids = sorted(contact_ids)
+    for start in range(0, len(ids), 250):
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/contacts",
+                params={"filter[id][]": ids[start:start + 250], "limit": 250},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Şamil contact batch unavailable: %s", exc)
+            continue
+        if response.status_code != 200:
+            logger.warning("Şamil contact batch failed: %s", response.status_code)
+            continue
+        for contact in response.json().get("_embedded", {}).get("contacts", []) or []:
+            try:
+                result[int(contact["id"])] = contact
+            except (KeyError, TypeError, ValueError):
+                continue
+    return result
+
+
+async def _load_samil_latest_notes(lead_to_contact: dict[int, int | None]) -> dict[int, str]:
+    """Read the latest text note from a deal, then its primary contact."""
+    semaphore = asyncio.Semaphore(8)
+
+    async def read_notes(entity_type: str, entity_id: int) -> str:
+        try:
+            async with semaphore:
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes",
+                    params={"filter[note_type][]": "common", "limit": 20, "order[updated_at]": "desc"},
+                    timeout=12,
+                )
+        except Exception as exc:
+            logger.warning("Şamil %s/%s notes unavailable: %s/%s", entity_type, entity_id, type(exc).__name__, exc)
+            return ""
+        if response.status_code != 200:
+            return ""
+        for note in response.json().get("_embedded", {}).get("notes", []) or []:
+            text = str((note.get("params") or {}).get("text") or "").strip()
+            if text:
+                return text
+        return ""
+
+    async def read_one(lead_id: int, contact_id: int | None) -> tuple[int, str]:
+        note = await read_notes("leads", lead_id)
+        if not note and contact_id:
+            note = await read_notes("contacts", contact_id)
+        return lead_id, note
+
+    return dict(await asyncio.gather(*(read_one(lead_id, contact_id) for lead_id, contact_id in lead_to_contact.items())))
+
+
 def _format_samil_deadline(deadline_ts: int | float | None, now: datetime) -> tuple[str, str, bool]:
     """Return the compact task deadline, full deadline and overdue flag."""
     try:
@@ -5683,12 +5783,8 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
 
     # Both requests are independent and start at the same time.
     leads_request = asyncio.create_task(_load_all_samil_leads())
-    tasks_request = asyncio.create_task(_kommo_get_async(
-        f"{KOMMO_BASE_URL}/api/v4/tasks",
-        # Apply responsible-user filtering locally; nested task filters can
-        # intermittently return an empty response from Kommo.
-        params={"filter[is_completed]": 0, "limit": 250},
-        timeout=10,
+    tasks_request = asyncio.create_task(_samil_load_all(
+        f"{KOMMO_BASE_URL}/api/v4/tasks", "tasks", {"filter[is_completed]": 0}
     ))
     leads = await leads_request
 
@@ -5712,18 +5808,14 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
                 continue
             lead_by_contact_id.setdefault(contact_id, lead)
 
-    # Enrich visible deals with primary contact phone.
-    contact_ids = set()
-    for lead in leads:
-        for contact in lead.get("_embedded", {}).get("contacts", []) or []:
-            try: contact_ids.add(int(contact.get("id")))
-            except (TypeError, ValueError): pass
-    async def _load_contact(contact_id):
-        response = await _kommo_get_async(f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}", timeout=8)
-        if response.status_code == 200: return response.json()
-        return {}
-    contact_rows = await asyncio.gather(*[_load_contact(cid) for cid in contact_ids])
-    contacts = {int(row.get("id")): row for row in contact_rows if row.get("id")}
+    # Fetch all linked contacts in bounded batches; one failed contact cannot hide a deal.
+    contact_ids = {
+        int(contact.get("id"))
+        for lead in leads
+        for contact in lead.get("_embedded", {}).get("contacts", []) or []
+        if str(contact.get("id", "")).isdigit()
+    }
+    contacts = await _load_samil_contacts(contact_ids)
     deals = []
     for lead_id, lead in lead_by_id.items():
         lead_contacts = lead.get("_embedded", {}).get("contacts", []) or []
@@ -5733,19 +5825,29 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
                 first_contact_id = int(lead_contacts[0].get("id"))
             except (TypeError, ValueError):
                 pass
-        # Never fall back to the deal title: Müştəri must contain only the contact name.
-        contact = contacts.get(first_contact_id or 0, {"name": "", "custom_fields_values": []})
-        phone = ""
-        for field in contact.get("custom_fields_values", []) or []:
-            if field.get("field_code") == "PHONE" and field.get("values"):
-                phone = field["values"][0].get("value", "")
-                break
+        # Keep the contact fields separate from the deal title, with embedded fallback.
+        embedded_contact = next((c for c in lead_contacts if c.get("id") == first_contact_id), {})
+        contact = contacts.get(first_contact_id or 0, embedded_contact or {"name": "", "custom_fields_values": []})
+        contact_rows = []
+        all_phones = []
+        for linked_contact in lead_contacts:
+            linked_id = linked_contact.get("id")
+            full_contact = contacts.get(int(linked_id), linked_contact) if str(linked_id).isdigit() else linked_contact
+            phones = []
+            for field in full_contact.get("custom_fields_values", []) or []:
+                if field.get("field_code") == "PHONE":
+                    phones.extend(str(value.get("value", "")).strip() for value in field.get("values", []) or [] if value.get("value"))
+            phones = list(dict.fromkeys(phones))
+            all_phones.extend(phone for phone in phones if phone not in all_phones)
+            contact_rows.append({"id": linked_id, "name": full_contact.get("name", ""), "phones": phones})
+        phone = all_phones[0] if all_phones else ""
         status_id = lead.get("status_id", 0)
         deals.append({
             "id": lead_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": SAMIL_STAGE_NAMES.get(status_id, "Naməlum mərhələ"),
-            "contact_name": contact.get("name", ""), "phone": phone,
+            "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
+            "contacts": contact_rows,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
             "last_note": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
@@ -5758,41 +5860,42 @@ async def build_samil_overview(stage_key: str | None = None) -> dict:
         if stage_deals is not None:
             stage_deals.append(deal)
 
-    tasks_response = await tasks_request
-    if tasks_response.status_code != 200:
-        raise RuntimeError(f"Şamil tasks fetch failed: {tasks_response.status_code}")
-
-    # Attach the latest open task (description/deadline) and latest lead note.
-    task_by_lead = {}
+    # Attach all open tasks and use the nearest/most recent one as the compact summary.
+    _all_tasks = await tasks_request
     _samil_tasks = [
-        task for task in (tasks_response.json().get("_embedded", {}).get("tasks", []) or [])
-        if task.get("responsible_user_id") == 15532668 and not task.get("is_completed")
+        task for task in _all_tasks
+        if int(task.get("responsible_user_id", 0) or 0) == 15532668 and not task.get("is_completed")
     ]
+    task_by_lead: dict[int, list[dict]] = {}
     for task in _samil_tasks:
         entity_id = task.get("entity_id")
         entity_type = task.get("entity_type", "contacts")
         related_lead = lead_by_id.get(int(entity_id)) if entity_type == "leads" and entity_id else lead_by_contact_id.get(int(entity_id)) if entity_id else None
         if related_lead:
             related_id = int(related_lead["id"])
-            current = task_by_lead.get(related_id)
-            if not current or (task.get("created_at", 0) > current.get("created_at", 0)):
-                task_by_lead[related_id] = task
-    async def _load_note(lead_id):
-        response = await _kommo_get_async(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}/notes", params={"limit": 1, "order[updated_at]": "desc"}, timeout=8)
-        if response.status_code == 200:
-            notes = response.json().get("_embedded", {}).get("notes", []) or []
-            return lead_id, (notes[0].get("params", {}).get("text", "") if notes else "")
-        return lead_id, ""
-    note_rows = await asyncio.gather(*[_load_note(lead_id) for lead_id in lead_by_id])
-    note_by_lead = dict(note_rows)
+            task_by_lead.setdefault(related_id, []).append(task)
+    for related_tasks in task_by_lead.values():
+        related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
+    note_by_lead = await _load_samil_latest_notes({
+        int(deal["id"]): next((int(c.get("id")) for c in lead_by_id[int(deal["id"])].get("_embedded", {}).get("contacts", []) or [] if str(c.get("id", "")).isdigit()), None)
+        for deal in deals
+    })
     for deal in deals:
         lead_id = int(deal["id"])
-        task = task_by_lead.get(lead_id, {})
+        related_tasks = task_by_lead.get(lead_id, [])
+        task = related_tasks[0] if related_tasks else {}
         deadline_ts = int(task.get("complete_till", 0) or 0)
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["task_desc"] = task.get("text", "")
         deal["deadline_ts"] = deadline_ts
         deal["deadline"] = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
+        deal["tasks"] = [{
+            "id": related.get("id"),
+            "text": related.get("text", ""),
+            "complete_till": int(related.get("complete_till", 0) or 0),
+            "deadline": datetime.fromtimestamp(int(related.get("complete_till", 0) or 0), tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if related.get("complete_till") else "",
+            "task_type_id": related.get("task_type_id"),
+        } for related in related_tasks]
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []

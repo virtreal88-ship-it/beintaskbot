@@ -535,13 +535,14 @@ function getUserId() {
 const CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '7962757442';
 const SAMIL_UI_STAGES = [
-    ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['geri_donusler','Geri dönüşlər'],
-    ['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],['gorusler','Görüşlər'],['qurashdirma','Quraşdırma']
+    ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],['geri_donusler','Geri dönüşlər'],
+    ['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
+    ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə']
 ];
 const SAMIL_ALL_STAGES = [
-    ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['geri_donusler','Geri dönüşlər'],
-    ['cavab_gozlenilir','Cavab gözlənilir'],['yeni_sifarisler','Yeni sifarişlər'],['gorusler','Görüşlər'],['qurashdirma','Quraşdırma'],
-    ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
+    ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],
+    ['geri_donusler','Geri dönüşlər'],['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
+    ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
 const SAMIL_COMPLETION_PIPELINES = {
     samil: {label:'Şamil Əliyev', stages:SAMIL_ALL_STAGES},
@@ -605,21 +606,34 @@ function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stri
 function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
 function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
 
+function syncSamilStagesFromPayload(payload) {
+    const incoming = Array.isArray(payload?.stages) ? payload.stages : [];
+    if(!incoming.length) return;
+    const all = incoming.map(stage => [String(stage.key), String(stage.name || stage.key)]);
+    const active = all.filter(([key]) => !['nerazobrannoye','ugurlu','imtina'].includes(key));
+    SAMIL_ALL_STAGES.splice(0, SAMIL_ALL_STAGES.length, ...all);
+    SAMIL_UI_STAGES.splice(0, SAMIL_UI_STAGES.length, ...active);
+    if(!SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter)) samilStageFilter = SAMIL_UI_STAGES[0]?.[0] || 'sorgular';
+    renderSamilCompletionStages();
+    applySamilUi();
+}
 function groupSamilDealsByStage(deals) {
-    const grouped = Object.fromEntries(SAMIL_UI_STAGES.map(([key]) => [key, []]));
+    const grouped = Object.fromEntries(SAMIL_ALL_STAGES.map(([key]) => [key, []]));
     (Array.isArray(deals) ? deals : []).forEach(deal => {
-        if(grouped[deal.stage_key]) grouped[deal.stage_key].push(deal);
+        if(!grouped[deal.stage_key]) grouped[deal.stage_key] = [];
+        grouped[deal.stage_key].push(deal);
     });
     return grouped;
 }
 
 function applySamilWorkspace(payload) {
+    syncSamilStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
-        return {...deal, name:'', contact_name: contactName === dealName ? '' : contactName};
+        return {...deal, name: dealName, contact_name: contactName || '—'};
     };
     samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
     samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
@@ -1621,16 +1635,21 @@ function renderSamilDeals() {
         return;
     }
     container.innerHTML = filtered.map(deal => {
-        const clientName = escapeHtml(deal.contact_name || '—'), phone = escapeHtml(deal.phone || '—');
+        const dealTitle = escapeHtml(deal.name || '—');
+        const clientName = escapeHtml(deal.contact_name || '—');
+        const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+        const phone = escapeHtml(phoneList.join(', ') || '—');
         const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ'), link = escapeHtml(deal.kommo_link || '#');
         const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
         const note = escapeHtml(deal.last_note || '—'), task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
+        const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+        const tasksHtml = allTasks.length > 1 ? allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('') : task;
         const audio = deal.voice_url ? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>` : '<span class="text-gray-400">—</span>';
         return `<article class="samil-deal-card bg-white p-3.5 rounded-xl border-l-4 border-l-violet-500 border border-gray-100 shadow-sm" data-deal-id="${deal.id}">
             <div class="flex items-start justify-between gap-3 mb-2"><span class="text-[10px] text-gray-400 font-bold">Sövdələşmə məlumatı</span><div class="flex items-center gap-2"><span class="shrink-0 bg-violet-50 text-violet-700 text-[10px] font-black px-2 py-0.5 rounded-md">${stageName}</span><button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button></div></div>
             <div class="space-y-1 text-[11px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${clientName}</div><div>📞 <b>Telefon:</b> ${phone}</div>
-                <div>📝 <b>Son qeyd:</b> ${note}</div><div>📋 <b>Tapşırıq:</b> ${task}</div>
+                <div>📌 <b>Sövdələşmə:</b> ${dealTitle}</div><div>👤 <b>Müştəri:</b> ${clientName}</div><div>📞 <b>Telefon:</b> ${phone}</div>
+                <div>📝 <b>Son qeyd:</b> ${note}</div><div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
                 <div>🕒 <b>Yaradılıb:</b> ${created}</div><div>⏰ <b>Dedlayn:</b> ${escapeHtml(deal.deadline || '—')}</div>
                 <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
             </div><div class="mt-3 pt-2 border-t border-gray-100"><a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a></div>
