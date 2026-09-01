@@ -3045,10 +3045,17 @@
     "sessions": [
       {
         "start_time": "2026-09-01 05:28:26",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-09-01 05:28:28",
+        "actual_minutes": 0.0,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 0,
+    "target_minutes": 60,
+    "actual_minutes": 0,
+    "deadline_ts": 1788176700,
+    "completed_before_deadline": false,
+    "delay_reason": "",
+    "completed_at": "2026-09-01 05:28:28"
   }
 }
