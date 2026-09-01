@@ -1,5 +1,40 @@
 [
   {
+    "id": "4e3f64ab",
+    "type": "change_stage",
+    "created_at": "2026-09-01T13:56:51.727072+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994775224222",
+      "phone": "+994775224222",
+      "lead_id": 77817953,
+      "task_id": 94210201,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Ələt, balıq satışı",
+      "task_price": "150",
+      "note": "Uğurlu. Təlimatlar edildi. Satış etməyə başlayıblar. Cəmi: 1650₼\n850₼ ödədilər. Qalanını 15.09 tarixində",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77817953",
+      "callback_key": "3a97b597"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ce8453e3",
     "type": "change_stage",
     "created_at": "2026-09-01T09:28:31.250419+04:00",
