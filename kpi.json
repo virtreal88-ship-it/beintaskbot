@@ -3084,12 +3084,15 @@
         "paused": false
       }
     ],
-    "kpi_score": 0,
+    "kpi_score": 100,
     "target_minutes": 60,
     "actual_minutes": 0,
     "deadline_ts": 1788176280,
     "completed_before_deadline": false,
     "delay_reason": "",
-    "completed_at": "2026-09-01 13:40:05"
+    "completed_at": "2026-09-01 13:40:05",
+    "manual_correction": true,
+    "corrected_by": 1628569350,
+    "corrected_at": "2026-09-01 14:26:37"
   }
 }
