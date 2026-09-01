@@ -1,5 +1,40 @@
 [
   {
+    "id": "ce8453e3",
+    "type": "change_stage",
+    "created_at": "2026-09-01T09:28:31.250419+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Ceyhun partner",
+      "phone": "+994556333435",
+      "lead_id": 77806936,
+      "task_id": 94199266,
+      "sender_name": "Hüseyn Səfərov",
+      "task_text": "5 printer \n2 terminal \n1 terminal ikitərəfli \nKöçürmə ilə olacaq \nQiymət təklifi hazırda Nizamiyə göndər",
+      "task_price": "",
+      "note": "Təklif hazırladım, özü götürdü sistemdə",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77806936",
+      "callback_key": "afcfe735"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "9a52bbbf",
     "type": "reassign_task",
     "created_at": "2026-08-31T20:50:56.939216+04:00",
