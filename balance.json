@@ -804,6 +804,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-03 15:08:49"
+      },
+      {
+        "task_id": 94180920,
+        "executor": "Rasim Əsgərov",
+        "client": "Musa ( Nubarucuzluq)",
+        "phone": "+994513239370",
+        "task_type": "Görüş",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Yerində təqdimat",
+        "result_text": "Uğurlu quraşdırma",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-03 18:30:14"
       }
     ],
     "balance": 0.0
