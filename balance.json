@@ -790,6 +790,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-01 09:56:48"
+      },
+      {
+        "task_id": 94299953,
+        "executor": "Rasim Əsgərov",
+        "client": "Rasim",
+        "phone": "0102135104",
+        "task_type": "Texniki tapşırıq",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Əlavə işlər",
+        "result_text": ".",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-03 15:08:49"
       }
     ],
     "balance": 0.0
