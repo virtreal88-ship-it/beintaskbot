@@ -1,5 +1,40 @@
 [
   {
+    "id": "43f62f16",
+    "type": "change_stage",
+    "created_at": "2026-09-03T22:30:17.104333+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Musa ( Nubarucuzluq)",
+      "phone": "+994513239370",
+      "lead_id": 77776064,
+      "task_id": 94180920,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Yerində təqdimat",
+      "task_price": "100",
+      "note": "Uğurlu quraşdırma",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77776064",
+      "callback_key": "345b0e1f"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "027c0d46",
     "type": "change_stage",
     "created_at": "2026-09-03T19:08:51.765151+04:00",
