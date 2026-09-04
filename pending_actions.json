@@ -1,5 +1,40 @@
 [
   {
+    "id": "1dbd0d2b",
+    "type": "change_stage",
+    "created_at": "2026-09-04T15:25:53.436696+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Ləziz restoran",
+      "phone": "+994505394934",
+      "lead_id": 77784640,
+      "task_id": 94195456,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Quraşdırma",
+      "task_price": "",
+      "note": "H",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77784640",
+      "callback_key": "d559a9c2"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "43f62f16",
     "type": "change_stage",
     "created_at": "2026-09-03T22:30:17.104333+04:00",
