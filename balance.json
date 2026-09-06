@@ -784,7 +784,7 @@
         "phone": "+994775224222",
         "task_type": "Quraşdırma",
         "amount": 150.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Ələt, balıq satışı",
         "result_text": "Uğurlu. Təlimatlar edildi. Satış etməyə başlayıblar. Cəmi: 1650₼\n850₼ ödədilər. Qalanını 15.09 tarixində",
         "kpi": 0,
@@ -834,7 +834,7 @@
         "date": "2026-09-04 08:53:21"
       }
     ],
-    "balance": -70.0
+    "balance": 80.0
   },
   "7329891614": {
     "transactions": [
