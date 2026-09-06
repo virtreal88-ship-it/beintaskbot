@@ -672,7 +672,7 @@
         "phone": "+994502060677",
         "task_type": "Texniki tapşırıq",
         "amount": 20.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Tərəzi",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -848,7 +848,7 @@
         "date": "2026-09-06 12:44:54"
       }
     ],
-    "balance": 0.0
+    "balance": 20.0
   },
   "7329891614": {
     "transactions": [
