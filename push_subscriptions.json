@@ -40,11 +40,11 @@
     }
   },
   "7962757442": {
-    "endpoint": "https://fcm.googleapis.com/fcm/send/dH9GT96CJfU:APA91bGVcHokwx_TvIHFxiuJsVlsq6vyWCBSRzGPbweuvJPvM2aA1PvRRxoZCcCxfYGaMkWUConcXQREZ_BD-AiY3SBROgAj3PIQk0QApVz0TQLMhuc6tqAOVvMc_3E7EF5JR9XpTMst",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/cq2oep1O6e0:APA91bF2KjYtnRaHfgDaYVOhtWcL7s5Von0xo8XmGuiJBRNvrFY2SguwCF4L-41zacSdtnJSV3oau2B7wdh7oQZeXvV67cT9n4El0x4H6gqIkzhsAB9ZQnHFoPn-k7un5NqNtggeJ3o4",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BKnUX63w6wvH0w_JjQJ3O0ZN9ltVriTgxqGke5jptAe-lNxZ-uL3eUMs6keD-UT-M6uLPPi_3_LTKFVFyd2baiw",
-      "auth": "z_HV_aM-nOEKhYJFdkPkow"
+      "p256dh": "BEhEp9YHLjQe1GPDSqaRm4bvDyPrBNP9szAaakpe4Ye6mebKKUu_1Qa7nx0Wo7ngEjgNmGY86nKWFTwZ46qj2Vk",
+      "auth": "dzkSR-4lVgL_f02bguTLNw"
     }
   },
   "1142054888": {
