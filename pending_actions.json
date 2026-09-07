@@ -1,5 +1,40 @@
 [
   {
+    "id": "29f8a44a",
+    "type": "change_stage",
+    "created_at": "2026-09-07T19:07:06.560357+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "M A",
+      "phone": "+994707010207",
+      "lead_id": 76708861,
+      "task_id": 94287529,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Sumqayıtda dükan açır. Həmdə 1 ekspeditoru var. Mağaza üçün avadanlıqlar 920 AZN demişəm. Mağaza üçün Aylıq 50. Hər əlavə ekspeditor 20 AZN.",
+      "task_price": "",
+      "note": "Uğurlu.\nQuraşdırma davam edir. Hələki məhsullar yaradılır",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76708861",
+      "callback_key": "80742687"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "73cd8e06",
     "type": "change_stage",
     "created_at": "2026-09-07T14:21:45.063500+04:00",
