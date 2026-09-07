@@ -1,5 +1,33 @@
 [
   {
+    "id": "c2ef468a",
+    "type": "assign_executor",
+    "created_at": "2026-09-07T11:20:31.930998+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "avtopro",
+      "phone": "+994703101516",
+      "lead_id": 75344945,
+      "task_text": "[0] Bizneslə bağlı sualları var əlaqə saxlanılmalıdır.",
+      "deadline": "08.09.2026 20:20",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "imtina olundu",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75344945",
+      "conf_key": "c4ea8aaa",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Şamil",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "234da255",
     "type": "reassign_task",
     "created_at": "2026-09-04T15:30:42.200765+04:00",
