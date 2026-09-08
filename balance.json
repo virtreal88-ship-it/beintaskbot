@@ -860,6 +860,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-09-06 12:46:21"
+      },
+      {
+        "task_id": 94336549,
+        "executor": "Rasim Əsgərov",
+        "client": "M A",
+        "phone": "+994707010207",
+        "task_type": "Quraşdırma",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Tamamlandı",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-08 05:50:18"
       }
     ],
     "balance": 0.0
