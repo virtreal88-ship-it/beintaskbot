@@ -1,5 +1,40 @@
 [
   {
+    "id": "7c859bd3",
+    "type": "change_stage",
+    "created_at": "2026-09-09T14:51:23.530734+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Bəhram",
+      "phone": "994515194626",
+      "lead_id": 71052761,
+      "task_id": 94347481,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "İnteqrasiya (caspos)",
+      "task_price": "30",
+      "note": "Uğurlu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/71052761",
+      "callback_key": "d679855d"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "ade2538d",
     "type": "change_stage",
     "created_at": "2026-09-08T09:50:21.163549+04:00",
