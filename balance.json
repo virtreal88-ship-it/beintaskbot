@@ -874,6 +874,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-08 05:50:18"
+      },
+      {
+        "task_id": 94347481,
+        "executor": "Rasim Əsgərov",
+        "client": "Bəhram",
+        "phone": "994515194626",
+        "task_type": "Texniki tapşırıq",
+        "amount": 30.0,
+        "status": "pending",
+        "task_text": "İnteqrasiya (caspos)",
+        "result_text": "Uğurlu",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-09 10:51:21"
       }
     ],
     "balance": 0.0
