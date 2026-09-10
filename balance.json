@@ -882,7 +882,7 @@
         "phone": "994515194626",
         "task_type": "Texniki tapşırıq",
         "amount": 30.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "İnteqrasiya (caspos)",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -904,7 +904,7 @@
         "date": "2026-09-10 10:34:27"
       }
     ],
-    "balance": -50.0
+    "balance": -20.0
   },
   "7329891614": {
     "transactions": [
