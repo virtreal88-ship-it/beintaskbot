@@ -916,6 +916,20 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-10 16:27:29"
+      },
+      {
+        "task_id": 94356125,
+        "executor": "Rasim Əsgərov",
+        "client": "Rəvan Harinov",
+        "phone": "+994554336609",
+        "task_type": "Quraşdırma",
+        "amount": 200.0,
+        "status": "pending",
+        "task_text": "Məlumatları dəqiqləşdir. Xaçmazdı",
+        "result_text": "Müştəri: xanbagirestaurant\n500₼ ödəniş aldım.\nAvadanlıq özlərindən idi",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-10 16:28:36"
       }
     ],
     "balance": -20.0
