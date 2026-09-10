@@ -1,5 +1,40 @@
 [
   {
+    "id": "3c986d12",
+    "type": "change_stage",
+    "created_at": "2026-09-10T20:27:31.660332+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "ZZ333ZZ",
+      "phone": "+0552101256",
+      "lead_id": 77483605,
+      "task_id": 94280649,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Danışılıb. Quraşdırma online olacaq. Aylıq 50. +200 qaimələri biz işləyəcəyik. Yeri avtovağzal 1 çi mərtəbə.",
+      "task_price": "20",
+      "note": "Müştəri: Baytarliqavadanliqi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77483605",
+      "callback_key": "45f2f899"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "7c859bd3",
     "type": "change_stage",
     "created_at": "2026-09-09T14:51:23.530734+04:00",
