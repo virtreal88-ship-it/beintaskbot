@@ -888,9 +888,23 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-09 10:51:21"
+      },
+      {
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -50.0,
+        "status": "confirmed",
+        "task_text": "Leoya göndərdim",
+        "result_text": "Leoya göndərdim",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-09-10 10:34:27"
       }
     ],
-    "balance": 0.0
+    "balance": -50.0
   },
   "7329891614": {
     "transactions": [
