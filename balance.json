@@ -902,6 +902,20 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-09-10 10:34:27"
+      },
+      {
+        "task_id": 94280649,
+        "executor": "Rasim Əsgərov",
+        "client": "ZZ333ZZ",
+        "phone": "+0552101256",
+        "task_type": "Görüş",
+        "amount": 20.0,
+        "status": "pending",
+        "task_text": "Danışılıb. Quraşdırma online olacaq. Aylıq 50. +200 qaimələri biz işləyəcəyik. Yeri avtovağzal 1 çi mərtəbə.",
+        "result_text": "Müştəri: Baytarliqavadanliqi",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-10 16:27:29"
       }
     ],
     "balance": -20.0
