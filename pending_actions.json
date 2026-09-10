@@ -1,5 +1,40 @@
 [
   {
+    "id": "752b5de5",
+    "type": "change_stage",
+    "created_at": "2026-09-10T20:28:38.596964+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Rəvan Harinov",
+      "phone": "+994554336609",
+      "lead_id": 72273445,
+      "task_id": 94356125,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Məlumatları dəqiqləşdir. Xaçmazdı",
+      "task_price": "200",
+      "note": "Müştəri: xanbagirestaurant\n500₼ ödəniş aldım.\nAvadanlıq özlərindən idi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/72273445",
+      "callback_key": "4773ede8"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "3c986d12",
     "type": "change_stage",
     "created_at": "2026-09-10T20:27:31.660332+04:00",
