@@ -1,5 +1,40 @@
 [
   {
+    "id": "4995518b",
+    "type": "change_stage",
+    "created_at": "2026-09-12T01:25:57.322587+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Turan _36 Aptek",
+      "phone": "+0552158229",
+      "lead_id": 77452293,
+      "task_id": 93793375,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Aptekdi , 1 c dən keçməlidir . Əd paket nəzəərə alınmalıdır. Həmçinin köhnə fiskal servis ilə inteqrasiya var . Butadan mal alır.",
+      "task_price": "",
+      "note": "Eyni tapşırıq 2 dəfə yaradılıb. Qeydləri digər tapşırığa yazacam",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77452293",
+      "callback_key": "e235afd5"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f3943f5a",
     "type": "change_stage",
     "created_at": "2026-09-12T01:25:14.200123+04:00",
