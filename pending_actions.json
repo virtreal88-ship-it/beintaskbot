@@ -1,5 +1,40 @@
 [
   {
+    "id": "fc5ac78a",
+    "type": "change_stage",
+    "created_at": "2026-09-12T01:19:49.741176+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "RR",
+      "phone": "+994502298080",
+      "lead_id": 77818017,
+      "task_id": 94325259,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Çörək istehsalat sexi. Hazırlıqlı ol",
+      "task_price": "",
+      "note": "1 dəfə əlaqə saxlamaq mümkün oldu. Başqa vaxta ertələdi. Daha sonra əlaqə saxlamaq mümkün olmadı.",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77818017",
+      "callback_key": "939b88be"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "752b5de5",
     "type": "change_stage",
     "created_at": "2026-09-10T20:28:38.596964+04:00",
