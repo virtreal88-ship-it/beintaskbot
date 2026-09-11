@@ -1,5 +1,40 @@
 [
   {
+    "id": "d6ed2470",
+    "type": "change_stage",
+    "created_at": "2026-09-12T01:22:23.490087+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Автоконтакт +994554591103",
+      "phone": "+994554591103",
+      "lead_id": 77470427,
+      "task_id": 93819791,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": "Xəbər al",
+      "task_price": "",
+      "note": "Telefonda məlumatlar verildi. Görüşə ehtiyac yoxdur dedi",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77470427",
+      "callback_key": "68db4961"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "2c926611",
     "type": "change_stage",
     "created_at": "2026-09-12T01:20:54.501268+04:00",
