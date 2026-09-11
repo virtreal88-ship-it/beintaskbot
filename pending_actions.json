@@ -1,5 +1,40 @@
 [
   {
+    "id": "f3943f5a",
+    "type": "change_stage",
+    "created_at": "2026-09-12T01:25:14.200123+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "ziko555",
+      "phone": "+0554102222",
+      "lead_id": 77446219,
+      "task_id": 93795309,
+      "sender_name": "Rasim Əsgərov",
+      "task_text": ". Restoran sistemi . hazırda termet işlədir. Öz məkanında görüşmək istəyir",
+      "task_price": "",
+      "note": "Mesajlara və zənglərə cavab van vermir",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77446219",
+      "callback_key": "dd1124c6"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "8e80be1f",
     "type": "change_stage",
     "created_at": "2026-09-12T01:23:46.176498+04:00",
