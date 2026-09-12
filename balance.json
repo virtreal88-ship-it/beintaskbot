@@ -812,7 +812,7 @@
         "phone": "+994513239370",
         "task_type": "Görüş",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Yerində təqdimat",
         "result_text": "Uğurlu quraşdırma",
         "kpi": 0,
@@ -932,7 +932,7 @@
         "date": "2026-09-10 16:28:36"
       }
     ],
-    "balance": 100.0
+    "balance": 200.0
   },
   "7329891614": {
     "transactions": [
