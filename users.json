@@ -6,7 +6,7 @@
   },
   "1628569350": {
     "kommo_user_id": 10932455,
-    "role": "Əməkdaş",
+    "role": "Admin",
     "name": "Nizami Qasımov"
   },
   "7262243946": {
@@ -42,6 +42,11 @@
   "1142054888": {
     "role": "Əməkdaş",
     "name": "Nuranə Şirinova",
+    "kommo_user_id": 15532668
+  },
+  "6824377548": {
+    "role": "Əməkdaş",
+    "name": "Rüfət Həsənzadə",
     "kommo_user_id": 15532668
   }
 }
