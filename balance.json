@@ -910,7 +910,7 @@
         "phone": "+0552101256",
         "task_type": "Görüş",
         "amount": 20.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Danışılıb. Quraşdırma online olacaq. Aylıq 50. +200 qaimələri biz işləyəcəyik. Yeri avtovağzal 1 çi mərtəbə.",
         "result_text": "Müştəri: Baytarliqavadanliqi",
         "kpi": 0,
@@ -932,7 +932,7 @@
         "date": "2026-09-10 16:28:36"
       }
     ],
-    "balance": 80.0
+    "balance": 100.0
   },
   "7329891614": {
     "transactions": [
