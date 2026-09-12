@@ -230,7 +230,7 @@
         <div id="filter-row" style="display:none;" class="flex gap-2">
             <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
-                <option value="Şamil Əliyev">Şamil Əliyev</option>
+                <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
                 <option value="Soltan Abbasov">Soltan Abbasov</option>
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
                 <option value="Nizami Qasımov">Nizami Qasımov</option>
@@ -246,16 +246,16 @@
         <div id="notifications-container" class="space-y-3" style="padding-bottom:20px;"></div>
     </div>
 
-    <!-- SCREEN: ŞAMIL DEALS -->
+    <!-- SCREEN: RÜFƏT DEALS -->
     <div id="screen-samil-deals" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">Mərhələ üzrə müştərilər</div>
             </div>
-            <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+            <button onclick="loadRufatWorkspace(true, rufatStageFilter)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
-        <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Şamilin mərhələləri"></div>
+        <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Rüfətin mərhələləri"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
         <div id="samil-deals-container" class="space-y-3" style="padding-bottom:20px;"></div>
     </div>
@@ -270,7 +270,7 @@
             <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
             <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-create"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
@@ -326,7 +326,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="edit-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Telefon:</label><input type="text" id="edit-phone" readonly class="w-full p-2.5 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div id="price-field-edit"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
@@ -363,7 +363,7 @@
     </div>
     <div id="screen-stage-assignee" class="screen space-y-4">
         <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-stage-select')">← Geri</button></div>
-        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('assignee','shamil',this)">Şamil Əliyev</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div>
+        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('assignee','rufat',this)">Rüfət Həsənzadə</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div>
         <button onclick="stageNextStep2()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Davam et</button>
     </div>
     <div id="screen-stage-deadline" class="screen space-y-4">
@@ -428,7 +428,7 @@
         <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
             <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
-                <option value="Şamil Əliyev">Şamil Əliyev</option>
+                <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
                 <option value="Soltan Abbasov">Soltan Abbasov</option>
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
                 <option value="Nizami Qasımov">Nizami Qasımov</option>
@@ -462,8 +462,8 @@
         <textarea id="complete-note-text" placeholder="Nəticəni yazın..." class="w-full min-h-[200px] p-3 text-sm leading-relaxed text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none resize-y mb-3" style="flex:1;"></textarea>
         <div id="samil-completion-stage-selector" style="display:none;" class="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3">
             <label for="completion-pipeline-select" class="text-xs font-bold text-violet-900 block mb-2">Mərhələ seçimi (məcburi)</label>
-            <select id="completion-pipeline-select" onchange="renderSamilCompletionStages()" class="w-full p-2.5 text-sm text-gray-700 bg-white border border-violet-200 rounded-lg outline-none mb-2">
-                <option value="samil">Şamil Əliyev</option>
+            <select id="completion-pipeline-select" onchange="renderRufatCompletionStages()" class="w-full p-2.5 text-sm text-gray-700 bg-white border border-violet-200 rounded-lg outline-none mb-2">
+                <option value="rufat">Rüfət Həsənzadə</option>
                 <option value="operations">Əməliyyatlar lövhəsi</option>
             </select>
             <select id="completion-stage-select" class="w-full p-2.5 text-sm text-gray-700 bg-white border border-violet-200 rounded-lg outline-none" required></select>
@@ -533,54 +533,61 @@ function getUserId() {
     return tgId;
 }
 const CURRENT_USER_ID = getUserId();
-const IS_SAMIL = CURRENT_USER_ID === '7962757442';
-const SAMIL_UI_STAGES = [
+// Rüfət's login slot. The uid query parameter identifies the visitor; it must
+// not itself redefine which visitor receives Rüfət's special workspace.
+// Keep this value in sync with backend RUFAT_CHAT_ID.
+const RUFAT_CHAT_ID = '6824377548';
+// Keep the historical Şamil web-app link compatible with the current
+// Rüfət workspace.  The API applies the same allow-list server-side.
+const RUFAT_COMPAT_CHAT_IDS = new Set([RUFAT_CHAT_ID, '7962757442']);
+const IS_RUFAT = RUFAT_COMPAT_CHAT_IDS.has(CURRENT_USER_ID);
+const RUFAT_UI_STAGES = [
     ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],['geri_donusler','Geri dönüşlər'],
     ['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
     ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə']
 ];
-const SAMIL_ALL_STAGES = [
+const RUFAT_ALL_STAGES = [
     ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],
     ['geri_donusler','Geri dönüşlər'],['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
     ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
-const SAMIL_COMPLETION_PIPELINES = {
-    samil: {label:'Şamil Əliyev', stages:SAMIL_ALL_STAGES},
+const RUFAT_COMPLETION_PIPELINES = {
+    rufat: {label:'Rüfət Həsənzadə', stages:RUFAT_ALL_STAGES},
     operations: {label:'Əməliyyatlar lövhəsi', stages:[
-        ['samil','Şamil Əliyev'],['soltan','Soltan Abbasov'],['huseyn','Hüseyn Səfərov'],
+        ['rufat','Rüfət Həsənzadə'],['soltan','Soltan Abbasov'],['huseyn','Hüseyn Səfərov'],
         ['nizami','Nizami Qasımov'],['rasim','Rasim Əsgərov'],['sermaye','Sərmayə Əhmədsoy'],
         ['asya','Asya Agayeva'],['nurane','Nuranə Şirinova'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
     ]}
 };
-function renderSamilCompletionStages() {
+function renderRufatCompletionStages() {
     const pipeline = document.getElementById('completion-pipeline-select');
     const stage = document.getElementById('completion-stage-select');
     if(!pipeline || !stage) return;
-    const config = SAMIL_COMPLETION_PIPELINES[pipeline.value] || SAMIL_COMPLETION_PIPELINES.samil;
+    const config = RUFAT_COMPLETION_PIPELINES[pipeline.value] || RUFAT_COMPLETION_PIPELINES.rufat;
     stage.innerHTML = '<option value="">Mərhələni seçin</option>' + config.stages.map(([key,label]) => `<option value="${key}">${label}</option>`).join('');
 }
-let samilDeals = [];
-let samilDealsByStage = {};
-let samilStageCounts = {};
-let samilStageFilter = 'sorgular';
-let samilWorkspaceRequest = null;
-function applySamilUi() {
-    if(!IS_SAMIL) return;
-    const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
+let rufatDeals = [];
+let rufatDealsByStage = {};
+let rufatStageCounts = {};
+let rufatStageFilter = 'sorgular';
+let rufatWorkspaceRequest = null;
+function applyRufatUi() {
+    if(!IS_RUFAT) return;
+    const stageCards = RUFAT_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
     const stageSelect = document.querySelector('#screen-stage-select .space-y-2');
     if(stageSelect) stageSelect.innerHTML = stageCards;
     const dealStages = document.querySelector('#screen-deal-create .space-y-2');
     if(dealStages) dealStages.innerHTML = stageCards;
-    // Şamil may create a task for any active icraçı; do not narrow the list to himself.
+    // Rüfət may create a task for any active icraçı; do not narrow the list to himself.
     ['task-assignee-select','edit-assignee-select'].forEach(id => {
         const el = document.getElementById(id);
-        if(el) el.value = el.value || 'Şamil Əliyev';
+        if(el) el.value = el.value || 'Rüfət Həsənzadə';
     });
     ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
     ['tab-samil-deals','side-tab-samil-deals'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='flex'; });
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
-const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
+const RUFAT_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
     'task-client-name','search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
@@ -591,7 +598,7 @@ const PERSISTED_FORM_IDS = [
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
-const SALARY_IDS = ['7962757442','7329891614','1289510272','6596538872','1142054888'];
+const SALARY_IDS = ['6824377548','7329891614','1289510272','6596538872','1142054888'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; const sideLbl = document.getElementById('side-tab-history-label'); if(sideLbl) sideLbl.textContent = 'Maliyyə'; }); }
 document.addEventListener('DOMContentLoaded', () => { });
 
@@ -603,22 +610,22 @@ function setUserDisplayName(name) {
 }
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
-function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
-function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
+function getCachedRufatWorkspace() { try { return JSON.parse(localStorage.getItem(RUFAT_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
+function setCachedRufatWorkspace(data) { try { localStorage.setItem(RUFAT_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
 
-function syncSamilStagesFromPayload(payload) {
+function syncRufatStagesFromPayload(payload) {
     const incoming = Array.isArray(payload?.stages) ? payload.stages : [];
     if(!incoming.length) return;
     const all = incoming.map(stage => [String(stage.key), String(stage.name || stage.key)]);
     const active = all.filter(([key]) => !['nerazobrannoye','ugurlu','imtina'].includes(key));
-    SAMIL_ALL_STAGES.splice(0, SAMIL_ALL_STAGES.length, ...all);
-    SAMIL_UI_STAGES.splice(0, SAMIL_UI_STAGES.length, ...active);
-    if(!SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter)) samilStageFilter = SAMIL_UI_STAGES[0]?.[0] || 'sorgular';
-    renderSamilCompletionStages();
-    applySamilUi();
+    RUFAT_ALL_STAGES.splice(0, RUFAT_ALL_STAGES.length, ...all);
+    RUFAT_UI_STAGES.splice(0, RUFAT_UI_STAGES.length, ...active);
+    if(!RUFAT_UI_STAGES.some(([key]) => key === rufatStageFilter)) rufatStageFilter = RUFAT_UI_STAGES[0]?.[0] || 'sorgular';
+    renderRufatCompletionStages();
+    applyRufatUi();
 }
 function groupSamilDealsByStage(deals) {
-    const grouped = Object.fromEntries(SAMIL_ALL_STAGES.map(([key]) => [key, []]));
+    const grouped = Object.fromEntries(RUFAT_ALL_STAGES.map(([key]) => [key, []]));
     (Array.isArray(deals) ? deals : []).forEach(deal => {
         if(!grouped[deal.stage_key]) grouped[deal.stage_key] = [];
         grouped[deal.stage_key].push(deal);
@@ -627,7 +634,7 @@ function groupSamilDealsByStage(deals) {
 }
 
 function applySamilWorkspace(payload) {
-    syncSamilStagesFromPayload(payload);
+    syncRufatStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
     const normalizeDeal = deal => {
@@ -635,27 +642,35 @@ function applySamilWorkspace(payload) {
         const contactName = String(deal?.contact_name || '').trim();
         return {...deal, name: dealName, contact_name: contactName || '—'};
     };
-    samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
-    samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
+    rufatDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
+    rufatDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
         ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal) : []]))
-        : groupSamilDealsByStage(samilDeals);
-    SAMIL_UI_STAGES.forEach(([key]) => {
-        if(!Array.isArray(samilDealsByStage[key])) samilDealsByStage[key] = samilDeals.filter(deal => deal.stage_key === key);
+        : groupSamilDealsByStage(rufatDeals);
+    RUFAT_UI_STAGES.forEach(([key]) => {
+        if(!Array.isArray(rufatDealsByStage[key])) rufatDealsByStage[key] = rufatDeals.filter(deal => deal.stage_key === key);
     });
-    samilStageCounts = payload.stage_counts || {};
-    SAMIL_UI_STAGES.forEach(([key]) => {
-        if(!Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = samilDealsByStage[key].length;
+    rufatStageCounts = payload.stage_counts || {};
+    RUFAT_UI_STAGES.forEach(([key]) => {
+        if(!Number.isFinite(Number(rufatStageCounts[key]))) rufatStageCounts[key] = rufatDealsByStage[key].length;
     });
+    // Do not leave the user on an empty default stage when the pipeline has
+    // deals in another stage. This is important after a UID/pipeline migration
+    // because the old cached default stage may be empty.
+    const currentStageDeals = Array.isArray(rufatDealsByStage[rufatStageFilter]) ? rufatDealsByStage[rufatStageFilter] : [];
+    if(!currentStageDeals.length) {
+        const firstNonEmpty = RUFAT_UI_STAGES.find(([key]) => Array.isArray(rufatDealsByStage[key]) && rufatDealsByStage[key].length);
+        if(firstNonEmpty) rufatStageFilter = firstNonEmpty[0];
+    }
     if(payload.user_name) setUserDisplayName(payload.user_name);
 }
 
-async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
-    if(!IS_SAMIL) return false;
-    if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
+async function loadRufatWorkspace(showFeedback = false, requestedStage = null) {
+    if(!IS_RUFAT) return false;
+    if(requestedStage && RUFAT_UI_STAGES.some(([key]) => key === requestedStage)) rufatStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
-    if(samilWorkspaceRequest) return samilWorkspaceRequest;
-    samilWorkspaceRequest = (async () => {
+    if(rufatWorkspaceRequest) return rufatWorkspaceRequest;
+    rufatWorkspaceRequest = (async () => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 12000);
         showSyncIndicator();
@@ -670,7 +685,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
             applySamilWorkspace(payload);
             setCachedTasks(mockTasks);
             setCachedGozleme(gozlemeItems);
-            setCachedSamilWorkspace(payload);
+            setCachedRufatWorkspace(payload);
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
             if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
@@ -681,16 +696,16 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
             return false;
         } finally {
             clearTimeout(timeout);
-            samilWorkspaceRequest = null;
+            rufatWorkspaceRequest = null;
             hideLoader();
             hideSyncIndicator();
         }
     })();
-    return samilWorkspaceRequest;
+    return rufatWorkspaceRequest;
 }
 
 function restoreSamilWorkspaceFromCache() {
-    const cached = getCachedSamilWorkspace();
+    const cached = getCachedRufatWorkspace();
     // Köhnə versiyalar yalnız bir mərhələnin məlumatını yadda saxlayırdı; onları istifadə etməyək.
     if(!cached || (cached.stage_key && cached.stage_key !== 'all')) return false;
     applySamilWorkspace(cached);
@@ -733,7 +748,7 @@ async function initApp() {
     if(name) setUserDisplayName(name);
     initSessionPersistence();
     restoreSessionForms();
-    applySamilUi();
+    applyRufatUi();
     setPendingTabVisible();
     await openNotifications();
     applyHashRoute();
@@ -741,8 +756,8 @@ async function initApp() {
 
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
-        if(IS_SAMIL) {
-            loadSamilWorkspace();
+        if(IS_RUFAT) {
+            loadRufatWorkspace();
         } else {
             syncNotifications();
             if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
@@ -888,7 +903,7 @@ function showSuccessScreen(msg, link, isInfo) {
 function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
 
 async function syncNotifications(showError = false) {
-    if(IS_SAMIL) return loadSamilWorkspace(showError);
+    if(IS_RUFAT) return loadRufatWorkspace(showError);
     try {
         const r = await fetch(API_BASE + '/api/notifications?_ts=' + Date.now(), {
             cache: 'no-store',
@@ -1012,7 +1027,7 @@ async function submitEditNote() {
 }
 
 function submitTask() {
-    if(IS_SAMIL) gd.assigneeName = 'Şamil Əliyev';
+    if(IS_RUFAT) gd.assigneeName = 'Rüfət Həsənzadə';
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
     const textInput = textEl.value.trim();
     if(editingTaskId) {
@@ -1022,7 +1037,8 @@ function submitTask() {
         const editClientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value.trim() : '';
         let payload = {action: 'update_task', task_id: editingTaskId, text: finalText, client_name: editClientName};
         if(gd.deadline) payload.deadline = gd.deadline;
-        payload.assignee = gd.assigneeName && gd.assigneeName.toLowerCase().includes('nizami') ? 'admin' : 'sahe_meneceri';
+        // Sahə Meneceri is retired; preserve task editing while routing to Admin.
+        payload.assignee = 'admin';
         if(gd.assigneeName) payload.assigneeName = gd.assigneeName;
         if(gd.originalAssignee) payload.originalAssignee = gd.originalAssignee;
         if(gd.task_type) payload.task_type = gd.task_type;
@@ -1058,7 +1074,7 @@ function submitTask() {
 }
 
 function submitDeal() {
-    if(IS_SAMIL && !gd.stage) gd.stage = 'yeni_sifarisler';
+    if(IS_RUFAT && !gd.stage) gd.stage = 'yeni_sifarisler';
     const hs = document.getElementById('deal-subtask-toggle').checked;
     doFetch({action: 'create_deal', phone: gd.phone, customer_name: document.getElementById('deal-customer-name').value.trim(), stage: gd.stage || 'yeni_sifaris', create_subtask: hs, subtask_text: hs ? document.getElementById('deal-subtask-text').value.trim() : ''}, 'deal-submit-btn');
 }
@@ -1068,7 +1084,7 @@ function submitNoteFlow() {
 }
 function stageNextStep1() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } nav('screen-stage-assignee'); }
 function stageNextStep2() { if(!gd.assignee) { toast('İcraçı seçin!', true); return; } nav('screen-stage-deadline'); }
-function submitStage() { if(IS_SAMIL) gd.assignee = 'shamil'; if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
+function submitStage() { if(IS_RUFAT) gd.assignee = 'rufat'; if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
 function submitClose() {
     const c = document.getElementById('job-comment').value.trim();
     if(!c) { document.getElementById('job-comment-error').style.display = 'block'; return; }
@@ -1078,10 +1094,10 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications() {
     nav('screen-notifications');
-    if(IS_SAMIL) {
+    if(IS_RUFAT) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored) renderNotifications(); else showLoader();
-        await loadSamilWorkspace(!restored);
+        await loadRufatWorkspace(!restored);
         loadBalance();
         loadKpi();
         return;
@@ -1212,7 +1228,7 @@ function renderPendingActions() {
         execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
         execBtn.textContent = '👷 İcraçı seç';
         execBtn.addEventListener('click', () => {
-            showPendingSelectModal('İcraçı seç', ['Şamil','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
+            showPendingSelectModal('İcraçı seç', ['Rüfət','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
                 resolvePendingAction(action.id, choice, execBtn);
             });
         });
@@ -1405,7 +1421,7 @@ function openSubtaskFromPending(action) {
     const contactName = data.contact_name || '';
     const leadId = data.lead_id || '';
     const parentAssignee = data.sender_name || '';
-    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
+    const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const desc = '';
     const html = `<div id="subtask-modal" data-lead-id="${leadId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
@@ -1534,7 +1550,7 @@ function renderNotifications() {
         const isOverdue = t.is_overdue;
         card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-blue-500'}`;
         card.style.position = 'relative';
-        const displayDesc = (t.desc || t.text || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/i, '');
+        const displayDesc = (t.desc || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/i, '');
         const assigneeName = t.assigneeName || t.responsible_user_name || '';
         let header = '';
         if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || ''}</span></div>`; }
@@ -1610,8 +1626,8 @@ function escapeHtml(value) {
 }
 
 function setSamilStageFilter(stageKey) {
-    if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
-    samilStageFilter = stageKey;
+    if(!RUFAT_UI_STAGES.some(([key]) => key === stageKey)) return;
+    rufatStageFilter = stageKey;
     // Mərhələlərarası keçid şəbəkəyə sorğu göndərmir: bütün siyahı əvvəlcədən yüklənib.
     renderSamilDeals();
 }
@@ -1621,14 +1637,14 @@ function renderSamilDeals() {
     const container = document.getElementById('samil-deals-container');
     const count = document.getElementById('samil-deals-count');
     if(!nav || !container || !count) return;
-    const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
-    const localCount = key => (Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0);
-    const stageTotal = key => Number.isFinite(Number(samilStageCounts[key])) ? Number(samilStageCounts[key]) : localCount(key);
-    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
-    const filtered = Array.isArray(samilDealsByStage[samilStageFilter])
-        ? samilDealsByStage[samilStageFilter]
-        : samilDeals.filter(deal => deal.stage_key === samilStageFilter);
-    const activeLabel = (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
+    const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${rufatStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
+    const localCount = key => (Array.isArray(rufatDealsByStage[key]) ? rufatDealsByStage[key].length : 0);
+    const stageTotal = key => Number.isFinite(Number(rufatStageCounts[key])) ? Number(rufatStageCounts[key]) : localCount(key);
+    nav.innerHTML = RUFAT_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    const filtered = Array.isArray(rufatDealsByStage[rufatStageFilter])
+        ? rufatDealsByStage[rufatStageFilter]
+        : rufatDeals.filter(deal => deal.stage_key === rufatStageFilter);
+    const activeLabel = (RUFAT_UI_STAGES.find(([key]) => key === rufatStageFilter) || ['', 'Mərhələ'])[1];
     count.textContent = `${activeLabel}: ${filtered.length} sövdələşmə`;
     if(!filtered.length) {
         container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Bu mərhələdə sövdələşmə yoxdur.</div>';
@@ -1679,22 +1695,22 @@ function showDealContextMenu(deal, x, y) {
 function showDealModal(deal, mode) {
     const modal = document.createElement('div'); modal.id='deal-modal'; modal.style.cssText='position:fixed;inset:0;background:#0006;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     const title = mode==='edit'?'Redaktə et':mode==='task'?'Tapşırıq əlavə et':'Qeyd əlavə et';
-    const body = mode==='edit' ? `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>` : `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>${mode==='task'?'<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><option value="Şamil Əliyev">Şamil Əliyev</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select>':''}`;
+    const body = mode==='edit' ? `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${RUFAT_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>` : `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>${mode==='task'?'<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select>':''}`;
     modal.innerHTML=`<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal); modal.querySelector('#deal-modal-cancel').onclick=()=>modal.remove();
-    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); await loadSamilWorkspace(false);}catch(e){toast(e.message,true)}};
+    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); await loadRufatWorkspace(false);}catch(e){toast(e.message,true)}};
 }
 async function openSamilDeals() {
-    if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+    if(!IS_RUFAT) { switchTab('tab-tasks'); return; }
     nav('screen-samil-deals');
-    if(!samilDeals.length) {
+    if(!rufatDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored) renderSamilDeals(); else showLoader();
     } else {
         renderSamilDeals();
     }
     // Ekran dərhal lokal məlumatdan açılır; yenilənmə arxa planda bütün mərhələləri yeniləyir.
-    loadSamilWorkspace(false);
+    loadRufatWorkspace(false);
 }
 
 function desktopCompleteTask(taskId) {
@@ -1753,8 +1769,8 @@ function showCompletePanel() {
     document.getElementById('postpone-fast-menu').style.display = 'none';
     const selector = document.getElementById('samil-completion-stage-selector');
     if(selector) {
-        selector.style.display = IS_SAMIL ? 'block' : 'none';
-        if(IS_SAMIL) renderSamilCompletionStages();
+        selector.style.display = IS_RUFAT ? 'block' : 'none';
+        if(IS_RUFAT) renderRufatCompletionStages();
     }
     const note = document.getElementById('complete-note-text');
     if(note) setTimeout(() => note.focus(), 100);
@@ -1765,9 +1781,9 @@ async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    const completionPipeline = IS_SAMIL ? document.getElementById('completion-pipeline-select')?.value : '';
-    const completionStage = IS_SAMIL ? document.getElementById('completion-stage-select')?.value : '';
-    if(IS_SAMIL && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
+    const completionPipeline = IS_RUFAT ? document.getElementById('completion-pipeline-select')?.value : '';
+    const completionStage = IS_RUFAT ? document.getElementById('completion-stage-select')?.value : '';
+    if(IS_RUFAT && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
     const completedId = task.id;
     const btn = document.getElementById('btn-confirm-complete');
     const origText = btn ? btn.innerHTML : '';
@@ -1847,13 +1863,13 @@ function handleBarAction(actionType) {
         editingTaskId = task.id;
         flow = 'task'; gd = {phone: task.phone || '', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
         const rawDesc = task.desc || task.text || '';
-        const markerMatch = rawDesc.match(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+(?:\.\d+)?))?\]\s*/);
+        const markerMatch = rawDesc.match(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+(?:\.\d+)?))?\]\s*/);
         let editPrice = '';
         if(markerMatch) { gd.assigneeName = markerMatch[1]; editPrice = markerMatch[2] || ''; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
         else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
         else { document.getElementById('edit-task-desc').value = rawDesc; }
         const epf = document.getElementById('edit-task-price'); if(epf) epf.value = editPrice;
-        const _shortToFull = {'Şamil':'Şamil Əliyev','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'};
+        const _shortToFull = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'};
         if(gd.assigneeName && _shortToFull[gd.assigneeName]) gd.assigneeName = _shortToFull[gd.assigneeName];
         gd.originalAssignee = gd.assigneeName || '';
         const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
@@ -1913,7 +1929,7 @@ function switchTab(tabId, updateHash = true) {
         nav('screen-notifications');
         openNotifications();
     } else if(tabId === 'tab-samil-deals') {
-        if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+        if(!IS_RUFAT) { switchTab('tab-tasks'); return; }
         const dealsTab = document.getElementById('tab-samil-deals');
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
@@ -2067,7 +2083,7 @@ function renderGozleme() {
         const isOverdue = t.is_overdue;
         card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-amber-400'}`;
         card.style.position = 'relative';
-        const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Şamil Əliyev|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Şamil|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
+        const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
         const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
         let header = '';
         if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || t.deadline || ''}</span></div>`; }
@@ -2141,10 +2157,10 @@ function renderGozleme() {
 
 async function openGozleme() {
     nav('screen-gozleme');
-    if(IS_SAMIL) {
+    if(IS_RUFAT) {
         const restored = gozlemeItems.length > 0 || restoreSamilWorkspaceFromCache();
         if(restored) renderGozleme(); else showLoader();
-        await loadSamilWorkspace(!restored);
+        await loadRufatWorkspace(!restored);
         return;
     }
     const gfa = document.getElementById('gozleme-filter-assignee');
@@ -2167,7 +2183,7 @@ function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
     const phone = task.phone||'';
     const parentAssignee = task.assigneeName || task.responsible || '';
-    const assigneeOptions = ['Şamil Əliyev','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
+    const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
         <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Əlavə tapşırıq</h3>
@@ -2205,7 +2221,8 @@ async function submitSubtask(parentTaskId) {
     const task = mockTasks.find(t => t.id === parentTaskId);
     const entityId = task ? task.entity_id : null;
     const entityType = task ? (task.entity_type || 'leads') : 'leads';
-    let assigneeKey = 'sahe_meneceri';
+    // Sahə Meneceri is retired; new subtasks use the Admin executor.
+    let assigneeKey = 'admin';
     if(assignee.toLowerCase().includes('nizami')) assigneeKey = 'admin';
     else if(assignee.toLowerCase().includes('soltan')) assigneeKey = 'soltan';
     const payload = {action:'task', phone:phone, text:`[${assignee}] ${desc}`, deadline:deadline, assignee: assigneeKey, assigneeName:assignee, task_type:taskType, parent_task_id:parentTaskId, entity_id:entityId, entity_type:entityType};
@@ -2220,7 +2237,7 @@ async function submitSubtask(parentTaskId) {
     document.getElementById('subtask-modal').remove();
 }
 // Balance System
-const BALANCE_EMPLOYEE_OPTIONS = '<option value="7920785774">Rasim Əsgərov</option><option value="7962757442">Şamil Əliyev</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option><option value="8835096199">Texniki Dəstək</option>';
+const BALANCE_EMPLOYEE_OPTIONS = '<option value="7920785774">Rasim Əsgərov</option><option value="6824377548">Rüfət Həsənzadə</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option><option value="8835096199">Texniki Dəstək</option>';
 
 function escapeBalanceText(value) {
     return String(value ?? '—').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -2564,7 +2581,7 @@ async function pendingChangeExecutor(actionId, executorName) {
         // For assign_executor type, use resolve (task doesn't exist yet)
         const action = pendingActions.find(a => a.id === actionId);
         if(action && action.type === 'assign_executor') {
-            const shortMap = {'Şamil Əliyev':'Şamil','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
+            const shortMap = {'Rüfət Həsənzadə':'Rüfət','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
             const choice = shortMap[executorName] || executorName;
             hideLoader();
             resolvePendingAction(actionId, choice, null);
