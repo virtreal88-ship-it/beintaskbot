@@ -664,7 +664,11 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
     if(samilWorkspaceRequest) return samilWorkspaceRequest;
     samilWorkspaceRequest = (async () => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 12000);
+        // Kommo overview includes leads, contacts and tasks and can take more
+        // than 12 seconds on a cold Railway instance.  Abort only after a
+        // realistic API window; otherwise the UI reports a false server error
+        // even though the request eventually succeeds.
+        const timeout = setTimeout(() => controller.abort(), 45000);
         showSyncIndicator();
         try {
             const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&_ts=' + Date.now(), {
@@ -2599,7 +2603,10 @@ async function pendingChangeExecutor(actionId, executorName) {
     } catch(e) { toast('Xəta: ' + e.message, true); } finally { hideLoader(); }
 }
 window._STAGE_NAMES = {};
-fetch(API_BASE + '/api/stages').then(r=>r.json()).then(d=>{if(d.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
+// Stage names are already included in the Rüfət workspace response.  This
+// auxiliary endpoint is not available on every older deployment, so failure
+// here must never block the main interface.
+fetch(API_BASE + '/api/stages').then(r=>r.ok ? r.json() : null).then(d=>{if(d?.stages) window._STAGE_NAMES=d.stages;}).catch(()=>{});
 
 // Voice recording
 let _voiceRecorder = null, _voiceChunks = [], _voiceBlob = null, _voiceRecording = false, _voiceMode = '';
