@@ -564,7 +564,7 @@ function renderSamilCompletionStages() {
 let samilDeals = [];
 let samilDealsByStage = {};
 let samilStageCounts = {};
-let samilStageFilter = 'sorgular';
+let samilStageFilter = localStorage.getItem('samil_stage_filter') || 'sorgular';
 let samilWorkspaceRequest = null;
 function applySamilUi() {
     if(!IS_SAMIL) return;
@@ -648,11 +648,6 @@ function applySamilWorkspace(payload) {
     SAMIL_UI_STAGES.forEach(([key]) => {
         if(!Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = samilDealsByStage[key].length;
     });
-    // Do not leave the user on an empty default stage when deals exist elsewhere.
-    if(!samilDealsByStage[samilStageFilter]?.length) {
-        const firstPopulated = SAMIL_UI_STAGES.find(([key]) => samilDealsByStage[key]?.length);
-        if(firstPopulated) samilStageFilter = firstPopulated[0];
-    }
     if(payload.user_name) setUserDisplayName(payload.user_name);
 }
 
@@ -1623,6 +1618,7 @@ function escapeHtml(value) {
 function setSamilStageFilter(stageKey) {
     if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
     samilStageFilter = stageKey;
+    localStorage.setItem('samil_stage_filter', stageKey);
     // Mərhələlərarası keçid şəbəkəyə sorğu göndərmir: bütün siyahı əvvəlcədən yüklənib.
     renderSamilDeals();
 }
