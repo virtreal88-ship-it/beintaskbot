@@ -924,7 +924,7 @@
         "phone": "+994554336609",
         "task_type": "Quraşdırma",
         "amount": 200.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Məlumatları dəqiqləşdir. Xaçmazdı",
         "result_text": "Müştəri: xanbagirestaurant\n500₼ ödəniş aldım.\nAvadanlıq özlərindən idi",
         "kpi": 0,
@@ -946,7 +946,7 @@
         "date": "2026-09-12 08:40:13"
       }
     ],
-    "balance": 0.0
+    "balance": 200.0
   },
   "7329891614": {
     "transactions": [
