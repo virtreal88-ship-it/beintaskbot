@@ -5865,11 +5865,17 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             all_phones.extend(phone for phone in phones if phone not in all_phones)
             contact_rows.append({"id": linked_id, "name": full_contact.get("name", ""), "phones": phones})
         phone = all_phones[0] if all_phones else ""
-        status_id = lead.get("status_id", 0)
+        # Normalize the status for this particular lead.  Do not reuse the
+        # normalized_status_id variable from the previous counting loop: that
+        # would assign every deal the stage of the last lead in the response.
+        try:
+            status_id = int(lead.get("status_id", 0) or 0)
+        except (TypeError, ValueError):
+            status_id = 0
         deals.append({
             "id": lead_id,
-            "stage_key": status_to_key.get(normalized_status_id, ""),
-            "stage_name": RUFAT_STAGE_NAMES.get(normalized_status_id, "Naməlum mərhələ"),
+            "stage_key": status_to_key.get(status_id, ""),
+            "stage_name": RUFAT_STAGE_NAMES.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
             "contacts": contact_rows,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
