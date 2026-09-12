@@ -798,7 +798,7 @@
         "phone": "0102135104",
         "task_type": "Texniki tapşırıq",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Əlavə işlər",
         "result_text": ".",
         "kpi": 0,
@@ -932,7 +932,7 @@
         "date": "2026-09-10 16:28:36"
       }
     ],
-    "balance": 200.0
+    "balance": 300.0
   },
   "7329891614": {
     "transactions": [
