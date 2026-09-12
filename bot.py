@@ -5885,10 +5885,16 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             stage_deals.append(deal)
 
     # Attach all open tasks and use the nearest/most recent one as the compact summary.
+    #
+    # The Sövdələşmələr tab is the historical Şamil/Rüfət funnel.  Tasks linked
+    # to its deals can be assigned to different Kommo users (for example Admin
+    # after the employee-account migration), so filtering only by the legacy
+    # Sahə Meneceri responsible_user_id silently hid valid deal tasks from
+    # Rüfət's Tapşırıqlar tab.
     _all_tasks = await tasks_request
     _rufat_tasks = [
         task for task in _all_tasks
-        if int(task.get("responsible_user_id", 0) or 0) == 15532668 and not task.get("is_completed")
+        if not task.get("is_completed")
     ]
     task_by_lead: dict[int, list[dict]] = {}
     for task in _rufat_tasks:
@@ -5939,9 +5945,10 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
         if not lead:
             continue
         task_text = task.get("text", "")
-        marker_name = _rufat_marker_name(task_text)
-        if marker_name and marker_name != "Rüfət Həsənzadə":
-            continue
+        # Do not filter by the optional employee marker here.  A task belongs
+        # in Rüfət's list because it is attached to a deal in Sövdələşmələr;
+        # the Kommo responsible user and legacy marker are not reliable after
+        # the account migration.
         task_type_id = task.get("task_type_id", 1)
         if task_type_id == 4229224:
             continue
