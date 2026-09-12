@@ -756,7 +756,7 @@
         "phone": "+0557413380",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Sayt inteqrasiya",
         "result_text": "Uğurlu",
         "kpi": 0,
@@ -932,7 +932,7 @@
         "date": "2026-09-10 16:28:36"
       }
     ],
-    "balance": 400.0
+    "balance": 500.0
   },
   "7329891614": {
     "transactions": [
