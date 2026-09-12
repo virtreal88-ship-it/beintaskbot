@@ -770,7 +770,7 @@
         "phone": "+994505394934",
         "task_type": "Quraşdırma",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Görüş istəyir. Cloposdan keçir",
         "result_text": "300 quraşdırma aylıq 49₼.",
         "kpi": 0,
@@ -932,7 +932,7 @@
         "date": "2026-09-10 16:28:36"
       }
     ],
-    "balance": 300.0
+    "balance": 400.0
   },
   "7329891614": {
     "transactions": [
