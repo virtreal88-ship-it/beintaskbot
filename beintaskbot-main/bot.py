@@ -6000,11 +6000,18 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
 
 async def handle_api_rufat_overview(request: web.Request) -> web.Response:
     """Return the fully preloaded Rüfət workspace for instant stage switching."""
+    raw_chat_id = (
+        request.headers.get("X-TG-User-ID")
+        or request.rel_url.query.get("uid")
+        or request.rel_url.query.get("chat_id")
+        or ""
+    )
     try:
-        chat_id = int(request.headers.get("X-TG-User-ID", ""))
+        chat_id = int(raw_chat_id)
     except (TypeError, ValueError):
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
     if not is_rufat_chat(chat_id):
+        logger.warning("Rüfət overview access denied for supplied user id")
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
     # Stage filtering is deliberately performed in the browser after one full prefetch.
     try:

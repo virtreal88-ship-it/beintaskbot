@@ -680,7 +680,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
         const timeout = setTimeout(() => controller.abort(), 45000);
         showSyncIndicator();
         try {
-            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&_ts=' + Date.now(), {
+            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + '&_ts=' + Date.now(), {
                 cache: 'no-store',
                 // `cache: 'no-store'` already prevents stale data without triggering a CORS preflight for Cache-Control.
                 headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
