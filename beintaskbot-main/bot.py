@@ -1199,25 +1199,9 @@ _http = requests.Session()
 _http.headers.update(HEADERS)
 _http.mount('https://', requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10))
 
-def normalize_phone_for_kommo(phone: str) -> str:
-    """Return an Azerbaijani phone in the canonical international format."""
-    raw = str(phone or "").strip()
-    digits = re.sub(r"[^\d]", "", raw)
-    if digits.startswith("00"):
-        digits = digits[2:]
-    if digits.startswith("994"):
-        return "+" + digits
-    if digits.startswith("0") and len(digits) == 10:
-        return "+994" + digits[1:]
-    if len(digits) == 9:
-        return "+994" + digits
-    return raw
-
-
 def search_contact_by_phone(phone: str) -> list:
     digits = re.sub(r"[^\d]", "", phone)
     target_suffix = digits[-9:] if len(digits) >= 9 else digits
-    canonical = normalize_phone_for_kommo(phone)
     variants = set()
     if len(digits) >= 9:
         variants.add(digits[-9:])
@@ -1230,8 +1214,6 @@ def search_contact_by_phone(phone: str) -> list:
     else:
         variants.add(digits)
     variants.add(phone.strip())
-    if canonical:
-        variants.add(canonical)
     all_contacts = []
     seen_ids = set()
     for variant in variants:
@@ -1555,36 +1537,17 @@ def update_contact_kommo(contact_id: int, data: dict) -> dict | None:
 
 def create_contact_kommo(name: str, phone: str, custom_fields: list = None, responsible_user_id: int = 10932455) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts"
-    normalized_phone = normalize_phone_for_kommo(phone)
-    phone_values = [{"value": normalized_phone, "enum_code": "MOB"}]
     payload = [{
         "name": name,
         "responsible_user_id": responsible_user_id,
         "custom_fields_values": [
-            {"field_code": "PHONE", "values": phone_values}
+            {"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}
         ] + (custom_fields or [])
     }]
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code in (200, 201):
             return resp.json()
-        # Some Kommo accounts expose a PHONE enum set without MOB. Retry once
-        # without enum_code; Kommo then assigns the default phone enum itself.
-        fallback_payload = [{
-            "name": name,
-            "responsible_user_id": responsible_user_id,
-            "custom_fields_values": [
-                {"field_code": "PHONE", "values": [{"value": normalized_phone}]}
-            ] + (custom_fields or [])
-        }]
-        retry = _http.post(url, headers=HEADERS, json=fallback_payload, timeout=8)
-        if retry.status_code in (200, 201):
-            return retry.json()
-        logger.error(
-            "Create contact failed: phone=%s normalized=%s status=%s retry_status=%s body=%s retry_body=%s",
-            phone, normalized_phone, resp.status_code, retry.status_code,
-            resp.text[:500], retry.text[:500],
-        )
     except Exception as e:
         logger.error(f"Create contact error: {e}")
     return None
@@ -6877,13 +6840,6 @@ async def start_webhook_server():
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
-    # Register webhook on startup
-    try:
-        _wh_url = f"https://worker-production-3e3e.up.railway.app/webhook"
-        _wh_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook", json={"url": _wh_url}, timeout=10)
-        logger.info(f"Webhook set: {_wh_resp.status_code} {_wh_resp.text[:100]}")
-    except Exception as _whe:
-        logger.error(f"Failed to set webhook: {_whe}")
 
 
 def _rehydrate_tecili_tasks():
@@ -7667,12 +7623,21 @@ def main():
     global _bot_app
     async def post_init(application: Application) -> None:
         ensure_known_employee_registrations()
+        # This deployment uses long polling for Telegram updates. Telegram
+        # rejects getUpdates while a webhook is configured, so clear a webhook
+        # left by any previous deployment before polling begins. The aiohttp
+        # server below continues to receive Kommo webhooks only.
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=False)
+            logger.info("Telegram webhook cleared; long polling is active")
+        except Exception as exc:
+            logger.warning("Could not clear Telegram webhook before polling: %s", exc)
         await start_webhook_server()
         try:
             _rehydrate_tecili_tasks()
         except Exception as _re_err:
             logger.warning(f"Təcili rehydrate skipped: {_re_err}")
-        logger.info(f"Bot started. Webhook on port {WEBHOOK_PORT}, Telegram polling active.")
+        logger.info(f"Bot started. Kommo webhook server on port {WEBHOOK_PORT}; Telegram polling active.")
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app
