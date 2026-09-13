@@ -1270,7 +1270,7 @@ def get_pipeline_stages_for_chat(chat_id=None) -> tuple[dict, dict]:
 
 def get_rufat_completion_stage(pipeline_key: str, stage_key: str) -> tuple[int, int, str] | None:
     """Resolve Rüfət's required completion-stage choice across both permitted pipelines."""
-    if pipeline_key == "rufat":
+    if pipeline_key in ("rufat", "samil"):
         status_id = RUFAT_STAGES.get(stage_key)
         if status_id:
             return RUFAT_PIPELINE_ID, int(status_id), RUFAT_STAGE_NAMES.get(int(status_id), stage_key)
