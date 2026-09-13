@@ -1,0 +1,37 @@
+{
+  "994501234": {
+    "telegram_id": 1628569350,
+    "name": "Nizami Qasımov",
+    "role": "admin",
+    "payment_type": "salary",
+    "is_active": true
+  },
+  "885401234": {
+    "telegram_id": 6824377548,
+    "name": "Rauf Həsənzadə",
+    "role": "employee",
+    "payment_type": "salary",
+    "is_active": true
+  },
+  "776501234": {
+    "telegram_id": 7920785774,
+    "name": "Rasim Əsgərov",
+    "role": "employee",
+    "payment_type": "piecework",
+    "is_active": true
+  }
+  "885401234": {
+    "telegram_id": 7329891614,
+    "name": "Hüseyn Səfərov",
+    "role": "employee",
+    "payment_type": "salary",
+    "is_active": true
+  },
+    "885401234": {
+    "telegram_id": 7962757442,
+    "name": "Şamil Əliyev",
+    "role": "employee",
+    "payment_type": "salary",
+    "is_active": true
+  },
+}
