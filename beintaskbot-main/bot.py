@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
 Telegram Bot with Kommo CRM Integration — AI Function Calling Architecture
-- Dynamic user management via users.json (Roles: admin, employee, piecework)
+- OpenAI function calling replaces old state machine
+- Role-based user registration
 - Background notifications (task deadlines, morning digest, stuck deals)
 - Voice message transcription
+- Conversation history (last 10 messages per user)
+- Multi-variant phone search
 - Azerbaijani interface
 - Kommo webhook endpoint for stage change notifications
 """
@@ -34,38 +37,16 @@ from telegram.ext import (
 from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
+# import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-KOMMO_TOKEN = os.environ.get("KOMMO_TOKEN", "")
+KOMMO_TOKEN = os.environ.get("KOMMO_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
-
-# ─── Dynamic User Management (users.json) ─────────────────────────────────────
-async def get_users_db() -> dict:
-    """Загрузка динамической базы пользователей из users.json."""
-    return await read_json("users.json", default={})
-
-async def get_user_by_tg_id(tg_id: int) -> dict | None:
-    """Получить профиль активного пользователя по его Telegram ID."""
-    users = await get_users_db()
-    user_data = users.get(str(tg_id))
-    if user_data and user_data.get("is_active", True):
-        return user_data
-    return None
-
-async def get_employee_name(tg_id: int) -> str:
-    """Получение имени сотрудника по Telegram ID."""
-    user = await get_user_by_tg_id(tg_id)
-    return user["name"] if user else "Неизвестный"
-
-async def is_admin(tg_id: int) -> bool:
-    """Проверка прав администратора."""
-    user = await get_user_by_tg_id(tg_id)
-    return user.get("role") == "admin" if user else False
 
 # VAPID keys for Web Push
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "6i8cjNC8eztEI8LpdwvKAFcKKr-lXR9oEES_zFIbN74")
@@ -235,30 +216,84 @@ def load_users() -> dict:
             pass
     return users
 
-# ─── User Resolution & Compatibility Helpers ──────────────────────────────
+def ensure_known_employee_registrations() -> None:
+    """Seed fixed employee accounts once, so /start is never needed per deploy."""
+    users = load_users()
+    changed = False
+    for chat_id, (name, kommo_user_id) in _KNOWN_EMPLOYEE_REGISTRATIONS.items():
+        key = str(chat_id)
+        current = users.get(key)
+        if not isinstance(current, dict):
+            current = {}
+        expected = {
+            "role": "Admin" if chat_id == ADMIN_CHAT_ID else "Əməkdaş",
+            "name": name,
+            # Keep historical Kommo IDs for employee display and compatibility.
+            # New task assignments are routed to Admin by the assignee maps.
+            "kommo_user_id": kommo_user_id,
+        }
+        if any(current.get(field) != value for field, value in expected.items()):
+            current.update(expected)
+            users[key] = current
+            changed = True
+    if changed:
+        save_users(users)
+        logger.info("Known employee registrations restored for startup")
 
-async def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
-    """Динамический поиск Telegram Chat ID по Kommo User ID из users.json."""
-    if not kommo_user_id:
-        return None
-    users = await get_users_db()
+
+def save_users(data: dict):
+    try:
+        with open(_USER_DB_LOCAL, "w") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    try:
+        write_json("users.json", data)
+    except Exception as e:
+        logger.error(f"save_users gh error: {e}")
+
+def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
+    if int(kommo_user_id or 0) == ADMIN_KOMMO_USER_ID:
+        return ADMIN_CHAT_ID
+    users = load_users()
     for chat_id_str, info in users.items():
         if info.get("kommo_user_id") == kommo_user_id:
-            try:
-                return int(chat_id_str)
-            except ValueError:
-                pass
+            return int(chat_id_str)
     return None
 
-async def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
-    """Получение Kommo User ID пользователя по его Chat ID из users.json."""
-    user = await get_user_by_tg_id(chat_id)
-    if user:
-        return user.get("kommo_user_id")
+# Salary employees that historically shared the Sahə Meneceri Kommo license.
+# Their Telegram identities remain separate; new work is routed to Admin.
+_SALARY_CHAT_IDS = {RUFAT_CHAT_ID, 7262243946, 7329891614, 7920785774, 1289510272, 6596538872, 1142054888}
+
+def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
+    users = load_users()
+    info = users.get(str(chat_id))
+    if info:
+        uid = info.get("kommo_user_id")
+        if uid:
+            return uid
+    # Fallback for known employees
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    if cid == 1628569350:
+        return 10932455  # Admin
+    if cid in _SALARY_CHAT_IDS:
+        return 15532668  # Legacy display identity; new assignments use Admin
     return None
 
+def is_admin(chat_id: int) -> bool:
+    """Return whether a Telegram chat belongs to the Admin account."""
+    try:
+        if int(chat_id) == ADMIN_CHAT_ID:
+            return True
+    except (TypeError, ValueError):
+        pass
+    # Do not infer admin access from a shared Kommo user ID. Several legacy
+    # employee accounts used the same Sahə Meneceri license.
+    return False
 
-# ─── Pending Actions & Task Management Constants ──────────────────────────
 
 _PENDING_ACTIONS_FILE = "pending_actions.json"
 _TASK_PRIORITIES_FILE = "task_priorities.json"
@@ -267,13 +302,20 @@ _VALID_TASK_PRIORITIES = {"urgent", "medium", "low"}
 
 
 def task_created_by_rufat(task_id) -> bool:
-    """Return whether the task creator is Rüfət."""
+    """Return whether the task creator is the second administrator, Rüfət."""
     try:
         creators = read_json(_TASK_CREATORS_FILE) or {}
         creator = str(creators.get(str(task_id), "")).strip().casefold()
+        # Keep legacy Şamil records recognizable, while all new records use Rüfət.
         return creator in {"rüfət", "rüfət əliyev", "şamil", "şamil əliyev"}
     except Exception:
         return False
+_PENDING_EXECUTOR_NAMES = {
+    "Rüfət": "Rüfət Həsənzadə",
+    "Soltan": "Soltan Abbasov",
+    "Hüseyn": "Hüseyn Səfərov",
+    "Rasim": "Rasim Əsgərov",
+}
 
 
 def get_pending_actions() -> list:
@@ -463,6 +505,8 @@ def _close_pending_telegram_message(action: dict, result_text: str):
         )
     except Exception as exc:
         logger.warning("Pending action Telegram cleanup failed: %s", exc)
+
+
 def _clear_runtime_pending_action(action: dict):
     """Remove volatile Telegram callback state after a PWA resolution."""
     if not _bot_app:
@@ -2695,75 +2739,102 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
         except:
             pass
 
-# ─── Telegram Handlers & Auto-Onboarding ──────────────────────────────────────
-
+# ─── Telegram Handlers ───────────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    user_data = await get_user_by_tg_id(chat_id)
-    
-    # 1. Если пользователь НЕ зарегистрирован или деактивирован в users.json
-    if not user_data:
-        full_name = update.effective_user.full_name
-        username = f"@{update.effective_user.username}" if update.effective_user.username else "yoxdur"
-        
-        # Сообщение пользователю
+    chat_id = update.message.chat_id
+    users = load_users()
+    if str(chat_id) in users:
+        info = users[str(chat_id)]
         await update.message.reply_text(
-            f"👋 Salam, {update.effective_user.first_name}!\n\n"
-            f"🆔 Sizin Telegram ID: `{chat_id}`\n\n"
-            f"⚠️ Siz hələ BeinSystems CRM sistemində qeydiyyatdan keçməmisiniz.\n"
-            f"Müraciətiniz avtomatik olaraq administratora göndərildi.",
-            parse_mode="Markdown",
+            f"👋 Salam, {info.get('name', '')}!\n\n"
+            f"📱 CRM düyməsinə basaraq Mini App-dan istifadə edin və ya sərbəst mətn yazın.",
             reply_markup=ReplyKeyboardRemove()
         )
-        
-        # Автоматическое уведомление Администраторам
-        users_db = await get_users_db()
-        admin_ids = [
-            int(uid) for uid, u in users_db.items() 
-            if u.get("role") == "admin" and u.get("is_active", True)
-        ]
-        
-        for admin_id in admin_ids:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=f"🔔 *CRM-ə yeni giriş cəhdi!*\n\n"
-                         f"👤 *Ad:* {full_name}\n"
-                         f"🔗 *Username:* {username}\n"
-                         f"🆔 *Telegram ID:* `{chat_id}`\n\n"
-                         f"💡 _İstifadəçini aktivləşdirmək üçün GitHub-da `users.json` faylına bu ID-ni əlavə edin._",
-                    parse_mode="Markdown"
-                )
-            except Exception as exc:
-                logger.error(f"Админ {admin_id} учун уведомление отправка олунмады: {exc}")
         return
-
-    # 2. Если пользователь есть в users.json
-    role_title = "Administrator" if user_data.get("role") == "admin" else "Əməkdaş"
-    pay_title = "Nisbi (Сдельная)" if user_data.get("payment_type") == "piecework" else "Maaş (Оклад)"
-    
+    keyboard = [
+        [InlineKeyboardButton("🤝 Partnyor", callback_data="reg_partnyor")],
+        [InlineKeyboardButton("👤 Əməkdaş", callback_data="reg_emekdash")],
+    ]
     await update.message.reply_text(
-        f"👋 Salam, *{user_data.get('name', '')}*!\n\n"
-        f"🎗 *Rol:* {role_title}\n"
-        f"💳 *Ödəniş növü:* {pay_title}\n\n"
-        f"📱 CRM ilə işləmək üçün menyudan istifadə edin və ya tapşırıqlar barədə mesaj yazın.",
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
+        "👋 Xoş gəlmisiniz! Qeydiyyat növünü seçin:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def role_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    info = await get_user_by_tg_id(chat_id)
+    chat_id = update.message.chat_id
+    users = load_users()
+    info = users.get(str(chat_id))
     if info:
-        role_title = "Administrator" if info.get("role") == "admin" else "Əməkdaş"
-        await update.message.reply_text(
-            f"👤 *İstifadəçi:* {info.get('name', 'Adsız')}\n"
-            f"🏷 *Rol:* {role_title}\n"
-            f"💳 *Ödəniş növü:* {info.get('payment_type', 'salary')}",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"👤 {info.get('name', 'Adsız')}\n🏷 Rol: {info.get('role', 'Naməlum')}")
     else:
         await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
+
+# ─── Registration Callbacks ──────────────────────────────────────────────────
+async def registration_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    chat_id = query.message.chat_id
+    data = query.data
+    if data == "reg_partnyor":
+        _pending_partner_registration[chat_id] = True
+        try:
+            await query.edit_message_text(
+                "🤝 *Partnyor qeydiyyatı*\n\nAdınızı daxil edin (Kommo siyahısında qeyd olunduğu kimi):",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+    elif data == "reg_emekdash":
+        _pending_employee_registration[chat_id] = "__ask_name__"
+        try:
+            await query.edit_message_text(
+                "👤 *Əməkdaş qeydiyyatı*\n\nAdınızı yazın:",
+                parse_mode="Markdown"
+            )
+        except:
+            pass
+
+async def employee_approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+    data = query.data
+    parts = data.split("_")
+    applicant_chat_id = int(parts[1])
+    decision = parts[2]
+    emp_name = _pending_employee_registration.pop(applicant_chat_id, None)
+    if not emp_name or emp_name == "__ask_name__":
+        try:
+            await query.edit_message_text("⚠️ Məlumat tapılmadı.")
+        except:
+            pass
+        return
+    if decision == "yes":
+        users = load_users()
+        users[str(applicant_chat_id)] = {"role": "Əməkdaş", "name": emp_name}
+        save_users(users)
+        try:
+            await query.edit_message_text(f"✅ {emp_name} əməkdaş kimi qeydiyyatdan keçdi.", parse_mode="Markdown")
+        except:
+            pass
+        try:
+            await context.bot.send_message(applicant_chat_id, "✅ Qeydiyyat təsdiqləndi! Mənə mesaj yaza bilərsiniz.")
+        except:
+            pass
+    else:
+        try:
+            await query.edit_message_text(f"❌ {emp_name} rədd edildi.")
+        except:
+            pass
+        try:
+            await context.bot.send_message(applicant_chat_id, "❌ Qeydiyyat rədd edildi.")
+        except:
+            pass
 
 # ─── Task Deadline Callback ──────────────────────────────────────────────────
 async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3868,29 +3939,45 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
     user_text = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    
+    chat_id = update.message.chat_id
     # Handle group mentions
     if update.message.chat.type in ("group", "supergroup"):
         bot_username = context.bot.username
         if not bot_username or f"@{bot_username}" not in user_text:
             return
         user_text = user_text.replace(f"@{bot_username}", "").strip()
-        
     if not user_text:
         return
-        
-    # Check registration dynamically via users.json
-    user_data = await get_user_by_tg_id(chat_id)
-    if not user_data:
-        await update.message.reply_text(
-            "⚠️ Siz CRM sistemində qeydiyyatdan keçməmisiniz və ya hesabınız aktiv deyil.\n"
-            "Xahiş olunur, /start yazaraq müraciət edin.",
-            parse_mode="Markdown"
-        )
+    # Check registration
+    users = load_users()
+    if str(chat_id) not in users:
+        # Check pending registrations
+        if chat_id in _pending_partner_registration:
+            await handle_partner_registration(update, context, user_text)
+            return
+        if chat_id in _pending_employee_registration:
+            emp_state = _pending_employee_registration[chat_id]
+            if emp_state == "__ask_name__":
+                _pending_employee_registration[chat_id] = user_text
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                if admin_chat:
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("✅ Təsdiq", callback_data=f"empreg_{chat_id}_yes"),
+                            InlineKeyboardButton("❌ Rədd", callback_data=f"empreg_{chat_id}_no"),
+                        ]
+                    ]
+                    try:
+                        await context.bot.send_message(
+                            admin_chat, f"👤 Yeni əməkdaş qeydiyyatı:\n\nAd: {user_text}\nChat ID: {chat_id}",
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                    except:
+                        pass
+                await update.message.reply_text("⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.")
+            return
+        await update.message.reply_text("⚠️ Qeydiyyatdan keçməmisiniz. /start yazın.")
         return
-
-    # Ниже продолжается стандартная логика обработки текста ИИ / Kommo CRM...
     # Check if it's a reply to a task/lead notification
     if await handle_task_reply(update, context):
         return
@@ -7579,6 +7666,7 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
 def main():
     global _bot_app
     async def post_init(application: Application) -> None:
+        ensure_known_employee_registrations()
         await start_webhook_server()
         try:
             _rehydrate_tecili_tasks()
@@ -7588,12 +7676,12 @@ def main():
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app
-    
     # Command handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("role", role_command))
-    
-    # Callback handlers (Task management, stage transitions & flows)
+    # Callback handlers
+    app.add_handler(CallbackQueryHandler(registration_type_callback, pattern="^reg_"))
+    app.add_handler(CallbackQueryHandler(employee_approval_callback, pattern="^empreg_"))
     app.add_handler(CallbackQueryHandler(task_deadline_callback, pattern="^taskdl_"))
     app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
     app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
@@ -7609,11 +7697,10 @@ def main():
     app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
     app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
     app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
-    
     # Message handlers
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact_message))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
-    
     # Background jobs
     job_queue = app.job_queue
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
@@ -7622,7 +7709,6 @@ def main():
     job_queue.run_daily(check_stuck_deals, time=datetime.strptime("06:00", "%H:%M").time())
     job_queue.run_daily(check_stuck_deals, time=datetime.strptime("09:00", "%H:%M").time())
     job_queue.run_daily(check_stuck_deals, time=datetime.strptime("13:00", "%H:%M").time())
-    
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
