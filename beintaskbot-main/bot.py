@@ -5702,7 +5702,8 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
 
 async def _load_rufat_latest_notes(lead_to_contact: dict[int, int | None]) -> dict[int, str]:
     """Read the latest text note from a deal, then its primary contact."""
-    semaphore = asyncio.Semaphore(8)
+    # Kommo rate-limits bursts of per-entity note requests.
+    semaphore = asyncio.Semaphore(3)
 
     async def read_notes(entity_type: str, entity_id: int) -> str:
         try:
@@ -5998,8 +5999,14 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
     }
 
 
+_rufat_overview_lock = asyncio.Lock()
+_rufat_overview_cache = None
+_rufat_overview_cache_at = 0.0
+
+
 async def handle_api_rufat_overview(request: web.Request) -> web.Response:
     """Return the fully preloaded Rüfət workspace for instant stage switching."""
+    global _rufat_overview_cache, _rufat_overview_cache_at
     raw_chat_id = (
         request.headers.get("X-TG-User-ID")
         or request.rel_url.query.get("uid")
@@ -6015,7 +6022,17 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
     # Stage filtering is deliberately performed in the browser after one full prefetch.
     try:
-        overview = await build_rufat_overview()
+        async with _rufat_overview_lock:
+            now = _time_module.monotonic()
+            if (
+                _rufat_overview_cache is not None
+                and now - _rufat_overview_cache_at < 15
+            ):
+                overview = _rufat_overview_cache
+            else:
+                overview = await build_rufat_overview()
+                _rufat_overview_cache = overview
+                _rufat_overview_cache_at = now
         # The old Şamil link remains compatible, while the current UID must
         # always receive Rüfət's employee identity in the web app.
         if chat_id == RUFAT_CHAT_ID:
