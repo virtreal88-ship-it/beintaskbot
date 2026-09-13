@@ -515,7 +515,21 @@
 <script>
 const tg = window.Telegram?.WebApp || {};
 
-const API_BASE = 'https://worker-production-3e3e.up.railway.app';
+const API_BASE = (() => {
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get('api_base') || localStorage.getItem('api_base');
+    if (override) {
+        const cleaned = String(override).trim().replace(/\/+$/, '');
+        if (cleaned) {
+            localStorage.setItem('api_base', cleaned);
+            return cleaned;
+        }
+    }
+    if (['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) {
+        return 'http://127.0.0.1:8080';
+    }
+    return 'https://worker-production-3e3e.up.railway.app';
+})();
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
