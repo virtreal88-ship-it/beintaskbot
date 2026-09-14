@@ -6637,7 +6637,68 @@ def _is_allowed_kommo_media_url(raw: str) -> bool:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
     host = parsed.netloc.split("@")[-1].split(":")[0].casefold()
-    return host.endswith(".kommo.com") or host.endswith(".amocrm.ru") or host.endswith(".amocrm.com") or host in {"kommo.com", "amocrm.ru", "amocrm.com"}
+    return (
+        host.endswith(".kommo.com")
+        or host.endswith(".amocrm.ru")
+        or host.endswith(".amocrm.com")
+        or host.endswith(".amojo.ru")
+        or host in {"kommo.com", "amocrm.ru", "amocrm.com", "amojo.kommo.com", "amojo.amocrm.ru"}
+    )
+
+
+def _drive_file_download_url(file_uuid: str) -> str:
+    uuid = str(file_uuid or "").strip()
+    if not uuid:
+        return ""
+    try:
+        info_resp = requests.get(
+            f"https://drive-g.kommo.com/v1.0/files/{uuid}",
+            headers={"Authorization": f"Bearer {KOMMO_TOKEN}"},
+            timeout=8,
+        )
+        if info_resp.status_code == 200:
+            return str((info_resp.json().get("_links") or {}).get("download", {}).get("href") or "").strip()
+    except Exception as exc:
+        logger.warning("Drive file %s failed: %s", uuid, exc)
+    return ""
+
+
+def _extract_nested_text(value, depth: int = 0) -> str:
+    if depth > 5 or value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("text", "message", "body", "content", "caption", "service"):
+            found = _extract_nested_text(value.get(key), depth + 1)
+            if found:
+                return found
+    if isinstance(value, list):
+        for inner in value:
+            found = _extract_nested_text(inner, depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def _extract_file_uuid(params: dict) -> str:
+    if not isinstance(params, dict):
+        return ""
+    for key in ("file_uuid", "uuid"):
+        val = str(params.get(key) or "").strip()
+        if len(val) >= 32:
+            return val
+    file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
+    for key in ("file_uuid", "uuid"):
+        val = str(file_obj.get(key) or "").strip()
+        if len(val) >= 32:
+            return val
+    return ""
+
+
+def _looks_audio_name(name: str) -> bool:
+    n = str(name or "").casefold()
+    return any(n.endswith(ext) for ext in (".ogg", ".mp3", ".m4a", ".wav", ".opus", ".aac", ".oga", ".webm", ".mpeg")) or "voice" in n or "audio" in n
 
 
 def _deal_fmt_ts(ts) -> str:
@@ -6650,11 +6711,16 @@ def _deal_fmt_ts(ts) -> str:
     return datetime.fromtimestamp(value, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
 
 
-def _is_chat_note_type(note_type: str) -> bool:
+def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = "") -> bool:
     ntype = str(note_type or "").casefold()
-    if not ntype:
-        return False
+    combined = f"{ntype} {file_name} {message_type}".casefold()
     if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba"}:
+        return True
+    if ntype in {"attachment", "file"}:
+        return _looks_audio_name(file_name) or message_type in {"voice", "audio", "picture", "video"}
+    if message_type in {"voice", "audio", "picture", "video", "file", "sticker"}:
+        return True
+    if _looks_audio_name(file_name) or _looks_audio_name(combined):
         return True
     return "message" in ntype or ntype.startswith("sms")
 
@@ -6665,8 +6731,13 @@ def _format_deal_note(note: dict) -> dict | None:
     ntype = str(note.get("note_type") or "common")
     params = note.get("params") if isinstance(note.get("params"), dict) else {}
     created = int(note.get("created_at") or 0)
+    file_name = str(params.get("file_name") or params.get("original_name") or "").strip()
+    file_uuid = _extract_file_uuid(params)
+    media = str(params.get("link") or params.get("url") or params.get("media") or "").strip()
+    if not _is_allowed_kommo_media_url(media):
+        media = ""
     text = ""
-    media = ""
+    message_type = "text"
     if ntype == "common":
         text = str(params.get("text") or "").strip()
     elif ntype in {"call_in", "call_out"}:
@@ -6676,23 +6747,36 @@ def _format_deal_note(note: dict) -> dict | None:
         text = f"{label} {phone}".strip()
         if duration:
             text += f" ({duration}s)"
-        media = str(params.get("link") or params.get("source") or "").strip()
+        media = media or str(params.get("source") or "").strip()
+        message_type = "audio" if media or file_uuid else "text"
     elif ntype in {"attachment", "file"}:
-        text = str(params.get("file_name") or params.get("text") or "Fayl").strip()
-        media = str(params.get("link") or params.get("url") or "").strip()
+        text = _extract_nested_text(params) or file_name or "Fayl"
+        message_type = "audio" if _looks_audio_name(file_name) else "file"
     else:
-        text = str(params.get("text") or params.get("message") or params.get("service") or "").strip()
-        media = str(params.get("link") or params.get("url") or "").strip()
-    if not text and not media:
+        text = _extract_nested_text(params)
+        media = media or str(params.get("link") or params.get("url") or "").strip()
+        if not _is_allowed_kommo_media_url(media):
+            media = ""
+    if not text and not media and not file_uuid:
         return None
+    if _looks_audio_name(file_name) and not text:
+        text = "Səs mesajı"
+        message_type = "audio"
+    is_chat = _is_chat_note_type(ntype, file_name, message_type)
+    if ntype == "common" and ("səs yazısı" in text.casefold() or "🎤" in text):
+        is_chat = True
+        message_type = "audio"
     return {
         "id": note.get("id"),
         "type": ntype,
         "text": text,
         "created_at": created,
         "created": _deal_fmt_ts(created),
-        "media_url": media if _is_allowed_kommo_media_url(media) else "",
-        "is_chat": _is_chat_note_type(ntype),
+        "media_url": media,
+        "file_uuid": file_uuid,
+        "file_name": file_name,
+        "message_type": message_type,
+        "is_chat": is_chat,
     }
 
 
@@ -6797,50 +6881,120 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
 
 def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
     rows: list[dict] = []
-    for page in range(1, pages + 1):
+    urls = (
+        f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
+        f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages",
+        f"{KOMMO_BASE_URL}/ajax/v2/talks/{int(talk_id)}/messages",
+    )
+    working_url = None
+    for url in urls:
         try:
-            resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
-                headers=HEADERS,
-                params={"limit": 250, "page": page},
-                timeout=12,
-            )
+            resp = _http.get(url, headers=HEADERS, params={"limit": 250, "page": 1}, timeout=12)
         except Exception as exc:
-            logger.warning("Deal talk %s messages failed: %s", talk_id, exc)
-            break
+            logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
+            continue
         if resp.status_code != 200:
-            logger.warning("Deal talk %s messages status %s", talk_id, resp.status_code)
+            logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
+            continue
+        payload = resp.json() if resp.content else {}
+        messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
+        if isinstance(messages, list):
+            rows.extend(messages)
+            working_url = url
             break
-        messages = resp.json().get("_embedded", {}).get("messages", []) or []
-        if not messages:
-            break
-        rows.extend(messages)
-        if len(messages) < 250:
-            break
+    if working_url and pages > 1:
+        for page in range(2, pages + 1):
+            try:
+                resp = _http.get(working_url, headers=HEADERS, params={"limit": 250, "page": page}, timeout=12)
+            except Exception:
+                break
+            if resp.status_code != 200:
+                break
+            payload = resp.json() if resp.content else {}
+            messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
+            if not messages:
+                break
+            rows.extend(messages)
+            if len(messages) < 250:
+                break
     return rows
+
+
+def _extract_messages_payload(payload) -> list[dict]:
+    if not isinstance(payload, dict):
+        return []
+    messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or payload.get("items") or []
+    return messages if isinstance(messages, list) else []
+
+
+def _fetch_chat_history_by_chat_id(chat_id: str) -> list[dict]:
+    chat_id = str(chat_id or "").strip()
+    if not chat_id:
+        return []
+    urls = (
+        f"https://amojo.kommo.com/v1/chats/{chat_id}/history",
+        f"https://amojo.kommo.com/v2/chats/{chat_id}/history",
+        f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/history",
+        f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/history",
+    )
+    for url in urls:
+        try:
+            resp = requests.get(url, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, params={"limit": 50, "offset": 0}, timeout=12)
+        except Exception as exc:
+            logger.warning("Chat history %s failed: %s", url, exc)
+            continue
+        if resp.status_code != 200:
+            logger.warning("Chat history %s status %s", url, resp.status_code)
+            continue
+        try:
+            payload = resp.json()
+        except Exception:
+            continue
+        messages = _extract_messages_payload(payload)
+        if messages:
+            return messages
+    return []
 
 
 def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if not isinstance(message, dict):
         return None
+    nested = message.get("message") if isinstance(message.get("message"), dict) else {}
     author = message.get("author") if isinstance(message.get("author"), dict) else {}
+    if not author:
+        author = message.get("sender") if isinstance(message.get("sender"), dict) else {}
     attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
-    created = int(message.get("created_at") or 0)
-    media = str(attachment.get("link") or "").strip()
-    message_type = str(message.get("message_type") or "text")
-    text = str(message.get("text") or "").strip()
+    created = int(message.get("created_at") or message.get("timestamp") or nested.get("timestamp") or 0)
+    media = str(
+        attachment.get("link")
+        or nested.get("media")
+        or message.get("media")
+        or ""
+    ).strip()
+    file_uuid = _extract_file_uuid(attachment) or _extract_file_uuid(nested) or _extract_file_uuid(message)
+    file_name = str(attachment.get("file_name") or nested.get("file_name") or message.get("file_name") or "").strip()
+    message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
+    if message_type in {"incoming", "outgoing"}:
+        message_type = str(nested.get("type") or "text")
+    text = str(nested.get("text") or message.get("text") or "").strip()
     if not text:
-        if message_type in {"voice", "audio"}:
+        if message_type in {"voice", "audio"} or _looks_audio_name(file_name):
             text = "Səs mesajı"
+            message_type = "audio" if message_type not in {"voice", "audio"} else message_type
         elif message_type == "picture":
             text = "Şəkil"
         elif message_type in {"file", "video", "sticker"}:
-            text = str(attachment.get("file_name") or message_type)
-    direction = str(message.get("type") or "")
+            text = file_name or message_type
+    direction = str(message.get("type") or message.get("direction") or "")
+    incoming = direction == "incoming" or str(author.get("type") or "") == "external"
+    if direction not in {"incoming", "outgoing"} and str(author.get("client_id") or ""):
+        incoming = True
+    if not text and not media and not file_uuid:
+        return None
     return {
-        "id": message.get("id"),
-        "direction": direction,
-        "incoming": direction == "incoming" or str(author.get("type") or "") == "external",
+        "id": nested.get("id") or message.get("id"),
+        "direction": "incoming" if incoming else "outgoing",
+        "incoming": incoming,
         "author": str(author.get("name") or "").strip(),
         "text": text,
         "message_type": message_type,
@@ -6848,8 +7002,100 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "created": _deal_fmt_ts(created),
         "origin": origin or str(message.get("origin") or ""),
         "media_url": media if _is_allowed_kommo_media_url(media) else "",
-        "file_name": str(attachment.get("file_name") or ""),
+        "file_uuid": file_uuid,
+        "file_name": file_name,
     }
+
+
+def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> list[dict]:
+    rows: list[dict] = []
+    entities = [("lead", int(lead_id))] + [("contact", int(cid)) for cid in contact_ids]
+    for entity_type, entity_id in entities:
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/events",
+                headers=HEADERS,
+                params={
+                    "filter[entity]": entity_type,
+                    "filter[entity_id]": entity_id,
+                    "filter[type]": "incoming_chat_message,outgoing_chat_message,incoming_sms,outgoing_sms",
+                    "limit": 100,
+                },
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Deal chat events %s/%s failed: %s", entity_type, entity_id, exc)
+            continue
+        if resp.status_code != 200:
+            logger.warning("Deal chat events %s/%s status %s", entity_type, entity_id, resp.status_code)
+            continue
+        for event in (resp.json().get("_embedded") or {}).get("events", []) or []:
+            if not isinstance(event, dict):
+                continue
+            etype = str(event.get("type") or "")
+            incoming = etype.startswith("incoming")
+            after = event.get("value_after") or []
+            payload = after[0] if after and isinstance(after[0], dict) else {}
+            message = payload.get("message") if isinstance(payload.get("message"), dict) else payload
+            text = _extract_nested_text(message) or ("Gələn mesaj" if incoming else "Gedən mesaj")
+            media = str(message.get("media") or message.get("link") or "").strip() if isinstance(message, dict) else ""
+            file_uuid = _extract_file_uuid(message) if isinstance(message, dict) else ""
+            created = int(event.get("created_at") or 0)
+            rows.append({
+                "id": event.get("id"),
+                "direction": "incoming" if incoming else "outgoing",
+                "incoming": incoming,
+                "author": "",
+                "text": text,
+                "message_type": "audio" if _looks_audio_name(text) else "text",
+                "created_at": created,
+                "created": _deal_fmt_ts(created),
+                "origin": etype,
+                "media_url": media if _is_allowed_kommo_media_url(media) else "",
+                "file_uuid": file_uuid,
+                "file_name": "",
+            })
+    return rows
+
+
+def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
+    try:
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{int(entity_id)}/files",
+            headers=HEADERS,
+            params={"limit": 50},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("Deal files %s/%s failed: %s", entity_type, entity_id, exc)
+        return []
+    if resp.status_code != 200:
+        return []
+    rows = []
+    for item in (resp.json().get("_embedded") or {}).get("files", []) or []:
+        uuid = str(item.get("file_uuid") or item.get("uuid") or "").strip()
+        name = str(item.get("name") or item.get("file_name") or "").strip()
+        if not uuid:
+            continue
+        if not _looks_audio_name(name) and not name:
+            # still include unnamed files as possible voice
+            name = "Fayl"
+        created = int(item.get("created_at") or 0)
+        rows.append({
+            "id": item.get("id") or uuid,
+            "direction": "incoming",
+            "incoming": True,
+            "author": "",
+            "text": "Səs mesajı" if _looks_audio_name(name) else name,
+            "message_type": "audio" if _looks_audio_name(name) else "file",
+            "created_at": created,
+            "created": _deal_fmt_ts(created),
+            "origin": "file",
+            "media_url": "",
+            "file_uuid": uuid,
+            "file_name": name,
+        })
+    return rows
 
 
 def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | None:
@@ -6903,32 +7149,82 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
     chat_from_notes = [item for item in unique_notes if item.get("is_chat")]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     chat: list[dict] = []
+    seen_chat: set[tuple] = set()
+
+    def _add_chat(item: dict | None) -> None:
+        if not item:
+            return
+        key = (str(item.get("id") or ""), str(item.get("text") or ""), int(item.get("created_at") or 0), str(item.get("file_uuid") or ""))
+        if key in seen_chat:
+            return
+        seen_chat.add(key)
+        chat.append(item)
+
     for talk in _fetch_talks(lid, contact_ids):
+        origin = str(talk.get("origin") or "")
         raw_talk_id = talk.get("talk_id") or talk.get("id")
         try:
             talk_id = int(raw_talk_id)
         except (TypeError, ValueError):
-            continue
-        origin = str(talk.get("origin") or "")
-        for message in _fetch_talk_messages(talk_id):
-            formatted = _format_chat_message(message, origin)
-            if formatted:
-                chat.append(formatted)
-    if not chat and chat_from_notes:
-        for note in reversed(chat_from_notes):
-            chat.append({
-                "id": note.get("id"),
-                "direction": "",
-                "incoming": True,
-                "author": "",
-                "text": note.get("text") or "",
-                "message_type": "text",
-                "created_at": note.get("created_at") or 0,
-                "created": note.get("created") or "",
-                "origin": note.get("type") or "",
-                "media_url": note.get("media_url") or "",
-                "file_name": "",
-            })
+            talk_id = 0
+        if talk_id:
+            for message in _fetch_talk_messages(talk_id):
+                _add_chat(_format_chat_message(message, origin))
+        chat_id = str(talk.get("chat_id") or "").strip()
+        if chat_id:
+            for message in _fetch_chat_history_by_chat_id(chat_id):
+                _add_chat(_format_chat_message(message, origin))
+    for contact_id in contact_ids:
+        try:
+            chats_resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/contacts/chats",
+                headers=HEADERS,
+                params={"contact_id": int(contact_id)},
+                timeout=8,
+            )
+        except Exception:
+            chats_resp = None
+        if chats_resp is not None and chats_resp.status_code == 200:
+            for row in (chats_resp.json().get("_embedded") or {}).get("chats", []) or []:
+                chat_id = str(row.get("chat_id") or "").strip()
+                if chat_id:
+                    for message in _fetch_chat_history_by_chat_id(chat_id):
+                        _add_chat(_format_chat_message(message, "contact"))
+    for event_item in _fetch_chat_events(lid, contact_ids):
+        _add_chat(event_item)
+    for note in reversed(chat_from_notes):
+        _add_chat({
+            "id": note.get("id"),
+            "direction": "incoming" if str(note.get("type") or "").endswith("_in") else "outgoing",
+            "incoming": str(note.get("type") or "").endswith("_in") or note.get("type") in {"attachment", "file"},
+            "author": "",
+            "text": note.get("text") or "",
+            "message_type": note.get("message_type") or "text",
+            "created_at": note.get("created_at") or 0,
+            "created": note.get("created") or "",
+            "origin": note.get("type") or "",
+            "media_url": note.get("media_url") or "",
+            "file_uuid": note.get("file_uuid") or "",
+            "file_name": note.get("file_name") or "",
+        })
+    for entity_type, entity_id in [("leads", lid)] + [("contacts", cid) for cid in contact_ids]:
+        for file_item in _fetch_entity_files_as_chat(entity_type, entity_id):
+            _add_chat(file_item)
+    if str(lid) in _voice_urls:
+        _add_chat({
+            "id": f"voice-{lid}",
+            "direction": "outgoing",
+            "incoming": False,
+            "author": "",
+            "text": "Səs mesajı",
+            "message_type": "audio",
+            "created_at": 0,
+            "created": "",
+            "origin": "app",
+            "media_url": f"/api/voice/{lid}",
+            "file_uuid": "",
+            "file_name": "voice.ogg",
+        })
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if len(chat) > 120:
         chat = chat[-120:]
@@ -6999,6 +7295,9 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
 
 async def handle_api_deal_file(request: web.Request) -> web.Response:
     src = unquote(str(request.rel_url.query.get("src") or "").strip())
+    file_uuid = str(request.rel_url.query.get("uuid") or "").strip()
+    if file_uuid and not src:
+        src = _drive_file_download_url(file_uuid)
     if not _is_allowed_kommo_media_url(src):
         return web.Response(status=400, text="Invalid media")
     token = request.rel_url.query.get("k") or ""
@@ -7024,6 +7323,8 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
         content_type = audio_resp.headers.get("Content-Type") or "application/octet-stream"
+        if file_uuid and content_type == "application/octet-stream":
+            content_type = "audio/ogg"
         return web.Response(
             body=audio_resp.content,
             content_type=content_type,
