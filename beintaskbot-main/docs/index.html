@@ -87,7 +87,6 @@
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
             body:not(.sidebar-open) .sidebar-item-label { display:none; }
             body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
-            #sidebar-user { display:none !important; }
             #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
             .sidebar-item {
                 display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; padding:10px 12px; margin:0; border:none;
@@ -104,8 +103,11 @@
             }
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
             body:not(.sidebar-open) #side-tab-pending { position:relative; }
-            #sidebar-user { display:none !important; }
+            #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; }
+            #sidebar-user-name { display:none !important; }
             #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:4px; }
+            body:not(.sidebar-open) #sidebar-user { padding:8px 0 0; border:0; align-items:center; }
+            body:not(.sidebar-open) #sidebar-sync span:not(.sync-spinner) { display:none; }
             #content-area {
                 margin:0 0 0 var(--crm-side-w); width:auto; max-width:none; height:100vh; max-height:100vh;
                 padding:16px 24px 20px; box-sizing:border-box;
@@ -246,8 +248,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
     </div>
-    <div id="sidebar-user" style="display:none;">
-        <div id="sidebar-user-name"></div>
+    <div id="sidebar-user">
         <div id="sidebar-sync"><span class="sync-spinner"></span><span>Yenilənir...</span></div>
     </div>
 </nav>
