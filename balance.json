@@ -1633,7 +1633,7 @@
         "phone": "+79057854455",
         "task_type": "",
         "amount": 1.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Tapşırıq təsdiqləndi (1.00 AZN)",
         "result_text": "Tapşırıq təsdiqləndi (1.00 AZN)",
         "kpi": 0,
@@ -1641,6 +1641,6 @@
         "date": "2026-09-14 18:04:05"
       }
     ],
-    "balance": 0
+    "balance": 1.0
   }
 }
