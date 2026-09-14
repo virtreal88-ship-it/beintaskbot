@@ -85,9 +85,9 @@
             #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand h1,
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
-            body:not(.sidebar-open) .sidebar-item-label,
-            body:not(.sidebar-open) #sidebar-user-name { display:none; }
+            body:not(.sidebar-open) .sidebar-item-label { display:none; }
             body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
+            body:not(.sidebar-open) #sidebar-user-name { display:block; font-size:9px; line-height:1.2; text-align:center; color:#34d399; overflow:hidden; max-height:2.6em; }
             #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
             .sidebar-item {
                 display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; padding:10px 12px; margin:0; border:none;
@@ -132,11 +132,11 @@
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
         #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
         #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > * { margin:0 !important; }
-        .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; }
+        .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; overflow-x:hidden; min-width:0; }
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
         .samil-kanban-header { padding:12px 12px 8px; }
-        .samil-kanban-list { display:flex; flex:1; flex-direction:column; gap:10px; min-height:250px; overflow-y:auto; padding:10px; }
-        .samil-deal-card, .crm-task-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; }
+        .samil-kanban-list { display:flex; flex:1; flex-direction:column; gap:10px; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px; }
+        .samil-deal-card, .crm-task-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; min-width:0; max-width:100%; overflow:hidden; word-break:break-word; }
         .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
@@ -159,31 +159,34 @@
         }
         .icon-action-btn svg { width:18px; height:18px; }
         .icon-action-btn.primary { background:#2481cc; border-color:#2481cc; color:#fff; }
+        .icon-action-btn.labeled { width:auto; padding:0 12px; gap:6px; font-size:12px; font-weight:700; white-space:nowrap; }
+        .page-user-name { color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
-        #task-date-select { display:block; width:100%; }
+        #task-date-select, #gozleme-date-select { display:block; width:100%; }
         @media (max-width: 1023px) {
-            #screen-notifications .samil-kanban-wrap { overflow-x:hidden; }
-            #notifications-container.samil-kanban-board {
+            #screen-notifications .samil-kanban-wrap, #screen-gozleme .samil-kanban-wrap { overflow-x:hidden; }
+            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board {
                 display:flex; flex-direction:column; grid-auto-flow:row; grid-auto-columns:unset;
                 grid-template-columns:none; min-height:0; height:auto;
             }
-            #screen-notifications .samil-kanban-column { max-height:none; min-height:0; height:auto; }
+            #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column { max-height:none; min-height:0; height:auto; }
         }
         @media (min-width: 1024px) {
             #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #samil-stage-select { display:none !important; }
-            #task-date-select { display:none !important; }
+            #task-date-select, #gozleme-date-select { display:none !important; }
             #samil-stage-nav { display:none; }
             #pin-sidebar-btn { width:32px; height:32px; color:#94a3b8; font-size:13px; }
             #pin-sidebar-btn svg { width:14px; height:14px; }
             #pin-sidebar-btn:hover { color:#64748b; }
+            .page-user-name { font-size:13px !important; }
             #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
-            #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count { display:none; }
+            #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
-            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
+            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
             #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { grid-auto-columns:calc((100% - 28px) / 3); height:100%; min-height:0; gap:14px; }
-            .samil-kanban-column { max-height:none; min-height:0; height:100%; }
+            .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
     </style>
@@ -275,7 +278,7 @@
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-                <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+                <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary labeled" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq</span></button>
             </div>
         </div>
         <select id="task-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
@@ -310,7 +313,7 @@
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-                <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary" aria-label="Yeni sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+                <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sövdələşmə</span></button>
             </div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
@@ -540,9 +543,15 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Bu həftə · Növbəti həftə · Gələcək</div>
+                <div class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
-            <button onclick="loadGozleme(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+            <div class="flex items-center gap-2">
+                <button type="button" onclick="loadGozleme(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+            </div>
+        </div>
+        <select id="gozleme-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
+        <div class="flex justify-between items-center">
+            <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="gozleme-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="gozleme-overdue-count"></span></span>
         </div>
         <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
             <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
@@ -1860,6 +1869,7 @@ const DATE_KANBAN_COLS = [
     {key:'future', label:'Gələcək', color:'#94a3b8'}
 ];
 let taskDateFilter = localStorage.getItem('task_date_filter') || 'today';
+let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_filter') || 'today';
 let taskKanbanDragState = null;
 
 function crmDayStart(d) {
@@ -2045,9 +2055,14 @@ function createCrmTaskCard(t, mode) {
 function renderDateKanban(container, items, mode) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
-    const isMobileTask = mode === 'task' && !window.matchMedia('(min-width: 1024px)').matches;
-    if(isMobileTask && !DATE_KANBAN_COLS.some(col => col.key === taskDateFilter)) taskDateFilter = 'today';
-    const cols = isMobileTask ? DATE_KANBAN_COLS.filter(col => col.key === taskDateFilter) : DATE_KANBAN_COLS;
+    const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !window.matchMedia('(min-width: 1024px)').matches;
+    const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
+    if(isMobileBoard && !DATE_KANBAN_COLS.some(col => col.key === filterKey)) {
+        if(mode === 'gozleme') gozlemeKanbanFilter = 'today';
+        else taskDateFilter = 'today';
+    }
+    const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
+    const cols = isMobileBoard ? DATE_KANBAN_COLS.filter(col => col.key === activeFilter) : DATE_KANBAN_COLS;
     cols.forEach(col => {
         const column = document.createElement('div');
         column.className = 'samil-kanban-column';
@@ -2099,6 +2114,7 @@ function renderNotifications() {
 }
 window.addEventListener('resize', () => {
     if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
+    if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
 });
 
 function escapeHtml(value) {
@@ -2746,14 +2762,31 @@ function renderGozleme() {
     const playingAudio = document.querySelector("#gozleme-container audio");
     if(playingAudio && !playingAudio.paused) return;
     const container = document.getElementById('gozleme-container');
-    const countEl = document.getElementById('gozleme-count');
     if(!container) return;
     const gfRow = document.getElementById('gozleme-filter-row');
     if(gfRow && (isAdmin || gozlemeFilter !== 'all')) gfRow.style.display = 'flex';
     let filtered = gozlemeItems;
     if(gozlemeFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || t.assignee_name || '') === gozlemeFilter);
     const overdueCount = filtered.filter(t => t.is_overdue).length;
+    const oc = document.getElementById('gozleme-overdue-count');
+    if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
+    const tc = document.getElementById('gozleme-total-count');
+    if(tc) tc.textContent = `(${filtered.length})`;
+    const countEl = document.getElementById('gozleme-count');
     if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    const dateSelect = document.getElementById('gozleme-date-select');
+    if(dateSelect) {
+        if(!DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'today';
+        dateSelect.innerHTML = DATE_KANBAN_COLS.map(col => {
+            const n = filtered.filter(t => crmDateBucket(t) === col.key).length;
+            return `<option value="${col.key}" ${col.key === gozlemeKanbanFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
+        }).join('');
+        dateSelect.onchange = () => {
+            gozlemeKanbanFilter = dateSelect.value;
+            localStorage.setItem('gozleme_date_filter', gozlemeKanbanFilter);
+            renderGozleme();
+        };
+    }
     renderDateKanban(container, filtered, 'gozleme');
 }
 
