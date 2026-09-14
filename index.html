@@ -271,7 +271,7 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
-                <div id="tasks-employee-name" class="text-[10px] text-gray-400 font-medium mt-0.5"></div>
+                <div id="tasks-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
@@ -306,7 +306,7 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Kartı başqa mərhələyə sürüşdürün</div>
+                <div id="deals-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
@@ -786,8 +786,8 @@ function setUserDisplayName(name) {
     if(area) area.innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
     const sideName = document.getElementById('sidebar-user-name');
     if(sideName) sideName.innerHTML = `<span style="color:#34d399;font-weight:700;">${name}</span>`;
-    const taskName = document.getElementById('tasks-employee-name');
-    if(taskName) taskName.textContent = FUNNEL_OWNER_NAME || name || '';
+    const display = FUNNEL_OWNER_NAME || name || '';
+    document.querySelectorAll('.page-user-name').forEach(el => { el.textContent = display; });
 }
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
