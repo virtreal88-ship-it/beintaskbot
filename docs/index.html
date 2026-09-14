@@ -1230,7 +1230,7 @@ function clearSessionField(id) {
 
 function showSuccessScreen(msg, link, isInfo) {
     let html = msg.replace(/\n/g, '<br>');
-    if(link) html += '<br><a href="' + link + '" target="_blank" style="color:#2481cc;font-size:13px;">🔗 Kommo-da bax</a>';
+    if(link && isAdmin) html += '<br><a href="' + link + '" target="_blank" style="color:#2481cc;font-size:13px;">🔗 Kommo-da bax</a>';
     document.getElementById('success-msg').innerHTML = html;
     const ss = document.getElementById('screen-success');
     ss.style.display = 'flex';
@@ -1616,7 +1616,7 @@ function renderPendingActions() {
         if(data.sender_name) appendPendingDetail(details, '👷', 'İcraçı', data.sender_name);
         if(data.assignee_name_raw) appendPendingDetail(details, '➡️', 'Yeni icraçı', data.assignee_name_raw);
         appendPendingDetail(details, '⏰', 'Deadline', data.deadline_text || data.deadline || formatPendingDate(action.created_at));
-        if(data.link) {
+        if(isAdmin && data.link) {
             const linkRow = document.createElement('a');
             linkRow.href = data.link;
             linkRow.target = '_blank';
@@ -2110,6 +2110,7 @@ function createCrmTaskCard(t, mode) {
     const phoneList = Array.isArray(t.phones) && t.phones.length ? t.phones : (t.phone ? [t.phone] : []);
     const phone = phoneList.filter(Boolean).join(', ');
     const leadId = t.lead_id || t.entity_id || '';
+    const kommoLink = (isAdmin && (t.kommo_link || '')) ? `<a href="${escapeHtml(t.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : '';
     card.innerHTML = `
         <div class="flex items-start justify-between gap-2 mb-1">
             <div class="min-w-0">
@@ -2121,7 +2122,7 @@ function createCrmTaskCard(t, mode) {
         <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
         <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
-            ${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : '<span></span>'}
+            <div class="flex items-center gap-3 min-w-0">${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : ''}${kommoLink || (leadId ? '' : '<span></span>')}</div>
             <div class="desktop-task-actions gap-1">
                 <button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>
                 <button type="button" onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md text-[10px]">+2s</button>
@@ -2299,6 +2300,7 @@ function dealDetailSectionsHtml(deal, token) {
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
+                ${(typeof isAdmin !== 'undefined' && isAdmin && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700">🔗 Kommo-da aç</a></div>` : ''}
             </div>
             <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
             <div>${notesHtml}</div>
@@ -2558,7 +2560,7 @@ function renderSamilDeals() {
                     <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>
+                    <div class="flex items-center gap-3">${isAdmin && deal.kommo_link ? `<a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
