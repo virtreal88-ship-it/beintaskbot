@@ -266,7 +266,6 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
-            <div id="price-field-create"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="task-price-input" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
                 <div class="flex items-center gap-2">
@@ -384,7 +383,6 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
-            <div id="price-field-edit"><label class="text-xs font-bold text-gray-400 block mb-1">İşin Qiyməti (AZN):</label><input type="number" id="edit-task-price" placeholder="Boş qalsa 0 AZN" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
             <div class="flex items-center gap-2 mt-1">
                 <button type="button" id="edit-voice-btn" onclick="toggleVoiceRecord('edit')" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
@@ -683,8 +681,8 @@ const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
 const FORM_STATE_KEY = 'miniapp_form_state_' + CURRENT_USER_ID;
 const PERSISTED_FORM_IDS = [
-    'task-client-name','search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom',
-    'edit-task-type-select','edit-assignee-select','edit-priority','edit-task-price','edit-task-desc','edit-deadline-custom',
+    'task-client-name','search-phone','task-type-select','task-assignee-select','task-priority','task-desc','task-deadline-custom',
+    'edit-task-type-select','edit-assignee-select','edit-priority','edit-task-desc','edit-deadline-custom',
     'note-text-input','complete-note-text','search-phone-flow','deal-customer-name','deal-subtask-text',
     'note-text','note-subtask-text','job-comment'
 ];
@@ -1021,7 +1019,7 @@ function initSessionPersistence() {
     });
 }
 function clearCreateFormState() {
-    ['search-phone','task-type-select','task-assignee-select','task-priority','task-price-input','task-desc','task-deadline-custom'].forEach(id => {
+    ['search-phone','task-type-select','task-assignee-select','task-priority','task-desc','task-deadline-custom'].forEach(id => {
         const el = document.getElementById(id); if(!el) return;
         if(el.tagName === 'SELECT') el.selectedIndex = 0; else el.value = '';
     });
@@ -1060,8 +1058,6 @@ async function syncNotifications(showError = false) {
             localStorage.setItem('is_admin','true');
             setPendingTabVisible();
             const filterRow = document.getElementById('filter-row'); if(filterRow) filterRow.style.display = 'flex';
-            const pf1 = document.getElementById('price-field-create'); if(pf1) pf1.style.display='';
-            const pf2 = document.getElementById('price-field-edit'); if(pf2) pf2.style.display='';
         } else {
             isAdmin = false;
             localStorage.removeItem('is_admin');
@@ -1173,8 +1169,7 @@ function submitTask() {
     const textInput = textEl.value.trim();
     if(editingTaskId) {
         if(!textInput) { toast('Mətni daxil edin!', true); return; }
-        const editPriceVal = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value.trim() : '';
-        let finalText = gd.assigneeName ? (editPriceVal ? `[${gd.assigneeName}:${editPriceVal}] ${textInput}` : `[${gd.assigneeName}] ${textInput}`) : textInput;
+        let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
         const editClientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value.trim() : '';
         let payload = {action: 'update_task', task_id: editingTaskId, text: finalText, client_name: editClientName};
         if(gd.deadline) payload.deadline = gd.deadline;
@@ -1207,8 +1202,6 @@ function submitTask() {
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType, client_name: clientName};
         const prioritySelect = document.getElementById('task-priority');
         if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
-        const priceInput = document.getElementById('task-price-input');
-        if(priceInput && priceInput.value) newPayload.price = priceInput.value;
         doFetch(newPayload, 'task-submit-btn');
     }
 }
@@ -2236,8 +2229,7 @@ function openTaskEditModal(task) {
     }
     window._taskEditContext = {
         assigneeName: task.assigneeName || task.assignee_name || (markerMatch ? markerMatch[1] : ''),
-        clientName: task.contact_name || task.lead_name || '',
-        price: (markerMatch && markerMatch[2]) ? markerMatch[2] : (task.price || '')
+        clientName: task.contact_name || task.lead_name || ''
     };
     document.getElementById('task-edit-modal').classList.add('open');
 }
@@ -2256,7 +2248,7 @@ async function saveTaskEditModal() {
     const taskType = document.getElementById('modal-task-type')?.value || '';
     const ctx = window._taskEditContext || {};
     const assigneeName = ctx.assigneeName || task.assigneeName || '';
-    const finalText = assigneeName ? (ctx.price ? '[' + assigneeName + ':' + ctx.price + '] ' + textInput : '[' + assigneeName + '] ' + textInput) : textInput;
+    const finalText = assigneeName ? '[' + assigneeName + '] ' + textInput : textInput;
     const payload = {action: 'update_task', task_id: taskId, text: finalText, client_name: ctx.clientName || ''};
     if(deadlineVal) payload.deadline = 'custom:' + deadlineVal;
     if(taskType) payload.task_type = taskType;
@@ -2301,15 +2293,14 @@ function checkEditChanged() {
     const assignee = document.getElementById('edit-assignee-select') ? document.getElementById('edit-assignee-select').value : '';
     const taskType = document.getElementById('edit-task-type-select') ? document.getElementById('edit-task-type-select').value : '';
     const deadline = gd.deadline || '';
-    const price = document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : '';
     const priority = document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : '';
     const clientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value : '';
-    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || price !== window._editOriginal.price || priority !== (window._editOriginal.priority || '') || clientName !== (window._editOriginal.client_name || '');
+    const changed = desc !== window._editOriginal.desc || assignee !== window._editOriginal.assignee || taskType !== window._editOriginal.task_type || deadline !== window._editOriginal.deadline || priority !== (window._editOriginal.priority || '') || clientName !== (window._editOriginal.client_name || '');
     if(changed) { btn.disabled = false; btn.className = 'flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
     else { btn.disabled = true; btn.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
 }
 document.addEventListener('DOMContentLoaded', () => {
-    ['edit-task-desc','edit-task-price','edit-client-name'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
+    ['edit-task-desc','edit-client-name'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', checkEditChanged); });
     ['edit-assignee-select','edit-task-type-select','edit-priority'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('change', () => { gd.assigneeName = document.getElementById('edit-assignee-select').value; checkEditChanged(); }); });
     const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
 });
