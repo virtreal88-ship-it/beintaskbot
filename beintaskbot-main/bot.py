@@ -1276,6 +1276,8 @@ def get_rufat_completion_stage(pipeline_key: str, stage_key: str) -> tuple[int, 
             return RUFAT_PIPELINE_ID, int(status_id), RUFAT_STAGE_NAMES.get(int(status_id), stage_key)
         return None
     if pipeline_key == "operations":
+        if stage_key in ("samil", "shamil"):
+            stage_key = "rufat"
         operation_stages = {
             "rufat": (109988184, "Rüfət Həsənzadə"),
             "soltan": (109988188, "Soltan Abbasov"),
@@ -1307,15 +1309,15 @@ def get_lead_details(lead_id: int) -> dict | None:
 def get_task_deal_context(task_data: dict) -> dict:
     """Resolve a Kommo task to its deal and primary client details."""
     entity_id = task_data.get("entity_id")
-    entity_type = task_data.get("entity_type", "contacts")
+    entity_type = _normalize_kommo_entity_type(task_data.get("entity_type", "contacts"))
     lead_id = entity_id if entity_type == "leads" else None
     contact = None
 
     if entity_id and entity_type == "contacts":
         contact = get_contact_details(int(entity_id))
-        leads = (contact or {}).get("_embedded", {}).get("leads", [])
-        if leads:
-            lead_id = leads[0].get("id")
+        preferred = _preferred_lead_for_rufat(_leads_linked_to_contact(int(entity_id)))
+        if preferred:
+            lead_id = preferred.get("id")
     elif lead_id:
         lead = get_lead_details(int(lead_id))
         contacts = (lead or {}).get("_embedded", {}).get("contacts", [])
@@ -1552,6 +1554,73 @@ def create_contact_kommo(name: str, phone: str, custom_fields: list = None, resp
         logger.error(f"Create contact error: {e}")
     return None
 
+def _normalize_kommo_entity_type(entity_type) -> str:
+    value = str(entity_type or "").strip().lower()
+    if value in ("lead", "leads"):
+        return "leads"
+    if value in ("contact", "contacts"):
+        return "contacts"
+    return value or "leads"
+
+
+def _lead_pipeline_id(lead) -> int:
+    try:
+        return int((lead or {}).get("pipeline_id", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rufat_permitted_pipeline_ids() -> set[int]:
+    return {int(RUFAT_PIPELINE_ID), int(GOZLEME_PIPELINE_ID)}
+
+
+def _rufat_may_use_lead(lead_id=None, lead=None) -> bool:
+    if lead is not None and _lead_pipeline_id(lead) in _rufat_permitted_pipeline_ids():
+        return True
+    resolved_id = lead_id
+    if resolved_id is None and isinstance(lead, dict):
+        resolved_id = lead.get("id")
+    if not resolved_id:
+        return False
+    return _lead_pipeline_id(get_lead_details(int(resolved_id))) in _rufat_permitted_pipeline_ids()
+
+
+def _leads_linked_to_contact(contact_id: int) -> list:
+    contact = get_contact_details(int(contact_id))
+    leads = list((contact or {}).get("_embedded", {}).get("leads", []) or [])
+    if leads:
+        return leads
+    try:
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/contacts/{int(contact_id)}/leads",
+            headers=HEADERS,
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            return list(resp.json().get("_embedded", {}).get("leads", []) or [])
+    except Exception as exc:
+        logger.error("Contact leads lookup error: %s", exc)
+    return []
+
+
+def _preferred_lead_for_rufat(leads: list) -> dict | None:
+    if not leads:
+        return None
+    ranked = []
+    for item in leads:
+        try:
+            lead_id = int(item["id"] if isinstance(item, dict) else item)
+        except (TypeError, ValueError, KeyError):
+            continue
+        lead = item if isinstance(item, dict) and item.get("pipeline_id") is not None else get_lead_details(lead_id)
+        ranked.append(lead or {"id": lead_id})
+    for wanted in (int(RUFAT_PIPELINE_ID), int(GOZLEME_PIPELINE_ID)):
+        for lead in ranked:
+            if _lead_pipeline_id(lead) == wanted:
+                return lead
+    return ranked[0]
+
+
 def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
     lead = get_lead_details(int(lead_id))
     return bool(lead and int(lead.get("pipeline_id", 0) or 0) == int(pipeline_id))
@@ -1567,16 +1636,39 @@ def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
     try:
         resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{int(task_id)}", headers=HEADERS, timeout=8)
         if resp.status_code != 200:
+            logger.warning("task_allowed_for_chat: task %s HTTP %s", task_id, resp.status_code)
             return False
         task = resp.json()
         entity_id = task.get("entity_id")
         if not entity_id:
             return False
-        if task.get("entity_type", "leads") == "leads":
-            return lead_allowed_for_chat(int(entity_id), chat_id)
-        contact = get_contact_details(int(entity_id))
-        return any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (contact or {}).get("_embedded", {}).get("leads", []))
+        entity_type = _normalize_kommo_entity_type(task.get("entity_type", "leads"))
+        if entity_type == "leads":
+            allowed = _rufat_may_use_lead(lead_id=int(entity_id))
+            if not allowed:
+                logger.warning(
+                    "task_allowed_for_chat: lead %s is outside Rüfət/Əməliyyatlar",
+                    entity_id,
+                )
+            return allowed
+        if entity_type == "contacts":
+            allowed = any(
+                _rufat_may_use_lead(
+                    lead=lead,
+                    lead_id=lead.get("id") if isinstance(lead, dict) else lead,
+                )
+                for lead in _leads_linked_to_contact(int(entity_id))
+            )
+            if not allowed:
+                logger.warning(
+                    "task_allowed_for_chat: contact %s has no Rüfət/Əməliyyatlar lead",
+                    entity_id,
+                )
+            return allowed
+        logger.warning("task_allowed_for_chat: unsupported entity_type %s for task %s", entity_type, task_id)
+        return False
     except Exception:
+        logger.exception("task_allowed_for_chat failed for task %s", task_id)
         return False
 
 
