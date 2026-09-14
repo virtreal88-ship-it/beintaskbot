@@ -103,9 +103,11 @@
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
         .samil-kanban-header { padding:12px 12px 8px; }
         .samil-kanban-list { display:flex; flex:1; flex-direction:column; gap:10px; min-height:250px; overflow-y:auto; padding:10px; }
-        .samil-deal-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; }
-        .samil-deal-card.dragging { opacity:.45; }
-        .samil-deal-card.is-saving { opacity:.62; pointer-events:none; }
+        .samil-deal-card, .crm-task-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; }
+        .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
+        .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
+        .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
+        .crm-chart { display:flex; align-items:flex-end; gap:6px; height:88px; padding-top:8px; }
         .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
         .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
@@ -155,7 +157,10 @@
             <span class="sidebar-icon">➕</span><span>Yeni</span>
         </button>
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
-            <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Hesabatlar</span>
+            <span class="sidebar-icon">💰</span><span id="side-tab-history-label">Maliyyə</span>
+        </button>
+        <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
+            <span class="sidebar-icon">📈</span><span>Hesabatlar</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
             <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
@@ -192,37 +197,11 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Növbəti həftə</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Bu həftə · Növbəti həftə · Gələcək</div>
             </div>
             <div class="flex items-center gap-2">
                 <button onclick="openNotifications(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
                 <button onclick="switchTab('tab-create')" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yeni tapşırıq</button>
-            </div>
-        </div>
-        <div id="balance-widget" style="display:none;" class="bg-white border border-gray-100 p-4 rounded-2xl shadow-lg flex justify-between items-center gap-3">
-            <div class="grid grid-cols-2 gap-4 flex-1">
-                <div>
-                    <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balans</div>
-                    <div class="text-xl font-black mt-1 text-emerald-600" id="balance-amount">0.00 AZN</div>
-                </div>
-                <div class="border-l border-gray-100 pl-4">
-                    <div class="text-[10px] uppercase tracking-wider text-amber-600 font-bold">Gözləmədə</div>
-                    <div class="text-xl font-black mt-1 text-amber-500" id="balance-pending-amount">0.00 AZN</div>
-                </div>
-            </div>
-            <button onclick="switchTab('tab-history')" class="bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">Hesabat</button>
-        </div>
-        <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
-            <div class="flex justify-between items-center">
-                <div>
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Balans</div>
-                    <div class="text-2xl font-black mt-1" id="main-finance-balance">0.00 AZN</div>
-                </div>
-                <div class="text-right">
-                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI</div>
-                    <div class="text-lg font-black mt-1" id="main-finance-stars">⭐ 0/5</div>
-                    <div class="text-[10px] opacity-75" id="main-finance-tasks">0 tapşırıq</div>
-                </div>
             </div>
         </div>
         <div class="flex justify-between items-center">
@@ -298,6 +277,22 @@
     <div id="screen-balance-history" class="screen space-y-4">
         <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
+            <div class="flex items-center gap-1.5">
+                <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Mədaxil</button>
+                <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Məxaric</button>
+            </div>
+        </div>
+        <div id="balance-widget" style="display:none;" class="bg-white border border-gray-100 p-4 rounded-2xl shadow-lg flex justify-between items-center gap-3">
+            <div class="grid grid-cols-2 gap-4 flex-1">
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balans</div>
+                    <div class="text-xl font-black mt-1 text-emerald-600" id="balance-amount">0.00 AZN</div>
+                </div>
+                <div class="border-l border-gray-100 pl-4">
+                    <div class="text-[10px] uppercase tracking-wider text-amber-600 font-bold">Gözləmədə</div>
+                    <div class="text-xl font-black mt-1 text-amber-500" id="balance-pending-amount">0.00 AZN</div>
+                </div>
+            </div>
         </div>
         <div id="balance-history-container" class="space-y-3"></div>
     </div>
@@ -306,15 +301,19 @@
         <div class="border-b border-gray-200 pb-2 mb-3">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə</span>
         </div>
-        <div id="finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
+        <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
             <div class="flex justify-between items-center">
                 <div>
                     <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">Balans</div>
-                    <div class="text-2xl font-black mt-1" id="finance-kpi">0.00 AZN</div>
+                    <div class="text-2xl font-black mt-1" id="main-finance-balance">0.00 AZN</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI</div>
+                    <div class="text-lg font-black mt-1" id="main-finance-stars">⭐ 0/5</div>
+                    <div class="text-[10px] opacity-75" id="main-finance-tasks">0 tapşırıq</div>
                 </div>
             </div>
         </div>
-        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Tarixçə</div>
         <div id="kpi-history-container" class="space-y-3"></div>
     </div>
 
@@ -324,42 +323,44 @@
                 <div class="text-sm font-extrabold text-gray-800">Hesabatlar</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">KPI, bonus və iş göstəriciləri</div>
             </div>
-            <div class="flex items-center gap-1.5">
-                <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Mədaxil</button>
-                <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Məxaric</button>
-                <button onclick="loadHesabatlar(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
-            </div>
+            <button onclick="loadHesabatlar(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
         </div>
-        <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İşlənən müraciət</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-processed">0</div>
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balans</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-bonus">0.00 AZN</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Gözləmədə bonus</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-pending">0.00 AZN</div>
             </div>
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
                 <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">KPI</div>
                 <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-kpi">⭐ 0/5</div>
             </div>
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Bonus</div>
-                <div class="text-xl font-black mt-1 text-emerald-600" id="hesabat-bonus">0.00 AZN</div>
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İşlənən müraciət</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-processed">0</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İş vaxtı</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-worktime">—</div>
             </div>
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
                 <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Boş dayanma</div>
-                <div class="text-xl font-black mt-1 text-amber-600" id="hesabat-idle">—</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-idle">—</div>
             </div>
         </div>
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İş vaxtı</div>
-                <div class="text-lg font-black mt-1 text-slate-800" id="hesabat-worktime">—</div>
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Tapşırıqlar (günlər)</div>
+                <div id="hesabat-chart-tasks" class="crm-chart"></div>
             </div>
             <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Gözləmədə bonus</div>
-                <div class="text-lg font-black mt-1 text-amber-500" id="hesabat-pending">0.00 AZN</div>
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Bonus (AZN)</div>
+                <div id="hesabat-chart-bonus" class="crm-chart"></div>
             </div>
         </div>
-        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Tarixçə</div>
-        <div id="hesabat-history-container" class="space-y-3"></div>
     </div>
 
     <!-- SCREEN: EDIT TASK (reused for edit flow) -->
@@ -460,7 +461,7 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Növbəti həftə</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Bu həftə · Növbəti həftə · Gələcək</div>
             </div>
             <button onclick="loadGozleme(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
         </div>
@@ -543,7 +544,10 @@
         <span class="text-lg">➕</span><span class="mt-0.5">Yeni</span>
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Hesabatlar</span>
+        <span class="text-lg">💰</span><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
+    </button>
+    <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">📈</span><span class="mt-0.5">Hesabatlar</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">🔔</span><span class="mt-0.5">Gözləmə</span>
@@ -836,7 +840,7 @@ function setPendingTabVisible() {
     if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
 }
 function setSidebarActive(tabId) {
-    ['tab-tasks','tab-samil-deals','tab-create','tab-history','tab-gozleme','tab-pending'].forEach(id => {
+    ['tab-tasks','tab-samil-deals','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending'].forEach(id => {
         const item = document.getElementById('side-' + id);
         if(item) item.classList.toggle('active', id === tabId);
     });
@@ -1629,26 +1633,77 @@ const DATE_KANBAN_COLS = [
     {key:'overdue', label:'Gecikmiş', color:'#ef4444'},
     {key:'today', label:'Bu gün', color:'#2563eb'},
     {key:'tomorrow', label:'Sabah', color:'#0ea5e9'},
-    {key:'week', label:'Növbəti həftə', color:'#8b5cf6'}
+    {key:'week', label:'Bu həftə', color:'#64748b'},
+    {key:'nextweek', label:'Növbəti həftə', color:'#8b5cf6'},
+    {key:'future', label:'Gələcək', color:'#94a3b8'}
 ];
+let taskKanbanDragState = null;
 
+function crmDayStart(d) {
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function crmThisWeekEnd(now) {
+    const todayStart = crmDayStart(now);
+    const mondayOffset = (todayStart.getDay() + 6) % 7;
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(weekStart.getDate() - mondayOffset);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+    return weekEnd;
+}
 function crmTaskDeadlineMs(t) {
     return Number(t.complete_till || t.deadline_ts || 0) * 1000;
 }
 function crmDateBucket(t) {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayStart = crmDayStart(now);
     const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
     const tomEnd = new Date(todayEnd); tomEnd.setDate(tomEnd.getDate() + 1);
+    const weekEnd = crmThisWeekEnd(now);
+    const nextWeekEnd = new Date(weekEnd); nextWeekEnd.setDate(nextWeekEnd.getDate() + 7);
     const d = crmTaskDeadlineMs(t);
     if(t.is_overdue || (d > 0 && d < todayStart.getTime())) return 'overdue';
     if(d > 0 && d < todayEnd.getTime()) return 'today';
     if(d >= todayEnd.getTime() && d < tomEnd.getTime()) return 'tomorrow';
-    return 'week';
+    if(d >= tomEnd.getTime() && d < weekEnd.getTime()) return 'week';
+    if(d >= weekEnd.getTime() && d < nextWeekEnd.getTime()) return 'nextweek';
+    return 'future';
+}
+function pad2(n) { return String(n).padStart(2, '0'); }
+function toCustomDeadline(date) {
+    return 'custom:' + date.getFullYear() + '-' + pad2(date.getMonth()+1) + '-' + pad2(date.getDate()) + 'T' + pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+}
+function deadlineForDateBucket(key) {
+    const now = new Date();
+    const todayStart = crmDayStart(now);
+    if(key === 'today') {
+        const d = new Date(todayStart); d.setHours(18, 0, 0, 0);
+        if(d <= now) d.setTime(now.getTime() + 60*60*1000);
+        return d;
+    }
+    if(key === 'tomorrow') {
+        const d = new Date(todayStart); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); return d;
+    }
+    if(key === 'week') {
+        const weekEnd = crmThisWeekEnd(now);
+        const d = new Date(weekEnd); d.setDate(d.getDate() - 1); d.setHours(18, 0, 0, 0);
+        if(d <= now) { d.setTime(weekEnd.getTime() - 60*60*1000); }
+        return d;
+    }
+    if(key === 'nextweek') {
+        const d = crmThisWeekEnd(now); d.setHours(10, 0, 0, 0); return d;
+    }
+    if(key === 'future') {
+        const d = new Date(todayStart); d.setDate(d.getDate() + 14); d.setHours(10, 0, 0, 0); return d;
+    }
+    return null;
 }
 
-function bindCrmTaskCard(wrapper, card, bgAction, t, displayDesc, assigneeName) {
-    card.onclick = () => { };
+function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
+    card.addEventListener('click', event => {
+        if(event.target.closest('a,button,audio')) return;
+        clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`);
+    });
     let longPressTimer = null;
     card.addEventListener('touchstart', (e) => {
         longPressTimer = setTimeout(() => {
@@ -1658,79 +1713,106 @@ function bindCrmTaskCard(wrapper, card, bgAction, t, displayDesc, assigneeName) 
     }, {passive: false});
     card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
     card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-    let startX = 0, currentX = 0, isSwiping = false;
-    card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
-    card.addEventListener('touchmove', (e) => {
-        if(!isSwiping) return;
-        currentX = e.touches[0].clientX - startX;
-        if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
-        if(currentX < -120) currentX = -120 + (currentX-120)*0.2;
-        card.style.transform = `translateX(${currentX}px)`;
-        if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
-        else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
-        else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
-    }, {passive:true});
-    card.addEventListener('touchend', () => {
-        isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
-        if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-        else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-        else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
-        currentX = 0;
+    card.addEventListener('dragstart', event => {
+        taskKanbanDragState = { taskId: String(t.id), fromBucket: crmDateBucket(t) };
+        card.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(t.id));
     });
-    wrapper.appendChild(card);
+    card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        document.querySelectorAll('.samil-kanban-column.drag-over').forEach(column => column.classList.remove('drag-over'));
+        taskKanbanDragState = null;
+    });
+}
+
+function bindTaskColumnDrop(column) {
+    column.addEventListener('dragover', event => {
+        if(!taskKanbanDragState) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        column.classList.add('drag-over');
+    });
+    column.addEventListener('dragleave', event => {
+        if(!column.contains(event.relatedTarget)) column.classList.remove('drag-over');
+    });
+    column.addEventListener('drop', async event => {
+        event.preventDefault();
+        column.classList.remove('drag-over');
+        const taskId = event.dataTransfer.getData('text/plain') || taskKanbanDragState?.taskId;
+        const nextBucket = column.dataset.dateColumn;
+        if(!taskId || !nextBucket || nextBucket === 'overdue') return;
+        await moveTaskToDateBucket(taskId, nextBucket);
+    });
+}
+
+async function moveTaskToDateBucket(taskId, nextBucket) {
+    const task = mockTasks.find(item => String(item.id) === String(taskId));
+    if(!task) return;
+    const nextDate = deadlineForDateBucket(nextBucket);
+    if(!nextDate) return;
+    const previousTill = task.complete_till;
+    const previousOverdue = task.is_overdue;
+    const previousTime = task.time;
+    task.complete_till = Math.floor(nextDate.getTime() / 1000);
+    task.is_overdue = false;
+    task.time = nextDate.toLocaleString('az-AZ');
+    const gTask = (typeof gozlemeItems !== 'undefined' ? gozlemeItems : []).find(item => String(item.id) === String(taskId));
+    if(gTask) { gTask.complete_till = task.complete_till; gTask.is_overdue = false; gTask.time = task.time; }
+    setCachedTasks(mockTasks);
+    renderNotifications();
+    renderGozleme();
+    document.querySelector(`[data-task-id="${taskId}"]`)?.classList.add('is-saving');
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify({action:'update_task', task_id:Number(taskId), deadline: toCustomDeadline(nextDate)})
+        });
+        const j = await r.json();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Vaxt dəyişmədi');
+        toast('Tarix dəyişdirildi', false);
+        document.querySelector(`[data-task-id="${taskId}"]`)?.classList.remove('is-saving');
+    } catch(error) {
+        task.complete_till = previousTill;
+        task.is_overdue = previousOverdue;
+        task.time = previousTime;
+        setCachedTasks(mockTasks);
+        renderNotifications();
+        renderGozleme();
+        toast(error.message || 'Vaxt dəyişmədi', true);
+    }
 }
 
 function createCrmTaskCard(t, mode) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
-    const bgAction = document.createElement('div');
-    bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
-    bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
-    wrapper.appendChild(bgAction);
-    const card = document.createElement('div');
+    const card = document.createElement('article');
     const isOverdue = t.is_overdue;
-    const accent = mode === 'gozleme' ? (isOverdue ? 'border-l-red-500' : 'border-l-amber-400') : (isOverdue ? 'border-l-red-500' : 'border-l-blue-500');
-    card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${accent}`;
-    card.style.position = 'relative';
+    card.className = 'crm-task-card';
+    card.draggable = true;
+    card.dataset.taskId = String(t.id);
     const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
     const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
-    let header = '';
-    if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || t.deadline || ''}</span></div>`; }
-    else if(mode === 'gozleme') { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || t.deadline || ''}</span></div>`; }
-    else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
-    const priceMatch = t.price ? [null, t.price] : (t.desc || t.task_text || t.text || '').match(/\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]/);
-    const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
-    const priorityTags = {
-        urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
-        high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
-        medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
-        low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
-    };
-    const priorityTag = priorityTags[t.priority] || '';
+    const title = t.contact_name || t.lead_name || displayDesc || 'Tapşırıq';
+    const when = t.overdue_text || t.time || t.deadline || '';
+    const tag = t.stage_name || t.task_type_name || (mode === 'gozleme' ? 'gözləmə' : '');
     card.innerHTML = `
-        ${header}
-        <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
-        <div class="space-y-1 text-[11px] text-gray-700">
-            <div>👤 <b>Müştəri:</b> ${t.contact_name || t.lead_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
-            <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
-            ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
-            ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
-            ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
-            ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
-            ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
+        <div class="flex items-start justify-between gap-2 mb-1">
+            <div class="min-w-0">
+                <div class="text-[11px] font-semibold ${isOverdue ? 'text-red-500' : 'text-slate-400'}">${escapeHtml(when)}</div>
+                <div class="text-sm font-semibold text-slate-900 leading-snug truncate">${escapeHtml(title)}</div>
+            </div>
+            ${assigneeName ? `<span class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${escapeHtml(assigneeName)}</span>` : ''}
         </div>
-        <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
-            ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
-            <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
-        </div>
-        <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
-            <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
-            <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
-            <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
-        </div>
+        <div class="text-[11px] text-slate-600 leading-snug line-clamp-2">${escapeHtml(displayDesc)}</div>
+        <div class="flex items-center justify-between gap-2 mt-2">
+            ${tag ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 text-sky-700">${escapeHtml(tag)}</span>` : '<span></span>'}
+            <div class="desktop-task-actions gap-1">
+                <button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>
+                <button type="button" onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md text-[10px]">+2s</button>
+            </div>
         </div>`;
-    bindCrmTaskCard(wrapper, card, bgAction, t, displayDesc, assigneeName);
-    return wrapper;
+    bindCrmTaskCard(card, t, displayDesc, assigneeName);
+    return card;
 }
 
 function renderDateKanban(container, items, mode) {
@@ -1739,6 +1821,7 @@ function renderDateKanban(container, items, mode) {
     DATE_KANBAN_COLS.forEach(col => {
         const column = document.createElement('div');
         column.className = 'samil-kanban-column';
+        column.dataset.dateColumn = col.key;
         const list = items.filter(t => crmDateBucket(t) === col.key);
         column.innerHTML = `<div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><span class="text-xs font-extrabold text-slate-800 flex items-center gap-2"><span class="stage-dot" style="background:${col.color}"></span>${col.label}</span><span class="text-[11px] font-bold text-slate-500">${list.length}</span></div></div>`;
         const listEl = document.createElement('div');
@@ -1752,6 +1835,7 @@ function renderDateKanban(container, items, mode) {
             });
         }
         column.appendChild(listEl);
+        bindTaskColumnDrop(column);
         container.appendChild(column);
     });
 }
@@ -2155,7 +2239,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function switchTab(tabId, updateHash = true) {
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-    ['tab-tasks', 'tab-samil-deals', 'tab-create', 'tab-history', 'tab-gozleme', 'tab-pending'].forEach(id => {
+    ['tab-tasks', 'tab-samil-deals', 'tab-create', 'tab-history', 'tab-hesabat', 'tab-gozleme', 'tab-pending'].forEach(id => {
         const tab = document.getElementById(id);
         if(tab) tab.className = inactiveClass;
     });
@@ -2176,6 +2260,11 @@ function switchTab(tabId, updateHash = true) {
         nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = activeClass;
+        if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
+        else { nav('screen-balance-history'); loadBalanceHistory(); }
+    } else if(tabId === 'tab-hesabat') {
+        const hesabatTab = document.getElementById('tab-hesabat');
+        if(hesabatTab) hesabatTab.className = activeClass;
         nav('screen-hesabatlar');
         loadHesabatlar();
     } else if(tabId === 'tab-gozleme') {
@@ -2221,7 +2310,7 @@ async function loadKpi() {
     } catch(e) {}
 }
 async function loadKpiHistory() {
-    const widget = document.getElementById('finance-widget'); if(widget) widget.style.display = 'block';
+    const widget = document.getElementById('main-finance-widget'); if(widget) widget.style.display = 'block';
     await Promise.all([loadKpi(), loadBalance()]);
     const container = document.getElementById('kpi-history-container');
     // Show balance transactions for salary employees
@@ -2262,24 +2351,11 @@ function computeIdleFromHistory(history) {
     return { idle: counted ? idle : null, work };
 }
 async function loadHesabatlar(showFeedback = false) {
-    const medaxilButton = document.getElementById('btn-medaxil');
-    const mexaricButton = document.getElementById('btn-mexaric');
-    if(isAdmin) {
-        if(medaxilButton) medaxilButton.style.display = 'inline-block';
-        if(mexaricButton) mexaricButton.style.display = 'inline-block';
-        await loadAdminBalances();
-        const processed = document.getElementById('hesabat-processed');
-        if(processed) processed.textContent = '—';
-        if(showFeedback) toast('Hesabat yeniləndi', false);
-        return;
-    }
-    if(medaxilButton) medaxilButton.style.display = 'none';
-    if(mexaricButton) mexaricButton.style.display = 'none';
     try {
         const kr = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const kj = await kr.json();
         if(kj && kj.success) kpiData = kj;
-        await loadBalance();
+        if(!isAdmin) await loadBalance();
         const hist = kpiData?.history || [];
         const processed = Number(kj.total_tasks) || hist.length || (window._balanceData || []).length;
         const avgStars = Number(kj.avg_stars);
@@ -2295,26 +2371,22 @@ async function loadHesabatlar(showFeedback = false) {
         setText('hesabat-pending', pending.toFixed(2) + ' AZN');
         setText('hesabat-worktime', formatHesabatMinutes(idle.work));
         setText('hesabat-idle', idle.idle == null ? '—' : formatHesabatMinutes(idle.idle));
-        const container = document.getElementById('hesabat-history-container');
+        renderHesabatChart('hesabat-chart-tasks', hist.map(h => Number(h.kpi_score) || 0));
         const tx = window._balanceData || [];
-        if(!container) return;
-        if(hist.length) {
-            container.innerHTML = hist.map(h => {
-                const d = h.date ? new Date(h.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
-                const starN = Math.round((h.kpi_score || 0) / 20);
-                const amount = (starN * 0.5).toFixed(2);
-                const starStr = starN > 0 ? '⭐'.repeat(starN) : '—';
-                return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${starStr}</span></div><span class="text-xs font-black text-emerald-600">+${amount} AZN</span></div>`;
-            }).join('');
-        } else if(tx.length) {
-            container.innerHTML = tx.map(t => renderBalanceTransaction(t, false)).join('');
-        } else {
-            container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ məlumat yoxdur.</div>';
-        }
+        const bonusSeries = tx.length ? tx.slice(0, 12).reverse().map(t => Math.abs(Number(t.amount) || 0)) : hist.map(h => Math.round((h.kpi_score || 0) / 20) * 0.5);
+        renderHesabatChart('hesabat-chart-bonus', bonusSeries);
         if(showFeedback) toast('Hesabat yeniləndi', false);
     } catch(e) {
         if(showFeedback) toast('Hesabat yüklənmədi', true);
     }
+}
+function renderHesabatChart(id, values) {
+    const el = document.getElementById(id);
+    if(!el) return;
+    const data = (values || []).slice(0, 12);
+    if(!data.length) { el.innerHTML = '<div class="text-[11px] text-slate-400 font-semibold">Məlumat yoxdur</div>'; return; }
+    const max = Math.max(...data, 0.01);
+    el.innerHTML = data.map(v => `<div title="${v}" style="height:${Math.max(8, (Number(v)/max)*100)}%" class="flex-1 min-w-[8px] rounded-t bg-slate-800"></div>`).join('');
 }
 
 /* ================= GÖZLƏMƏ TAB (exact copy of Tapşırıqlar behavior) ================= */
@@ -2543,7 +2615,7 @@ async function loadBalanceHistory() {
     if(medaxilButton) medaxilButton.style.display = 'none';
     if(mexaricButton) mexaricButton.style.display = 'none';
     await loadBalance();
-    const container = document.getElementById('hesabat-history-container') || document.getElementById('balance-history-container');
+    const container = document.getElementById('balance-history-container');
     const transactions = window._balanceData || [];
     container.innerHTML = transactions.length
         ? transactions.map(t => renderBalanceTransaction(t, false)).join('')
