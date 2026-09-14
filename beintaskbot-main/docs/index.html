@@ -87,7 +87,7 @@
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
             body:not(.sidebar-open) .sidebar-item-label { display:none; }
             body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
-            body:not(.sidebar-open) #sidebar-user-name { display:block; font-size:9px; line-height:1.2; text-align:center; color:#34d399; overflow:hidden; max-height:2.6em; }
+            #sidebar-user { display:none !important; }
             #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
             .sidebar-item {
                 display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; padding:10px 12px; margin:0; border:none;
@@ -104,7 +104,7 @@
             }
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
             body:not(.sidebar-open) #side-tab-pending { position:relative; }
-            #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; font-size:12px; font-weight:600; color:#475569; }
+            #sidebar-user { display:none !important; }
             #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:4px; }
             #content-area {
                 margin:0 0 0 var(--crm-side-w); width:auto; max-width:none; height:100vh; max-height:100vh;
@@ -132,11 +132,11 @@
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
         #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
         #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > * { margin:0 !important; }
-        .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; overflow-x:hidden; min-width:0; }
+        .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; min-width:0; }
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
-        .samil-kanban-header { padding:12px 12px 8px; }
+        .samil-kanban-header { padding:12px 12px 8px; flex-shrink:0; }
         .samil-kanban-list { display:flex; flex:1; flex-direction:column; gap:10px; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px; }
-        .samil-deal-card, .crm-task-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; min-width:0; max-width:100%; overflow:hidden; word-break:break-word; }
+        .samil-deal-card, .crm-task-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; flex-shrink:0; min-width:0; max-width:100%; }
         .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
@@ -246,7 +246,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
     </div>
-    <div id="sidebar-user">
+    <div id="sidebar-user" style="display:none;">
         <div id="sidebar-user-name"></div>
         <div id="sidebar-sync"><span class="sync-spinner"></span><span>Yenilənir...</span></div>
     </div>
@@ -1868,9 +1868,20 @@ const DATE_KANBAN_COLS = [
     {key:'nextweek', label:'Növbəti həftə', color:'#8b5cf6'},
     {key:'future', label:'Gələcək', color:'#94a3b8'}
 ];
-let taskDateFilter = localStorage.getItem('task_date_filter') || 'today';
-let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_filter') || 'today';
+let taskDateFilter = localStorage.getItem('task_date_bucket') || 'all';
+let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_bucket') || 'all';
 let taskKanbanDragState = null;
+function isDateFilterKey(key) {
+    return key === 'all' || DATE_KANBAN_COLS.some(col => col.key === key);
+}
+function dateFilterSelectHtml(items, selected) {
+    const allOpt = `<option value="all" ${selected === 'all' ? 'selected' : ''}>Müddətsiz (${items.length})</option>`;
+    const rest = DATE_KANBAN_COLS.map(col => {
+        const n = items.filter(t => crmDateBucket(t) === col.key).length;
+        return `<option value="${col.key}" ${col.key === selected ? 'selected' : ''}>${col.label} (${n})</option>`;
+    }).join('');
+    return allOpt + rest;
+}
 
 function crmDayStart(d) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -2056,13 +2067,16 @@ function renderDateKanban(container, items, mode) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
     const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !window.matchMedia('(min-width: 1024px)').matches;
+    const validKeys = ['all', ...DATE_KANBAN_COLS.map(col => col.key)];
     const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
-    if(isMobileBoard && !DATE_KANBAN_COLS.some(col => col.key === filterKey)) {
-        if(mode === 'gozleme') gozlemeKanbanFilter = 'today';
-        else taskDateFilter = 'today';
+    if(isMobileBoard && !validKeys.includes(filterKey)) {
+        if(mode === 'gozleme') gozlemeKanbanFilter = 'all';
+        else taskDateFilter = 'all';
     }
     const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
-    const cols = isMobileBoard ? DATE_KANBAN_COLS.filter(col => col.key === activeFilter) : DATE_KANBAN_COLS;
+    const cols = (!isMobileBoard || activeFilter === 'all')
+        ? DATE_KANBAN_COLS
+        : DATE_KANBAN_COLS.filter(col => col.key === activeFilter);
     cols.forEach(col => {
         const column = document.createElement('div');
         column.className = 'samil-kanban-column';
@@ -2099,14 +2113,14 @@ function renderNotifications() {
     if(tc) tc.textContent = `(${filtered.length})`;
     const dateSelect = document.getElementById('task-date-select');
     if(dateSelect) {
-        if(!DATE_KANBAN_COLS.some(col => col.key === taskDateFilter)) taskDateFilter = 'today';
-        dateSelect.innerHTML = DATE_KANBAN_COLS.map(col => {
+        if(taskDateFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === taskDateFilter)) taskDateFilter = 'all';
+        dateSelect.innerHTML = `<option value="all" ${taskDateFilter === 'all' ? 'selected' : ''}>Müddətsiz (${filtered.length})</option>` + DATE_KANBAN_COLS.map(col => {
             const n = filtered.filter(t => crmDateBucket(t) === col.key).length;
             return `<option value="${col.key}" ${col.key === taskDateFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
         }).join('');
         dateSelect.onchange = () => {
             taskDateFilter = dateSelect.value;
-            localStorage.setItem('task_date_filter', taskDateFilter);
+            localStorage.setItem('task_date_bucket', taskDateFilter);
             renderNotifications();
         };
     }
@@ -2776,14 +2790,14 @@ function renderGozleme() {
     if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
     const dateSelect = document.getElementById('gozleme-date-select');
     if(dateSelect) {
-        if(!DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'today';
-        dateSelect.innerHTML = DATE_KANBAN_COLS.map(col => {
+        if(gozlemeKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'all';
+        dateSelect.innerHTML = `<option value="all" ${gozlemeKanbanFilter === 'all' ? 'selected' : ''}>Müddətsiz (${filtered.length})</option>` + DATE_KANBAN_COLS.map(col => {
             const n = filtered.filter(t => crmDateBucket(t) === col.key).length;
             return `<option value="${col.key}" ${col.key === gozlemeKanbanFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
         }).join('');
         dateSelect.onchange = () => {
             gozlemeKanbanFilter = dateSelect.value;
-            localStorage.setItem('gozleme_date_filter', gozlemeKanbanFilter);
+            localStorage.setItem('gozleme_date_bucket', gozlemeKanbanFilter);
             renderGozleme();
         };
     }
