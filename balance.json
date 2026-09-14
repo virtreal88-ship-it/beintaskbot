@@ -1625,7 +1625,22 @@
     "balance": 0
   },
   "6824377548": {
-    "transactions": [],
+    "transactions": [
+      {
+        "task_id": 0,
+        "executor": "Rüfət Həsənzadə",
+        "client": "KM",
+        "phone": "+79057854455",
+        "task_type": "",
+        "amount": 1.0,
+        "status": "pending",
+        "task_text": "Tapşırıq təsdiqləndi (1.00 AZN)",
+        "result_text": "Tapşırıq təsdiqləndi (1.00 AZN)",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-14 18:04:05"
+      }
+    ],
     "balance": 0
   }
 }
