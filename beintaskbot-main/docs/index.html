@@ -177,90 +177,110 @@
 					border-radius: 24px 24px 0 0;
 				}
 			}
-			/* Desktop: >= 1024px — sidebar navigation layout */
+			/* Desktop: >= 1024px — top navbar CRM layout */
 			@media (min-width: 1024px) {
+				:root {
+					--crm-nav-h: 60px;
+				}
 				body {
-					background: #f8f9fa;
+					background: #f4f6f8;
+					color: #0f172a;
 				}
-				/* Hide mobile header and bottom tab bar */
-				#mobile-header {
-					display: none !important;
+				button:active {
+					transform: none;
+					opacity: 1;
 				}
+				#mobile-header,
 				#tab-bar {
 					display: none !important;
 				}
-				/* Fixed left sidebar */
 				#desktop-sidebar {
 					display: flex;
-					flex-direction: column;
+					flex-direction: row;
+					align-items: center;
+					gap: 12px;
 					position: fixed;
 					top: 0;
 					left: 0;
-					bottom: 0;
-					width: 240px;
-					background: #1a252f;
-					color: #fff;
-					z-index: 45;
-					padding: 24px 14px 20px;
+					right: 0;
+					bottom: auto;
+					width: 100%;
+					height: var(--crm-nav-h);
+					background: #ffffff;
+					color: #0f172a;
+					z-index: 50;
+					padding: 0 22px;
 					box-sizing: border-box;
-					box-shadow: 2px 0 12px rgba(0, 0, 0, 0.08);
+					border-bottom: 1px solid #e6e8eb;
+					box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
 				}
 				#desktop-sidebar .sidebar-brand {
-					padding: 0 12px 20px;
-					border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-					margin-bottom: 16px;
+					padding: 0 18px 0 0;
+					border-bottom: 0;
+					margin: 0;
+					flex-shrink: 0;
 				}
 				#desktop-sidebar .sidebar-brand h1 {
-					font-size: 18px;
-					font-weight: 800;
-					letter-spacing: 0.03em;
+					font-size: 15px;
+					font-weight: 700;
+					letter-spacing: -0.03em;
 					margin: 0;
-					color: #fff;
+					color: #0f172a;
 				}
 				#desktop-sidebar .sidebar-brand span {
-					font-size: 11px;
+					font-size: 10px;
 					color: #94a3b8;
 					display: block;
-					margin-top: 2px;
+					margin-top: 1px;
+					font-weight: 500;
+				}
+				#desktop-sidebar .sidebar-nav {
+					display: flex;
+					align-items: center;
+					gap: 4px;
+					flex: 1;
+					min-width: 0;
+					overflow-x: auto;
 				}
 				.sidebar-item {
 					display: flex;
 					align-items: center;
-					gap: 12px;
-					width: 100%;
-					padding: 12px 14px;
-					margin-bottom: 4px;
+					gap: 8px;
+					width: auto;
+					padding: 8px 12px;
+					margin: 0;
 					border: none;
 					background: transparent;
-					color: #cbd5e1;
-					font-size: 14px;
+					color: #64748b;
+					font-size: 13px;
 					font-weight: 600;
 					text-align: left;
-					border-radius: 12px;
+					border-radius: 8px;
 					cursor: pointer;
 					font-family: inherit;
+					white-space: nowrap;
 					transition:
 						background 0.15s ease,
 						color 0.15s ease;
 					position: relative;
 				}
 				.sidebar-item:hover {
-					background: rgba(255, 255, 255, 0.06);
-					color: #fff;
+					background: #f1f5f9;
+					color: #0f172a;
 				}
 				.sidebar-item.active {
-					background: #2481cc;
+					background: #0f172a;
 					color: #fff;
-					box-shadow: 0 2px 8px rgba(36, 129, 204, 0.35);
+					box-shadow: none;
 				}
 				.sidebar-item .sidebar-icon {
-					font-size: 18px;
-					width: 24px;
+					font-size: 14px;
+					width: 18px;
 					text-align: center;
 					flex-shrink: 0;
 				}
 				.sidebar-badge {
-					margin-left: auto;
+					margin-left: 6px;
 					background: #ef4444;
 					color: #fff;
 					font-size: 10px;
@@ -274,12 +294,15 @@
 					padding: 0 5px;
 				}
 				#sidebar-user {
-					margin-top: auto;
-					padding: 12px 14px;
-					border-top: 1px solid rgba(255, 255, 255, 0.08);
+					margin: 0 0 0 auto;
+					padding: 0 0 0 16px;
+					border: 0;
+					border-left: 1px solid #e6e8eb;
 					font-size: 12px;
-					color: #94a3b8;
+					font-weight: 600;
+					color: #475569;
 					word-break: break-word;
+					flex-shrink: 0;
 				}
 				#sidebar-sync {
 					display: none;
@@ -287,18 +310,22 @@
 					gap: 6px;
 					font-size: 10px;
 					color: #94a3b8;
-					margin-top: 6px;
+					margin-top: 4px;
 				}
-				/* Main content shifted right of sidebar, centered at max 900px */
 				#content-area {
-					margin-left: 240px;
+					margin: 0;
 					width: auto;
 					max-width: none;
-					padding: 32px 40px 48px;
+					height: 100vh;
+					max-height: 100vh;
+					padding: calc(var(--crm-nav-h) + 16px) 24px 20px;
 					box-sizing: border-box;
+					background: #f4f6f8;
+					flex: none;
+					overflow: auto;
 				}
 				#content-area > .screen {
-					max-width: 900px;
+					max-width: 1180px;
 					margin-left: auto;
 					margin-right: auto;
 				}
@@ -313,62 +340,58 @@
 				.screen .bg-white {
 					box-sizing: border-box;
 				}
-				/* Larger typography on desktop */
 				#content-area .text-\[11px\] {
 					font-size: 12px;
 				}
 				#content-area .text-\[10px\] {
 					font-size: 11px;
 				}
-				/* Two-column grid for task and pending cards */
 				#notifications-container,
 				#pending-actions-container,
 				#balance-history-container,
 				#kpi-history-container,
-				#gozleme-container,
-				#samil-deals-container {
-					display: grid;
-					grid-template-columns: repeat(2, minmax(0, 1fr));
-					gap: 16px;
-					align-items: start;
+				#gozleme-container {
+					display: flex;
+					flex-direction: column;
+					gap: 10px;
+					align-items: stretch;
 				}
 				#notifications-container > *,
 				#pending-actions-container > *,
 				#balance-history-container > *,
 				#kpi-history-container > *,
-				#gozleme-container > *,
-				#samil-deals-container > * {
+				#gozleme-container > * {
 					margin: 0 !important;
 				}
-				/* Full-width rows inside grid (empty states, section separators) */
-				#notifications-container > div[class*="text-center"],
-				#pending-actions-container > div[class*="text-center"],
-				#balance-history-container > div[class*="text-center"],
-				#balance-history-container > div[class*="mt-4"],
-				#kpi-history-container > div[class*="text-center"],
-				#gozleme-container > div[class*="text-center"],
-				#samil-deals-container > div[class*="text-center"] {
-					grid-column: 1 / -1;
+				#content-area .bg-white {
+					border-color: #e6e8eb !important;
+					box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04) !important;
+					border-radius: 12px !important;
 				}
-				/* Bottom sheet becomes a centered panel (offset by sidebar width) */
+				.filter-pill {
+					background: #fff;
+					border-color: #e6e8eb;
+					border-radius: 8px !important;
+				}
+				.filter-pill.active {
+					background: #0f172a;
+					border-color: #0f172a;
+				}
 				#bottom-action-bar {
-					max-width: 640px;
-					left: 240px;
+					max-width: 560px;
+					left: 0;
 					right: 0;
 					margin-left: auto;
 					margin-right: auto;
-					border-radius: 24px 24px 0 0;
-					box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.15);
+					border-radius: 16px 16px 0 0;
+					box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.12);
 				}
-				/* Desktop-only click actions on task cards */
 				.desktop-task-actions {
 					display: flex !important;
 				}
-				/* Hide swipe hints on desktop */
 				.swipe-hint {
 					display: none !important;
 				}
-				/* Show desktop action buttons on pending cards */
 				.desktop-pending-actions {
 					display: flex !important;
 				}
@@ -397,9 +420,9 @@
 				margin: 0 !important;
 			}
 			.samil-kanban-column {
-				background: #f8fafc;
-				border: 1px solid #e2e8f0;
-				border-radius: 16px;
+				background: #eef1f4;
+				border: 1px solid transparent;
+				border-radius: 12px;
 				display: flex;
 				flex-direction: column;
 				max-height: calc(100vh - 250px);
@@ -412,19 +435,18 @@
 					box-shadow 0.16s ease;
 			}
 			.samil-kanban-column.active-column {
-				border-color: #2481cc;
-				box-shadow: 0 10px 24px rgba(36, 129, 204, 0.12);
+				border-color: #cbd5e1;
+				box-shadow: none;
 			}
 			.samil-kanban-column.drag-over {
-				background: #eef6ff;
-				border-color: #2481cc;
-				box-shadow: inset 0 0 0 1px rgba(36, 129, 204, 0.24);
+				background: #e8eef8;
+				border-color: #2563eb;
+				box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.25);
 			}
 			.samil-kanban-header {
-				background: rgba(255, 255, 255, 0.86);
-				border-bottom: 1px solid #e2e8f0;
-				backdrop-filter: blur(8px);
-				padding: 12px;
+				background: transparent;
+				border-bottom: 0;
+				padding: 12px 12px 8px;
 				position: sticky;
 				top: 0;
 				z-index: 1;
@@ -440,10 +462,26 @@
 			}
 			.samil-deal-card {
 				cursor: grab;
+				background: #fff;
+				border: 1px solid #e6e8eb !important;
+				box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05) !important;
 				transition:
 					box-shadow 0.15s ease,
 					opacity 0.15s ease,
-					transform 0.15s ease;
+					transform 0.15s ease,
+					border-color 0.15s ease;
+			}
+			.samil-deal-card:hover {
+				border-color: #cbd5e1 !important;
+				box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
+			}
+			.deal-drag-handle {
+				display: none;
+				color: #94a3b8;
+				font-size: 12px;
+				letter-spacing: -1px;
+				line-height: 1;
+				user-select: none;
 			}
 			.samil-deal-card:active {
 				cursor: grabbing;
@@ -475,17 +513,44 @@
 				width: 8px;
 			}
 			@media (min-width: 1024px) {
-				#content-area > #screen-samil-deals {
+				#content-area > #screen-samil-deals.active {
+					display: flex !important;
+					flex-direction: column;
 					max-width: none;
+					height: calc(100vh - var(--crm-nav-h) - 36px);
+					gap: 10px;
+				}
+				#screen-samil-deals > .flex.items-center.justify-between {
+					background: transparent !important;
+					border: 0 !important;
+					box-shadow: none !important;
+					padding: 0 !important;
+				}
+				#samil-stage-nav,
+				#samil-deals-count {
+					display: none;
 				}
 				.samil-kanban-wrap {
-					margin-left: -2px;
-					margin-right: -2px;
+					flex: 1;
+					min-height: 0;
+					margin: 0;
+					overflow-x: auto;
+					overflow-y: hidden;
+					padding-bottom: 0;
 				}
 				#samil-deals-container.samil-kanban-board {
-					grid-auto-columns: minmax(300px, 340px);
+					grid-auto-columns: 300px;
+					height: 100%;
+					min-height: 0;
+					gap: 14px;
 				}
-				.deal-drag-hint {
+				.samil-kanban-column {
+					max-height: none;
+					min-height: 0;
+					height: 100%;
+				}
+				.deal-drag-hint,
+				.deal-drag-handle {
 					display: inline;
 				}
 			}
@@ -569,63 +634,65 @@
 			</div>
 		</div>
 
-		<!-- DESKTOP SIDEBAR (>=1024px only) -->
+		<!-- DESKTOP NAVBAR (>=1024px only) -->
 		<nav id="desktop-sidebar" aria-label="Əsas naviqasiya">
 			<div class="sidebar-brand">
 				<h1>Bein Systems</h1>
-				<span>CRM Smart Assistant</span>
+				<span>CRM</span>
 			</div>
-			<button
-				id="side-tab-tasks"
-				class="sidebar-item active"
-				onclick="switchTab('tab-tasks')"
-			>
-				<span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
-			</button>
-			<button
-				id="side-tab-samil-deals"
-				class="sidebar-item"
-				style="display: none"
-				onclick="switchTab('tab-samil-deals')"
-			>
-				<span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
-			</button>
-			<button
-				id="side-tab-create"
-				class="sidebar-item"
-				onclick="switchTab('tab-create')"
-			>
-				<span class="sidebar-icon">➕</span><span>Yeni</span>
-			</button>
-			<button
-				id="side-tab-history"
-				class="sidebar-item"
-				onclick="switchTab('tab-history')"
-			>
-				<span class="sidebar-icon">📊</span
-				><span id="side-tab-history-label">Balans</span>
-			</button>
-			<button
-				id="side-tab-gozleme"
-				class="sidebar-item"
-				onclick="switchTab('tab-gozleme')"
-			>
-				<span class="sidebar-icon">🔔</span><span>Gözləmə</span>
-			</button>
-			<button
-				id="side-tab-pending"
-				class="sidebar-item"
-				style="display: none"
-				onclick="switchTab('tab-pending')"
-			>
-				<span class="sidebar-icon">⏳</span
-				><span>Gözləyən sorğular</span
-				><span
-					id="sidebar-pending-badge"
-					class="sidebar-badge"
+			<div class="sidebar-nav">
+				<button
+					id="side-tab-tasks"
+					class="sidebar-item active"
+					onclick="switchTab('tab-tasks')"
+				>
+					<span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
+				</button>
+				<button
+					id="side-tab-samil-deals"
+					class="sidebar-item"
 					style="display: none"
-				></span>
-			</button>
+					onclick="switchTab('tab-samil-deals')"
+				>
+					<span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
+				</button>
+				<button
+					id="side-tab-create"
+					class="sidebar-item"
+					onclick="switchTab('tab-create')"
+				>
+					<span class="sidebar-icon">➕</span><span>Yeni</span>
+				</button>
+				<button
+					id="side-tab-history"
+					class="sidebar-item"
+					onclick="switchTab('tab-history')"
+				>
+					<span class="sidebar-icon">📊</span
+					><span id="side-tab-history-label">Balans</span>
+				</button>
+				<button
+					id="side-tab-gozleme"
+					class="sidebar-item"
+					onclick="switchTab('tab-gozleme')"
+				>
+					<span class="sidebar-icon">🔔</span><span>Gözləmə</span>
+				</button>
+				<button
+					id="side-tab-pending"
+					class="sidebar-item"
+					style="display: none"
+					onclick="switchTab('tab-pending')"
+				>
+					<span class="sidebar-icon">⏳</span
+					><span>Gözləyən sorğular</span
+					><span
+						id="sidebar-pending-badge"
+						class="sidebar-badge"
+						style="display: none"
+					></span>
+				</button>
+			</div>
 			<div id="sidebar-user">
 				<div id="sidebar-user-name"></div>
 				<div id="sidebar-sync">
@@ -840,12 +907,12 @@
 						<div
 							class="text-[10px] text-gray-400 font-medium mt-0.5"
 						>
-							CRM lövhəsi
+							Kartı başqa mərhələyə sürüşdürün
 						</div>
 					</div>
 					<button
 						onclick="loadSamilWorkspace(true, samilStageFilter)"
-						class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold"
+						class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold"
 					>
 						Yenilə
 					</button>
@@ -4401,18 +4468,19 @@
 				const audio = deal.voice_url
 					? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith("http") ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>`
 					: '<span class="text-gray-400">—</span>';
-				return `<article class="samil-deal-card bg-white p-3.5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || "")}">
-					<div class="flex items-start justify-between gap-3 mb-2">
-						<div class="min-w-0">
-							<div class="text-[10px] text-gray-400 font-bold uppercase">Sövdələşmə</div>
-							<div class="text-sm font-black text-slate-900 truncate">${dealTitle}</div>
+				return `<article class="samil-deal-card bg-white p-3 rounded-xl border border-gray-200" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || "")}">
+					<div class="flex items-start gap-2 mb-2">
+						<span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
+						<div class="min-w-0 flex-1">
+							<div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
+							<div class="text-sm font-semibold text-slate-900 truncate">${dealTitle}</div>
 						</div>
-						<div class="flex items-center gap-2">
-							<span class="shrink-0 text-[10px] font-black px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
+						<div class="flex items-center gap-1.5">
+							<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
 							<button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button>
 						</div>
 					</div>
-					<div class="space-y-1.5 text-[11px] text-gray-700">
+					<div class="space-y-1 text-[11px] text-gray-600">
 						<div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
 						<div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
 						<div>📝 <b>Son qeyd:</b> ${note}</div>
@@ -4424,8 +4492,8 @@
 						<div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
 					</div>
 					<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-						<a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a>
-						<span class="deal-drag-hint text-[10px] text-gray-400 font-bold">Sürüşdür</span>
+						<a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-slate-700 underline" onclick="event.stopPropagation()">Kommo</a>
+						<span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
 					</div>
 				</article>`;
 			}
@@ -4615,9 +4683,9 @@
 							<div class="flex items-center justify-between gap-2">
 								<div class="flex items-center gap-2 min-w-0">
 									<span class="stage-dot" style="background:${stageColor(key)}"></span>
-									<div class="text-sm font-black text-slate-800 truncate">${escapeHtml(label)}</div>
+									<div class="text-[13px] font-semibold text-slate-800 truncate">${escapeHtml(label)}</div>
 								</div>
-								<span class="bg-white border border-slate-200 text-slate-600 text-[10px] font-black px-2 py-0.5 rounded-full">${stageTotal(key)}</span>
+								<span class="bg-white/80 text-slate-500 text-[10px] font-semibold px-2 py-0.5 rounded-full">${stageTotal(key)}</span>
 							</div>
 						</div>
 						<div class="samil-kanban-list custom-scroll">${cardsHtml}</div>
