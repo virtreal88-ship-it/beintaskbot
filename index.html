@@ -207,13 +207,12 @@
         body.public-deal-only #tab-bar,
         body.public-deal-only #bottom-action-bar,
         body.public-deal-only #screen-success,
-        body.public-deal-only #screen-create { display:none !important; }
-        body.public-deal-only #content-area {
-            margin:0 !important; width:100% !important; max-width:none !important; height:auto !important;
-            max-height:none !important; padding:16px !important; overflow:visible !important; flex:none !important;
+        body.public-deal-only #screen-create,
+        body.public-deal-only #content-area { display:none !important; }
+        body.public-deal-only #screen-public-deal {
+            display:block !important; width:100%; max-width:560px; margin:0 auto;
+            padding:16px 16px 32px; box-sizing:border-box;
         }
-        body.public-deal-only #content-area > .screen { display:none !important; }
-        body.public-deal-only #screen-public-deal { display:block !important; max-width:560px; margin:0 auto; padding-bottom:32px; }
         .deal-chat-row { border-radius:12px; padding:8px 10px; margin:6px 0; max-width:92%; font-size:12px; }
         .deal-chat-row.in { background:#f1f5f9; margin-right:auto; }
         .deal-chat-row.out { background:#dbeafe; margin-left:auto; text-align:right; }
@@ -222,6 +221,7 @@
 <body class="flex flex-col h-screen overflow-hidden">
 
 <div id="toast"></div>
+<div id="screen-public-deal" class="screen space-y-3"></div>
 
 <div id="screen-create" onclick="if(event.target===this) closeCreateTaskModal()">
     <div class="create-task-modal-card" onclick="event.stopPropagation()">
@@ -330,8 +330,6 @@
 
 <!-- MAIN CONTENT AREA -->
 <div class="flex-1 overflow-y-auto px-4 py-3 custom-scroll pb-20" id="content-area">
-
-    <div id="screen-public-deal" class="screen space-y-3"></div>
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
