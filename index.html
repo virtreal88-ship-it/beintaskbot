@@ -2228,7 +2228,9 @@ function dealDetailSectionsHtml(deal, token) {
             const who = escapeHtml(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
             return `<div class="deal-chat-row ${cls}"><div class="text-[10px] text-gray-500">${who} · ${escapeHtml(item.created || '')}</div><div>${escapeHtml(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`;
         }).join('')
-        : '<div class="text-gray-400">Çat yoxdur</div>';
+        : (deal.chat_blocked
+            ? '<div style="font-size:12px;color:#b45309;line-height:1.45">Kommo çatın mətnini və səs mesajlarını API-yə vermir. Inteqrasiyada <b>External chat history</b> hüququ lazımdır, sonra KOMMO_TOKEN yenilənməlidir.</div>'
+            : '<div class="text-gray-400">Çat yoxdur</div>');
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">

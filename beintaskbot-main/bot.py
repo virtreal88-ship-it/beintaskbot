@@ -6879,8 +6879,9 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
     return list(talks.values())
 
 
-def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
+def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool]:
     rows: list[dict] = []
+    blocked = False
     urls = (
         f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
         f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages",
@@ -6893,6 +6894,10 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
         except Exception as exc:
             logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
             continue
+        if resp.status_code in {401, 402, 403}:
+            blocked = True
+            logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
+            continue
         if resp.status_code != 200:
             logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
             continue
@@ -6901,6 +6906,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
         if isinstance(messages, list):
             rows.extend(messages)
             working_url = url
+            blocked = False
             break
     if working_url and pages > 1:
         for page in range(2, pages + 1):
@@ -6917,7 +6923,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
             rows.extend(messages)
             if len(messages) < 250:
                 break
-    return rows
+    return rows, blocked
 
 
 def _extract_messages_payload(payload) -> list[dict]:
@@ -7007,8 +7013,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     }
 
 
-def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> list[dict]:
+def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict], bool]:
     rows: list[dict] = []
+    skipped = False
     entities = [("lead", int(lead_id))] + [("contact", int(cid)) for cid in contact_ids]
     for entity_type, entity_id in entities:
         try:
@@ -7037,9 +7044,12 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> list[dict]:
             after = event.get("value_after") or []
             payload = after[0] if after and isinstance(after[0], dict) else {}
             message = payload.get("message") if isinstance(payload.get("message"), dict) else payload
-            text = _extract_nested_text(message) or ("Gələn mesaj" if incoming else "Gedən mesaj")
+            text = _extract_nested_text(message)
             media = str(message.get("media") or message.get("link") or "").strip() if isinstance(message, dict) else ""
             file_uuid = _extract_file_uuid(message) if isinstance(message, dict) else ""
+            if not text and not media and not file_uuid:
+                skipped = True
+                continue
             created = int(event.get("created_at") or 0)
             rows.append({
                 "id": event.get("id"),
@@ -7055,7 +7065,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> list[dict]:
                 "file_uuid": file_uuid,
                 "file_name": "",
             })
-    return rows
+    return rows, skipped
 
 
 def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
@@ -7150,6 +7160,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
+    chat_blocked = False
 
     def _add_chat(item: dict | None) -> None:
         if not item:
@@ -7168,7 +7179,9 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
         except (TypeError, ValueError):
             talk_id = 0
         if talk_id:
-            for message in _fetch_talk_messages(talk_id):
+            messages, blocked = _fetch_talk_messages(talk_id)
+            chat_blocked = chat_blocked or blocked
+            for message in messages:
                 _add_chat(_format_chat_message(message, origin))
         chat_id = str(talk.get("chat_id") or "").strip()
         if chat_id:
@@ -7190,7 +7203,9 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
                 if chat_id:
                     for message in _fetch_chat_history_by_chat_id(chat_id):
                         _add_chat(_format_chat_message(message, "contact"))
-    for event_item in _fetch_chat_events(lid, contact_ids):
+    event_items, events_without_text = _fetch_chat_events(lid, contact_ids)
+    chat_blocked = chat_blocked or events_without_text
+    for event_item in event_items:
         _add_chat(event_item)
     for note in reversed(chat_from_notes):
         _add_chat({
@@ -7248,6 +7263,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
         "deadline_ts": int(first_task.get("complete_till") or 0),
         "tasks": tasks,
         "chat": chat,
+        "chat_blocked": bool(chat_blocked and not chat),
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
