@@ -6598,7 +6598,8 @@ def make_deal_share_token(lead_id: int) -> str:
 
 
 def parse_deal_share_token(token: str) -> int | None:
-    parts = str(token or "").strip().split(".")
+    raw = unquote(str(token or "")).strip().strip("\"'").rstrip("/").rstrip(".,)")
+    parts = raw.split(".")
     if len(parts) != 3:
         return None
     lead_s, exp_s, digest = parts
@@ -7108,8 +7109,8 @@ def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
     return rows
 
 
-def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | None:
-    """Read-only snapshot of a personal-funnel deal for in-app and shared view."""
+def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_personal: bool = True) -> dict | None:
+    """Read-only snapshot of a deal for in-app and shared view."""
     lead = lead if isinstance(lead, dict) else get_lead_details(int(lead_id))
     if not lead:
         return None
@@ -7119,7 +7120,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
         status_id = int(lead.get("status_id") or 0)
     except (TypeError, ValueError):
         return None
-    if pipeline_id not in all_personal_pipeline_ids():
+    if require_personal and pipeline_id not in all_personal_pipeline_ids():
         return None
     stages, names, _ui = load_pipeline_stage_maps(pipeline_id)
     status_to_key = {int(sid): key for key, sid in stages.items()}
@@ -7302,7 +7303,7 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
     lead_id = parse_deal_share_token(request.rel_url.query.get("k") or "")
     if not lead_id:
         return web.json_response({"success": False, "error": "Link etibarsızdır və ya müddəti bitib"}, status=403)
-    deal = build_deal_view_payload(lead_id)
+    deal = build_deal_view_payload(lead_id, require_personal=False)
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     deal.pop("kommo_link", None)
