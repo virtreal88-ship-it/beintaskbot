@@ -25,7 +25,15 @@
         .screen { display:none; } .screen.active { display:block; }
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
-        #screen-create { margin:0; }
+        #screen-create {
+            display:none; position:fixed; inset:0; z-index:9999; margin:0;
+            background:rgba(15,23,42,.45); align-items:center; justify-content:center; padding:16px;
+        }
+        #screen-create.open { display:flex !important; }
+        #screen-create .create-task-modal-card {
+            background:#fff; border-radius:20px; width:min(440px,100%); max-height:90vh; overflow:auto;
+            box-shadow:0 18px 50px rgba(15,23,42,.18);
+        }
         #screen-create .create-form { padding:12px; }
         #screen-create .create-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
         #screen-create .create-grid .create-span-2 { grid-column:1 / -1; }
@@ -198,7 +206,8 @@
         body.public-deal-only #desktop-sidebar,
         body.public-deal-only #tab-bar,
         body.public-deal-only #bottom-action-bar,
-        body.public-deal-only #screen-success { display:none !important; }
+        body.public-deal-only #screen-success,
+        body.public-deal-only #screen-create { display:none !important; }
         body.public-deal-only #content-area {
             margin:0 !important; width:100% !important; max-width:none !important; height:auto !important;
             max-height:none !important; padding:16px !important; overflow:visible !important; flex:none !important;
@@ -213,6 +222,41 @@
 <body class="flex flex-col h-screen overflow-hidden">
 
 <div id="toast"></div>
+
+<div id="screen-create" onclick="if(event.target===this) closeCreateTaskModal()">
+    <div class="create-task-modal-card" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between px-4 pt-4 pb-1">
+            <span class="text-sm font-extrabold text-gray-800">Yeni tapşırıq</span>
+            <button type="button" class="text-xs font-bold text-slate-500" onclick="closeCreateTaskModal()">Ləğv et</button>
+        </div>
+        <div class="create-form space-y-2 p-4">
+            <div class="create-grid">
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
+            <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
+            <div id="search-error" class="create-span-2 text-red-500 text-[11px] font-bold" style="display:none;">Min 7 rəqəm daxil edin.</div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Deadline:</label>
+                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
+            </div>
+            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
+            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
+                <div class="flex items-center gap-2">
+                    <button type="button" id="voice-record-btn" onclick="toggleVoiceRecord()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
+                    <span id="voice-status" class="text-[11px] text-gray-500"></span>
+                    <button type="button" id="voice-delete-btn" style="display:none;" onclick="deleteVoiceRecord()" class="text-red-500 text-xs font-bold">❌</button>
+                </div>
+                <audio id="voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
+            </div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+                <button type="button" onclick="closeCreateTaskModal()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button>
+                <button id="task-submit-btn" onclick="submitTask()" class="flex-1 bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">Göndər</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Preloader -->
 <div id="preloader" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.7);z-index:9999;align-items:center;justify-content:center;"><div class="sync-spinner" style="width:36px;height:36px;border-width:4px;"></div></div>
@@ -344,39 +388,6 @@
         </div>
     </div>
 
-    <!-- SCREEN: CREATE TASK -->
-    <div id="screen-create" class="screen space-y-4">
-        <div class="flex items-center justify-between mb-2">
-            <button class="text-xs font-bold text-blue-500" onclick="switchTab('tab-tasks')">← Geri</button>
-            <span class="text-sm font-extrabold text-gray-800">Yeni tapşırıq</span>
-            <span></span>
-        </div>
-        <div class="create-form space-y-2 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-            <div class="create-grid">
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
-            <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
-            <div id="search-error" class="create-span-2 text-red-500 text-[11px] font-bold" style="display:none;">Min 7 rəqəm daxil edin.</div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Deadline:</label>
-                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
-            </div>
-            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
-            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
-                <div class="flex items-center gap-2">
-                    <button type="button" id="voice-record-btn" onclick="toggleVoiceRecord()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
-                    <span id="voice-status" class="text-[11px] text-gray-500"></span>
-                    <button type="button" id="voice-delete-btn" style="display:none;" onclick="deleteVoiceRecord()" class="text-red-500 text-xs font-bold">❌</button>
-                </div>
-                <audio id="voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
-            </div>
-            </div>
-            <button id="task-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">🚀 Tapşırığı CRM-ə Göndər</button>
-        </div>
-    </div>
-
-    <!-- SCREEN: BALANCE HISTORY -->
     <div id="screen-balance-history" class="screen space-y-4">
         <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
@@ -1069,7 +1080,17 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('hashchange', applyHashRoute);
 
-function nav(id) {
+function openCreateTaskModal() {
+    editingTaskId = null;
+    restoreSessionForms();
+    const modal = document.getElementById('screen-create');
+    if(modal) modal.classList.add('open');
+    document.getElementById('task-client-name')?.focus();
+}
+function closeCreateTaskModal() {
+    document.getElementById('screen-create')?.classList.remove('open');
+    saveSessionForms();
+}
     if(id !== 'screen-pending') stopPendingActionPolling();
     closeBottomBar();
     document.getElementById('screen-success').style.display = 'none';
@@ -1154,7 +1175,7 @@ function saveSessionForms() {
             if(el) fields[id] = el.type === 'checkbox' ? el.checked : el.value;
         });
         const createScreen = document.getElementById('screen-create');
-        const createDeadline = createScreen?.classList.contains('active') ? (gd.deadline || '') : (previous.createDeadline || '');
+        const createDeadline = createScreen?.classList.contains('open') ? (gd.deadline || '') : (previous.createDeadline || '');
         sessionStorage.setItem(FORM_STATE_KEY, JSON.stringify({fields, createDeadline}));
     } catch(e) {}
 }
@@ -1205,7 +1226,11 @@ function showSuccessScreen(msg, link, isInfo) {
     const ss = document.getElementById('screen-success');
     ss.style.display = 'flex';
 }
-function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
+function resumeEdit() {
+    document.getElementById('screen-success').style.display = 'none';
+    if(currentEditScreen === 'screen-create') { openCreateTaskModal(); return; }
+    if(currentEditScreen) nav(currentEditScreen);
+}
 
 async function syncNotifications(showError = false) {
     if(HAS_OWN_FUNNEL && !isAdmin) return loadSamilWorkspace(showError);
@@ -1265,6 +1290,7 @@ async function doFetch(payload, btnId) {
                 uploadVoiceNote(j.entity_id, j.entity_type || 'leads');
             }
             if(payload.action === 'task' && !payload.parent_task_id) clearCreateFormState();
+            closeCreateTaskModal();
             await syncNotifications();
             showSuccessScreen(j.message || 'Uğurla tamamlandı!', j.link || '', payload.action === 'info');
         } else { toast(j.error || 'Xəta!', true); }
@@ -1368,6 +1394,7 @@ function submitTask() {
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType, client_name: clientName};
         const prioritySelect = document.getElementById('task-priority');
         if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
+        currentEditScreen = 'screen-create';
         doFetch(newPayload, 'task-submit-btn');
     }
 }
@@ -2777,6 +2804,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function switchTab(tabId, updateHash = true) {
+    if(tabId === 'tab-create') {
+        openCreateTaskModal();
+        return;
+    }
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
     ['tab-tasks', 'tab-samil-deals', 'tab-create', 'tab-history', 'tab-hesabat', 'tab-gozleme', 'tab-pending'].forEach(id => {
@@ -2793,11 +2824,6 @@ function switchTab(tabId, updateHash = true) {
         const dealsTab = document.getElementById('tab-samil-deals');
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
-    } else if(tabId === 'tab-create') {
-        document.getElementById('tab-create').className = activeClass;
-        editingTaskId = null;
-        restoreSessionForms();
-        nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = activeClass;
         nav('screen-balance-history');
