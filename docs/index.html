@@ -108,6 +108,14 @@
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
         .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
+        #task-edit-modal { position:fixed; inset:0; z-index:80; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
+        #task-edit-modal.open { display:flex; }
+        #task-edit-modal .task-edit-card { width:100%; max-width:420px; background:#fff; border-radius:20px; padding:18px; box-shadow:0 18px 50px rgba(15,23,42,.18); }
+        #task-edit-modal textarea, #task-edit-modal input, #task-edit-modal select { width:100%; box-sizing:border-box; border:1px solid #e2e8f0; background:#f8fafc; border-radius:12px; padding:12px 14px; font-size:14px; color:#0f172a; outline:none; font-family:inherit; }
+        #task-edit-modal textarea { min-height:110px; resize:vertical; }
+        #task-edit-modal input, #task-edit-modal select { margin-top:12px; }
+        #task-edit-modal .task-edit-actions { display:flex; gap:10px; margin-top:14px; }
+        #task-edit-modal .task-edit-actions button { flex:1; border:none; border-radius:12px; padding:12px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; }
         .crm-chart { display:flex; align-items:flex-end; gap:6px; height:88px; padding-top:8px; }
         .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
@@ -531,6 +539,26 @@
         <button onclick="handlePostponeTime('+1h')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+1 saat</button>
         <button onclick="handlePostponeTime('+2h')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+2 saat</button>
         <button onclick="handlePostponeTime('+1d')" class="bg-amber-50 text-amber-700 font-bold py-2 rounded-xl text-xs border border-amber-200">+1 gün</button>
+    </div>
+</div>
+
+<div id="task-edit-modal" onclick="if(event.target===this) closeTaskEditModal()">
+    <div class="task-edit-card" onclick="event.stopPropagation()">
+        <textarea id="modal-task-desc" placeholder="Mətni yazın..."></textarea>
+        <input type="datetime-local" id="modal-task-deadline" class="mt-3">
+        <select id="modal-task-type" class="mt-3">
+            <option value="1">Əlaqə saxla</option>
+            <option value="2">Görüş</option>
+            <option value="4232112">Texniki tapşırıq</option>
+            <option value="3263995">Təqdimat</option>
+            <option value="3263999">Quraşdırma</option>
+            <option value="4232108">Import</option>
+            <option value="4239844">xatırlat müşt.</option>
+        </select>
+        <div class="task-edit-actions">
+            <button type="button" onclick="closeTaskEditModal()" class="bg-slate-100 text-slate-600">Ləğv et</button>
+            <button type="button" id="modal-task-save" onclick="saveTaskEditModal()" class="bg-[#2563eb] text-white">Yadda saxla</button>
+        </div>
     </div>
 </div>
 
@@ -2185,41 +2213,85 @@ async function handlePostponeTime(preset) {
 
 function handleBarAction(actionType) {
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    if(actionType === 'edit') {
-        editingTaskId = task.id;
-        flow = 'task'; gd = {phone: task.phone || '', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
-        const rawDesc = task.desc || task.text || '';
-        const markerMatch = rawDesc.match(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::(\d+(?:\.\d+)?))?\]\s*/);
-        let editPrice = '';
-        if(markerMatch) { gd.assigneeName = markerMatch[1]; editPrice = markerMatch[2] || ''; document.getElementById('edit-task-desc').value = rawDesc.replace(markerMatch[0], ''); }
-        else if(task.assigneeName) { gd.assigneeName = task.assigneeName; document.getElementById('edit-task-desc').value = rawDesc; }
-        else { document.getElementById('edit-task-desc').value = rawDesc; }
-        const epf = document.getElementById('edit-task-price'); if(epf) epf.value = editPrice;
-        const _shortToFull = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki':'Texniki Dəstək'};
-        if(gd.assigneeName && _shortToFull[gd.assigneeName]) gd.assigneeName = _shortToFull[gd.assigneeName];
-        gd.originalAssignee = gd.assigneeName || '';
-        const asel = document.getElementById('edit-assignee-select'); if(asel) asel.value = gd.assigneeName || '';
-        const tsel = document.getElementById('edit-task-type-select'); if(tsel && task.task_type_id) { tsel.value = String(task.task_type_id); gd.task_type = String(task.task_type_id); }
-        const epri = document.getElementById('edit-priority'); if(epri) { epri.value = task.priority || ''; }
-        const ecn = document.getElementById('edit-client-name'); if(ecn) { ecn.value = task.contact_name || ''; }
-        const eph = document.getElementById('edit-phone'); if(eph) { eph.value = task.phone || ''; }
-        const dp = document.getElementById('edit-deadline-custom');
-        if(dp && task.complete_till) { const d = new Date(task.complete_till*1000); const pad=n=>String(n).padStart(2,'0'); dp.value=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; gd.deadline='custom:'+dp.value; } else if(dp) dp.value='';
-
-        // Store original values for change tracking
-        window._editOriginal = {
-            desc: document.getElementById('edit-task-desc').value,
-            assignee: gd.assigneeName || '',
-            task_type: gd.task_type || '',
-            deadline: gd.deadline || '',
-            price: (document.getElementById('edit-task-price') ? document.getElementById('edit-task-price').value : ''),
-            priority: (document.getElementById('edit-priority') ? document.getElementById('edit-priority').value : ''),
-            client_name: (document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value : '')
-        };
-        // Disable submit button initially
-        const esb = document.getElementById('edit-submit-btn');
-        if(esb) { esb.disabled = true; esb.className = 'flex-1 bg-gray-300 text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95'; }
-        currentEditScreen = 'screen-task-details'; closeBottomBar(); nav('screen-task-details');
+    if(actionType === 'edit') openTaskEditModal(task);
+}
+function openTaskEditModal(task) {
+    if(!task) return;
+    closeBottomBar();
+    editingTaskId = task.id;
+    selectedTaskId = task.id;
+    const rawDesc = task.desc || task.task_text || task.text || '';
+    const markerMatch = rawDesc.match(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i);
+    const cleanDesc = markerMatch ? rawDesc.replace(markerMatch[0], '') : rawDesc;
+    const descEl = document.getElementById('modal-task-desc');
+    const typeEl = document.getElementById('modal-task-type');
+    const dlEl = document.getElementById('modal-task-deadline');
+    if(descEl) descEl.value = cleanDesc;
+    if(typeEl) typeEl.value = String(task.task_type_id || task.task_type || '1');
+    if(dlEl) {
+        if(task.complete_till) {
+            const d = new Date(task.complete_till * 1000);
+            dlEl.value = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+        } else dlEl.value = '';
+    }
+    window._taskEditContext = {
+        assigneeName: task.assigneeName || task.assignee_name || (markerMatch ? markerMatch[1] : ''),
+        clientName: task.contact_name || task.lead_name || '',
+        price: (markerMatch && markerMatch[2]) ? markerMatch[2] : (task.price || '')
+    };
+    document.getElementById('task-edit-modal').classList.add('open');
+}
+function closeTaskEditModal() {
+    const modal = document.getElementById('task-edit-modal');
+    if(modal) modal.classList.remove('open');
+    editingTaskId = null;
+}
+async function saveTaskEditModal() {
+    const taskId = editingTaskId || selectedTaskId;
+    const task = mockTasks.find(t => t.id === taskId);
+    if(!taskId || !task) { toast('Tapşırıq tapılmadı', true); return; }
+    const textInput = (document.getElementById('modal-task-desc')?.value || '').trim();
+    if(!textInput) { toast('Mətni daxil edin!', true); return; }
+    const deadlineVal = document.getElementById('modal-task-deadline')?.value || '';
+    const taskType = document.getElementById('modal-task-type')?.value || '';
+    const ctx = window._taskEditContext || {};
+    const assigneeName = ctx.assigneeName || task.assigneeName || '';
+    const finalText = assigneeName ? (ctx.price ? '[' + assigneeName + ':' + ctx.price + '] ' + textInput : '[' + assigneeName + '] ' + textInput) : textInput;
+    const payload = {action: 'update_task', task_id: taskId, text: finalText, client_name: ctx.clientName || ''};
+    if(deadlineVal) payload.deadline = 'custom:' + deadlineVal;
+    if(taskType) payload.task_type = taskType;
+    if(assigneeName) payload.assigneeName = assigneeName;
+    const btn = document.getElementById('modal-task-save');
+    const orig = btn ? btn.textContent : '';
+    if(btn) { btn.disabled = true; btn.textContent = 'Yadda saxlanır...'; }
+    showLoader();
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if(!r.ok || !j.success) throw new Error(j.error || 'Yenilənmədi');
+        task.desc = finalText;
+        task.text = finalText;
+        if(deadlineVal) {
+            task.complete_till = Math.floor(new Date(deadlineVal).getTime() / 1000);
+            task.is_overdue = task.complete_till * 1000 < Date.now();
+            task.time = new Date(deadlineVal).toLocaleString('az-AZ');
+        }
+        if(taskType) task.task_type_id = taskType;
+        setCachedTasks(mockTasks);
+        closeTaskEditModal();
+        renderNotifications();
+        renderGozleme();
+        toast('Tapşırıq yadda saxlanıldı', false);
+        await syncNotifications();
+    } catch(e) {
+        toast(e.message || 'Xəta!', true);
+    } finally {
+        hideLoader();
+        if(btn) { btn.disabled = false; btn.textContent = orig; }
     }
 }
 function checkEditChanged() {
