@@ -107,6 +107,7 @@
         .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
+        .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
         .crm-chart { display:flex; align-items:flex-end; gap:6px; height:88px; padding-top:8px; }
         .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
@@ -116,7 +117,8 @@
             #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
-            #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
+            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
+            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { grid-auto-columns:calc((100% - 28px) / 3); height:100%; min-height:0; gap:14px; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
@@ -159,14 +161,14 @@
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
             <span class="sidebar-icon">💰</span><span id="side-tab-history-label">Maliyyə</span>
         </button>
-        <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
-            <span class="sidebar-icon">📈</span><span>Hesabatlar</span>
-        </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
             <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+        </button>
+        <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
+            <span class="sidebar-icon">📈</span><span>Hesabatlar</span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -546,14 +548,14 @@
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">💰</span><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
     </button>
-    <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">📈</span><span class="mt-0.5">Hesabatlar</span>
-    </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">🔔</span><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
+    </button>
+    <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <span class="text-lg">📈</span><span class="mt-0.5">Hesabatlar</span>
     </button>
 </div>
 
@@ -1702,7 +1704,8 @@ function deadlineForDateBucket(key) {
 function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
     card.addEventListener('click', event => {
         if(event.target.closest('a,button,audio')) return;
-        clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`);
+        selectedTaskId = t.id;
+        handleBarAction('edit');
     });
     let longPressTimer = null;
     card.addEventListener('touchstart', (e) => {
@@ -1794,7 +1797,9 @@ function createCrmTaskCard(t, mode) {
     const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
     const title = t.contact_name || t.lead_name || displayDesc || 'Tapşırıq';
     const when = t.overdue_text || t.time || t.deadline || '';
-    const tag = t.stage_name || t.task_type_name || (mode === 'gozleme' ? 'gözləmə' : '');
+    const phoneList = Array.isArray(t.phones) && t.phones.length ? t.phones : (t.phone ? [t.phone] : []);
+    const phone = phoneList.filter(Boolean).join(', ');
+    const link = t.kommo_link || '';
     card.innerHTML = `
         <div class="flex items-start justify-between gap-2 mb-1">
             <div class="min-w-0">
@@ -1803,9 +1808,10 @@ function createCrmTaskCard(t, mode) {
             </div>
             ${assigneeName ? `<span class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${escapeHtml(assigneeName)}</span>` : ''}
         </div>
-        <div class="text-[11px] text-slate-600 leading-snug line-clamp-2">${escapeHtml(displayDesc)}</div>
-        <div class="flex items-center justify-between gap-2 mt-2">
-            ${tag ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-md bg-sky-50 text-sky-700">${escapeHtml(tag)}</span>` : '<span></span>'}
+        <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
+        <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
+        <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
+            ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-slate-700 underline" onclick="event.stopPropagation()">Kommo</a>` : '<span></span>'}
             <div class="desktop-task-actions gap-1">
                 <button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>
                 <button type="button" onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md text-[10px]">+2s</button>
