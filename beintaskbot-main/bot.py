@@ -25,6 +25,7 @@ import asyncio
 import uuid
 import time as _time_module
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse, quote, unquote
 from openai import OpenAI
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
 from telegram.helpers import escape_markdown
@@ -6628,6 +6629,229 @@ def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
 
 
+def _is_allowed_kommo_media_url(raw: str) -> bool:
+    try:
+        parsed = urlparse(str(raw or "").strip())
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    host = parsed.netloc.split("@")[-1].split(":")[0].casefold()
+    return host.endswith(".kommo.com") or host.endswith(".amocrm.ru") or host.endswith(".amocrm.com") or host in {"kommo.com", "amocrm.ru", "amocrm.com"}
+
+
+def _deal_fmt_ts(ts) -> str:
+    try:
+        value = int(ts or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    return datetime.fromtimestamp(value, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def _is_chat_note_type(note_type: str) -> bool:
+    ntype = str(note_type or "").casefold()
+    if not ntype:
+        return False
+    if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba"}:
+        return True
+    return "message" in ntype or ntype.startswith("sms")
+
+
+def _format_deal_note(note: dict) -> dict | None:
+    if not isinstance(note, dict):
+        return None
+    ntype = str(note.get("note_type") or "common")
+    params = note.get("params") if isinstance(note.get("params"), dict) else {}
+    created = int(note.get("created_at") or 0)
+    text = ""
+    media = ""
+    if ntype == "common":
+        text = str(params.get("text") or "").strip()
+    elif ntype in {"call_in", "call_out"}:
+        label = "Gələn zəng" if ntype == "call_in" else "Gedən zəng"
+        phone = str(params.get("phone") or params.get("uniq") or "").strip()
+        duration = params.get("duration")
+        text = f"{label} {phone}".strip()
+        if duration:
+            text += f" ({duration}s)"
+        media = str(params.get("link") or params.get("source") or "").strip()
+    elif ntype in {"attachment", "file"}:
+        text = str(params.get("file_name") or params.get("text") or "Fayl").strip()
+        media = str(params.get("link") or params.get("url") or "").strip()
+    else:
+        text = str(params.get("text") or params.get("message") or params.get("service") or "").strip()
+        media = str(params.get("link") or params.get("url") or "").strip()
+    if not text and not media:
+        return None
+    return {
+        "id": note.get("id"),
+        "type": ntype,
+        "text": text,
+        "created_at": created,
+        "created": _deal_fmt_ts(created),
+        "media_url": media if _is_allowed_kommo_media_url(media) else "",
+        "is_chat": _is_chat_note_type(ntype),
+    }
+
+
+def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 3) -> list[dict]:
+    rows: list[dict] = []
+    for page in range(1, pages + 1):
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{int(entity_id)}/notes",
+                headers=HEADERS,
+                params={"limit": 250, "page": page, "order[created_at]": "desc"},
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.warning("Deal notes %s/%s failed: %s", entity_type, entity_id, exc)
+            break
+        if resp.status_code == 204:
+            break
+        if resp.status_code != 200:
+            logger.warning("Deal notes %s/%s status %s", entity_type, entity_id, resp.status_code)
+            break
+        notes = resp.json().get("_embedded", {}).get("notes", []) or []
+        if not notes:
+            break
+        for note in notes:
+            formatted = _format_deal_note(note)
+            if formatted:
+                rows.append(formatted)
+        if len(notes) < 250:
+            break
+    return rows
+
+
+def _fetch_open_tasks_for_entities(entity_ids: list[int]) -> list[dict]:
+    ids = [int(item) for item in entity_ids if str(item).isdigit()]
+    if not ids:
+        return []
+    rows: list[dict] = []
+    seen: set[int] = set()
+    chunk_size = 40
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start:start + chunk_size]
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/tasks",
+                headers=HEADERS,
+                params={"filter[is_completed]": 0, "filter[entity_id][]": chunk, "limit": 250},
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.warning("Deal tasks failed: %s", exc)
+            continue
+        if resp.status_code != 200:
+            continue
+        for task in resp.json().get("_embedded", {}).get("tasks", []) or []:
+            if task.get("is_completed"):
+                continue
+            try:
+                task_id = int(task.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            deadline_ts = int(task.get("complete_till", 0) or 0)
+            rows.append({
+                "id": task_id,
+                "text": task.get("text") or "",
+                "complete_till": deadline_ts,
+                "deadline": _deal_fmt_ts(deadline_ts),
+                "task_type_id": task.get("task_type_id"),
+                "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
+            })
+    rows.sort(key=lambda item: (int(item.get("complete_till") or 0) == 0, int(item.get("complete_till") or 0)))
+    return rows
+
+
+def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
+    talks: dict[int, dict] = {}
+
+    def _ingest(params: dict) -> None:
+        try:
+            resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/talks", headers=HEADERS, params=params, timeout=10)
+        except Exception as exc:
+            logger.warning("Deal talks failed: %s", exc)
+            return
+        if resp.status_code != 200:
+            logger.warning("Deal talks status %s", resp.status_code)
+            return
+        for talk in resp.json().get("_embedded", {}).get("talks", []) or []:
+            try:
+                talk_id = int(talk.get("talk_id") or talk.get("id"))
+            except (TypeError, ValueError):
+                continue
+            talks[talk_id] = talk
+
+    _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
+    for contact_id in contact_ids:
+        _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
+    return list(talks.values())
+
+
+def _fetch_talk_messages(talk_id: int, pages: int = 2) -> list[dict]:
+    rows: list[dict] = []
+    for page in range(1, pages + 1):
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
+                headers=HEADERS,
+                params={"limit": 250, "page": page},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Deal talk %s messages failed: %s", talk_id, exc)
+            break
+        if resp.status_code != 200:
+            logger.warning("Deal talk %s messages status %s", talk_id, resp.status_code)
+            break
+        messages = resp.json().get("_embedded", {}).get("messages", []) or []
+        if not messages:
+            break
+        rows.extend(messages)
+        if len(messages) < 250:
+            break
+    return rows
+
+
+def _format_chat_message(message: dict, origin: str = "") -> dict | None:
+    if not isinstance(message, dict):
+        return None
+    author = message.get("author") if isinstance(message.get("author"), dict) else {}
+    attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
+    created = int(message.get("created_at") or 0)
+    media = str(attachment.get("link") or "").strip()
+    message_type = str(message.get("message_type") or "text")
+    text = str(message.get("text") or "").strip()
+    if not text:
+        if message_type in {"voice", "audio"}:
+            text = "Səs mesajı"
+        elif message_type == "picture":
+            text = "Şəkil"
+        elif message_type in {"file", "video", "sticker"}:
+            text = str(attachment.get("file_name") or message_type)
+    direction = str(message.get("type") or "")
+    return {
+        "id": message.get("id"),
+        "direction": direction,
+        "incoming": direction == "incoming" or str(author.get("type") or "") == "external",
+        "author": str(author.get("name") or "").strip(),
+        "text": text,
+        "message_type": message_type,
+        "created_at": created,
+        "created": _deal_fmt_ts(created),
+        "origin": origin or str(message.get("origin") or ""),
+        "media_url": media if _is_allowed_kommo_media_url(media) else "",
+        "file_name": str(attachment.get("file_name") or ""),
+    }
+
+
 def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | None:
     """Read-only snapshot of a personal-funnel deal for in-app and shared view."""
     lead = lead if isinstance(lead, dict) else get_lead_details(int(lead_id))
@@ -6646,6 +6870,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
     lead_contacts = (lead.get("_embedded") or {}).get("contacts") or []
     contact_rows = []
     all_phones: list[str] = []
+    contact_ids: list[int] = []
     for linked in lead_contacts:
         if not isinstance(linked, dict):
             continue
@@ -6655,52 +6880,60 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
             fetched = get_contact_details(int(linked_id))
             if fetched:
                 full = fetched
+            contact_ids.append(int(linked_id))
         phones = _contact_phones(full)
         for phone in phones:
             if phone not in all_phones:
                 all_phones.append(phone)
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
     contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
-    last_note = ""
-    try:
-        note_resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/leads/{lid}/notes",
-            headers=HEADERS,
-            params={"limit": 20, "order[updated_at]": "desc"},
-            timeout=8,
-        )
-        if note_resp.status_code == 200:
-            for note in note_resp.json().get("_embedded", {}).get("notes", []) or []:
-                text = str((note.get("params") or {}).get("text") or "").strip()
-                if text:
-                    last_note = text
-                    break
-    except Exception as exc:
-        logger.warning("Deal view notes failed: %s", exc)
-    tasks = []
-    try:
-        task_resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/tasks",
-            headers=HEADERS,
-            params={"filter[entity_id]": lid, "filter[entity_type]": "leads", "limit": 50},
-            timeout=8,
-        )
-        if task_resp.status_code == 200:
-            for task in task_resp.json().get("_embedded", {}).get("tasks", []) or []:
-                if task.get("is_completed"):
-                    continue
-                deadline_ts = int(task.get("complete_till", 0) or 0)
-                tasks.append({
-                    "id": task.get("id"),
-                    "text": task.get("text") or "",
-                    "complete_till": deadline_ts,
-                    "deadline": datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else "",
-                    "task_type_id": task.get("task_type_id"),
-                })
-            tasks.sort(key=lambda item: (int(item.get("complete_till") or 0) == 0, int(item.get("complete_till") or 0)))
-    except Exception as exc:
-        logger.warning("Deal view tasks failed: %s", exc)
+    note_rows = _fetch_entity_notes("leads", lid)
+    for contact_id in contact_ids:
+        note_rows.extend(_fetch_entity_notes("contacts", contact_id))
+    note_rows.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
+    seen_notes: set[tuple] = set()
+    unique_notes: list[dict] = []
+    for note in note_rows:
+        key = (note.get("text"), note.get("created_at"), note.get("type"))
+        if key in seen_notes:
+            continue
+        seen_notes.add(key)
+        unique_notes.append(note)
+    notes = [item for item in unique_notes if not item.get("is_chat")]
+    chat_from_notes = [item for item in unique_notes if item.get("is_chat")]
+    tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
+    chat: list[dict] = []
+    for talk in _fetch_talks(lid, contact_ids):
+        raw_talk_id = talk.get("talk_id") or talk.get("id")
+        try:
+            talk_id = int(raw_talk_id)
+        except (TypeError, ValueError):
+            continue
+        origin = str(talk.get("origin") or "")
+        for message in _fetch_talk_messages(talk_id):
+            formatted = _format_chat_message(message, origin)
+            if formatted:
+                chat.append(formatted)
+    if not chat and chat_from_notes:
+        for note in reversed(chat_from_notes):
+            chat.append({
+                "id": note.get("id"),
+                "direction": "",
+                "incoming": True,
+                "author": "",
+                "text": note.get("text") or "",
+                "message_type": "text",
+                "created_at": note.get("created_at") or 0,
+                "created": note.get("created") or "",
+                "origin": note.get("type") or "",
+                "media_url": note.get("media_url") or "",
+                "file_name": "",
+            })
+    chat.sort(key=lambda item: int(item.get("created_at") or 0))
+    if len(chat) > 120:
+        chat = chat[-120:]
     first_task = tasks[0] if tasks else {}
+    last_note = next((item.get("text") for item in notes if item.get("text")), "")
     return {
         "id": lid,
         "name": lead.get("name") or "",
@@ -6713,10 +6946,12 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
+        "notes": notes,
         "task_desc": first_task.get("text") or "",
         "deadline": first_task.get("deadline") or "",
         "deadline_ts": int(first_task.get("complete_till") or 0),
         "tasks": tasks,
+        "chat": chat,
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
@@ -6760,6 +6995,43 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     deal.pop("kommo_link", None)
     return web.json_response({"success": True, "deal": deal, "readonly": True})
+
+
+async def handle_api_deal_file(request: web.Request) -> web.Response:
+    src = unquote(str(request.rel_url.query.get("src") or "").strip())
+    if not _is_allowed_kommo_media_url(src):
+        return web.Response(status=400, text="Invalid media")
+    token = request.rel_url.query.get("k") or ""
+    if token:
+        if not parse_deal_share_token(token):
+            return web.Response(status=403, text="Forbidden")
+    else:
+        raw_chat_id = request.headers.get("X-TG-User-ID") or request.rel_url.query.get("uid") or ""
+        try:
+            chat_id = int(raw_chat_id)
+            lead_id = int(request.rel_url.query.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            return web.Response(status=401, text="Unauthorized")
+        if not lead_id:
+            return web.Response(status=400, text="lead_id required")
+        lead = get_lead_details(lead_id)
+        if not lead or not _user_can_view_personal_lead(chat_id, lead):
+            return web.Response(status=403, text="Forbidden")
+    try:
+        audio_resp = requests.get(src, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, timeout=20, allow_redirects=True)
+        if audio_resp.status_code != 200:
+            audio_resp = requests.get(src, timeout=20, allow_redirects=True)
+        if audio_resp.status_code != 200:
+            return web.Response(status=404, text="Media not found")
+        content_type = audio_resp.headers.get("Content-Type") or "application/octet-stream"
+        return web.Response(
+            body=audio_resp.content,
+            content_type=content_type,
+            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "private, max-age=600"},
+        )
+    except Exception as exc:
+        logger.warning("Deal media proxy failed: %s", exc)
+        return web.Response(status=502, text="Media fetch failed")
 
 
 async def handle_api_rufat_overview(request: web.Request) -> web.Response:
@@ -7605,6 +7877,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/deal/view", handle_api_deal_view)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
+    app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/file", handle_api_deal_file)
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)

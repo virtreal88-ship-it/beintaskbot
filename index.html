@@ -193,6 +193,21 @@
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
+        body.public-deal-only { overflow:auto; height:auto; background:#f4f6f8; }
+        body.public-deal-only #mobile-header,
+        body.public-deal-only #desktop-sidebar,
+        body.public-deal-only #tab-bar,
+        body.public-deal-only #bottom-action-bar,
+        body.public-deal-only #screen-success { display:none !important; }
+        body.public-deal-only #content-area {
+            margin:0 !important; width:100% !important; max-width:none !important; height:auto !important;
+            max-height:none !important; padding:16px !important; overflow:visible !important; flex:none !important;
+        }
+        body.public-deal-only #content-area > .screen { display:none !important; }
+        body.public-deal-only #screen-public-deal { display:block !important; max-width:560px; margin:0 auto; padding-bottom:32px; }
+        .deal-chat-row { border-radius:12px; padding:8px 10px; margin:6px 0; max-width:92%; font-size:12px; }
+        .deal-chat-row.in { background:#f1f5f9; margin-right:auto; }
+        .deal-chat-row.out { background:#dbeafe; margin-left:auto; text-align:right; }
     </style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
@@ -271,6 +286,8 @@
 
 <!-- MAIN CONTENT AREA -->
 <div class="flex-1 overflow-y-auto px-4 py-3 custom-scroll pb-20" id="content-area">
+
+    <div id="screen-public-deal" class="screen space-y-3"></div>
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
@@ -1017,6 +1034,12 @@ function applyHashRoute() {
 }
 
 async function initApp() {
+    if(new URLSearchParams(window.location.search).get('k')) {
+        document.body.classList.add('public-deal-only');
+        await renderPublicDealPage();
+        return;
+    }
+    // Show user name in header
     // Show user name in header
     const firstName = tg.initDataUnsafe?.user?.first_name || '';
     const lastName = tg.initDataUnsafe?.user?.last_name || '';
@@ -2158,6 +2181,66 @@ function dealTasksHtml(deal) {
     }
     return task;
 }
+function dealMediaSrc(raw, token) {
+    if(!raw) return '';
+    if(raw.startsWith('/api/')) return API_BASE + raw;
+    if(raw.startsWith('http') && !token) return raw;
+    const q = new URLSearchParams({src: raw});
+    if(token) q.set('k', token);
+    return API_BASE + '/api/deal/file?' + q.toString();
+}
+function dealMediaBlock(raw, token, kind, fileName) {
+    const src = dealMediaSrc(raw, token);
+    if(!src) return '';
+    const safe = escapeHtml(src);
+    const type = String(kind || '').toLowerCase();
+    if(type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw)) {
+        return `<img src="${safe}" alt="" style="max-width:100%;border-radius:8px;margin-top:6px">`;
+    }
+    if(type === 'voice' || type === 'audio' || /call_|audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + (fileName || ''))) {
+        return `<audio controls preload="none" style="height:28px;width:100%;margin-top:6px" src="${safe}"></audio>`;
+    }
+    return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:700">${escapeHtml(fileName || 'Fayl')}</a>`;
+}
+function dealDetailSectionsHtml(deal, token) {
+    const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    const notes = Array.isArray(deal.notes) ? deal.notes : [];
+    const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+    const chat = Array.isArray(deal.chat) ? deal.chat : [];
+    const notesHtml = notes.length
+        ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${escapeHtml(item.text || '')}</div>${dealMediaBlock(item.media_url, token, item.type)}</div>`).join('')
+        : `<div class="text-gray-400">${escapeHtml(deal.last_note || 'Qeyd yoxdur')}</div>`;
+    const tasksHtml = tasks.length
+        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}${item.responsible ? ` <span class="text-gray-400">· ${escapeHtml(item.responsible)}</span>` : ''}</div>`).join('')
+        : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
+    const chatHtml = chat.length
+        ? chat.map(item => {
+            const cls = item.incoming ? 'in' : 'out';
+            const who = escapeHtml(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
+            return `<div class="deal-chat-row ${cls}"><div class="text-[10px] text-gray-500">${who} · ${escapeHtml(item.created || '')}</div><div>${escapeHtml(item.text || '')}</div>${dealMediaBlock(item.media_url, token, item.message_type, item.file_name)}</div>`;
+        }).join('')
+        : '<div class="text-gray-400">Çat yoxdur</div>';
+    return `<div>
+            <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
+                <div style="font-size:16px;font-weight:800">${escapeHtml(deal.name || '—')}</div>
+                <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
+            </div>
+            <div class="space-y-1 text-[13px] text-gray-700">
+                <div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
+                <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
+                <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
+                ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
+            </div>
+            <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
+            <div>${notesHtml}</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:800">Tapşırıqlar</div>
+            <div>${tasksHtml}</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:800">Çat</div>
+            <div>${chatHtml}</div>
+        </div>`;
+}
 function buildDealShareUrl(leadId, token) {
     const url = new URL(window.location.href);
     url.searchParams.set('deal', String(leadId));
@@ -2183,32 +2266,21 @@ async function copyText(value) {
 function closeDealViewModal() {
     document.getElementById('deal-view-modal')?.remove();
 }
-function openDealViewModal(deal, opts) {
-    if(!deal) return;
-    const readonly = !!(opts && opts.readonly);
+async function loadDealSnapshot(deal) {
+    if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
+    const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(deal.id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+    const d = await r.json().catch(() => ({}));
+    if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+    return Object.assign({}, deal, d.deal, {share_token: d.share_token});
+}
+function paintDealViewModal(deal, readonly) {
     closeDealViewModal();
-    const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
-    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    const token = deal.share_token || '';
     const modal = document.createElement('div');
     modal.id = 'deal-view-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:#0007;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(440px,100%);max-height:90vh;overflow:auto;box-shadow:0 8px 30px #0003">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
-            <div>
-                <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
-                <div style="font-size:16px;font-weight:800">${escapeHtml(deal.name || '—')}</div>
-            </div>
-            <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
-        </div>
-        ${readonly ? '<div style="font-size:11px;color:#64748b;margin-bottom:10px">Yalnız oxumaq üçün. Kommo-ya giriş tələb olunmur.</div>' : ''}
-        <div class="space-y-1 text-[13px] text-gray-700">
-            <div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
-            <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
-            <div>📝 <b>Son qeyd:</b> ${escapeHtml(deal.last_note || '—')}</div>
-            <div>📋 <b>Tapşırıq:</b> <div class="mt-1">${dealTasksHtml(deal)}</div></div>
-            <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
-            <div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>
-        </div>
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(520px,100%);max-height:90vh;overflow:auto;box-shadow:0 8px 30px #0003">
+        ${dealDetailSectionsHtml(deal, token)}
         <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             ${readonly ? '' : '<button type="button" id="deal-view-share" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Paylaş</button>'}
             <button type="button" id="deal-view-close" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Bağla</button>
@@ -2220,38 +2292,47 @@ function openDealViewModal(deal, opts) {
     const shareBtn = modal.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
         try {
-            let token = deal.share_token;
-            if(!token) {
-                const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(deal.id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
-                const d = await r.json().catch(() => ({}));
-                if(!d.success || !d.share_token) throw new Error(d.error || 'Link hazırlanmadı');
-                token = d.share_token;
-                deal.share_token = token;
-            }
-            const ok = await copyText(buildDealShareUrl(deal.id, token));
+            const ok = await copyText(buildDealShareUrl(deal.id, deal.share_token));
             toast(ok ? 'Link kopyalandı' : 'Linki kopyalamaq olmadı', !ok);
         } catch(err) { toast(err.message, true); }
     };
+}
+async function openDealViewModal(deal, opts) {
+    if(!deal) return;
+    const readonly = !!(opts && opts.readonly);
+    try {
+        if(!readonly) {
+            showLoader();
+            deal = await loadDealSnapshot(deal);
+        }
+        paintDealViewModal(deal, readonly);
+    } catch(err) { toast(err.message, true); }
+    finally { hideLoader(); }
+}
+async function renderPublicDealPage() {
+    const token = new URLSearchParams(window.location.search).get('k');
+    const box = document.getElementById('screen-public-deal');
+    if(!box || !token) return;
+    box.innerHTML = '<div class="bg-white p-4 rounded-2xl text-sm text-gray-500">Yüklənir...</div>';
+    try {
+        const r = await fetch(API_BASE + '/api/deal/public?k=' + encodeURIComponent(token));
+        const d = await r.json().catch(() => ({}));
+        if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+        box.innerHTML = `<div class="bg-white p-4 rounded-2xl shadow-sm">${dealDetailSectionsHtml(d.deal, token)}<div class="text-[11px] text-gray-400 mt-4">Yalnız oxumaq üçün. Kommo-ya giriş tələb olunmur.</div></div>`;
+    } catch(err) {
+        box.innerHTML = `<div class="bg-white p-4 rounded-2xl text-sm text-red-500">${escapeHtml(err.message)}</div>`;
+    }
 }
 async function maybeOpenSharedDeal() {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('k');
     const dealId = params.get('deal');
-    if(!token && !dealId) return;
+    if(token || !dealId || !CURRENT_USER_ID) return;
     try {
-        if(token) {
-            const r = await fetch(API_BASE + '/api/deal/public?k=' + encodeURIComponent(token));
-            const d = await r.json().catch(() => ({}));
-            if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
-            openDealViewModal(d.deal, {readonly: true});
-            return;
-        }
-        if(dealId && CURRENT_USER_ID) {
-            const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(dealId), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
-            const d = await r.json().catch(() => ({}));
-            if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
-            openDealViewModal(d.deal, {readonly: false});
-        }
+        const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(dealId), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+        const d = await r.json().catch(() => ({}));
+        if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+        openDealViewModal(Object.assign(d.deal, {share_token: d.share_token}), {readonly: false});
     } catch(err) { toast(err.message, true); }
 }
 
