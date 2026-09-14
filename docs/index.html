@@ -2202,6 +2202,20 @@ window.addEventListener('resize', () => {
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 }
+function linkifyText(value) {
+    const text = String(value ?? '');
+    const re = /(https?:\/\/[^\s<>"'\\]+|www\.[^\s<>"'\\]+)/gi;
+    let out = '', last = 0, match;
+    while ((match = re.exec(text))) {
+        out += escapeHtml(text.slice(last, match.index));
+        let href = match[0].replace(/[),.;!?]+$/g, '');
+        const tail = match[0].slice(href.length);
+        const url = /^https?:\/\//i.test(href) ? href : 'https://' + href;
+        out += `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;word-break:break-all">${escapeHtml(href)}</a>${escapeHtml(tail)}`;
+        last = match.index + match[0].length;
+    }
+    return out + escapeHtml(text.slice(last));
+}
 
 function setSamilStageFilter(stageKey) {
     if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
@@ -2260,16 +2274,16 @@ function dealDetailSectionsHtml(deal, token) {
     const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
     const chat = Array.isArray(deal.chat) ? deal.chat : [];
     const notesHtml = notes.length
-        ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${escapeHtml(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`).join('')
-        : `<div class="text-gray-400">${escapeHtml(deal.last_note || 'Qeyd yoxdur')}</div>`;
+        ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`).join('')
+        : `<div class="text-gray-400">${linkifyText(deal.last_note || 'Qeyd yoxdur')}</div>`;
     const tasksHtml = tasks.length
-        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}${item.responsible ? ` <span class="text-gray-400">· ${escapeHtml(item.responsible)}</span>` : ''}</div>`).join('')
+        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}${item.responsible ? ` <span class="text-gray-400">· ${escapeHtml(item.responsible)}</span>` : ''}</div>`).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
     const chatHtml = chat.length
         ? chat.map(item => {
             const cls = item.incoming ? 'in' : 'out';
             const who = escapeHtml(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
-            return `<div class="deal-chat-row ${cls}"><div class="text-[10px] text-gray-500">${who} · ${escapeHtml(item.created || '')}</div><div>${escapeHtml(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`;
+            return `<div class="deal-chat-row ${cls}"><div class="text-[10px] text-gray-500">${who} · ${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`;
         }).join('')
         : (deal.chat_blocked
             ? '<div style="font-size:12px;color:#b45309;line-height:1.45">Kommo çatın mətnini və səs mesajlarını API-yə vermir. Inteqrasiyada <b>External chat history</b> hüququ lazımdır, sonra KOMMO_TOKEN yenilənməlidir.</div>'

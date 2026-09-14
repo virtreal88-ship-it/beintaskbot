@@ -19,6 +19,7 @@
         .sec { margin-top:14px; font-size:12px; font-weight:800; }
         audio { width:100%; height:28px; margin-top:6px; }
         img { max-width:100%; border-radius:8px; margin-top:6px; }
+        a { color:#2563eb; word-break:break-all; }
     </style>
 </head>
 <body>
@@ -33,6 +34,20 @@ const COLORS = {
 };
 function esc(v) {
     return String(v ?? '').replace(/[&<>'\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function linkify(v) {
+    const text = String(v ?? '');
+    const re = /(https?:\/\/[^\s<>"'\\]+|www\.[^\s<>"'\\]+)/gi;
+    let out = '', last = 0, match;
+    while ((match = re.exec(text))) {
+        out += esc(text.slice(last, match.index));
+        let href = match[0].replace(/[),.;!?]+$/g, '');
+        const tail = match[0].slice(href.length);
+        const url = /^https?:\/\//i.test(href) ? href : 'https://' + href;
+        out += '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(href) + '</a>' + esc(tail);
+        last = match.index + match[0].length;
+    }
+    return out + esc(text.slice(last));
 }
 function mediaSrc(raw, token, uuid) {
     if (uuid) {
@@ -71,15 +86,15 @@ function render(deal, token) {
     const chat = Array.isArray(deal.chat) ? deal.chat : [];
     const color = COLORS[deal.stage_key] || '#64748b';
     const notesHtml = notes.length
-        ? notes.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="muted">' + esc(item.created || '') + '</div><div>' + esc(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>').join('')
-        : '<div class="muted">' + esc(deal.last_note || 'Qeyd yoxdur') + '</div>';
+        ? notes.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="muted">' + esc(item.created || '') + '</div><div>' + linkify(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>').join('')
+        : '<div class="muted">' + linkify(deal.last_note || 'Qeyd yoxdur') + '</div>';
     const tasksHtml = tasks.length
-        ? tasks.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">' + esc((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—') + (item.deadline ? ' <span class="muted">(' + esc(item.deadline) + ')</span>' : '') + '</div>').join('')
+        ? tasks.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">' + linkify((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—') + (item.deadline ? ' <span class="muted">(' + esc(item.deadline) + ')</span>' : '') + '</div>').join('')
         : '<div class="muted">Açıq tapşırıq yoxdur</div>';
     const chatHtml = chat.length
         ? chat.map(item => {
             const who = esc(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
-            return '<div class="deal-chat-row ' + (item.incoming ? 'in' : 'out') + '"><div class="muted">' + who + ' · ' + esc(item.created || '') + '</div><div>' + esc(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>';
+            return '<div class="deal-chat-row ' + (item.incoming ? 'in' : 'out') + '"><div class="muted">' + who + ' · ' + esc(item.created || '') + '</div><div>' + linkify(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>';
         }).join('')
         : (deal.chat_blocked
             ? '<div style="font-size:12px;color:#b45309">Kommo çatın mətnini API-yə vermir.</div>'
