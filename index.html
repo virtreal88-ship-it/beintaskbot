@@ -83,10 +83,10 @@
             .screen input, .screen select, .screen textarea, .screen .space-y-3, .screen .bg-white { box-sizing:border-box; }
             #content-area .text-\[11px\] { font-size:12px; }
             #content-area .text-\[10px\] { font-size:11px; }
-            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container {
+            #notifications-container:not(.samil-kanban-board), #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container:not(.samil-kanban-board), #hesabat-history-container {
                 display:flex; flex-direction:column; gap:10px; align-items:stretch;
             }
-            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > * { margin:0 !important; }
+            #notifications-container:not(.samil-kanban-board) > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container:not(.samil-kanban-board) > *, #hesabat-history-container > * { margin:0 !important; }
             #content-area .bg-white { border-color:#e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.04) !important; border-radius:12px !important; }
             .filter-pill { background:#fff; border-color:#e6e8eb; border-radius:8px !important; }
             .filter-pill.active { background:#0f172a; border-color:#0f172a; }
@@ -97,8 +97,8 @@
         }
         .desktop-task-actions, .desktop-pending-actions { display:none; }
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
-        #samil-deals-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
-        #samil-deals-container.samil-kanban-board > * { margin:0 !important; }
+        #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
+        #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > * { margin:0 !important; }
         .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; }
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
         .samil-kanban-header { padding:12px 12px 8px; }
@@ -110,11 +110,11 @@
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
         .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
         @media (min-width: 1024px) {
-            #content-area > #screen-samil-deals.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - var(--crm-nav-h) - 36px); gap:10px; }
-            #screen-samil-deals > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
-            #samil-stage-nav, #samil-deals-count { display:none; }
+            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - var(--crm-nav-h) - 36px); gap:10px; }
+            #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
+            #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
-            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
+            #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
@@ -151,11 +151,11 @@
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
             <span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
         </button>
-        <button id="side-tab-create" class="sidebar-item" onclick="switchTab('tab-create')">
+        <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
             <span class="sidebar-icon">➕</span><span>Yeni</span>
         </button>
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
-            <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Balans</span>
+            <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Hesabatlar</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
             <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
@@ -189,7 +189,16 @@
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
-        <!-- Balance Widget (piecework employees only) -->
+        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div>
+                <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Növbəti həftə</div>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="openNotifications(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+                <button onclick="switchTab('tab-create')" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yeni tapşırıq</button>
+            </div>
+        </div>
         <div id="balance-widget" style="display:none;" class="bg-white border border-gray-100 p-4 rounded-2xl shadow-lg flex justify-between items-center gap-3">
             <div class="grid grid-cols-2 gap-4 flex-1">
                 <div>
@@ -201,10 +210,8 @@
                     <div class="text-xl font-black mt-1 text-amber-500" id="balance-pending-amount">0.00 AZN</div>
                 </div>
             </div>
-            <button onclick="switchTab('tab-history')" class="bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">Tarixçə</button>
+            <button onclick="switchTab('tab-history')" class="bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-[11px] font-bold">Hesabat</button>
         </div>
-
-        <!-- Finance Widget (salary employees only) -->
         <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
             <div class="flex justify-between items-center">
                 <div>
@@ -218,20 +225,9 @@
                 </div>
             </div>
         </div>
-
-        <!-- Task count + overdue -->
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
         </div>
-
-        <!-- Date filters -->
-        <div class="grid grid-cols-3 gap-2">
-            <button id="filter-today" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('today',this)">Bu gün</button>
-            <button id="filter-tomorrow" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('tomorrow',this)">Sabah</button>
-            <button id="filter-week" class="filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setDateFilter('week',this)">Bu həftə</button>
-        </div>
-
-        <!-- Employee filter (admin) + pin -->
         <div id="filter-row" style="display:none;" class="flex gap-2">
             <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
@@ -246,9 +242,9 @@
             </select>
             <button onclick="pinFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
-
-        <!-- Tasks container -->
-        <div id="notifications-container" class="space-y-3" style="padding-bottom:20px;"></div>
+        <div class="samil-kanban-wrap custom-scroll">
+            <div id="notifications-container" class="samil-kanban-board"></div>
+        </div>
     </div>
 
     <!-- SCREEN: ŞAMIL DEALS -->
@@ -269,8 +265,10 @@
 
     <!-- SCREEN: CREATE TASK -->
     <div id="screen-create" class="screen space-y-4">
-        <div class="flex items-center gap-1 mb-2">
+        <div class="flex items-center justify-between mb-2">
             <button class="text-xs font-bold text-blue-500" onclick="switchTab('tab-tasks')">← Geri</button>
+            <span class="text-sm font-extrabold text-gray-800">Yeni tapşırıq</span>
+            <span></span>
         </div>
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
@@ -300,10 +298,6 @@
     <div id="screen-balance-history" class="screen space-y-4">
         <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
-            <div class="flex items-center gap-1.5">
-                <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Mədaxil</button>
-                <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Məxaric</button>
-            </div>
         </div>
         <div id="balance-history-container" class="space-y-3"></div>
     </div>
@@ -322,6 +316,50 @@
         </div>
         <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Tarixçə</div>
         <div id="kpi-history-container" class="space-y-3"></div>
+    </div>
+
+    <div id="screen-hesabatlar" class="screen space-y-3">
+        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div>
+                <div class="text-sm font-extrabold text-gray-800">Hesabatlar</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">KPI, bonus və iş göstəriciləri</div>
+            </div>
+            <div class="flex items-center gap-1.5">
+                <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Mədaxil</button>
+                <button id="btn-mexaric" style="display:none;" onclick="openMexaric()" class="bg-red-500 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">Məxaric</button>
+                <button onclick="loadHesabatlar(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İşlənən müraciət</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-processed">0</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">KPI</div>
+                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-kpi">⭐ 0/5</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Bonus</div>
+                <div class="text-xl font-black mt-1 text-emerald-600" id="hesabat-bonus">0.00 AZN</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Boş dayanma</div>
+                <div class="text-xl font-black mt-1 text-amber-600" id="hesabat-idle">—</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İş vaxtı</div>
+                <div class="text-lg font-black mt-1 text-slate-800" id="hesabat-worktime">—</div>
+            </div>
+            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Gözləmədə bonus</div>
+                <div class="text-lg font-black mt-1 text-amber-500" id="hesabat-pending">0.00 AZN</div>
+            </div>
+        </div>
+        <div class="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Tarixçə</div>
+        <div id="hesabat-history-container" class="space-y-3"></div>
     </div>
 
     <!-- SCREEN: EDIT TASK (reused for edit flow) -->
@@ -422,15 +460,9 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Əməliyyatlar lövhəsi — sizin mərhələnizdəki müştərilər</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Növbəti həftə</div>
             </div>
-            <button onclick="loadGozleme(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
-        </div>
-        <!-- Date filters (same as Tapşırıqlar) -->
-        <div class="grid grid-cols-3 gap-2">
-            <button id="gozleme-filter-today" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('today',this)">Bu gün</button>
-            <button id="gozleme-filter-tomorrow" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('tomorrow',this)">Sabah</button>
-            <button id="gozleme-filter-week" class="gozleme-filter-pill filter-pill py-2.5 text-center text-xs font-bold rounded-xl" onclick="setGozlemeDateFilter('week',this)">Bu həftə</button>
+            <button onclick="loadGozleme(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
         </div>
         <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
             <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
@@ -447,7 +479,9 @@
             <button onclick="pinGozlemeFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
         <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
-        <div id="gozleme-container" class="space-y-3" style="padding-bottom:20px;"></div>
+        <div class="samil-kanban-wrap custom-scroll">
+            <div id="gozleme-container" class="samil-kanban-board"></div>
+        </div>
     </div>
 </div>
 
@@ -505,11 +539,11 @@
     <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">🗂️</span><span class="mt-0.5">Sövdələşmələr</span>
     </button>
-    <button id="tab-create" onclick="switchTab('tab-create')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+    <button id="tab-create" onclick="switchTab('tab-create')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">➕</span><span class="mt-0.5">Yeni</span>
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Balans</span>
+        <span class="text-lg">📊</span><span id="tab-history-label" class="mt-0.5">Hesabatlar</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <span class="text-lg">🔔</span><span class="mt-0.5">Gözləmə</span>
@@ -624,7 +658,7 @@ let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['6824377548','7329891614','1289510272','6596538872','1142054888'];
-if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; document.addEventListener('DOMContentLoaded', () => { const lbl = document.getElementById('tab-history-label'); if(lbl) lbl.textContent = 'Maliyyə'; const sideLbl = document.getElementById('side-tab-history-label'); if(sideLbl) sideLbl.textContent = 'Maliyyə'; }); }
+if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; }
 document.addEventListener('DOMContentLoaded', () => { });
 
 function setUserDisplayName(name) {
@@ -1164,12 +1198,12 @@ function submitClose() {
 }
 
 /* ================= NOTIFICATIONS & SWR ================= */
-async function openNotifications() {
+async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
     if(IS_SAMIL) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored) renderNotifications(); else showLoader();
-        await loadSamilWorkspace(!restored);
+        await loadSamilWorkspace(!!forceRefresh || !restored);
         loadBalance();
         loadKpi();
         return;
@@ -1178,14 +1212,14 @@ async function openNotifications() {
     if(fa && currentFilter !== 'all') fa.value = currentFilter;
     if(isAdmin || currentFilter !== 'all') document.getElementById('filter-row').style.display = 'flex';
     const cachedData = getCachedTasks();
-    if(cachedData) {
+    if(cachedData && !forceRefresh) {
         mockTasks = cachedData;
         renderNotifications();
     } else if(mockTasks.length === 0) {
         showLoader();
     }
     showSyncIndicator();
-    await syncNotifications(!cachedData);
+    await syncNotifications(!!forceRefresh || !cachedData);
     hideLoader();
     hideSyncIndicator();
     loadBalance();
@@ -1575,7 +1609,7 @@ function setDateFilter(val, btn) {
     document.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
     if(currentDateFilter) {
         const id = currentDateFilter === 'today' ? 'filter-today' : currentDateFilter === 'tomorrow' ? 'filter-tomorrow' : 'filter-week';
-        document.getElementById(id).classList.add('active');
+        const el = document.getElementById(id); if(el) el.classList.add('active');
     }
     renderNotifications();
 }
@@ -1591,108 +1625,152 @@ function filterByDate(tasks) {
     return tasks;
 }
 
+const DATE_KANBAN_COLS = [
+    {key:'overdue', label:'Gecikmiş', color:'#ef4444'},
+    {key:'today', label:'Bu gün', color:'#2563eb'},
+    {key:'tomorrow', label:'Sabah', color:'#0ea5e9'},
+    {key:'week', label:'Növbəti həftə', color:'#8b5cf6'}
+];
+
+function crmTaskDeadlineMs(t) {
+    return Number(t.complete_till || t.deadline_ts || 0) * 1000;
+}
+function crmDateBucket(t) {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart); todayEnd.setDate(todayEnd.getDate() + 1);
+    const tomEnd = new Date(todayEnd); tomEnd.setDate(tomEnd.getDate() + 1);
+    const d = crmTaskDeadlineMs(t);
+    if(t.is_overdue || (d > 0 && d < todayStart.getTime())) return 'overdue';
+    if(d > 0 && d < todayEnd.getTime()) return 'today';
+    if(d >= todayEnd.getTime() && d < tomEnd.getTime()) return 'tomorrow';
+    return 'week';
+}
+
+function bindCrmTaskCard(wrapper, card, bgAction, t, displayDesc, assigneeName) {
+    card.onclick = () => { };
+    let longPressTimer = null;
+    card.addEventListener('touchstart', (e) => {
+        longPressTimer = setTimeout(() => {
+            e.preventDefault();
+            showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
+        }, 500);
+    }, {passive: false});
+    card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+    card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+    let startX = 0, currentX = 0, isSwiping = false;
+    card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
+    card.addEventListener('touchmove', (e) => {
+        if(!isSwiping) return;
+        currentX = e.touches[0].clientX - startX;
+        if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
+        if(currentX < -120) currentX = -120 + (currentX-120)*0.2;
+        card.style.transform = `translateX(${currentX}px)`;
+        if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
+        else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
+        else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
+    }, {passive:true});
+    card.addEventListener('touchend', () => {
+        isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
+        if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
+        else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
+        else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
+        currentX = 0;
+    });
+    wrapper.appendChild(card);
+}
+
+function createCrmTaskCard(t, mode) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
+    const bgAction = document.createElement('div');
+    bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
+    bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
+    wrapper.appendChild(bgAction);
+    const card = document.createElement('div');
+    const isOverdue = t.is_overdue;
+    const accent = mode === 'gozleme' ? (isOverdue ? 'border-l-red-500' : 'border-l-amber-400') : (isOverdue ? 'border-l-red-500' : 'border-l-blue-500');
+    card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${accent}`;
+    card.style.position = 'relative';
+    const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
+    const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
+    let header = '';
+    if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || t.deadline || ''}</span></div>`; }
+    else if(mode === 'gozleme') { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || t.deadline || ''}</span></div>`; }
+    else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
+    const priceMatch = t.price ? [null, t.price] : (t.desc || t.task_text || t.text || '').match(/\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]/);
+    const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
+    const priorityTags = {
+        urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
+        high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
+        medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
+        low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
+    };
+    const priorityTag = priorityTags[t.priority] || '';
+    card.innerHTML = `
+        ${header}
+        <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
+        <div class="space-y-1 text-[11px] text-gray-700">
+            <div>👤 <b>Müştəri:</b> ${t.contact_name || t.lead_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
+            <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
+            ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
+            ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
+            ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
+            ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
+            ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
+        </div>
+        <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
+            ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
+            <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
+        </div>
+        <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
+            <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
+            <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
+            <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
+        </div>
+        </div>`;
+    bindCrmTaskCard(wrapper, card, bgAction, t, displayDesc, assigneeName);
+    return wrapper;
+}
+
+function renderDateKanban(container, items, mode) {
+    container.className = 'samil-kanban-board';
+    container.innerHTML = '';
+    DATE_KANBAN_COLS.forEach(col => {
+        const column = document.createElement('div');
+        column.className = 'samil-kanban-column';
+        const list = items.filter(t => crmDateBucket(t) === col.key);
+        column.innerHTML = `<div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><span class="text-xs font-extrabold text-slate-800 flex items-center gap-2"><span class="stage-dot" style="background:${col.color}"></span>${col.label}</span><span class="text-[11px] font-bold text-slate-500">${list.length}</span></div></div>`;
+        const listEl = document.createElement('div');
+        listEl.className = 'samil-kanban-list';
+        if(!list.length) {
+            listEl.innerHTML = '<div class="samil-empty-column">Kart yoxdur</div>';
+        } else {
+            list.forEach(t => {
+                if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
+                listEl.appendChild(createCrmTaskCard(t, mode));
+            });
+        }
+        column.appendChild(listEl);
+        container.appendChild(column);
+    });
+}
+
 function renderNotifications() {
-    // Skip re-render if audio is playing
     const playingAudio = document.querySelector("#notifications-container audio");
     if(playingAudio && !playingAudio.paused) return;
     const container = document.getElementById('notifications-container');
-    container.innerHTML = '';
+    if(!container) return;
     let filtered = mockTasks;
     if(currentFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || '') === currentFilter);
-    filtered = filterByDate(filtered);
     const overdueCount = filtered.filter(t => t.is_overdue).length;
     const oc = document.getElementById('overdue-count');
     if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
     const tc = document.getElementById('task-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
-    if(filtered.length === 0) {
-        const labels = {today:'Bu gün', tomorrow:'Sabah', week:'Bu həftə'};
-        const msg = currentDateFilter ? `"${labels[currentDateFilter]}" üçün tapşırıq yoxdur.` : 'Aktiv tapşırıq yoxdur.';
-        container.innerHTML = `<div class="text-center py-10 text-gray-400 text-xs font-semibold">${msg}</div>`;
-        return;
-    }
-    filtered.forEach(t => {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
-        const bgAction = document.createElement('div');
-        bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
-        bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
-        wrapper.appendChild(bgAction);
-        const card = document.createElement('div');
-        const isOverdue = t.is_overdue;
-        card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-blue-500'}`;
-        card.style.position = 'relative';
-        const displayDesc = (t.desc || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*/i, '');
-        const assigneeName = t.assigneeName || t.responsible_user_name || '';
-        let header = '';
-        if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || ''}</span></div>`; }
-        else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-blue-500">Aktiv tapşırıq</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || ''}</span></div>`; }
-        const priceMatch = t.price ? [null, t.price] : (t.desc || t.text || '').match(/\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]/);
-        const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
-        const priorityTags = {
-            urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
-            high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
-            medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
-            low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
-        };
-        const priorityTag = priorityTags[t.priority] || '';
-        card.innerHTML = `
-            ${header}
-            <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
-            <div class="space-y-1 text-[11px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${t.contact_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
-                <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
-                ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
-                ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
-                ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
-                ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
-                ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
-            </div>
-            <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
-                ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
-                <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
-            </div>
-            <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
-                <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
-                <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
-                <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
-            </div>
-            </div>`;
-        card.onclick = () => { };
-        // Long-press handler for context menu
-        let longPressTimer = null;
-        card.addEventListener('touchstart', (e) => {
-            longPressTimer = setTimeout(() => {
-                e.preventDefault();
-                showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
-            }, 500);
-        }, {passive: false});
-        card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-        card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-        // Swipe
-        let startX = 0, currentX = 0, isSwiping = false;
-        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
-        card.addEventListener('touchmove', (e) => {
-            if(!isSwiping) return;
-            currentX = e.touches[0].clientX - startX;
-            if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
-            if(currentX < -120) currentX = -120 + (currentX+120)*0.2;
-            card.style.transform = `translateX(${currentX}px)`;
-            if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
-            else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
-            else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
-        }, {passive:true});
-        card.addEventListener('touchend', () => {
-            isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
-            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-            else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
-            currentX = 0;
-        });
-                wrapper.appendChild(card);
-        container.appendChild(wrapper);
-    });
+    renderDateKanban(container, filtered, 'task');
 }
+
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 }
@@ -2098,8 +2176,8 @@ function switchTab(tabId, updateHash = true) {
         nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = activeClass;
-        if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
-        else { nav('screen-balance-history'); loadBalanceHistory(); }
+        nav('screen-hesabatlar');
+        loadHesabatlar();
     } else if(tabId === 'tab-gozleme') {
         document.getElementById('tab-gozleme').className = activeClass;
         openGozleme();
@@ -2157,6 +2235,88 @@ async function loadKpiHistory() {
         return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${starStr}</span></div><span class="text-xs font-black text-emerald-600">+${amount} AZN</span></div>`;
     }).join('');
 }
+
+function formatHesabatMinutes(mins) {
+    if(mins == null || !Number.isFinite(Number(mins))) return '—';
+    const m = Math.max(0, Math.round(Number(mins)));
+    const h = Math.floor(m / 60);
+    const r = m % 60;
+    if(h && r) return h + ' saat ' + r + ' dəq';
+    if(h) return h + ' saat';
+    return r + ' dəq';
+}
+function computeIdleFromHistory(history) {
+    if(!history || !history.length) return { idle: null, work: 0 };
+    let work = 0;
+    history.forEach(h => { work += Number(h.actual) || 0; });
+    const items = history.map(h => ({
+        ts: h.date ? Date.parse(String(h.date).endsWith('Z') ? h.date : h.date + 'Z') : 0,
+        actual: Number(h.actual) || 0
+    })).filter(x => x.ts).sort((a,b) => a.ts - b.ts);
+    let idle = 0, counted = false;
+    for(let i = 1; i < items.length; i++) {
+        const gapMin = (items[i].ts - items[i-1].ts) / 60000 - items[i-1].actual;
+        const sameDay = new Date(items[i].ts).toDateString() === new Date(items[i-1].ts).toDateString();
+        if(sameDay && gapMin > 0) { idle += gapMin; counted = true; }
+    }
+    return { idle: counted ? idle : null, work };
+}
+async function loadHesabatlar(showFeedback = false) {
+    const medaxilButton = document.getElementById('btn-medaxil');
+    const mexaricButton = document.getElementById('btn-mexaric');
+    if(isAdmin) {
+        if(medaxilButton) medaxilButton.style.display = 'inline-block';
+        if(mexaricButton) mexaricButton.style.display = 'inline-block';
+        await loadAdminBalances();
+        const processed = document.getElementById('hesabat-processed');
+        if(processed) processed.textContent = '—';
+        if(showFeedback) toast('Hesabat yeniləndi', false);
+        return;
+    }
+    if(medaxilButton) medaxilButton.style.display = 'none';
+    if(mexaricButton) mexaricButton.style.display = 'none';
+    try {
+        const kr = await fetch(API_BASE + '/api/kpi', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const kj = await kr.json();
+        if(kj && kj.success) kpiData = kj;
+        await loadBalance();
+        const hist = kpiData?.history || [];
+        const processed = Number(kj.total_tasks) || hist.length || (window._balanceData || []).length;
+        const avgStars = Number(kj.avg_stars);
+        const avgKpi = Number(kj.avg_kpi);
+        const stars = Number.isFinite(avgStars) && avgStars > 0 ? avgStars : (Number.isFinite(avgKpi) ? avgKpi / 20 : 0);
+        const bonus = Number(window._balanceSummary?.balance ?? kj.balance) || 0;
+        const pending = Number(window._balanceSummary?.pending_balance) || 0;
+        const idle = computeIdleFromHistory(hist);
+        const setText = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+        setText('hesabat-processed', String(processed));
+        setText('hesabat-kpi', '⭐ ' + stars.toFixed(1) + '/5');
+        setText('hesabat-bonus', bonus.toFixed(2) + ' AZN');
+        setText('hesabat-pending', pending.toFixed(2) + ' AZN');
+        setText('hesabat-worktime', formatHesabatMinutes(idle.work));
+        setText('hesabat-idle', idle.idle == null ? '—' : formatHesabatMinutes(idle.idle));
+        const container = document.getElementById('hesabat-history-container');
+        const tx = window._balanceData || [];
+        if(!container) return;
+        if(hist.length) {
+            container.innerHTML = hist.map(h => {
+                const d = h.date ? new Date(h.date + 'Z').toLocaleDateString('az-AZ', {day:'2-digit',month:'short',year:'numeric'}) : '';
+                const starN = Math.round((h.kpi_score || 0) / 20);
+                const amount = (starN * 0.5).toFixed(2);
+                const starStr = starN > 0 ? '⭐'.repeat(starN) : '—';
+                return `<div class="flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm"><div><strong class="text-xs text-gray-800 block">Tapşırıq #${h.task_id}</strong><span class="text-[9px] text-gray-400 font-bold">${d} | ${starStr}</span></div><span class="text-xs font-black text-emerald-600">+${amount} AZN</span></div>`;
+            }).join('');
+        } else if(tx.length) {
+            container.innerHTML = tx.map(t => renderBalanceTransaction(t, false)).join('');
+        } else {
+            container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Hələ məlumat yoxdur.</div>';
+        }
+        if(showFeedback) toast('Hesabat yeniləndi', false);
+    } catch(e) {
+        if(showFeedback) toast('Hesabat yüklənmədi', true);
+    }
+}
+
 /* ================= GÖZLƏMƏ TAB (exact copy of Tapşırıqlar behavior) ================= */
 let gozlemeItems = [];
 const GOZLEME_CACHE_KEY = 'cached_gozleme_' + CURRENT_USER_ID;
@@ -2191,7 +2351,7 @@ function setGozlemeDateFilter(val, btn) {
     document.querySelectorAll('.gozleme-filter-pill').forEach(b => b.classList.remove('active'));
     if(gozlemeDateFilter) {
         const id = gozlemeDateFilter === 'today' ? 'gozleme-filter-today' : gozlemeDateFilter === 'tomorrow' ? 'gozleme-filter-tomorrow' : 'gozleme-filter-week';
-        document.getElementById(id).classList.add('active');
+        const el = document.getElementById(id); if(el) el.classList.add('active');
     }
     renderGozleme();
 }
@@ -2207,110 +2367,18 @@ function filterGozlemeByDate(tasks) {
 }
 
 function renderGozleme() {
-    // Skip re-render if audio is playing
     const playingAudio = document.querySelector("#gozleme-container audio");
     if(playingAudio && !playingAudio.paused) return;
     const container = document.getElementById('gozleme-container');
     const countEl = document.getElementById('gozleme-count');
     if(!container) return;
-    // Show filter for admin (or when a pinned filter is active)
     const gfRow = document.getElementById('gozleme-filter-row');
     if(gfRow && (isAdmin || gozlemeFilter !== 'all')) gfRow.style.display = 'flex';
-    container.innerHTML = '';
     let filtered = gozlemeItems;
     if(gozlemeFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || t.assignee_name || '') === gozlemeFilter);
-    filtered = filterGozlemeByDate(filtered);
     const overdueCount = filtered.filter(t => t.is_overdue).length;
     if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
-    if(!filtered.length) {
-        const labels = {today:'Bu gün', tomorrow:'Sabah', week:'Bu həftə'};
-        const msg = gozlemeDateFilter ? `"${labels[gozlemeDateFilter]}" üçün tapşırıq yoxdur.` : 'Gözləmədə tapşırıq yoxdur.';
-        container.innerHTML = `<div class="text-center py-10 text-gray-400 text-xs font-semibold">${msg}</div>`;
-        return;
-    }
-    filtered.forEach(t => {
-        // Keep the task available for bottom-bar actions
-        if(!mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
-        const wrapper = document.createElement('div');
-        wrapper.className = 'relative rounded-xl overflow-hidden bg-gray-200 shadow-sm';
-        const bgAction = document.createElement('div');
-        bgAction.className = 'absolute inset-0 flex items-center justify-between px-5 font-bold text-white text-xs rounded-xl';
-        bgAction.innerHTML = `<span style="opacity:0;">✓ İcra olundu</span><span style="opacity:0;">🕒 +2 saat</span>`;
-        wrapper.appendChild(bgAction);
-        const card = document.createElement('div');
-        const isOverdue = t.is_overdue;
-        card.className = `absolute inset-0 bg-white p-3.5 rounded-xl flex flex-col justify-between z-10 cursor-pointer transition-transform duration-100 border-l-4 ${isOverdue ? 'border-l-red-500' : 'border-l-amber-400'}`;
-        card.style.position = 'relative';
-        const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
-        const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
-        let header = '';
-        if(isOverdue) { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-red-500">⚠️ Gecikmiş</span><span class="text-[10px] text-gray-400 font-semibold">${t.overdue_text || t.time || t.deadline || ''}</span></div>`; }
-        else { header = `<div class="flex justify-between items-start mb-1"><span class="text-xs font-extrabold text-amber-500">🔔 Gözləmə</span><span class="text-[10px] text-gray-400 font-semibold">${t.time || t.deadline || ''}</span></div>`; }
-        const priceMatch = (t.desc || t.task_text || t.text || '').match(/\[[^:\]]+:(\d+)\]/);
-        const priceTag = priceMatch ? `<span class="bg-emerald-50 text-emerald-600 text-[10px] font-black px-2 py-0.5 rounded-md">+${priceMatch[1]} AZN</span>` : '';
-        const priorityTags = {
-            urgent: '<span class="bg-red-100 text-red-700 text-[10px] font-black px-2 py-0.5 rounded-md">Təcili</span>',
-            high: '<span class="bg-orange-100 text-orange-700 text-[10px] font-black px-2 py-0.5 rounded-md">Yüksək</span>',
-            medium: '<span class="bg-yellow-100 text-yellow-700 text-[10px] font-black px-2 py-0.5 rounded-md">Orta</span>',
-            low: '<span class="bg-gray-100 text-gray-600 text-[10px] font-black px-2 py-0.5 rounded-md">Aşağı</span>'
-        };
-        const priorityTag = priorityTags[t.priority] || '';
-        card.innerHTML = `
-            ${header}
-            <div class="text-xs font-black text-gray-900 leading-tight mb-2">${displayDesc}</div>
-            <div class="space-y-1 text-[11px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${t.contact_name || t.lead_name || ''} ${t.phone ? '('+t.phone+')' : ''}</div>
-                <div>👤 <b>İcraçı:</b> ${assigneeName}</div>
-                ${t.created_by ? '<div>📋 <b>Cavabdeh:</b> '+t.created_by+'</div>' : ''}
-                ${t.stage_name ? '<div>📊 <b>Mərhələ:</b> '+t.stage_name+'</div>' : ''}
-                ${t.task_type_name ? '<div>📌 <b>Növ:</b> '+t.task_type_name+'</div>' : ''}
-                ${t.last_note ? '<div>📝 <b>Son qeyd:</b> '+t.last_note+'</div>' : ''}
-                ${t.voice_url ? '<div class="mt-1"><audio controls preload="none" style="height:28px;width:100%" src="'+(t.voice_url.startsWith('http')?t.voice_url:API_BASE+t.voice_url)+'" onclick="event.stopPropagation()"></audio></div>' : ''}
-            </div>
-            <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
-                ${t.kommo_link ? `<a href="${t.kommo_link}" target="_blank" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation();">🔗 Kommo CRM</a>` : '<span></span>'}
-                <div class="flex items-center gap-1.5">${priorityTag}${priceTag}</div>
-            </div>
-            <div class="desktop-task-actions gap-2 mt-2 pt-2 border-t border-gray-100">
-                <button onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-[11px]">✓ İcra olundu</button>
-                <button onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-700 font-bold py-2 rounded-lg text-[11px]">🕒 +2 saat</button>
-                <button onclick="event.stopPropagation(); showTaskContextMenu(${t.id}, event.clientX, event.clientY);" class="bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold px-3 py-2 rounded-lg text-[11px]">⋯</button>
-            </div>
-            </div>`;
-        card.onclick = () => { };
-        // Long-press handler for context menu
-        let longPressTimer = null;
-        card.addEventListener('touchstart', (e) => {
-            longPressTimer = setTimeout(() => {
-                e.preventDefault();
-                showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
-            }, 500);
-        }, {passive: false});
-        card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-        card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-        // Swipe
-        let startX = 0, currentX = 0, isSwiping = false;
-        card.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; isSwiping = true; card.style.transition = 'none'; }, {passive:true});
-        card.addEventListener('touchmove', (e) => {
-            if(!isSwiping) return;
-            currentX = e.touches[0].clientX - startX;
-            if(currentX > 120) currentX = 120 + (currentX-120)*0.2;
-            if(currentX < -120) currentX = -120 + (currentX+120)*0.2;
-            card.style.transform = `translateX(${currentX}px)`;
-            if(currentX > 20) { bgAction.style.background='#10b981'; bgAction.children[0].style.opacity='1'; bgAction.children[1].style.opacity='0'; }
-            else if(currentX < -20) { bgAction.style.background='#f59e0b'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='1'; }
-            else { bgAction.style.background='transparent'; bgAction.children[0].style.opacity='0'; bgAction.children[1].style.opacity='0'; }
-        }, {passive:true});
-        card.addEventListener('touchend', () => {
-            isSwiping = false; card.style.transition = 'transform 0.2s ease-out';
-            if(currentX > 100) { card.style.transform='translateX(100%)'; setTimeout(() => { clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || t.lead_name || ''} | İcraçı: ${assigneeName}`); showCompletePanel(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-            else if(currentX < -100) { card.style.transform='translateX(-100%)'; setTimeout(() => { selectedTaskId=t.id; showPostponeReasonModal(); card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }, 200); }
-            else { card.style.transform='translateX(0)'; bgAction.style.background='transparent'; }
-            currentX = 0;
-        });
-        wrapper.appendChild(card);
-        container.appendChild(wrapper);
-    });
+    renderDateKanban(container, filtered, 'gozleme');
 }
 
 async function openGozleme() {
@@ -2475,7 +2543,7 @@ async function loadBalanceHistory() {
     if(medaxilButton) medaxilButton.style.display = 'none';
     if(mexaricButton) mexaricButton.style.display = 'none';
     await loadBalance();
-    const container = document.getElementById('balance-history-container');
+    const container = document.getElementById('hesabat-history-container') || document.getElementById('balance-history-container');
     const transactions = window._balanceData || [];
     container.innerHTML = transactions.length
         ? transactions.map(t => renderBalanceTransaction(t, false)).join('')
