@@ -85,6 +85,7 @@
             #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand h1,
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
+            body:not(.sidebar-open) #sidebar-user-name,
             body:not(.sidebar-open) .sidebar-item-label { display:none; }
             body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
             #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
@@ -104,10 +105,11 @@
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
             body:not(.sidebar-open) #side-tab-pending { position:relative; }
             #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; }
-            #sidebar-user-name { display:none !important; }
+            #sidebar-user-name { display:block; color:#34d399; font-size:12px; font-weight:700; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
             #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:4px; }
             body:not(.sidebar-open) #sidebar-user { padding:8px 0 0; border:0; align-items:center; }
             body:not(.sidebar-open) #sidebar-sync span:not(.sync-spinner) { display:none; }
+            .page-user-name { display:none !important; }
             #content-area {
                 margin:0 0 0 var(--crm-side-w); width:auto; max-width:none; height:100vh; max-height:100vh;
                 padding:16px 24px 20px; box-sizing:border-box;
@@ -162,7 +164,7 @@
         .icon-action-btn svg { width:18px; height:18px; }
         .icon-action-btn.primary { background:#2481cc; border-color:#2481cc; color:#fff; }
         .icon-action-btn.labeled { width:auto; padding:0 12px; gap:6px; font-size:12px; font-weight:700; white-space:nowrap; }
-        .page-user-name { color:#34d399 !important; }
+        .page-user-name { display:none !important; color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
         #task-date-select, #gozleme-date-select { display:block; width:100%; }
@@ -224,6 +226,7 @@
     <div class="sidebar-brand">
         <h1>Bein Systems</h1>
         <span>CRM</span>
+        <div id="sidebar-user-name"></div>
     </div>
     <div class="sidebar-nav">
         <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
@@ -792,12 +795,11 @@ if(ADMIN_IDS.includes(CURRENT_USER_ID)) { isAdmin = true; }
 document.addEventListener('DOMContentLoaded', () => { });
 
 function setUserDisplayName(name) {
-    const area = document.getElementById('user-display-area');
-    if(area) area.innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
-    const sideName = document.getElementById('sidebar-user-name');
-    if(sideName) sideName.innerHTML = `<span style="color:#34d399;font-weight:700;">${name}</span>`;
     const display = FUNNEL_OWNER_NAME || name || '';
-    document.querySelectorAll('.page-user-name').forEach(el => { el.textContent = display; });
+    const area = document.getElementById('user-display-area');
+    if(area) area.innerHTML = display ? `<span class="font-bold text-emerald-400">${display}</span>` : '';
+    const sideName = document.getElementById('sidebar-user-name');
+    if(sideName) sideName.textContent = display;
 }
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
