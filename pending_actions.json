@@ -3,7 +3,7 @@
     "id": "9aade225",
     "type": "confirm_stage",
     "created_at": "2026-09-14T21:41:44.718171+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "KM",
       "phone": "+79057854455",
@@ -22,7 +22,10 @@
     "options": [
       "Təsdiq et",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-09-14T22:04:06.837312+04:00",
+    "resolved_by": "bot.py:1020",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "b46dc03e",
