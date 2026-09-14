@@ -697,6 +697,7 @@
 <script>
 const tg = window.Telegram?.WebApp || {};
 
+const PUBLIC_PWA_BASE = 'https://virtreal88-ship-it.github.io/beintaskbot/';
 const API_BASE = (() => {
     const params = new URLSearchParams(window.location.search);
     const override = params.get('api_base') || localStorage.getItem('api_base');
@@ -1043,9 +1044,13 @@ function applyHashRoute() {
 }
 
 async function initApp() {
-    if(new URLSearchParams(window.location.search).get('k')) {
-        document.body.classList.add('public-deal-only');
-        await renderPublicDealPage();
+    const shareK = new URLSearchParams(window.location.search).get('k') || '';
+    if(/^\d+\.\d+\.[0-9a-f]{32}$/i.test(shareK)) {
+        const next = new URL('deal.html', PUBLIC_PWA_BASE);
+        next.searchParams.set('k', shareK);
+        const dealId = new URLSearchParams(window.location.search).get('deal');
+        if(dealId) next.searchParams.set('deal', dealId);
+        window.location.replace(next.toString());
         return;
     }
     // Show user name in header
@@ -2278,10 +2283,27 @@ function dealDetailSectionsHtml(deal, token) {
         </div>`;
 }
 function buildDealShareUrl(leadId, token) {
-    const url = new URL(window.location.href);
-    url.searchParams.set('deal', String(leadId));
-    url.searchParams.set('k', token);
+    const url = new URL('deal.html', PUBLIC_PWA_BASE);
+    if(leadId) url.searchParams.set('deal', String(leadId));
+    url.searchParams.set('k', String(token || ''));
     return url.toString();
+}
+async function shareDealLink(url, title) {
+    const text = title || 'Sövdələşmə';
+    if(window.Telegram?.WebApp?.openTelegramLink) {
+        window.Telegram.WebApp.openTelegramLink('https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent(text));
+        return 'shared';
+    }
+    if(navigator.share) {
+        try {
+            await navigator.share({title: text, text, url});
+            return 'shared';
+        } catch(err) {
+            if(err && err.name === 'AbortError') return 'aborted';
+        }
+    }
+    const ok = await copyText(url);
+    return ok ? 'copied' : 'failed';
 }
 async function copyText(value) {
     try {
@@ -2328,8 +2350,15 @@ function paintDealViewModal(deal, readonly) {
     const shareBtn = modal.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
         try {
-            const ok = await copyText(buildDealShareUrl(deal.id, deal.share_token));
-            toast(ok ? 'Link kopyalandı' : 'Linki kopyalamaq olmadı', !ok);
+            if(!deal.share_token && CURRENT_USER_ID) {
+                const snap = await loadDealSnapshot(deal);
+                deal.share_token = snap.share_token;
+            }
+            if(!deal.share_token) { toast('Link hazır deyil', true); return; }
+            const link = buildDealShareUrl(deal.id, deal.share_token);
+            const result = await shareDealLink(link, deal.name || deal.contact_name || 'Sövdələşmə');
+            if(result === 'copied') toast('Link kopyalandı');
+            else if(result === 'failed') toast('Linki paylaşmaq olmadı', true);
         } catch(err) { toast(err.message, true); }
     };
 }

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>Sövdələşmə</title>
+    <style>
+        body { margin:0; font-family: Inter, system-ui, sans-serif; background:#f4f6f8; color:#0f172a; }
+        .wrap { max-width:560px; margin:0 auto; padding:16px 16px 32px; }
+        .card { background:#fff; border-radius:16px; padding:16px; box-shadow:0 1px 4px #0001; }
+        .muted { color:#94a3b8; font-size:12px; }
+        .err { color:#ef4444; }
+        .deal-chat-row { border-radius:12px; padding:8px 10px; margin:6px 0; max-width:92%; font-size:12px; }
+        .deal-chat-row.in { background:#f1f5f9; margin-right:auto; }
+        .deal-chat-row.out { background:#dbeafe; margin-left:auto; text-align:right; }
+        h1 { font-size:16px; margin:4px 0 10px; }
+        .row { font-size:13px; margin:4px 0; }
+        .sec { margin-top:14px; font-size:12px; font-weight:800; }
+        audio { width:100%; height:28px; margin-top:6px; }
+        img { max-width:100%; border-radius:8px; margin-top:6px; }
+    </style>
+</head>
+<body>
+<div class="wrap"><div id="box" class="card muted">Yüklənir...</div></div>
+<script>
+const API = 'https://worker-production-3e3e.up.railway.app';
+const COLORS = {
+    nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
+    geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
+    icra_olunur:'#0ea5e9', gozleme:'#64748b', nizami:'#2481cc', soltan:'#14b8a6', sermaye:'#f59e0b',
+    asya:'#06b6d4', nurane:'#a855f7', qurashdirma:'#22c55e', muzakire:'#a855f7', ugurlu:'#10b981', imtina:'#ef4444'
+};
+function esc(v) {
+    return String(v ?? '').replace(/[&<>'\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function mediaSrc(raw, token, uuid) {
+    if (uuid) {
+        const q = new URLSearchParams({uuid});
+        if (token) q.set('k', token);
+        return API + '/api/deal/file?' + q;
+    }
+    if (!raw) return '';
+    if (raw.startsWith('/api/')) return API + raw;
+    const q = new URLSearchParams({src: raw});
+    if (token) q.set('k', token);
+    return API + '/api/deal/file?' + q;
+}
+function mediaBlock(item, token) {
+    const raw = (item && (item.media_url || item.media)) || '';
+    const uuid = (item && item.file_uuid) || '';
+    const kind = (item && (item.message_type || item.type)) || '';
+    const fileName = (item && item.file_name) || '';
+    const src = mediaSrc(raw, token, uuid);
+    if (!src) return '';
+    const safe = esc(src);
+    const type = String(kind || '').toLowerCase();
+    if (type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName)) {
+        return '<img src="' + safe + '" alt="">';
+    }
+    if (type === 'voice' || type === 'audio' || type === 'call_in' || type === 'call_out' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
+        return '<audio controls preload="none" src="' + safe + '"></audio>';
+    }
+    return '<a href="' + safe + '" target="_blank" rel="noopener">' + esc(fileName || 'Fayl') + '</a>';
+}
+function render(deal, token) {
+    const phones = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    const notes = Array.isArray(deal.notes) ? deal.notes : [];
+    const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+    const chat = Array.isArray(deal.chat) ? deal.chat : [];
+    const color = COLORS[deal.stage_key] || '#64748b';
+    const notesHtml = notes.length
+        ? notes.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="muted">' + esc(item.created || '') + '</div><div>' + esc(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>').join('')
+        : '<div class="muted">' + esc(deal.last_note || 'Qeyd yoxdur') + '</div>';
+    const tasksHtml = tasks.length
+        ? tasks.map(item => '<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">' + esc((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—') + (item.deadline ? ' <span class="muted">(' + esc(item.deadline) + ')</span>' : '') + '</div>').join('')
+        : '<div class="muted">Açıq tapşırıq yoxdur</div>';
+    const chatHtml = chat.length
+        ? chat.map(item => {
+            const who = esc(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
+            return '<div class="deal-chat-row ' + (item.incoming ? 'in' : 'out') + '"><div class="muted">' + who + ' · ' + esc(item.created || '') + '</div><div>' + esc(item.text || '') + '</div>' + mediaBlock(item, token) + '</div>';
+        }).join('')
+        : (deal.chat_blocked
+            ? '<div style="font-size:12px;color:#b45309">Kommo çatın mətnini API-yə vermir.</div>'
+            : '<div class="muted">Çat yoxdur</div>');
+    return '<div class="muted" style="font-weight:700;letter-spacing:.04em;text-transform:uppercase">Sövdələşmə</div>'
+        + '<div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">'
+        + '<h1>' + esc(deal.name || '—') + '</h1>'
+        + '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px;background:' + color + '18;color:' + color + '">' + esc(deal.stage_name || '') + '</span></div>'
+        + '<div class="row">👤 <b>Müştəri:</b> ' + esc(deal.contact_name || '—') + '</div>'
+        + '<div class="row">📞 <b>Telefon:</b> ' + esc(phones.join(', ') || '—') + '</div>'
+        + '<div class="muted">🕒 ' + esc(created) + ' · ⏰ ' + esc(deal.deadline || '—') + '</div>'
+        + '<div class="sec">Qeydlər</div>' + notesHtml
+        + '<div class="sec">Tapşırıqlar</div>' + tasksHtml
+        + '<div class="sec">Çat</div>' + chatHtml
+        + '<div class="muted" style="margin-top:16px">Yalnız oxumaq üçün. Kommo-ya giriş tələb olunmur.</div>';
+}
+(async function () {
+    const box = document.getElementById('box');
+    const token = new URLSearchParams(location.search).get('k') || '';
+    if (!token) {
+        box.className = 'card err';
+        box.textContent = 'Link etibarsızdır.';
+        return;
+    }
+    try {
+        const r = await fetch(API + '/api/deal/public?k=' + encodeURIComponent(token), {cache:'no-store'});
+        const d = await r.json().catch(() => ({}));
+        if (!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+        box.className = 'card';
+        box.innerHTML = render(d.deal, token);
+        document.title = d.deal.name || 'Sövdələşmə';
+    } catch (err) {
+        box.className = 'card err';
+        box.textContent = err.message || 'Yüklənmədi';
+    }
+})();
+</script>
+</body>
+</html>
