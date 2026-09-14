@@ -1325,13 +1325,8 @@ def get_task_deal_context(task_data: dict) -> dict:
             contact = get_contact_details(int(contacts[0]["id"]))
 
     client_name = (contact or {}).get("name", "")
-    phone = ""
-    for custom_field in (contact or {}).get("custom_fields_values", []) or []:
-        if custom_field.get("field_code") == "PHONE":
-            values = custom_field.get("values", [])
-            if values:
-                phone = values[0].get("value", "")
-                break
+    phones = _contact_phones(contact)
+    phone = phones[0] if phones else ""
 
     return {
         "lead_id": int(lead_id) if lead_id else None,
@@ -1339,6 +1334,48 @@ def get_task_deal_context(task_data: dict) -> dict:
         "phone": phone,
         "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}" if lead_id else "",
     }
+
+def _contact_phones(contact: dict | None) -> list[str]:
+    """Collect unique phone numbers from a Kommo contact payload."""
+    if not isinstance(contact, dict):
+        return []
+    phones: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw) -> None:
+        value = str(raw or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            phones.append(value)
+
+    _add(contact.get("phone"))
+    extra = contact.get("phones")
+    if isinstance(extra, list):
+        for item in extra:
+            _add(item)
+    for field in contact.get("custom_fields_values") or []:
+        if not isinstance(field, dict):
+            continue
+        code = str(field.get("field_code") or "").upper()
+        name = str(field.get("field_name") or "").casefold()
+        if code != "PHONE" and "phone" not in name and "telefon" not in name:
+            continue
+        for item in field.get("values") or []:
+            if isinstance(item, dict):
+                _add(item.get("value"))
+            else:
+                _add(item)
+    return phones
+
+
+def _contact_cache_entry(contact: dict | None) -> dict:
+    phones = _contact_phones(contact)
+    return {
+        "name": (contact or {}).get("name", ""),
+        "phone": phones[0] if phones else "",
+        "phones": phones,
+    }
+
 
 def get_phone_from_entity(entity_id: int, entity_type: str) -> str:
     try:
@@ -1348,20 +1385,12 @@ def get_phone_from_entity(entity_id: int, entity_type: str) -> str:
                 contacts_emb = lead.get("_embedded", {}).get("contacts", [])
                 if contacts_emb:
                     full_c = get_contact_details(contacts_emb[0]["id"])
-                    if full_c:
-                        for cf in (full_c.get("custom_fields_values") or []):
-                            if cf.get("field_code") == "PHONE":
-                                vals = cf.get("values", [])
-                                if vals:
-                                    return vals[0].get("value", "")
+                    phones = _contact_phones(full_c)
+                    return phones[0] if phones else ""
         elif entity_type == "contacts":
             full_c = get_contact_details(entity_id)
-            if full_c:
-                for cf in (full_c.get("custom_fields_values") or []):
-                    if cf.get("field_code") == "PHONE":
-                        vals = cf.get("values", [])
-                        if vals:
-                            return vals[0].get("value", "")
+            phones = _contact_phones(full_c)
+            return phones[0] if phones else ""
     except Exception:
         pass
     return ""
@@ -6006,11 +6035,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
         for linked_contact in lead_contacts:
             linked_id = linked_contact.get("id")
             full_contact = contacts.get(int(linked_id), linked_contact) if str(linked_id).isdigit() else linked_contact
-            phones = []
-            for field in full_contact.get("custom_fields_values", []) or []:
-                if field.get("field_code") == "PHONE":
-                    phones.extend(str(value.get("value", "")).strip() for value in field.get("values", []) or [] if value.get("value"))
-            phones = list(dict.fromkeys(phones))
+            phones = _contact_phones(full_contact)
             all_phones.extend(phone for phone in phones if phone not in all_phones)
             contact_rows.append({"id": linked_id, "name": full_contact.get("name", ""), "phones": phones})
         phone = all_phones[0] if all_phones else ""
@@ -6112,7 +6137,10 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
                 first_contact_id = int(lead_contacts[0].get("id"))
             except (TypeError, ValueError):
                 pass
-        contact = contacts.get(first_contact_id or 0, {"name": lead.get("name", ""), "phone": ""})
+        contact = contacts.get(first_contact_id or 0, {"name": lead.get("name", "")})
+        deal = next((row for row in deals if int(row.get("id") or 0) == lead_id), None)
+        phones = list((deal or {}).get("phones") or []) or _contact_phones(contact)
+        phone = phones[0] if phones else ""
         deadline_ts = task.get("complete_till", 0)
         compact_deadline, full_deadline, is_overdue = _format_rufat_deadline(deadline_ts, now)
         price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", task_text)
@@ -6124,7 +6152,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             "time": compact_deadline, "deadline": full_deadline, "deadline_ts": deadline_ts,
             "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
             "lead_id": lead_id, "lead_name": lead.get("name", ""),
-            "contact_name": contact.get("name", ""), "phone": contact.get("phone", ""),
+            "contact_name": contact.get("name", ""), "phone": phone, "phones": phones,
             "responsible": "Rüfət Həsənzadə", "assigneeName": "Rüfət Həsənzadə", "assignee_name": "Rüfət Həsənzadə",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
@@ -6317,12 +6345,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
                         if cr.status_code == 200:
                             for c in cr.json().get("_embedded", {}).get("contacts", []):
-                                phone_val = ""
-                                for cf in (c.get("custom_fields_values") or []):
-                                    if cf.get("field_code") == "PHONE":
-                                        vals = cf.get("values", [])
-                                        if vals: phone_val = vals[0].get("value", "")
-                                contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+                                try:
+                                    contacts_cache[int(c["id"])] = _contact_cache_entry(c)
+                                except (KeyError, TypeError, ValueError):
+                                    continue
                     except: pass
                 # Fetch leads linked to contacts (to get stage)
                 contact_lead_stage = {}  # {contact_id: stage_name}
@@ -6351,11 +6377,18 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=8)
                         if lr.status_code == 200:
                             for lead in lr.json().get("_embedded", {}).get("leads", []):
-                                leads_stage_cache[lead["id"]] = lead.get("status_id", 0)
+                                try:
+                                    lid = int(lead["id"])
+                                except (KeyError, TypeError, ValueError):
+                                    continue
+                                leads_stage_cache[lid] = lead.get("status_id", 0)
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
                                 if emb_contacts:
-                                    cid = emb_contacts[0]["id"]
-                                    leads_contact_cache[lead["id"]] = cid
+                                    try:
+                                        cid = int(emb_contacts[0]["id"])
+                                    except (KeyError, TypeError, ValueError):
+                                        continue
+                                    leads_contact_cache[lid] = cid
                                     contact_ids.add(cid)
                     except: pass
                     # Fetch any new contact_ids from leads
@@ -6367,12 +6400,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                             cr2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=8)
                             if cr2.status_code == 200:
                                 for c in cr2.json().get("_embedded", {}).get("contacts", []):
-                                    phone_val = ""
-                                    for cf in (c.get("custom_fields_values") or []):
-                                        if cf.get("field_code") == "PHONE":
-                                            vals = cf.get("values", [])
-                                            if vals: phone_val = vals[0].get("value", "")
-                                    contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+                                    try:
+                                        contacts_cache[int(c["id"])] = _contact_cache_entry(c)
+                                    except (KeyError, TypeError, ValueError):
+                                        continue
                         except: pass
                 for t in raw_tasks:
                     # Skip "Cavab gözlənilir" task type
@@ -6396,19 +6427,20 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 time_str = f"{mins} d\u0259q gecikir"
                     else:
                         time_str = ""
-                    entity_id = t.get("entity_id")
+                    try:
+                        entity_id = int(t.get("entity_id"))
+                    except (TypeError, ValueError):
+                        entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
-                    # Resolve from cache
-                    if entity_type == "contacts" and entity_id in contacts_cache:
-                        contact_name = contacts_cache[entity_id]["name"]
-                        phone = contacts_cache[entity_id]["phone"]
-                    elif entity_type == "leads" and entity_id in leads_contact_cache:
-                        cid = leads_contact_cache[entity_id]
-                        contact_name = contacts_cache.get(cid, {}).get("name", "")
-                        phone = contacts_cache.get(cid, {}).get("phone", "")
-                    else:
-                        contact_name = ""
-                        phone = ""
+                    contact_row = {}
+                    if entity_type == "contacts":
+                        contact_row = contacts_cache.get(entity_id) or {}
+                    elif entity_type == "leads":
+                        cid = leads_contact_cache.get(entity_id)
+                        contact_row = contacts_cache.get(cid) or {}
+                    contact_name = contact_row.get("name", "")
+                    phone = contact_row.get("phone", "")
+                    phones = list(contact_row.get("phones") or ([] if not phone else [phone]))
                     responsible_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
                     if entity_type == "leads":
                         kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
@@ -6472,6 +6504,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "task_id": t.get("id"),
                         "contact_name": contact_name,
                         "phone": phone,
+                        "phones": phones,
                         "responsible": responsible_name,
                         "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
@@ -6629,12 +6662,19 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         lead_contact_id = {}   # {lead_id: contact_id}
         contact_ids = set()
         for lead in leads:
-            lead_map[lead["id"]] = lead
+            try:
+                lid = int(lead["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            lead_map[lid] = lead
             emb_contacts = lead.get("_embedded", {}).get("contacts", []) or []
             if emb_contacts:
-                cid = emb_contacts[0].get("id")
+                try:
+                    cid = int(emb_contacts[0].get("id"))
+                except (TypeError, ValueError):
+                    cid = None
                 if cid:
-                    lead_contact_id[lead["id"]] = cid
+                    lead_contact_id[lid] = cid
                     contact_ids.add(cid)
 
         # ── Batch fetch contacts (name + phone), 50 per request ────────────
@@ -6648,13 +6688,10 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                 cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
                 if cr.status_code == 200:
                     for c in cr.json().get("_embedded", {}).get("contacts", []):
-                        phone_val = ""
-                        for cf in (c.get("custom_fields_values") or []):
-                            if cf.get("field_code") == "PHONE":
-                                vals = cf.get("values", [])
-                                if vals:
-                                    phone_val = vals[0].get("value", "")
-                        contacts_cache[c["id"]] = {"name": c.get("name", ""), "phone": phone_val}
+                        try:
+                            contacts_cache[int(c["id"])] = _contact_cache_entry(c)
+                        except (KeyError, TypeError, ValueError):
+                            continue
             except Exception:
                 pass
 
@@ -6683,8 +6720,10 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
             lead_name = lead.get("name", "")
             lead_status_id = lead.get("status_id", 0)
             cid = lead_contact_id.get(lead_id)
-            contact_name = contacts_cache.get(cid, {}).get("name", "") if cid else ""
-            contact_phone = contacts_cache.get(cid, {}).get("phone", "") if cid else ""
+            contact_row = contacts_cache.get(cid) or {}
+            contact_name = contact_row.get("name", "")
+            contact_phone = contact_row.get("phone", "")
+            contact_phones = list(contact_row.get("phones") or ([] if not contact_phone else [contact_phone]))
 
             # Last note of the lead (same as Tapşırıqlar cards)
             last_note = ""
@@ -6768,6 +6807,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "lead_name": lead_name,
                     "contact_name": contact_name,
                     "phone": contact_phone,
+                    "phones": contact_phones,
                     "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
                     "assigneeName": assignee_name,
                     "assignee_name": assignee_name,
