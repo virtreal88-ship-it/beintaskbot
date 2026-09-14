@@ -580,6 +580,8 @@ let samilDealsByStage = {};
 let samilStageCounts = {};
 let samilStageFilter = localStorage.getItem('samil_stage_filter') || 'sorgular';
 let samilWorkspaceRequest = null;
+let samilWorkspaceLoadedAt = 0;
+const samilPendingStageMoves = new Map();
 function applySamilUi() {
     if(!IS_SAMIL) return;
     const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
@@ -642,6 +644,54 @@ function groupSamilDealsByStage(deals) {
     return grouped;
 }
 
+function persistLocalSamilWorkspace() {
+    try {
+        setCachedSamilWorkspace({
+            deals: samilDeals,
+            deals_by_stage: samilDealsByStage,
+            stage_counts: samilStageCounts,
+            tasks: mockTasks,
+            gozleme: gozlemeItems,
+            stage_key: null,
+        });
+    } catch (e) {}
+}
+function applyPendingSamilStageMoves() {
+    const now = Date.now();
+    samilPendingStageMoves.forEach((move, dealId) => {
+        if (!move || now - Number(move.at || 0) > 120000) {
+            samilPendingStageMoves.delete(dealId);
+            return;
+        }
+        const deal = samilDeals.find(item => String(item.id) === String(dealId));
+        if (!deal) return;
+        if (deal.stage_key === move.stageKey) samilPendingStageMoves.delete(dealId);
+        else updateLocalSamilDealStage(dealId, move.stageKey, false);
+    });
+}
+function updateLocalSamilDealStage(dealId, stageKey, trackPending = true) {
+    const stageInfo = SAMIL_ALL_STAGES.find(([key]) => key === stageKey) || SAMIL_UI_STAGES.find(([key]) => key === stageKey);
+    const deal = samilDeals.find(item => String(item.id) === String(dealId));
+    if (deal) {
+        deal.stage_key = stageKey;
+        deal.stage_name = stageInfo?.[1] || deal.stage_name;
+    }
+    Object.keys(samilDealsByStage).forEach(key => {
+        samilDealsByStage[key] = (samilDealsByStage[key] || []).filter(item => String(item.id) !== String(dealId));
+    });
+    if (!Array.isArray(samilDealsByStage[stageKey])) samilDealsByStage[stageKey] = [];
+    if (deal) samilDealsByStage[stageKey].push(deal);
+    SAMIL_UI_STAGES.forEach(([key]) => {
+        samilStageCounts[key] = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0;
+    });
+    const applyStageName = item => {
+        if (String(item?.lead_id) === String(dealId)) item.stage_name = stageInfo?.[1] || item.stage_name;
+    };
+    (Array.isArray(mockTasks) ? mockTasks : []).forEach(applyStageName);
+    (Array.isArray(gozlemeItems) ? gozlemeItems : []).forEach(applyStageName);
+    if (trackPending) samilPendingStageMoves.set(String(dealId), {stageKey, at: Date.now()});
+}
+
 function applySamilWorkspace(payload) {
     syncSamilStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
@@ -663,13 +713,15 @@ function applySamilWorkspace(payload) {
         if(!Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = samilDealsByStage[key].length;
     });
     if(payload.user_name) setUserDisplayName(payload.user_name);
+    applyPendingSamilStageMoves();
 }
 
-async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
+async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
     if(!IS_SAMIL) return false;
     if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
+    const shouldRefresh = Boolean(showFeedback || forceRefresh);
     if(samilWorkspaceRequest) return samilWorkspaceRequest;
     samilWorkspaceRequest = (async () => {
         const controller = new AbortController();
@@ -680,7 +732,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
         const timeout = setTimeout(() => controller.abort(), 45000);
         showSyncIndicator();
         try {
-            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + '&_ts=' + Date.now(), {
+            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + (shouldRefresh ? '&refresh=1' : '') + '&_ts=' + Date.now(), {
                 cache: 'no-store',
                 // `cache: 'no-store'` already prevents stale data without triggering a CORS preflight for Cache-Control.
                 headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
@@ -690,7 +742,8 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
             applySamilWorkspace(payload);
             setCachedTasks(mockTasks);
             setCachedGozleme(gozlemeItems);
-            setCachedSamilWorkspace(payload);
+            persistLocalSamilWorkspace();
+            samilWorkspaceLoadedAt = Date.now();
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
             if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
@@ -762,6 +815,7 @@ async function initApp() {
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
         if(IS_SAMIL) {
+            if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
             loadSamilWorkspace();
         } else {
             syncNotifications();
@@ -1703,7 +1757,7 @@ function showDealModal(deal, mode) {
     const body = mode==='edit' ? `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>` : `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>${mode==='task'?'<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select>':''}`;
     modal.innerHTML=`<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal); modal.querySelector('#deal-modal-cancel').onclick=()=>modal.remove();
-    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); await loadSamilWorkspace(false);}catch(e){toast(e.message,true)}};
+    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); if(mode==='edit'){ const nextStageKey=payload.stage_key; if(nextStageKey && nextStageKey!==deal.stage_key){ updateLocalSamilDealStage(deal.id, nextStageKey); samilStageFilter=nextStageKey; localStorage.setItem('samil_stage_filter', nextStageKey); renderSamilDeals(); } persistLocalSamilWorkspace(); } else { await loadSamilWorkspace(false, null, true); } }catch(e){toast(e.message,true)}};
 }
 async function openSamilDeals() {
     if(!IS_SAMIL) { switchTab('tab-tasks'); return; }

@@ -4584,12 +4584,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
             if not update_lead_kommo(lead_id, {"status_id": RUFAT_STAGES[stage_key], "pipeline_id": RUFAT_PIPELINE_ID}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
-            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi."})
+            patch_rufat_overview_deal_stage(lead_id, stage_key)
+            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key})
         elif action == "deal_add_note":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             result = add_note(lead_id, text, "leads")
+            invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı."})
         elif action == "deal_add_task":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
@@ -4612,6 +4614,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not responsible_user_id:
                 return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
             result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name="Rüfət Həsənzadə")
+            invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
         elif action == "info":
             if is_rufat_chat(chat_id):
@@ -5792,37 +5795,91 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     return result
 
 
-async def _load_rufat_latest_notes(lead_to_contact: dict[int, int | None]) -> dict[int, str]:
-    """Read the latest text note from a deal, then its primary contact."""
-    # Kommo rate-limits bursts of per-entity note requests.
-    semaphore = asyncio.Semaphore(3)
+async def _load_rufat_latest_notes(lead_ids: set[int]) -> dict[int, str]:
+    """Load the newest lead note per deal from the collection endpoint.
 
-    async def read_notes(entity_type: str, entity_id: int) -> str:
+    Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
+    temporary account blocks. A few pages of /leads/notes is enough for cards.
+    """
+    latest: dict[int, str] = {}
+    if not lead_ids:
+        return latest
+    page = 1
+    max_pages = 4
+    while page <= max_pages:
         try:
-            async with semaphore:
-                response = await _kommo_get_async(
-                    f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes",
-                    params={"filter[note_type][]": "common", "limit": 20, "order[updated_at]": "desc"},
-                    timeout=12,
-                )
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/leads/notes",
+                params={"limit": 250, "page": page, "order[updated_at]": "desc"},
+                timeout=12,
+            )
         except Exception as exc:
-            logger.warning("Rüfət %s/%s notes unavailable: %s/%s", entity_type, entity_id, type(exc).__name__, exc)
-            return ""
+            logger.warning("Rüfət bulk notes page %s unavailable: %s", page, exc)
+            break
+        if response.status_code == 204:
+            break
         if response.status_code != 200:
-            return ""
-        for note in response.json().get("_embedded", {}).get("notes", []) or []:
+            logger.warning("Rüfət bulk notes page %s failed: %s", page, response.status_code)
+            break
+        payload = response.json()
+        notes = payload.get("_embedded", {}).get("notes", []) or []
+        if not notes:
+            break
+        for note in notes:
+            if not isinstance(note, dict):
+                continue
+            try:
+                entity_id = int(note.get("entity_id"))
+            except (TypeError, ValueError):
+                continue
+            if entity_id not in lead_ids or entity_id in latest:
+                continue
             text = str((note.get("params") or {}).get("text") or "").strip()
             if text:
-                return text
-        return ""
+                latest[entity_id] = text
+        if len(notes) < 250 and not payload.get("_links", {}).get("next"):
+            break
+        page += 1
+    return latest
 
-    async def read_one(lead_id: int, contact_id: int | None) -> tuple[int, str]:
-        note = await read_notes("leads", lead_id)
-        if not note and contact_id:
-            note = await read_notes("contacts", contact_id)
-        return lead_id, note
 
-    return dict(await asyncio.gather(*(read_one(lead_id, contact_id) for lead_id, contact_id in lead_to_contact.items())))
+async def _load_rufat_open_tasks(entity_ids: list[int]) -> list[dict]:
+    """Load open tasks only for pipeline leads/contacts, in small filter batches."""
+    rows: list[dict] = []
+    ids = [entity_id for entity_id in entity_ids if entity_id]
+    if not ids:
+        return rows
+    chunk_size = 40
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start:start + chunk_size]
+        page = 1
+        while True:
+            try:
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/tasks",
+                    params={
+                        "filter[is_completed]": 0,
+                        "filter[entity_id][]": chunk,
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            except Exception as exc:
+                logger.warning("Rüfət task chunk unavailable: %s", exc)
+                break
+            if response.status_code == 204:
+                break
+            if response.status_code != 200:
+                logger.warning("Rüfət task chunk failed: %s", response.status_code)
+                break
+            payload = response.json()
+            batch = payload.get("_embedded", {}).get("tasks", []) or []
+            rows.extend(row for row in batch if isinstance(row, dict))
+            if len(batch) < 250 and not payload.get("_links", {}).get("next"):
+                break
+            page += 1
+    return rows
 
 
 def _format_rufat_deadline(deadline_ts: int | float | None, now: datetime) -> tuple[str, str, bool]:
@@ -5890,12 +5947,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             page += 1
         return all_leads
 
-    # Both requests are independent and start at the same time.
-    leads_request = asyncio.create_task(_load_all_rufat_leads())
-    tasks_request = asyncio.create_task(_rufat_load_all(
-        f"{KOMMO_BASE_URL}/api/v4/tasks", "tasks", {"filter[is_completed]": 0}
-    ))
-    leads = await leads_request
+    leads = await _load_all_rufat_leads()
 
     status_to_key = {status_id: key for key, status_id in RUFAT_STAGES.items()}
     stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in RUFAT_STAGES}
@@ -5932,7 +5984,11 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
         for contact in lead.get("_embedded", {}).get("contacts", []) or []
         if str(contact.get("id", "")).isdigit()
     }
-    contacts = await _load_rufat_contacts(contact_ids)
+    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
+    contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
+    notes_request = asyncio.create_task(_load_rufat_latest_notes(set(lead_by_id.keys())))
+    tasks_request = asyncio.create_task(_load_rufat_open_tasks(task_entity_ids))
+    contacts = await contacts_request
     deals = []
     for lead_id, lead in lead_by_id.items():
         lead_contacts = lead.get("_embedded", {}).get("contacts", []) or []
@@ -6005,10 +6061,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead = await _load_rufat_latest_notes({
-        int(deal["id"]): next((int(c.get("id")) for c in lead_by_id[int(deal["id"])].get("_embedded", {}).get("contacts", []) or [] if str(c.get("id", "")).isdigit()), None)
-        for deal in deals
-    })
+    note_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -6094,11 +6147,81 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
 _rufat_overview_lock = asyncio.Lock()
 _rufat_overview_cache = None
 _rufat_overview_cache_at = 0.0
+_RUFAT_OVERVIEW_CACHE_TTL = 90.0
+
+
+def invalidate_rufat_overview_cache() -> None:
+    """Drop the in-memory Sövdələşmələr snapshot after a mutating action."""
+    global _rufat_overview_cache, _rufat_overview_cache_at
+    _rufat_overview_cache = None
+    _rufat_overview_cache_at = 0.0
+
+
+def patch_rufat_overview_deal_stage(lead_id: int, stage_key: str) -> None:
+    """Keep the cached overview aligned with a successful Kommo stage PATCH."""
+    global _rufat_overview_cache_at
+    overview = _rufat_overview_cache
+    if not isinstance(overview, dict) or stage_key not in RUFAT_STAGES:
+        return
+    status_id = RUFAT_STAGES[stage_key]
+    stage_name = RUFAT_STAGE_NAMES.get(status_id, "Naməlum mərhələ")
+    deal = None
+    for item in overview.get("deals") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            current_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if current_id != lead_id:
+            continue
+        item["stage_key"] = stage_key
+        item["stage_name"] = stage_name
+        deal = item
+        break
+    by_stage = overview.get("deals_by_stage")
+    if isinstance(by_stage, dict):
+        for key, items in list(by_stage.items()):
+            by_stage[key] = [
+                item for item in (items or [])
+                if isinstance(item, dict) and int(item.get("id") or 0) != lead_id
+            ]
+        if deal is not None:
+            by_stage.setdefault(stage_key, []).append(deal)
+        overview["stage_counts"] = {
+            key: len(by_stage.get(key) or []) for key in RUFAT_STAGES
+        }
+    for task in list(overview.get("tasks") or []) + list(overview.get("gozleme") or []):
+        if not isinstance(task, dict):
+            continue
+        try:
+            task_lead_id = int(task.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if task_lead_id == lead_id:
+            task["stage_name"] = stage_name
+    _rufat_overview_cache_at = _time_module.monotonic()
+
+
+async def get_rufat_overview(*, force: bool = False) -> dict:
+    """Return the Rüfət workspace, reusing a short in-memory snapshot."""
+    global _rufat_overview_cache, _rufat_overview_cache_at
+    async with _rufat_overview_lock:
+        now = _time_module.monotonic()
+        if (
+            not force
+            and _rufat_overview_cache is not None
+            and now - _rufat_overview_cache_at < _RUFAT_OVERVIEW_CACHE_TTL
+        ):
+            return _rufat_overview_cache
+        overview = await build_rufat_overview()
+        _rufat_overview_cache = overview
+        _rufat_overview_cache_at = now
+        return overview
 
 
 async def handle_api_rufat_overview(request: web.Request) -> web.Response:
     """Return the fully preloaded Rüfət workspace for instant stage switching."""
-    global _rufat_overview_cache, _rufat_overview_cache_at
     raw_chat_id = (
         request.headers.get("X-TG-User-ID")
         or request.rel_url.query.get("uid")
@@ -6112,19 +6235,9 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
     if not is_rufat_chat(chat_id):
         logger.warning("Rüfət overview access denied for supplied user id")
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    # Stage filtering is deliberately performed in the browser after one full prefetch.
+    force = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
     try:
-        async with _rufat_overview_lock:
-            now = _time_module.monotonic()
-            if (
-                _rufat_overview_cache is not None
-                and now - _rufat_overview_cache_at < 15
-            ):
-                overview = _rufat_overview_cache
-            else:
-                overview = await build_rufat_overview()
-                _rufat_overview_cache = overview
-                _rufat_overview_cache_at = now
+        overview = await get_rufat_overview(force=force)
         # The old Şamil link remains compatible, while the current UID must
         # always receive Rüfət's employee identity in the web app.
         if chat_id == RUFAT_CHAT_ID:
@@ -6143,7 +6256,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         if not chat_id:
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
         if is_rufat_chat(chat_id):
-            overview = await build_rufat_overview()
+            overview = await get_rufat_overview()
             return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
                                       "user_name": overview["user_name"]})
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
@@ -6458,7 +6571,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         is_admin = kommo_user_id == ADMIN_KOMMO_USER_ID or chat_id == ADMIN_CHAT_ID
 
         if is_rufat_chat(chat_id):
-            overview = await build_rufat_overview()
+            overview = await get_rufat_overview()
             reminders = overview["gozleme"]
             return web.json_response({"success": True, "items": reminders, "tasks": reminders,
                                       "count": len(reminders), "is_admin": False,

@@ -2147,6 +2147,8 @@
 			let samilStageFilter =
 				localStorage.getItem("samil_stage_filter") || "sorgular";
 			let samilWorkspaceRequest = null;
+			let samilWorkspaceLoadedAt = 0;
+			const samilPendingStageMoves = new Map();
 			let samilDealDragState = null;
 			const SAMIL_STAGE_COLORS = {
 				nerazobrannoye: "#94a3b8",
@@ -2310,6 +2312,35 @@
 				return grouped;
 			}
 
+			function persistLocalSamilWorkspace() {
+				setCachedSamilWorkspace({
+					deals: samilDeals,
+					deals_by_stage: samilDealsByStage,
+					stage_counts: samilStageCounts,
+					tasks: mockTasks,
+					gozleme: gozlemeItems,
+					stage_key: null,
+				});
+			}
+
+			function applyPendingSamilStageMoves() {
+				const now = Date.now();
+				samilPendingStageMoves.forEach((move, dealId) => {
+					if (!move || now - Number(move.at || 0) > 120000) {
+						samilPendingStageMoves.delete(dealId);
+						return;
+					}
+					const deal = samilDeals.find(
+						(item) => String(item.id) === String(dealId),
+					);
+					if (!deal) return;
+					if (deal.stage_key === move.stageKey)
+						samilPendingStageMoves.delete(dealId);
+					else
+						updateLocalSamilDealStage(dealId, move.stageKey, false);
+				});
+			}
+
 			function applySamilWorkspace(payload) {
 				syncSamilStagesFromPayload(payload);
 				mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
@@ -2354,11 +2385,13 @@
 						samilStageCounts[key] = samilDealsByStage[key].length;
 				});
 				if (payload.user_name) setUserDisplayName(payload.user_name);
+				applyPendingSamilStageMoves();
 			}
 
 			async function loadSamilWorkspace(
 				showFeedback = false,
 				requestedStage = null,
+				forceRefresh = false,
 			) {
 				if (!IS_SAMIL) return false;
 				if (
@@ -2368,6 +2401,7 @@
 					samilStageFilter = requestedStage;
 				// Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
 				const stageParam = "all";
+				const shouldRefresh = Boolean(showFeedback || forceRefresh);
 				if (samilWorkspaceRequest) return samilWorkspaceRequest;
 				samilWorkspaceRequest = (async () => {
 					const controller = new AbortController();
@@ -2384,6 +2418,7 @@
 								encodeURIComponent(stageParam) +
 								"&uid=" +
 								encodeURIComponent(CURRENT_USER_ID) +
+								(shouldRefresh ? "&refresh=1" : "") +
 								"&_ts=" +
 								Date.now(),
 							{
@@ -2401,7 +2436,8 @@
 						applySamilWorkspace(payload);
 						setCachedTasks(mockTasks);
 						setCachedGozleme(gozlemeItems);
-						setCachedSamilWorkspace(payload);
+						persistLocalSamilWorkspace();
+						samilWorkspaceLoadedAt = Date.now();
 						if (
 							document
 								.getElementById("screen-notifications")
@@ -2535,6 +2571,7 @@
 			document.addEventListener("visibilitychange", () => {
 				if (!document.hidden) {
 					if (IS_SAMIL) {
+						if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
 						loadSamilWorkspace();
 					} else {
 						syncNotifications();
@@ -4461,7 +4498,11 @@
 				});
 			}
 
-			function updateLocalSamilDealStage(dealId, stageKey) {
+			function updateLocalSamilDealStage(
+				dealId,
+				stageKey,
+				trackPending = true,
+			) {
 				const stageInfo =
 					SAMIL_ALL_STAGES.find(([key]) => key === stageKey) ||
 					SAMIL_UI_STAGES.find(([key]) => key === stageKey);
@@ -4486,6 +4527,21 @@
 						? samilDealsByStage[key].length
 						: 0;
 				});
+				const applyStageName = (item) => {
+					if (String(item?.lead_id) === String(dealId))
+						item.stage_name = stageInfo?.[1] || item.stage_name;
+				};
+				(Array.isArray(mockTasks) ? mockTasks : []).forEach(
+					applyStageName,
+				);
+				(Array.isArray(gozlemeItems) ? gozlemeItems : []).forEach(
+					applyStageName,
+				);
+				if (trackPending)
+					samilPendingStageMoves.set(String(dealId), {
+						stageKey,
+						at: Date.now(),
+					});
 			}
 
 			async function moveSamilDealToStage(dealId, nextStageKey) {
@@ -4508,9 +4564,13 @@
 						stage_key: nextStageKey,
 					});
 					toast("Mərhələ dəyişdirildi", false);
-					await loadSamilWorkspace(false);
+					persistLocalSamilWorkspace();
+					document
+						.querySelector(`[data-deal-id="${dealId}"]`)
+						?.classList.remove("is-saving");
 				} catch (error) {
-					updateLocalSamilDealStage(dealId, previousStageKey);
+					samilPendingStageMoves.delete(String(dealId));
+					updateLocalSamilDealStage(dealId, previousStageKey, false);
 					samilStageFilter = previousStageKey;
 					renderSamilDeals();
 					toast(error.message || "Mərhələ dəyişdirilmədi", true);
@@ -4697,7 +4757,21 @@
 						await samilDealAction(payload);
 						modal.remove();
 						toast("Uğurla yadda saxlanıldı", false);
-						await loadSamilWorkspace(false);
+						if (mode === "edit") {
+							const nextStageKey = payload.stage_key;
+							if (nextStageKey && nextStageKey !== deal.stage_key) {
+								updateLocalSamilDealStage(deal.id, nextStageKey);
+								samilStageFilter = nextStageKey;
+								localStorage.setItem(
+									"samil_stage_filter",
+									nextStageKey,
+								);
+								renderSamilDeals();
+							}
+							persistLocalSamilWorkspace();
+						} else {
+							await loadSamilWorkspace(false, null, true);
+						}
 					} catch (e) {
 						toast(e.message, true);
 					}
