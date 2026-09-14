@@ -153,10 +153,31 @@
         .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
         .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
+        .icon-action-btn {
+            width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b;
+            border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex-shrink:0;
+        }
+        .icon-action-btn svg { width:18px; height:18px; }
+        .icon-action-btn.primary { background:#2481cc; border-color:#2481cc; color:#fff; }
+        .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
+        .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
+        #task-date-select { display:block; width:100%; }
+        @media (max-width: 1023px) {
+            #screen-notifications .samil-kanban-wrap { overflow-x:hidden; }
+            #notifications-container.samil-kanban-board {
+                display:flex; flex-direction:column; grid-auto-flow:row; grid-auto-columns:unset;
+                grid-template-columns:none; min-height:0; height:auto;
+            }
+            #screen-notifications .samil-kanban-column { max-height:none; min-height:0; height:auto; }
+        }
         @media (min-width: 1024px) {
             #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #samil-stage-select { display:none !important; }
+            #task-date-select { display:none !important; }
             #samil-stage-nav { display:none; }
+            #pin-sidebar-btn { width:32px; height:32px; color:#94a3b8; font-size:13px; }
+            #pin-sidebar-btn svg { width:14px; height:14px; }
+            #pin-sidebar-btn:hover { color:#64748b; }
             #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
@@ -188,8 +209,12 @@
 <!-- DESKTOP NAVBAR (>=1024px only) -->
 <nav id="desktop-sidebar" aria-label="Əsas naviqasiya">
     <div class="sidebar-toggle-row">
-        <button type="button" id="toggle-sidebar-btn" class="sidebar-icon-btn" onclick="toggleDesktopSidebar()" aria-label="Menyunu aç/bağla">☰</button>
-        <button type="button" id="pin-sidebar-btn" class="sidebar-icon-btn" onclick="toggleSidebarPin()" aria-label="Menyunu bərkit">📌</button>
+        <button type="button" id="toggle-sidebar-btn" class="sidebar-icon-btn" onclick="toggleDesktopSidebar()" aria-label="Menyunu aç/bağla">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <button type="button" id="pin-sidebar-btn" class="sidebar-icon-btn" onclick="toggleSidebarPin()" aria-label="Menyunu bərkit">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v6l-2 3h10l-2-3V4"/><path d="M12 13v7"/></svg>
+        </button>
     </div>
     <div class="sidebar-brand">
         <h1>Bein Systems</h1>
@@ -197,25 +222,25 @@
     </div>
     <div class="sidebar-nav">
         <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
-            <span class="sidebar-icon">📋</span><span class="sidebar-item-label">Tapşırıqlar</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg></span><span class="sidebar-item-label">Tapşırıqlar</span>
         </button>
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
-            <span class="sidebar-icon">🗂️</span><span class="sidebar-item-label">Sövdələşmələr</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sövdələşmələr</span>
         </button>
         <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
-            <span class="sidebar-icon">➕</span><span class="sidebar-item-label">Yeni</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="sidebar-item-label">Yeni</span>
         </button>
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
-            <span class="sidebar-icon">💰</span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon">🔔</span><span class="sidebar-item-label">Gözləmə</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Gözləmə</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
-            <span class="sidebar-icon">⏳</span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
         <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
-            <span class="sidebar-icon">📈</span><span class="sidebar-item-label">Hesabatlar</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -246,13 +271,14 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Gecikmiş · Bu gün · Sabah · Bu həftə · Növbəti həftə · Gələcək</div>
+                <div id="tasks-employee-name" class="text-[10px] text-gray-400 font-medium mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
-                <button onclick="openNotifications(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
-                <button onclick="switchTab('tab-create')" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yeni tapşırıq</button>
+                <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+                <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
             </div>
         </div>
+        <select id="task-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
         </div>
@@ -283,8 +309,8 @@
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">Kartı başqa mərhələyə sürüşdürün</div>
             </div>
             <div class="flex items-center gap-2">
-                <button type="button" onclick="openCreateDealModal()" class="bg-[#2481cc] text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yarat</button>
-                <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+                <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+                <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary" aria-label="Yeni sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
             </div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
@@ -377,32 +403,32 @@
                 <div class="text-sm font-extrabold text-gray-800">Hesabatlar</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">KPI, bonus və iş göstəriciləri</div>
             </div>
-            <button onclick="loadHesabatlar(true)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+            <button type="button" onclick="loadHesabatlar(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
         </div>
         <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balans</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-bonus">0.00 AZN</div>
+            <div class="bg-emerald-50 border border-emerald-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-emerald-600/80 font-bold">Balans</div>
+                <div class="text-xl font-black mt-1 text-emerald-700" id="hesabat-bonus">0.00 AZN</div>
             </div>
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Gözləmədə bonus</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-pending">0.00 AZN</div>
+            <div class="bg-amber-50 border border-amber-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-amber-600/80 font-bold">Gözləmədə bonus</div>
+                <div class="text-xl font-black mt-1 text-amber-600" id="hesabat-pending">0.00 AZN</div>
             </div>
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">KPI</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-kpi">⭐ 0/5</div>
+            <div class="bg-sky-50 border border-sky-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-sky-600/80 font-bold">KPI</div>
+                <div class="text-xl font-black mt-1 text-sky-700" id="hesabat-kpi">⭐ 0/5</div>
             </div>
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İşlənən müraciət</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-processed">0</div>
+            <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-indigo-600/80 font-bold">İşlənən müraciət</div>
+                <div class="text-xl font-black mt-1 text-indigo-700" id="hesabat-processed">0</div>
             </div>
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">İş vaxtı</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-worktime">—</div>
+            <div class="bg-teal-50 border border-teal-100 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-teal-600/80 font-bold">İş vaxtı</div>
+                <div class="text-xl font-black mt-1 text-teal-700" id="hesabat-worktime">—</div>
             </div>
-            <div class="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
-                <div class="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Boş dayanma</div>
-                <div class="text-xl font-black mt-1 text-slate-800" id="hesabat-idle">—</div>
+            <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3 shadow-sm">
+                <div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Boş dayanma</div>
+                <div class="text-xl font-black mt-1 text-slate-600" id="hesabat-idle">—</div>
             </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -608,25 +634,25 @@
 <!-- BOTTOM NAVIGATION -->
 <div id="tab-bar" class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 h-[64px] flex justify-around items-center px-2 z-40 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
     <button id="tab-tasks" onclick="switchTab('tab-tasks')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]">
-        <span class="text-lg">📋</span><span class="mt-0.5">Tapşırıqlar</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg><span class="mt-0.5">Tapşırıqlar</span>
     </button>
     <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">🗂️</span><span class="mt-0.5">Sövdələşmələr</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sövdələşmələr</span>
     </button>
     <button id="tab-create" onclick="switchTab('tab-create')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">➕</span><span class="mt-0.5">Yeni</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="mt-0.5">Yeni</span>
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">💰</span><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">🔔</span><span class="mt-0.5">Gözləmə</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
-        <span class="text-lg">⏳</span><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
     </button>
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <span class="text-lg">📈</span><span class="mt-0.5">Hesabatlar</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
     </button>
 </div>
 
@@ -760,6 +786,8 @@ function setUserDisplayName(name) {
     if(area) area.innerHTML = `<span class="font-bold text-emerald-400">${name}</span>`;
     const sideName = document.getElementById('sidebar-user-name');
     if(sideName) sideName.innerHTML = `<span style="color:#34d399;font-weight:700;">${name}</span>`;
+    const taskName = document.getElementById('tasks-employee-name');
+    if(taskName) taskName.textContent = FUNNEL_OWNER_NAME || name || '';
 }
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
@@ -1033,10 +1061,10 @@ function openFlow(f) {
 }
 
 let _contactSearchTimer = null;
-function debounceContactSearch(val) {
+function debounceContactSearch(val, resultsId, phoneId, nameId) {
     clearTimeout(_contactSearchTimer);
-    const box = document.getElementById('contact-search-results');
-    const digits = val.replace(/\D/g, '');
+    const box = document.getElementById(resultsId || 'contact-search-results');
+    const digits = String(val || '').replace(/\D/g, '');
     if(digits.length < 7) { if(box) box.style.display='none'; return; }
     _contactSearchTimer = setTimeout(async () => {
         try {
@@ -1046,8 +1074,8 @@ function debounceContactSearch(val) {
             });
             const d = await r.json();
             if(d.success && d.contacts && d.contacts.length > 0) {
-                box.innerHTML = d.contacts.map(c => 
-                    `<div onclick="selectContact('${c.phone}','${(c.name||"").replace(/'/g,"\\'")}')"
+                box.innerHTML = d.contacts.map(c =>
+                    `<div onclick="selectContact('${String(c.phone||'').replace(/'/g,"\\'")}','${(c.name||'').replace(/'/g,"\\'")}','${resultsId || 'contact-search-results'}','${phoneId || 'search-phone'}','${nameId || 'task-client-name'}')"
                      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:12px;">
                      <div style="font-weight:700;color:#1e293b;">${c.name || 'Adsız'}</div>
                      <div style="color:#64748b;margin-top:2px;">${c.phone}</div>
@@ -1055,13 +1083,16 @@ function debounceContactSearch(val) {
                 ).join('');
                 box.style.display='block';
             } else { box.style.display='none'; }
-        } catch(e) { box.style.display='none'; }
+        } catch(e) { if(box) box.style.display='none'; }
     }, 600);
 }
-function selectContact(phone, name) {
-    document.getElementById('search-phone').value = phone;
-    if(name) document.getElementById('task-client-name').value = name;
-    document.getElementById('contact-search-results').style.display = 'none';
+function selectContact(phone, name, resultsId, phoneId, nameId) {
+    const phoneEl = document.getElementById(phoneId || 'search-phone');
+    if(phoneEl) phoneEl.value = phone;
+    const nameEl = document.getElementById(nameId || 'task-client-name');
+    if(name && nameEl) nameEl.value = name;
+    const box = document.getElementById(resultsId || 'contact-search-results');
+    if(box) box.style.display = 'none';
     gd.phone = phone;
     saveSessionForms();
 }
@@ -1334,7 +1365,10 @@ function openCreateDealModal() {
         <label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı</label>
         <input id="create-deal-name" type="text" placeholder="Ad Soyad" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
         <label class="text-xs font-bold text-gray-400 block mb-1">Telefon</label>
-        <input id="create-deal-phone" type="tel" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
+        <div style="position:relative;margin-bottom:8px;">
+            <input id="create-deal-phone" type="tel" placeholder="0505232933" oninput="debounceContactSearch(this.value,'create-deal-search-results','create-deal-phone','create-deal-name')" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">
+            <div id="create-deal-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div>
+        </div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Qeyd</label>
         <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
         <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
@@ -1825,6 +1859,7 @@ const DATE_KANBAN_COLS = [
     {key:'nextweek', label:'Növbəti həftə', color:'#8b5cf6'},
     {key:'future', label:'Gələcək', color:'#94a3b8'}
 ];
+let taskDateFilter = localStorage.getItem('task_date_filter') || 'today';
 let taskKanbanDragState = null;
 
 function crmDayStart(d) {
@@ -2010,7 +2045,10 @@ function createCrmTaskCard(t, mode) {
 function renderDateKanban(container, items, mode) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
-    DATE_KANBAN_COLS.forEach(col => {
+    const isMobileTask = mode === 'task' && !window.matchMedia('(min-width: 1024px)').matches;
+    if(isMobileTask && !DATE_KANBAN_COLS.some(col => col.key === taskDateFilter)) taskDateFilter = 'today';
+    const cols = isMobileTask ? DATE_KANBAN_COLS.filter(col => col.key === taskDateFilter) : DATE_KANBAN_COLS;
+    cols.forEach(col => {
         const column = document.createElement('div');
         column.className = 'samil-kanban-column';
         column.dataset.dateColumn = col.key;
@@ -2044,8 +2082,24 @@ function renderNotifications() {
     if(oc) oc.textContent = overdueCount > 0 ? `⚠️ ${overdueCount} gecikmiş` : '';
     const tc = document.getElementById('task-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
+    const dateSelect = document.getElementById('task-date-select');
+    if(dateSelect) {
+        if(!DATE_KANBAN_COLS.some(col => col.key === taskDateFilter)) taskDateFilter = 'today';
+        dateSelect.innerHTML = DATE_KANBAN_COLS.map(col => {
+            const n = filtered.filter(t => crmDateBucket(t) === col.key).length;
+            return `<option value="${col.key}" ${col.key === taskDateFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
+        }).join('');
+        dateSelect.onchange = () => {
+            taskDateFilter = dateSelect.value;
+            localStorage.setItem('task_date_filter', taskDateFilter);
+            renderNotifications();
+        };
+    }
     renderDateKanban(container, filtered, 'task');
 }
+window.addEventListener('resize', () => {
+    if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
+});
 
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>'\"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -2508,8 +2562,8 @@ function switchTab(tabId, updateHash = true) {
         nav('screen-create');
     } else if(tabId === 'tab-history') {
         document.getElementById('tab-history').className = activeClass;
-        if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
-        else { nav('screen-balance-history'); loadBalanceHistory(); }
+        nav('screen-balance-history');
+        loadBalanceHistory();
     } else if(tabId === 'tab-hesabat') {
         if(isAdmin) { switchTab('tab-tasks'); return; }
         const hesabatTab = document.getElementById('tab-hesabat');
@@ -2635,7 +2689,8 @@ function renderHesabatChart(id, values) {
     const data = (values || []).slice(0, 12);
     if(!data.length) { el.innerHTML = '<div class="text-[11px] text-slate-400 font-semibold">Məlumat yoxdur</div>'; return; }
     const max = Math.max(...data, 0.01);
-    el.innerHTML = data.map(v => `<div title="${v}" style="height:${Math.max(8, (Number(v)/max)*100)}%" class="flex-1 min-w-[8px] rounded-t bg-slate-800"></div>`).join('');
+    const color = id === 'hesabat-chart-bonus' ? '#10b981' : '#2563eb';
+    el.innerHTML = data.map(v => `<div title="${v}" style="height:${Math.max(8, (Number(v)/max)*100)}%;background:${color}" class="flex-1 min-w-[8px] rounded-t"></div>`).join('');
 }
 
 /* ================= GÖZLƏMƏ TAB (exact copy of Tapşırıqlar behavior) ================= */
@@ -2822,7 +2877,7 @@ function renderBalanceTransaction(t, adminView = false) {
             <div>${employeeRow}<div class="text-xs font-bold text-gray-800">Müştəri: ${escapeBalanceText(t.client)}</div><div class="text-[10px] text-gray-500 mt-0.5">Telefon: ${escapeBalanceText(t.phone)}</div></div>
             <div class="text-right shrink-0"><div class="text-sm font-black ${amountClass}">${amountSign}${amount.toFixed(2)} AZN</div><div class="mt-1">${statusBadge}</div></div>
         </div>
-        <div class="grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[10px]"><span class="font-bold text-gray-400">Tapşırıq növü</span><span class="text-gray-700">${escapeBalanceText(t.task_type)}</span><span class="font-bold text-gray-400">Nəticə</span><span class="text-gray-700 whitespace-pre-wrap">${escapeBalanceText(t.result_text)}</span><span class="font-bold text-gray-400">KPI</span><span>${renderKpiStars(t.kpi)}</span></div>
+        <div class="grid grid-cols-[72px_1fr] gap-x-2 gap-y-1 text-[10px]"><span class="font-bold text-gray-400">Tapşırıq növü</span><span class="text-gray-700">${escapeBalanceText(t.task_type)}</span><span class="font-bold text-gray-400">Nəticə</span><span class="text-gray-700 whitespace-pre-wrap">${escapeBalanceText(t.result_text)}</span></div>
         <div class="flex items-center justify-between gap-2"><span class="text-[9px] text-gray-400 font-bold">${formatBalanceDate(t.date)}</span>${confirmButton}</div>
     </div>`;
 }
@@ -2835,15 +2890,8 @@ async function loadBalance() {
         if(!r.ok || !j.success) throw new Error(j.error || 'Balans yüklənmədi');
         window._balanceData = j.transactions || [];
         window._balanceSummary = {balance: Number(j.balance) || 0, pending_balance: Number(j.pending_balance) || 0};
-        if(employeeType === 'salary') {
-            const financeWidget = document.getElementById('finance-widget'); if(financeWidget) financeWidget.style.display = 'block';
-            const mainFinanceWidget = document.getElementById('main-finance-widget'); if(mainFinanceWidget) mainFinanceWidget.style.display = 'block';
-            const bonusValue = window._balanceSummary.balance.toFixed(2);
-            const bonus = document.getElementById('finance-bonus'); if(bonus) bonus.textContent = bonusValue;
-            const mainBonus = document.getElementById('main-finance-bonus'); if(mainBonus) mainBonus.textContent = bonusValue;
-            const balanceWidget = document.getElementById('balance-widget'); if(balanceWidget) balanceWidget.style.display = 'none';
-            return j;
-        }
+        const mainFinanceWidget = document.getElementById('main-finance-widget');
+        if(mainFinanceWidget) mainFinanceWidget.style.display = 'none';
         const widget = document.getElementById('balance-widget'); if(widget) widget.style.display = 'flex';
         const balanceAmount = document.getElementById('balance-amount'); if(balanceAmount) balanceAmount.textContent = window._balanceSummary.balance.toFixed(2) + ' AZN';
         const pendingAmount = document.getElementById('balance-pending-amount'); if(pendingAmount) pendingAmount.textContent = window._balanceSummary.pending_balance.toFixed(2) + ' AZN';

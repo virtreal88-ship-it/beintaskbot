@@ -5518,23 +5518,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     t_data = t_resp.json()
                     entity_id = t_data.get("entity_id", "")
                     entity_type = t_data.get("entity_type", "leads")
-                    # Move lead to new assignee's stage in Əməliyyatlar pipeline
-                    if assignee_name_raw and entity_id:
-                        _lead_to_move = entity_id if entity_type == "leads" else None
-                        if not _lead_to_move and entity_type == "contacts":
-                            try:
-                                _clr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{entity_id}/leads", headers=HEADERS, timeout=8)
-                                if _clr.status_code == 200:
-                                    _cls = _clr.json().get('_embedded',{}).get('leads',[])
-                                    if _cls: _lead_to_move = _cls[0]['id']
-                            except: pass
-                        if _lead_to_move:
-                            try:
-                                if move_lead_to_icraci(_lead_to_move, assignee_name_raw):
-                                    logger.info(f"Edit: moved lead {_lead_to_move} to funnel of {assignee_name_raw}")
-                            except Exception as _me:
-                                logger.error(f"Edit: failed to move lead: {_me}")
-                    entity_type = t_data.get("entity_type", "leads")
                     link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
                     # Save note if provided
                     note_text = data.get("note", "").strip()
