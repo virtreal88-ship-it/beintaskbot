@@ -31,7 +31,7 @@
     "id": "b46dc03e",
     "type": "confirm_stage",
     "created_at": "2026-09-14T21:40:09.324076+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "KM",
       "phone": "+79057854455",
@@ -50,7 +50,10 @@
     "options": [
       "Təsdiq et",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-09-14T23:25:47.027667+04:00",
+    "resolved_by": "bot.py:4802",
+    "resolved_choice": "İmtina"
   },
   {
     "id": "84a5bcf8",
