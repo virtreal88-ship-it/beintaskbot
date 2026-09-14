@@ -1029,6 +1029,7 @@ async function initApp() {
     applyDesktopSidebar();
     await openNotifications();
     applyHashRoute();
+    await maybeOpenSharedDeal();
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -2144,11 +2145,127 @@ function setSamilStageFilter(stageKey) {
     renderSamilDeals();
 }
 
+function dealAudioHtml(deal) {
+    if(!deal.voice_url) return '<span class="text-gray-400">—</span>';
+    const src = escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url);
+    return `<audio controls preload="none" style="height:28px;width:100%" src="${src}"></audio>`;
+}
+function dealTasksHtml(deal) {
+    const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+    const task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
+    if(allTasks.length > 1) {
+        return allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('');
+    }
+    return task;
+}
+function buildDealShareUrl(leadId, token) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('deal', String(leadId));
+    url.searchParams.set('k', token);
+    return url.toString();
+}
+async function copyText(value) {
+    try {
+        await navigator.clipboard.writeText(value);
+        return true;
+    } catch (_err) {
+        const area = document.createElement('textarea');
+        area.value = value;
+        area.style.position = 'fixed';
+        area.style.left = '-9999px';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        return ok;
+    }
+}
+function closeDealViewModal() {
+    document.getElementById('deal-view-modal')?.remove();
+}
+function openDealViewModal(deal, opts) {
+    if(!deal) return;
+    const readonly = !!(opts && opts.readonly);
+    closeDealViewModal();
+    const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    const modal = document.createElement('div');
+    modal.id = 'deal-view-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:#0007;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(440px,100%);max-height:90vh;overflow:auto;box-shadow:0 8px 30px #0003">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
+            <div>
+                <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
+                <div style="font-size:16px;font-weight:800">${escapeHtml(deal.name || '—')}</div>
+            </div>
+            <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
+        </div>
+        ${readonly ? '<div style="font-size:11px;color:#64748b;margin-bottom:10px">Yalnız oxumaq üçün. Kommo-ya giriş tələb olunmur.</div>' : ''}
+        <div class="space-y-1 text-[13px] text-gray-700">
+            <div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
+            <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
+            <div>📝 <b>Son qeyd:</b> ${escapeHtml(deal.last_note || '—')}</div>
+            <div>📋 <b>Tapşırıq:</b> <div class="mt-1">${dealTasksHtml(deal)}</div></div>
+            <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
+            <div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${readonly ? '' : '<button type="button" id="deal-view-share" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Paylaş</button>'}
+            <button type="button" id="deal-view-close" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Bağla</button>
+        </div>
+    </div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeDealViewModal(); });
+    document.body.appendChild(modal);
+    modal.querySelector('#deal-view-close').onclick = closeDealViewModal;
+    const shareBtn = modal.querySelector('#deal-view-share');
+    if(shareBtn) shareBtn.onclick = async () => {
+        try {
+            let token = deal.share_token;
+            if(!token) {
+                const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(deal.id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+                const d = await r.json().catch(() => ({}));
+                if(!d.success || !d.share_token) throw new Error(d.error || 'Link hazırlanmadı');
+                token = d.share_token;
+                deal.share_token = token;
+            }
+            const ok = await copyText(buildDealShareUrl(deal.id, token));
+            toast(ok ? 'Link kopyalandı' : 'Linki kopyalamaq olmadı', !ok);
+        } catch(err) { toast(err.message, true); }
+    };
+}
+async function maybeOpenSharedDeal() {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('k');
+    const dealId = params.get('deal');
+    if(!token && !dealId) return;
+    try {
+        if(token) {
+            const r = await fetch(API_BASE + '/api/deal/public?k=' + encodeURIComponent(token));
+            const d = await r.json().catch(() => ({}));
+            if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+            openDealViewModal(d.deal, {readonly: true});
+            return;
+        }
+        if(dealId && CURRENT_USER_ID) {
+            const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(dealId), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+            const d = await r.json().catch(() => ({}));
+            if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
+            openDealViewModal(d.deal, {readonly: false});
+        }
+    } catch(err) { toast(err.message, true); }
+}
+
 function bindSamilDealCard(card, deal) {
     if(!card) return;
     let timer;
     const moreButton = card.querySelector('.deal-more-btn');
     if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
+    const viewButton = card.querySelector('.deal-open-view');
+    if(viewButton) viewButton.addEventListener('click', event => { event.stopPropagation(); openDealViewModal(deal); });
+    card.addEventListener('click', event => {
+        if(event.target.closest('.deal-more-btn, .deal-drag-handle, a, audio, button')) return;
+        openDealViewModal(deal);
+    });
     card.addEventListener('dragstart', event => {
         samilDealDragState = { dealId: String(deal.id), fromStage: deal.stage_key };
         card.classList.add('dragging');
@@ -2237,12 +2354,11 @@ function renderSamilDeals() {
             const clientName = escapeHtml(deal.contact_name || '—');
             const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
             const phone = escapeHtml(phoneList.join(', ') || '—');
-            const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ'), link = escapeHtml(deal.kommo_link || '#');
+            const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ');
             const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
-            const note = escapeHtml(deal.last_note || '—'), task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
-            const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
-            const tasksHtml = allTasks.length > 1 ? allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('') : task;
-            const audio = deal.voice_url ? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>` : '<span class="text-gray-400">—</span>';
+            const note = escapeHtml(deal.last_note || '—');
+            const tasksHtml = dealTasksHtml(deal);
+            const audio = dealAudioHtml(deal);
             return `<article class="samil-deal-card bg-white p-3 rounded-xl" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || '')}">
                 <div class="flex items-start gap-2 mb-2">
                     <span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
@@ -2264,7 +2380,7 @@ function renderSamilDeals() {
                     <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-slate-700 underline" onclick="event.stopPropagation()">Kommo</a>
+                    <button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;

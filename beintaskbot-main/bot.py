@@ -14,6 +14,8 @@ import os
 import re
 import json
 import math
+import hmac
+import hashlib
 import logging
 import requests
 import subprocess
@@ -6580,6 +6582,186 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         return overview
 
 
+_DEAL_SHARE_TTL_SEC = 30 * 24 * 3600
+
+
+def _deal_share_secret() -> bytes:
+    return str(TELEGRAM_TOKEN or "").encode("utf-8")
+
+
+def make_deal_share_token(lead_id: int) -> str:
+    exp = int(_time_module.time()) + _DEAL_SHARE_TTL_SEC
+    payload = f"{int(lead_id)}.{exp}"
+    digest = hmac.new(_deal_share_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return f"{payload}.{digest}"
+
+
+def parse_deal_share_token(token: str) -> int | None:
+    parts = str(token or "").strip().split(".")
+    if len(parts) != 3:
+        return None
+    lead_s, exp_s, digest = parts
+    try:
+        lead_id = int(lead_s)
+        exp = int(exp_s)
+    except (TypeError, ValueError):
+        return None
+    if exp < int(_time_module.time()):
+        return None
+    payload = f"{lead_id}.{exp}"
+    expected = hmac.new(_deal_share_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(expected, digest):
+        return None
+    return lead_id
+
+
+def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
+    try:
+        pipeline_id = int(lead.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pipeline_id not in all_personal_pipeline_ids():
+        return False
+    if is_admin(chat_id):
+        return True
+    owner = get_funnel_owner(chat_id)
+    return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
+
+
+def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | None:
+    """Read-only snapshot of a personal-funnel deal for in-app and shared view."""
+    lead = lead if isinstance(lead, dict) else get_lead_details(int(lead_id))
+    if not lead:
+        return None
+    try:
+        lid = int(lead.get("id") or lead_id)
+        pipeline_id = int(lead.get("pipeline_id") or 0)
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if pipeline_id not in all_personal_pipeline_ids():
+        return None
+    stages, names, _ui = load_pipeline_stage_maps(pipeline_id)
+    status_to_key = {int(sid): key for key, sid in stages.items()}
+    lead_contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    contact_rows = []
+    all_phones: list[str] = []
+    for linked in lead_contacts:
+        if not isinstance(linked, dict):
+            continue
+        linked_id = linked.get("id")
+        full = linked
+        if str(linked_id).isdigit():
+            fetched = get_contact_details(int(linked_id))
+            if fetched:
+                full = fetched
+        phones = _contact_phones(full)
+        for phone in phones:
+            if phone not in all_phones:
+                all_phones.append(phone)
+        contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
+    contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
+    last_note = ""
+    try:
+        note_resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/leads/{lid}/notes",
+            headers=HEADERS,
+            params={"limit": 20, "order[updated_at]": "desc"},
+            timeout=8,
+        )
+        if note_resp.status_code == 200:
+            for note in note_resp.json().get("_embedded", {}).get("notes", []) or []:
+                text = str((note.get("params") or {}).get("text") or "").strip()
+                if text:
+                    last_note = text
+                    break
+    except Exception as exc:
+        logger.warning("Deal view notes failed: %s", exc)
+    tasks = []
+    try:
+        task_resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/tasks",
+            headers=HEADERS,
+            params={"filter[entity_id]": lid, "filter[entity_type]": "leads", "limit": 50},
+            timeout=8,
+        )
+        if task_resp.status_code == 200:
+            for task in task_resp.json().get("_embedded", {}).get("tasks", []) or []:
+                if task.get("is_completed"):
+                    continue
+                deadline_ts = int(task.get("complete_till", 0) or 0)
+                tasks.append({
+                    "id": task.get("id"),
+                    "text": task.get("text") or "",
+                    "complete_till": deadline_ts,
+                    "deadline": datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else "",
+                    "task_type_id": task.get("task_type_id"),
+                })
+            tasks.sort(key=lambda item: (int(item.get("complete_till") or 0) == 0, int(item.get("complete_till") or 0)))
+    except Exception as exc:
+        logger.warning("Deal view tasks failed: %s", exc)
+    first_task = tasks[0] if tasks else {}
+    return {
+        "id": lid,
+        "name": lead.get("name") or "",
+        "stage_key": status_to_key.get(status_id, ""),
+        "stage_name": names.get(status_id, "Naməlum mərhələ"),
+        "contact_name": contact_name,
+        "phone": all_phones[0] if all_phones else "",
+        "phones": all_phones,
+        "contacts": contact_rows,
+        "created_at": lead.get("created_at", 0),
+        "updated_at": lead.get("updated_at", 0),
+        "last_note": last_note,
+        "task_desc": first_task.get("text") or "",
+        "deadline": first_task.get("deadline") or "",
+        "deadline_ts": int(first_task.get("complete_till") or 0),
+        "tasks": tasks,
+        "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
+        "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
+    }
+
+
+async def handle_api_deal_view(request: web.Request) -> web.Response:
+    raw_chat_id = (
+        request.headers.get("X-TG-User-ID")
+        or request.rel_url.query.get("uid")
+        or ""
+    )
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    lead = get_lead_details(lead_id)
+    if not lead:
+        return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    if not _user_can_view_personal_lead(chat_id, lead):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    deal = build_deal_view_payload(lead_id, lead)
+    if not deal:
+        return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    return web.json_response({"success": True, "deal": deal, "share_token": make_deal_share_token(lead_id)})
+
+
+async def handle_api_deal_public(request: web.Request) -> web.Response:
+    lead_id = parse_deal_share_token(request.rel_url.query.get("k") or "")
+    if not lead_id:
+        return web.json_response({"success": False, "error": "Link etibarsızdır və ya müddəti bitib"}, status=403)
+    deal = build_deal_view_payload(lead_id)
+    if not deal:
+        return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    deal.pop("kommo_link", None)
+    return web.json_response({"success": True, "deal": deal, "readonly": True})
+
+
 async def handle_api_rufat_overview(request: web.Request) -> web.Response:
     """Return the fully preloaded Rüfət workspace for instant stage switching."""
     raw_chat_id = (
@@ -7419,6 +7601,10 @@ async def start_webhook_server():
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)
+    app_web.router.add_route('OPTIONS', '/api/deal/view', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/view", handle_api_deal_view)
+    app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_get("/api/pending_actions", handle_get_pending_actions)
     app_web.router.add_post("/api/pending_actions/resolve", handle_resolve_action)
     app_web.router.add_post("/api/pending_actions/delete", handle_delete_pending_action)
