@@ -2214,22 +2214,24 @@ def execute_tool_search_contact(phone: str) -> str:
         results.append(format_contact_info(full_contact, notes, tasks))
     return "\n\n".join(results)
 
-def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None) -> int | None:
+def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None, status_id: int = None) -> int | None:
     """Create a deal linked to a contact in the requested pipeline."""
-    payload = [{
+    payload = {
         "name": contact_name or str(contact_id),
         "_embedded": {"contacts": [{"id": int(contact_id)}]},
         "pipeline_id": int(pipeline_id or PIPELINE_ID),
-    }]
+    }
+    if status_id:
+        payload["status_id"] = int(status_id)
     headers = {
         "Authorization": f"Bearer {KOMMO_TOKEN}",
         "Content-Type": "application/json",
     }
     try:
         response = _http.post(
-            f"https://texnikidestek50.kommo.com/api/v4/leads",
+            f"{KOMMO_BASE_URL}/api/v4/leads",
             headers=headers,
-            json=payload,
+            json=[payload],
             timeout=8,
         )
         if response.status_code in (200, 201):
@@ -2245,8 +2247,8 @@ def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int
     return None
 
 
-def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "", chat_id: int = None) -> dict:
-    """Resolve the task entity, creating or selecting a deal in the user's allowed pipeline."""
+def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "", chat_id: int = None, assignee_name: str = "") -> dict:
+    """Resolve the task entity, creating or selecting a deal in the icraçı funnel."""
     contacts = search_contact_by_phone(phone)
     if not contacts:
         contact_display_name = client_name or phone
@@ -2271,28 +2273,33 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         update_contact_kommo(contact_id, {"name": client_name})
         contact_name = client_name
     leads = (full_contact or {}).get("_embedded", {}).get("leads", [])
-    allowed_pipeline = get_pipeline_id_for_chat(chat_id)
-    if is_funnel_chat(chat_id):
-        leads = [lead for lead in leads if int(lead.get("pipeline_id", 0) or 0) == allowed_pipeline]
+    route = route_deal_for_employee(assignee_name) if assignee_name else None
+    if route:
+        allowed_pipeline, entry_status = route
+    else:
+        allowed_pipeline = get_pipeline_id_for_chat(chat_id)
+        entry_status = None
     lead_id = leads[0].get("id") if leads else None
     if not lead_id:
-        lead_id = create_lead_for_contact(contact_id, contact_name, allowed_pipeline)
+        lead_id = create_lead_for_contact(contact_id, contact_name, allowed_pipeline, entry_status)
         if not lead_id:
             return {"success": False, "message": "❌ Müştəri üçün sövdələşmə yaradıla bilmədi."}
         logger.info("Auto-created lead %s for contact %s", lead_id, contact_id)
+    elif assignee_name:
+        move_lead_to_icraci(lead_id, assignee_name)
 
     entity_id = int(lead_id)
     entity_type = "leads"
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
     assignee_map = {"rufat": 10932455, "soltan": 15531960, "huseyn": 10932455, "rasim": 10932455, "texniki": 10932455, "admin": 10932455, "sahe_meneceri": 10932455}
     assignee_id = assignee_map.get(assign_to, 10932455)
-    assignee_name = KOMMO_USERS.get(assignee_id, "Admin")
+    display_assignee = assignee_name or KOMMO_USERS.get(assignee_id, "Admin")
     return {
         "success": True, "needs_deadline": True,
         "contact_id": contact_id, "contact_name": contact_name,
         "entity_id": entity_id, "entity_type": entity_type,
         "link": link, "task_text": text,
-        "assignee_id": assignee_id, "assignee_name": assignee_name,
+        "assignee_id": assignee_id, "assignee_name": display_assignee,
         "phone": phone, "date": date, "time": time_str,
         "creator_chat_id": chat_id,
         "creator_name": get_employee_name_by_chat_id(chat_id, "") if chat_id else ""
@@ -5125,8 +5132,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             priority = _normalize_task_priority(data.get("priority", ""))
             assignee_name_raw = normalize_assignee_name(data.get("assigneeName") or data.get("assignee_name"))
             creator_name = get_employee_name_by_chat_id(chat_id, "")
-            if not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
-                assignee_name_raw = creator_name or "Nizami Qasımov"
+            if not assignee_name_raw:
+                return web.json_response({"success": False, "error": "İcraçı seçin."}, status=400)
             # Routing: all legacy Sahə Meneceri assignments now go to Admin.
             if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
                 assignee = "admin"
@@ -5164,7 +5171,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
             else:
                 client_name_input = data.get("client_name", "").strip()
-                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input, chat_id=chat_id)
+                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input, chat_id=chat_id, assignee_name=assignee_name_raw)
             if isinstance(result, str):
                 return web.json_response({"success": False, "error": result})
             if not result.get("success"):
@@ -5335,25 +5342,51 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 task_msg = f"\n\u2705 Tap\u015f\u0131r\u0131q: {task_text}"
             return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}{task_msg}", "link": link})
         elif action == "create_deal":
-            # For now, create_deal = change stage to specified + optionally create subtask
-            stage = data.get("stage", "yeni_sifaris")
-            result = execute_tool_change_stage(phone, stage, chat_id)
-            if not result.get("success"):
-                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
-            if result.get("needs_confirmation"):
-                return web.json_response({"success": False, "error": "Admin təsdiqi lazımdır. Botdan istifadə edin."})
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
-            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
-            # Subtask
-            if data.get("create_subtask") and data.get("subtask_text"):
-                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "rufat" if is_rufat_chat(chat_id) else "soltan", chat_id=chat_id)
-                if isinstance(st_result, dict) and st_result.get("success"):
-                    now = datetime.now(tz=BAKU_TZ)
-                    deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-                    create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
-            msg = f"✅ Sifariş yaradıldı!\n👤 {result['contact_name']}\n📌 {stage_display}"
-            link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
-            return web.json_response({"success": True, "message": msg, "link": link})
+            if not is_funnel_chat(chat_id):
+                return web.json_response({"success": False, "error": "Bu əməliyyat yalnız öz huniniz üçün mümkündür."}, status=403)
+            customer_name = str(data.get("customer_name") or "").strip()
+            note_text = str(data.get("note") or data.get("text") or "").strip()
+            stage_key = str(data.get("stage_key") or data.get("stage") or "").strip()
+            phone_raw = str(phone or data.get("phone") or "").strip()
+            if not customer_name:
+                return web.json_response({"success": False, "error": "Müştəri adını daxil edin."})
+            if not phone_raw or len(re.sub(r"\D", "", phone_raw)) < 7:
+                return web.json_response({"success": False, "error": "Telefon nömrəsini daxil edin."})
+            owner = get_funnel_owner(chat_id)
+            if not owner:
+                return web.json_response({"success": False, "error": "Huni tapılmadı."}, status=403)
+            stages = owner["stages"]
+            working_keys = {
+                str(key)
+                for key, _label in (owner.get("ui_stages") or [])
+                if key not in ("ugurlu", "imtina", "nerazobrannoye")
+            }
+            if stage_key not in stages or (working_keys and stage_key not in working_keys):
+                return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+            contacts = search_contact_by_phone(phone_raw)
+            contact_id = None
+            if contacts:
+                contact_id = int(contacts[0]["id"])
+                update_contact_kommo(contact_id, {"name": customer_name})
+            else:
+                created = create_contact_kommo(customer_name, phone_raw)
+                contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
+            if not contact_id:
+                return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
+            lead_id = create_lead_for_contact(int(contact_id), customer_name, owner["pipeline_id"], stages[stage_key])
+            if not lead_id:
+                return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
+            if note_text:
+                add_note(int(lead_id), note_text, "leads")
+            invalidate_rufat_overview_cache()
+            stage_label = owner["stage_names"].get(int(stages[stage_key]), stage_key)
+            return web.json_response({
+                "success": True,
+                "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
+                "lead_id": int(lead_id),
+                "stage_key": stage_key,
+                "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+            })
         elif action == "update_task":
             task_id = data.get("task_id")
             if not task_id:

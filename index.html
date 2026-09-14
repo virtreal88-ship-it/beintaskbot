@@ -282,7 +282,10 @@
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">Kartı başqa mərhələyə sürüşdürün</div>
             </div>
-            <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+            <div class="flex items-center gap-2">
+                <button type="button" onclick="openCreateDealModal()" class="bg-[#2481cc] text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yarat</button>
+                <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
+            </div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
@@ -1265,6 +1268,7 @@ function submitTask() {
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
     const textInput = textEl.value.trim();
     if(editingTaskId) {
+        if(!gd.assigneeName) { toast('İcraçı seçin!', true); return; }
         if(!textInput) { toast('Mətni daxil edin!', true); return; }
         let finalText = gd.assigneeName ? `[${gd.assigneeName}] ${textInput}` : textInput;
         const editClientName = document.getElementById('edit-client-name') ? document.getElementById('edit-client-name').value.trim() : '';
@@ -1305,8 +1309,82 @@ function submitTask() {
 
 function submitDeal() {
     if(HAS_OWN_FUNNEL && !gd.stage) gd.stage = SAMIL_UI_STAGES[0] ? SAMIL_UI_STAGES[0][0] : 'sorgular';
-    const hs = document.getElementById('deal-subtask-toggle').checked;
-    doFetch({action: 'create_deal', phone: gd.phone, customer_name: document.getElementById('deal-customer-name').value.trim(), stage: gd.stage || 'yeni_sifaris', create_subtask: hs, subtask_text: hs ? document.getElementById('deal-subtask-text').value.trim() : ''}, 'deal-submit-btn');
+    const nameEl = document.getElementById('deal-customer-name');
+    const phoneEl = document.getElementById('search-phone-flow');
+    const noteEl = document.getElementById('deal-subtask-text');
+    doFetch({
+        action: 'create_deal',
+        phone: gd.phone || (phoneEl ? phoneEl.value.trim() : ''),
+        customer_name: nameEl ? nameEl.value.trim() : '',
+        stage_key: gd.stage || 'sorgular',
+        note: noteEl && document.getElementById('deal-subtask-toggle')?.checked ? noteEl.value.trim() : ''
+    }, 'deal-submit-btn');
+}
+function openCreateDealModal() {
+    if(!HAS_OWN_FUNNEL) return;
+    document.getElementById('create-deal-modal')?.remove();
+    const defaultStage = (SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) ? samilStageFilter : (SAMIL_UI_STAGES[0] && SAMIL_UI_STAGES[0][0])) || '';
+    const stageOptions = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key === defaultStage ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    const modal = document.createElement('div');
+    modal.id = 'create-deal-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.onclick = (event) => { if(event.target === modal) closeCreateDealModal(); };
+    modal.innerHTML = `<div style="background:#fff;border-radius:20px;padding:18px;width:min(420px,100%);box-shadow:0 18px 50px rgba(15,23,42,.18)" onclick="event.stopPropagation()">
+        <div style="font-size:16px;font-weight:800;margin-bottom:12px">Yeni sövdələşmə</div>
+        <label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı</label>
+        <input id="create-deal-name" type="text" placeholder="Ad Soyad" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
+        <label class="text-xs font-bold text-gray-400 block mb-1">Telefon</label>
+        <input id="create-deal-phone" type="tel" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
+        <label class="text-xs font-bold text-gray-400 block mb-1">Qeyd</label>
+        <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
+        <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
+        <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
+        <div style="display:flex;gap:8px;margin-top:14px">
+            <button type="button" onclick="closeCreateDealModal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Ləğv et</button>
+            <button type="button" id="create-deal-save" onclick="submitCreateDeal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yarat</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+    document.getElementById('create-deal-name')?.focus();
+}
+function closeCreateDealModal() {
+    document.getElementById('create-deal-modal')?.remove();
+}
+async function submitCreateDeal() {
+    const name = document.getElementById('create-deal-name')?.value.trim() || '';
+    const phone = document.getElementById('create-deal-phone')?.value.trim() || '';
+    const note = document.getElementById('create-deal-note')?.value.trim() || '';
+    const stageKey = document.getElementById('create-deal-stage')?.value || '';
+    if(!name) { toast('Müştəri adını daxil edin!', true); return; }
+    if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
+    if(!stageKey || !SAMIL_UI_STAGES.some(([key]) => key === stageKey)) { toast('Mərhələni öz huninizdən seçin!', true); return; }
+    const btn = document.getElementById('create-deal-save');
+    const orig = btn ? btn.innerHTML : '';
+    if(btn) { btn.disabled = true; btn.innerHTML = 'Yüklənir...'; }
+    showLoader();
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note})
+        });
+        const j = await r.json();
+        if(r.ok && j.success) {
+            closeCreateDealModal();
+            toast(j.message || 'Sövdələşmə yaradıldı', false);
+            samilStageFilter = stageKey;
+            localStorage.setItem('samil_stage_filter', stageKey);
+            await loadSamilWorkspace(true, stageKey, true);
+            renderSamilDeals();
+        } else {
+            toast(j.error || 'Xəta!', true);
+        }
+    } catch(e) {
+        toast('Sistem xətası!', true);
+    } finally {
+        hideLoader();
+        if(btn) { btn.disabled = false; btn.innerHTML = orig; }
+    }
 }
 function submitNoteFlow() {
     const hs = document.getElementById('note-subtask-toggle').checked;
