@@ -43,78 +43,81 @@
             #tab-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:16px 16px 0 0; }
             #bottom-action-bar { max-width:600px; left:0; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; }
         }
-        /* Desktop: >= 1024px — sidebar navigation layout */
+        /* Desktop: >= 1024px — top navbar CRM layout */
         @media (min-width: 1024px) {
-            body { background:#f8f9fa; }
-            /* Hide mobile header and bottom tab bar */
-            #mobile-header { display:none !important; }
-            #tab-bar { display:none !important; }
-            /* Fixed left sidebar */
+            :root { --crm-nav-h: 60px; }
+            body { background:#f4f6f8; color:#0f172a; }
+            button:active { transform:none; opacity:1; }
+            #mobile-header, #tab-bar { display:none !important; }
             #desktop-sidebar {
-                display:flex; flex-direction:column;
-                position:fixed; top:0; left:0; bottom:0; width:240px;
-                background:#1a252f; color:#fff; z-index:45;
-                padding:24px 14px 20px; box-sizing:border-box;
-                box-shadow:2px 0 12px rgba(0,0,0,0.08);
+                display:flex; flex-direction:row; align-items:center; gap:12px;
+                position:fixed; top:0; left:0; right:0; bottom:auto; width:100%; height:var(--crm-nav-h);
+                background:#fff; color:#0f172a; z-index:50; padding:0 22px; box-sizing:border-box;
+                border-bottom:1px solid #e6e8eb; box-shadow:0 1px 0 rgba(15,23,42,.03);
             }
-            #desktop-sidebar .sidebar-brand { padding:0 12px 20px; border-bottom:1px solid rgba(255,255,255,0.08); margin-bottom:16px; }
-            #desktop-sidebar .sidebar-brand h1 { font-size:18px; font-weight:800; letter-spacing:0.03em; margin:0; color:#fff; }
-            #desktop-sidebar .sidebar-brand span { font-size:11px; color:#94a3b8; display:block; margin-top:2px; }
+            #desktop-sidebar .sidebar-brand { padding:0 18px 0 0; border:0; margin:0; flex-shrink:0; }
+            #desktop-sidebar .sidebar-brand h1 { font-size:15px; font-weight:700; letter-spacing:-0.03em; margin:0; color:#0f172a; }
+            #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
+            #desktop-sidebar .sidebar-nav { display:flex; align-items:center; gap:4px; flex:1; min-width:0; overflow-x:auto; }
             .sidebar-item {
-                display:flex; align-items:center; gap:12px; width:100%;
-                padding:12px 14px; margin-bottom:4px; border:none; background:transparent;
-                color:#cbd5e1; font-size:14px; font-weight:600; text-align:left;
-                border-radius:12px; cursor:pointer; font-family:inherit;
-                transition:background 0.15s ease, color 0.15s ease; position:relative;
+                display:flex; align-items:center; gap:8px; width:auto; padding:8px 12px; margin:0; border:none;
+                background:transparent; color:#64748b; font-size:13px; font-weight:600; text-align:left;
+                border-radius:8px; cursor:pointer; font-family:inherit; white-space:nowrap;
             }
-            .sidebar-item:hover { background:rgba(255,255,255,0.06); color:#fff; }
-            .sidebar-item.active { background:#2481cc; color:#fff; box-shadow:0 2px 8px rgba(36,129,204,0.35); }
-            .sidebar-item .sidebar-icon { font-size:18px; width:24px; text-align:center; flex-shrink:0; }
+            .sidebar-item:hover { background:#f1f5f9; color:#0f172a; }
+            .sidebar-item.active { background:#0f172a; color:#fff; box-shadow:none; }
+            .sidebar-item .sidebar-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; }
             .sidebar-badge {
-                margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
-                min-width:18px; height:18px; border-radius:9px;
-                display:flex; align-items:center; justify-content:center; padding:0 5px;
+                margin-left:6px; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
+                min-width:18px; height:18px; border-radius:9px; display:flex; align-items:center; justify-content:center; padding:0 5px;
             }
-            #sidebar-user {
-                margin-top:auto; padding:12px 14px; border-top:1px solid rgba(255,255,255,0.08);
-                font-size:12px; color:#94a3b8; word-break:break-word;
-            }
-            #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:6px; }
-            /* Main content shifted right of sidebar, centered at max 900px */
+            #sidebar-user { margin:0 0 0 auto; padding:0 0 0 16px; border:0; border-left:1px solid #e6e8eb; font-size:12px; font-weight:600; color:#475569; flex-shrink:0; }
+            #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:4px; }
             #content-area {
-                margin-left:240px; width:auto; max-width:none;
-                padding:32px 40px 48px; box-sizing:border-box;
+                margin:0; width:auto; max-width:none; height:100vh; max-height:100vh;
+                padding:calc(var(--crm-nav-h) + 16px) 24px 20px; box-sizing:border-box;
+                background:#f4f6f8; flex:none; overflow:auto;
             }
-            #content-area > .screen { max-width:900px; margin-left:auto; margin-right:auto; }
+            #content-area > .screen { max-width:1180px; margin-left:auto; margin-right:auto; }
             .screen { width:100%; box-sizing:border-box; }
             .screen input, .screen select, .screen textarea, .screen .space-y-3, .screen .bg-white { box-sizing:border-box; }
-            /* Larger typography on desktop */
             #content-area .text-\[11px\] { font-size:12px; }
             #content-area .text-\[10px\] { font-size:11px; }
-            /* Two-column grid for task and pending cards */
-            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container, #samil-deals-container {
-                display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; align-items:start;
+            #notifications-container, #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container {
+                display:flex; flex-direction:column; gap:10px; align-items:stretch;
             }
-            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > *, #samil-deals-container > * { margin:0 !important; }
-            /* Full-width rows inside grid (empty states, section separators) */
-            #notifications-container > div[class*='text-center'],
-            #pending-actions-container > div[class*='text-center'],
-            #balance-history-container > div[class*='text-center'],
-            #balance-history-container > div[class*='mt-4'],
-            #kpi-history-container > div[class*='text-center'],
-            #gozleme-container > div[class*='text-center'],
-            #samil-deals-container > div[class*='text-center'] { grid-column:1 / -1; }
-            /* Bottom sheet becomes a centered panel (offset by sidebar width) */
-            #bottom-action-bar { max-width:640px; left:240px; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; box-shadow:0 -8px 40px rgba(0,0,0,0.15); }
-            /* Desktop-only click actions on task cards */
+            #notifications-container > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container > * { margin:0 !important; }
+            #content-area .bg-white { border-color:#e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.04) !important; border-radius:12px !important; }
+            .filter-pill { background:#fff; border-color:#e6e8eb; border-radius:8px !important; }
+            .filter-pill.active { background:#0f172a; border-color:#0f172a; }
+            #bottom-action-bar { max-width:560px; left:0; right:0; margin-left:auto; margin-right:auto; border-radius:16px 16px 0 0; box-shadow:0 -8px 32px rgba(15,23,42,.12); }
             .desktop-task-actions { display:flex !important; }
-            /* Hide swipe hints on desktop */
             .swipe-hint { display:none !important; }
-            /* Show desktop action buttons on pending cards */
             .desktop-pending-actions { display:flex !important; }
         }
-        /* Hidden by default (mobile/tablet use swipe gestures) */
         .desktop-task-actions, .desktop-pending-actions { display:none; }
+        .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
+        #samil-deals-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
+        #samil-deals-container.samil-kanban-board > * { margin:0 !important; }
+        .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; }
+        .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
+        .samil-kanban-header { padding:12px 12px 8px; }
+        .samil-kanban-list { display:flex; flex:1; flex-direction:column; gap:10px; min-height:250px; overflow-y:auto; padding:10px; }
+        .samil-deal-card { cursor:grab; background:#fff; border:1px solid #e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.05) !important; }
+        .samil-deal-card.dragging { opacity:.45; }
+        .samil-deal-card.is-saving { opacity:.62; pointer-events:none; }
+        .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
+        .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
+        .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
+        @media (min-width: 1024px) {
+            #content-area > #screen-samil-deals.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - var(--crm-nav-h) - 36px); gap:10px; }
+            #screen-samil-deals > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
+            #samil-stage-nav, #samil-deals-count { display:none; }
+            .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
+            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; }
+            .samil-kanban-column { max-height:none; min-height:0; height:100%; }
+            .deal-drag-hint, .deal-drag-handle { display:inline; }
+        }
     </style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
@@ -135,30 +138,32 @@
     </div>
 </div>
 
-<!-- DESKTOP SIDEBAR (>=1024px only) -->
+<!-- DESKTOP NAVBAR (>=1024px only) -->
 <nav id="desktop-sidebar" aria-label="Əsas naviqasiya">
     <div class="sidebar-brand">
         <h1>Bein Systems</h1>
-        <span>CRM Smart Assistant</span>
+        <span>CRM</span>
     </div>
-    <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
-        <span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
-    </button>
-    <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
-        <span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
-    </button>
-    <button id="side-tab-create" class="sidebar-item" onclick="switchTab('tab-create')">
-        <span class="sidebar-icon">➕</span><span>Yeni</span>
-    </button>
-    <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
-        <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Balans</span>
-    </button>
-    <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-        <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
-    </button>
-    <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
-        <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
-    </button>
+    <div class="sidebar-nav">
+        <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
+            <span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
+        </button>
+        <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
+            <span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
+        </button>
+        <button id="side-tab-create" class="sidebar-item" onclick="switchTab('tab-create')">
+            <span class="sidebar-icon">➕</span><span>Yeni</span>
+        </button>
+        <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
+            <span class="sidebar-icon">📊</span><span id="side-tab-history-label">Balans</span>
+        </button>
+        <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
+            <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
+        </button>
+        <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
+            <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+        </button>
+    </div>
     <div id="sidebar-user">
         <div id="sidebar-user-name"></div>
         <div id="sidebar-sync"><span class="sync-spinner"></span><span>Yenilənir...</span></div>
@@ -251,13 +256,15 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Mərhələ üzrə müştərilər</div>
+                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Kartı başqa mərhələyə sürüşdürün</div>
             </div>
-            <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+            <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
         </div>
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Şamilin mərhələləri"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
-        <div id="samil-deals-container" class="space-y-3" style="padding-bottom:20px;"></div>
+        <div class="samil-kanban-wrap custom-scroll">
+            <div id="samil-deals-container" class="samil-kanban-board"></div>
+        </div>
     </div>
 
     <!-- SCREEN: CREATE TASK -->
@@ -580,6 +587,15 @@ let samilDealsByStage = {};
 let samilStageCounts = {};
 let samilStageFilter = localStorage.getItem('samil_stage_filter') || 'sorgular';
 let samilWorkspaceRequest = null;
+let samilWorkspaceLoadedAt = 0;
+const samilPendingStageMoves = new Map();
+let samilDealDragState = null;
+const SAMIL_STAGE_COLORS = {
+    nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
+    geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
+    qurashdirma:'#22c55e', muzakire:'#a855f7', ugurlu:'#10b981', imtina:'#ef4444'
+};
+function stageColor(stageKey) { return SAMIL_STAGE_COLORS[stageKey] || '#64748b'; }
 function applySamilUi() {
     if(!IS_SAMIL) return;
     const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
@@ -642,6 +658,54 @@ function groupSamilDealsByStage(deals) {
     return grouped;
 }
 
+function persistLocalSamilWorkspace() {
+    try {
+        setCachedSamilWorkspace({
+            deals: samilDeals,
+            deals_by_stage: samilDealsByStage,
+            stage_counts: samilStageCounts,
+            tasks: mockTasks,
+            gozleme: gozlemeItems,
+            stage_key: null,
+        });
+    } catch (e) {}
+}
+function applyPendingSamilStageMoves() {
+    const now = Date.now();
+    samilPendingStageMoves.forEach((move, dealId) => {
+        if (!move || now - Number(move.at || 0) > 120000) {
+            samilPendingStageMoves.delete(dealId);
+            return;
+        }
+        const deal = samilDeals.find(item => String(item.id) === String(dealId));
+        if (!deal) return;
+        if (deal.stage_key === move.stageKey) samilPendingStageMoves.delete(dealId);
+        else updateLocalSamilDealStage(dealId, move.stageKey, false);
+    });
+}
+function updateLocalSamilDealStage(dealId, stageKey, trackPending = true) {
+    const stageInfo = SAMIL_ALL_STAGES.find(([key]) => key === stageKey) || SAMIL_UI_STAGES.find(([key]) => key === stageKey);
+    const deal = samilDeals.find(item => String(item.id) === String(dealId));
+    if (deal) {
+        deal.stage_key = stageKey;
+        deal.stage_name = stageInfo?.[1] || deal.stage_name;
+    }
+    Object.keys(samilDealsByStage).forEach(key => {
+        samilDealsByStage[key] = (samilDealsByStage[key] || []).filter(item => String(item.id) !== String(dealId));
+    });
+    if (!Array.isArray(samilDealsByStage[stageKey])) samilDealsByStage[stageKey] = [];
+    if (deal) samilDealsByStage[stageKey].push(deal);
+    SAMIL_UI_STAGES.forEach(([key]) => {
+        samilStageCounts[key] = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0;
+    });
+    const applyStageName = item => {
+        if (String(item?.lead_id) === String(dealId)) item.stage_name = stageInfo?.[1] || item.stage_name;
+    };
+    (Array.isArray(mockTasks) ? mockTasks : []).forEach(applyStageName);
+    (Array.isArray(gozlemeItems) ? gozlemeItems : []).forEach(applyStageName);
+    if (trackPending) samilPendingStageMoves.set(String(dealId), {stageKey, at: Date.now()});
+}
+
 function applySamilWorkspace(payload) {
     syncSamilStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
@@ -663,13 +727,15 @@ function applySamilWorkspace(payload) {
         if(!Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = samilDealsByStage[key].length;
     });
     if(payload.user_name) setUserDisplayName(payload.user_name);
+    applyPendingSamilStageMoves();
 }
 
-async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
+async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
     if(!IS_SAMIL) return false;
     if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
+    const shouldRefresh = Boolean(showFeedback || forceRefresh);
     if(samilWorkspaceRequest) return samilWorkspaceRequest;
     samilWorkspaceRequest = (async () => {
         const controller = new AbortController();
@@ -680,7 +746,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
         const timeout = setTimeout(() => controller.abort(), 45000);
         showSyncIndicator();
         try {
-            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + '&_ts=' + Date.now(), {
+            const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + (shouldRefresh ? '&refresh=1' : '') + '&_ts=' + Date.now(), {
                 cache: 'no-store',
                 // `cache: 'no-store'` already prevents stale data without triggering a CORS preflight for Cache-Control.
                 headers: {'X-TG-User-ID': CURRENT_USER_ID}, signal: controller.signal
@@ -690,7 +756,8 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null) {
             applySamilWorkspace(payload);
             setCachedTasks(mockTasks);
             setCachedGozleme(gozlemeItems);
-            setCachedSamilWorkspace(payload);
+            persistLocalSamilWorkspace();
+            samilWorkspaceLoadedAt = Date.now();
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
             if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
@@ -762,6 +829,7 @@ async function initApp() {
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
         if(IS_SAMIL) {
+            if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
             loadSamilWorkspace();
         } else {
             syncNotifications();
@@ -1637,6 +1705,68 @@ function setSamilStageFilter(stageKey) {
     renderSamilDeals();
 }
 
+function bindSamilDealCard(card, deal) {
+    if(!card) return;
+    let timer;
+    const moreButton = card.querySelector('.deal-more-btn');
+    if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
+    card.addEventListener('dragstart', event => {
+        samilDealDragState = { dealId: String(deal.id), fromStage: deal.stage_key };
+        card.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(deal.id));
+    });
+    card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        document.querySelectorAll('.samil-kanban-column.drag-over').forEach(column => column.classList.remove('drag-over'));
+        samilDealDragState = null;
+    });
+    card.addEventListener('touchstart', e => { timer = setTimeout(() => { e.preventDefault(); showDealContextMenu(deal, e.touches[0].clientX, e.touches[0].clientY); }, 500); }, {passive:false});
+    card.addEventListener('touchend', () => clearTimeout(timer));
+    card.addEventListener('touchmove', () => clearTimeout(timer));
+}
+function bindSamilColumnDrop(column) {
+    column.addEventListener('dragover', event => {
+        if(!samilDealDragState) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        column.classList.add('drag-over');
+    });
+    column.addEventListener('dragleave', event => {
+        if(!column.contains(event.relatedTarget)) column.classList.remove('drag-over');
+    });
+    column.addEventListener('drop', async event => {
+        event.preventDefault();
+        column.classList.remove('drag-over');
+        const dealId = event.dataTransfer.getData('text/plain') || samilDealDragState?.dealId;
+        const nextStageKey = column.dataset.stageColumn;
+        if(!dealId || !nextStageKey) return;
+        await moveSamilDealToStage(dealId, nextStageKey);
+    });
+}
+async function moveSamilDealToStage(dealId, nextStageKey) {
+    const deal = samilDeals.find(item => String(item.id) === String(dealId));
+    if(!deal || deal.stage_key === nextStageKey) return;
+    const previousStageKey = deal.stage_key;
+    updateLocalSamilDealStage(dealId, nextStageKey);
+    samilStageFilter = nextStageKey;
+    localStorage.setItem('samil_stage_filter', nextStageKey);
+    renderSamilDeals();
+    document.querySelector(`[data-deal-id="${dealId}"]`)?.classList.add('is-saving');
+    try {
+        await samilDealAction({ action:'deal_edit', lead_id:Number(dealId), stage_key:nextStageKey });
+        toast('Mərhələ dəyişdirildi', false);
+        persistLocalSamilWorkspace();
+        document.querySelector(`[data-deal-id="${dealId}"]`)?.classList.remove('is-saving');
+    } catch(error) {
+        samilPendingStageMoves.delete(String(dealId));
+        updateLocalSamilDealStage(dealId, previousStageKey, false);
+        samilStageFilter = previousStageKey;
+        renderSamilDeals();
+        toast(error.message || 'Mərhələ dəyişdirilmədi', true);
+    }
+}
+
 function renderSamilDeals() {
     const nav = document.getElementById('samil-stage-nav');
     const container = document.getElementById('samil-deals-container');
@@ -1646,42 +1776,65 @@ function renderSamilDeals() {
     const localCount = key => (Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0);
     const stageTotal = key => Number.isFinite(Number(samilStageCounts[key])) ? Number(samilStageCounts[key]) : localCount(key);
     nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
-    const filtered = Array.isArray(samilDealsByStage[samilStageFilter])
-        ? samilDealsByStage[samilStageFilter]
-        : samilDeals.filter(deal => deal.stage_key === samilStageFilter);
-    const activeLabel = (SAMIL_UI_STAGES.find(([key]) => key === samilStageFilter) || ['', 'Mərhələ'])[1];
-    count.textContent = `${activeLabel}: ${filtered.length} sövdələşmə`;
-    if(!filtered.length) {
-        container.innerHTML = '<div class="text-center py-10 text-gray-400 text-xs font-semibold">Bu mərhələdə sövdələşmə yoxdur.</div>';
-        return;
-    }
-    container.innerHTML = filtered.map(deal => {
-        const dealTitle = escapeHtml(deal.name || '—');
-        const clientName = escapeHtml(deal.contact_name || '—');
-        const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
-        const phone = escapeHtml(phoneList.join(', ') || '—');
-        const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ'), link = escapeHtml(deal.kommo_link || '#');
-        const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
-        const note = escapeHtml(deal.last_note || '—'), task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
-        const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
-        const tasksHtml = allTasks.length > 1 ? allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('') : task;
-        const audio = deal.voice_url ? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>` : '<span class="text-gray-400">—</span>';
-        return `<article class="samil-deal-card bg-white p-3.5 rounded-xl border-l-4 border-l-violet-500 border border-gray-100 shadow-sm" data-deal-id="${deal.id}">
-            <div class="flex items-start justify-between gap-3 mb-2"><span class="text-[10px] text-gray-400 font-bold">Sövdələşmə məlumatı</span><div class="flex items-center gap-2"><span class="shrink-0 bg-violet-50 text-violet-700 text-[10px] font-black px-2 py-0.5 rounded-md">${stageName}</span><button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button></div></div>
-            <div class="space-y-1 text-[11px] text-gray-700">
-                <div>📌 <b>Sövdələşmə:</b> ${dealTitle}</div><div>👤 <b>Müştəri:</b> ${clientName}</div><div>📞 <b>Telefon:</b> ${phone}</div>
-                <div>📝 <b>Son qeyd:</b> ${note}</div><div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
-                <div>🕒 <b>Yaradılıb:</b> ${created}</div><div>⏰ <b>Dedlayn:</b> ${escapeHtml(deal.deadline || '—')}</div>
-                <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
-            </div><div class="mt-3 pt-2 border-t border-gray-100"><a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-bold text-blue-600 underline" onclick="event.stopPropagation()">🔗 Kommo CRM</a></div>
-        </article>`;
+    const totalDeals = SAMIL_UI_STAGES.reduce((sum, [key]) => sum + stageTotal(key), 0);
+    count.textContent = `${totalDeals} aktiv sövdələşmə · Kartı başqa mərhələyə sürüşdürün`;
+    container.className = 'samil-kanban-board';
+    container.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => {
+        const deals = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key] : samilDeals.filter(deal => deal.stage_key === key);
+        const cardsHtml = deals.length ? deals.map(deal => {
+            const dealTitle = escapeHtml(deal.name || '—');
+            const clientName = escapeHtml(deal.contact_name || '—');
+            const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+            const phone = escapeHtml(phoneList.join(', ') || '—');
+            const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ'), link = escapeHtml(deal.kommo_link || '#');
+            const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+            const note = escapeHtml(deal.last_note || '—'), task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
+            const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+            const tasksHtml = allTasks.length > 1 ? allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('') : task;
+            const audio = deal.voice_url ? `<audio controls preload="none" style="height:28px;width:100%" src="${escapeHtml(deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url)}" onclick="event.stopPropagation()"></audio>` : '<span class="text-gray-400">—</span>';
+            return `<article class="samil-deal-card bg-white p-3 rounded-xl" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || '')}">
+                <div class="flex items-start gap-2 mb-2">
+                    <span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
+                    <div class="min-w-0 flex-1">
+                        <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
+                        <div class="text-sm font-semibold text-slate-900 truncate">${dealTitle}</div>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
+                        <button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button>
+                    </div>
+                </div>
+                <div class="space-y-1 text-[11px] text-gray-600">
+                    <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
+                    <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
+                    <div>📝 <b>Son qeyd:</b> ${note}</div>
+                    <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
+                    <div class="grid grid-cols-2 gap-2 text-gray-500"><div>🕒 ${created}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
+                    <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
+                </div>
+                <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
+                    <a href="${link}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-slate-700 underline" onclick="event.stopPropagation()">Kommo</a>
+                    <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
+                </div>
+            </article>`;
+        }).join('') : '<div class="samil-empty-column">Bu mərhələdə sövdələşmə yoxdur.</div>';
+        return `<section class="samil-kanban-column ${samilStageFilter === key ? 'active-column' : ''}" data-stage-column="${key}">
+            <div class="samil-kanban-header">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="stage-dot" style="background:${stageColor(key)}"></span>
+                        <div class="text-[13px] font-semibold text-slate-800 truncate">${escapeHtml(label)}</div>
+                    </div>
+                    <span class="bg-white/80 text-slate-500 text-[10px] font-semibold px-2 py-0.5 rounded-full">${stageTotal(key)}</span>
+                </div>
+            </div>
+            <div class="samil-kanban-list custom-scroll">${cardsHtml}</div>
+        </section>`;
     }).join('');
-    filtered.forEach(deal => {
-        const card = container.querySelector(`[data-deal-id="${deal.id}"]`); let timer;
-        const moreButton = card?.querySelector('.deal-more-btn');
-        if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
-        card.addEventListener('touchstart', e => { timer = setTimeout(() => { e.preventDefault(); showDealContextMenu(deal, e.touches[0].clientX, e.touches[0].clientY); }, 500); }, {passive:false});
-        card.addEventListener('touchend', () => clearTimeout(timer)); card.addEventListener('touchmove', () => clearTimeout(timer));
+    container.querySelectorAll('.samil-kanban-column').forEach(bindSamilColumnDrop);
+    SAMIL_UI_STAGES.forEach(([key]) => {
+        const deals = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key] : [];
+        deals.forEach(deal => bindSamilDealCard(container.querySelector(`[data-deal-id="${deal.id}"]`), deal));
     });
 }
 
@@ -1703,7 +1856,7 @@ function showDealModal(deal, mode) {
     const body = mode==='edit' ? `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>` : `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>${mode==='task'?'<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px"><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select>':''}`;
     modal.innerHTML=`<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal); modal.querySelector('#deal-modal-cancel').onclick=()=>modal.remove();
-    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); await loadSamilWorkspace(false);}catch(e){toast(e.message,true)}};
+    modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); if(mode==='edit'){ const nextStageKey=payload.stage_key; if(nextStageKey && nextStageKey!==deal.stage_key){ updateLocalSamilDealStage(deal.id, nextStageKey); samilStageFilter=nextStageKey; localStorage.setItem('samil_stage_filter', nextStageKey); renderSamilDeals(); } persistLocalSamilWorkspace(); } else { await loadSamilWorkspace(false, null, true); } }catch(e){toast(e.message,true)}};
 }
 async function openSamilDeals() {
     if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
@@ -2482,7 +2635,7 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 async function clearAppCacheOnce() {
-  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_12') === '1') return;
+  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_14') === '1') return;
   if ('caches' in window) {
     const cacheNames = await caches.keys();
     await Promise.all(cacheNames.map(name => caches.delete(name)));
@@ -2490,13 +2643,13 @@ async function clearAppCacheOnce() {
   Object.keys(localStorage).forEach(key => {
     if (key.startsWith('cached_')) localStorage.removeItem(key);
   });
-  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_12', '1');
+  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_14', '1');
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=171-cache-clear');
+    const reg = await navigator.serviceWorker.register('sw.js?v=172-desktop-crm');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
