@@ -599,7 +599,7 @@ def _apply_pending_kpi_stars(action_data: dict, stars: int) -> bool:
     return bool(saved)
 
 
-def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, stars: int = 0) -> tuple[bool, str]:
+def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, stars: int = 0, amount: float = 0) -> tuple[bool, str]:
     """Execute one persisted admin action and resolve it only after success."""
     actions = get_pending_actions()
     action = next((item for item in actions if item.get("id") == action_id), None)
@@ -980,40 +980,43 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     else:
         return False, "Naməlum sorğu növü."
 
-    # Optional KPI stars on confirm (swipe-right Təsdiq et panel)
-    if stars and choice == "Təsdiq et":
-        _apply_pending_kpi_stars(action_data, stars)
-    # Salary balance: add 1 AZN per confirmed task (3 AZN if 5 stars)
+    # Admin-entered amount first sits in Gözləmədə; Maliyyə confirm adds it to balance.
     if choice == "Təsdiq et":
-        _sal_employee_tg = None
-        for _k in ("sender_chat_id", "employee_chat_id"):
-            _v = action_data.get(_k)
-            if _v and int(_v) != ADMIN_CHAT_ID:
-                _sal_employee_tg = int(_v)
-                break
-        if not _sal_employee_tg:
-            _sn = action_data.get("sender_name", "")
-            _sal_employee_tg = NAME_TO_CHAT.get(_sn)
-            if _sal_employee_tg: _sal_employee_tg = int(_sal_employee_tg)
-        if _sal_employee_tg and get_employee_type(_sal_employee_tg) == "salary" and stars:
-            _sal_amount = stars * 0.5  # 1⭐=0.5, 2⭐=1.0, 3⭐=1.5, 4⭐=2.0, 5⭐=2.5
-            _sal_name = _EMPLOYEE_NAMES_BY_TG.get(_sal_employee_tg, "")
-            _star_str = "\u2b50" * stars
-            _sal_task_id = action_data.get("task_id", 0)
-            try: _sal_task_id = int(_sal_task_id)
-            except: _sal_task_id = 0
-            _star_str_display = "\u2b50" * stars
-            add_balance_transaction(
-                telegram_id=_sal_employee_tg,
-                task_id=_sal_task_id,
-                amount=_sal_amount,
-                task_text=f"Tap\u015f\u0131r\u0131q t\u0259sdiql\u0259ndi {_star_str_display} ({_sal_amount:.2f} AZN)",
-                executor_name=_sal_name,
-                client=action_data.get("contact_name", ""),
-                phone=action_data.get("phone", ""),
-                task_type=action_data.get("task_type_name", ""),
-                status="confirmed",
-            )
+        try:
+            payout_amount = float(amount or 0)
+        except (TypeError, ValueError):
+            payout_amount = 0.0
+        if math.isfinite(payout_amount) and payout_amount > 0:
+            _sal_employee_tg = None
+            for _k in ("sender_chat_id", "employee_chat_id"):
+                _v = action_data.get(_k)
+                if _v and int(_v) != ADMIN_CHAT_ID:
+                    _sal_employee_tg = int(_v)
+                    break
+            if not _sal_employee_tg:
+                _sn = action_data.get("sender_name", "")
+                _sal_employee_tg = NAME_TO_CHAT.get(_sn)
+                if _sal_employee_tg:
+                    _sal_employee_tg = int(_sal_employee_tg)
+            if _sal_employee_tg:
+                _sal_name = _EMPLOYEE_NAMES_BY_TG.get(_sal_employee_tg, "")
+                _sal_task_id = action_data.get("task_id", 0)
+                try:
+                    _sal_task_id = int(_sal_task_id)
+                except (TypeError, ValueError):
+                    _sal_task_id = 0
+                add_balance_transaction(
+                    telegram_id=_sal_employee_tg,
+                    task_id=_sal_task_id,
+                    amount=payout_amount,
+                    task_text=f"Tapşırıq təsdiqləndi ({payout_amount:.2f} AZN)",
+                    executor_name=_sal_name,
+                    client=action_data.get("contact_name", ""),
+                    phone=action_data.get("phone", ""),
+                    task_type=action_data.get("task_type_name", ""),
+                    result_text=action_data.get("note") or action_data.get("task_text") or "",
+                    status="pending",
+                )
     if not mark_pending_action_resolved(action_id=action_id, choice=choice):
         return False, "Əməliyyat icra olundu, lakin sorğu bağlanmadı."
     _clear_runtime_pending_action(action)
@@ -4448,15 +4451,22 @@ async def handle_resolve_action(request: web.Request) -> web.Response:
     choice = data.get("choice")
     kpi_score = data.get("kpi_score", 0)
     stars = data.get("stars", 0)
+    amount = data.get("amount", 0)
     if not action_id or not choice:
         return web.json_response({"success": False, "message": "Sorğu və seçim tələb olunur."}, status=400)
     user_agent = request.headers.get("User-Agent", "unknown")
-    logger.info(f"RESOLVE_ACTION: id={action_id}, choice={choice}, stars={stars}, chat_id={chat_id}, UA={user_agent[:80]}")
+    logger.info(f"RESOLVE_ACTION: id={action_id}, choice={choice}, amount={amount}, chat_id={chat_id}, UA={user_agent[:80]}")
     try:
         stars = int(stars or 0)
     except (TypeError, ValueError):
         stars = 0
-    success, message = resolve_pending_action(str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0, stars=stars)
+    try:
+        amount = float(amount or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    success, message = resolve_pending_action(
+        str(action_id), str(choice), kpi_score=int(kpi_score) if kpi_score else 0, stars=stars, amount=amount
+    )
     return web.json_response({"success": success, "message": message})
 
 
@@ -5325,9 +5335,22 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 if samil_completion_stage:
                     target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
                     target_pipeline_name = "Rüfət Həsənzadə" if target_pipeline_id == RUFAT_PIPELINE_ID else "Əməliyyatlar lövhəsi"
-                    if target_status_id == 142 and not _task_creator_is_rufat:
-                        # Only successful completion requires Admin approval; all other choices move immediately.
-                        # Rüfət-created tasks bypass Nizami's approval flow.
+                    if update_lead_kommo(
+                        int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
+                    ):
+                        stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
+                        rufat_stage_key = next(
+                            (key for key, sid in RUFAT_STAGES.items() if int(sid) == int(target_status_id) and int(target_pipeline_id) == RUFAT_PIPELINE_ID),
+                            None,
+                        )
+                        if rufat_stage_key:
+                            patch_rufat_overview_deal_stage(int(lead_id), rufat_stage_key)
+                        else:
+                            invalidate_rufat_overview_cache()
+                    else:
+                        logger.error("Rüfət completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
+                        stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
+                    if target_status_id == 142:
                         conf_key = str(uuid.uuid4())[:8]
                         completion_sender = get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
                         deadline_display = (
@@ -5351,7 +5374,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 ]])
                                 sent = await _bot_app.bot.send_message(
                                     int(admin_chat),
-                                    f"🔄 *{completion_sender}* uğurla tamamlanmanı təsdiqə göndərdi:\n\n"
+                                    f"🔄 *{completion_sender}* uğurla tamamladı — məbləğ təsdiqi:\n\n"
                                     f"👤 {contact_name or '—'}\n📝 {task_desc}\n📞 {phone or '—'}\n"
                                     f"⏰ {deadline_display}\n📌 {target_pipeline_name}: {target_stage_name}\n🔗 {link}",
                                     parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True,
@@ -5360,6 +5383,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 logger.error(f"Rüfət completion confirmation send error: {exc}")
                         save_pending_action("confirm_stage", {
                             "contact_name": contact_name or "—", "phone": phone or "—", "lead_id": int(lead_id),
+                            "task_id": int(task_id),
                             "status_id": int(target_status_id), "stage_name": target_stage_name,
                             "stage_key": selected_stage, "pipeline_id": int(target_pipeline_id),
                             "sender_name": completion_sender, "sender_chat_id": int(chat_id), "conf_key": conf_key,
@@ -5368,16 +5392,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         }, ["Təsdiq et", "Rədd et"])
                         send_push_to_admin(
                             f"{completion_sender}: {contact_name or '—'} → {target_stage_name}",
-                            title="🔄 Uğurla tamamlandı — təsdiq", url="#pending",
+                            title="🔄 Uğurla tamamlandı — məbləğ", url="#pending",
                         )
-                        stage_msg = "\n📌 Uğurla tamamlandı: Admin təsdiqi gözlənilir"
-                    elif update_lead_kommo(
-                        int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
-                    ):
-                        stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
-                    else:
-                        logger.error("Rüfət completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
-                        stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
                 else:
                     # Existing behaviour for every employee other than Rüfət.
                     try:
@@ -5605,6 +5621,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "lead_id": lead_id,
                             "task_id": int(task_id),
                             "sender_name": completion_sender,
+                            "sender_chat_id": int(chat_id),
                             "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
                             "task_price": task_price_match.group(1) if task_price_match else "",
                             "note": note_text or "",

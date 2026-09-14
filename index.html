@@ -25,6 +25,19 @@
         .screen { display:none; } .screen.active { display:block; }
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
+        #screen-create { margin:0; }
+        #screen-create .create-form { padding:12px; }
+        #screen-create .create-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
+        #screen-create .create-grid .create-span-2 { grid-column:1 / -1; }
+        #screen-create .create-form label { font-size:10px; margin-bottom:2px; }
+        #screen-create .create-form input,
+        #screen-create .create-form select,
+        #screen-create .create-form textarea { padding:7px 10px; font-size:12px; border-radius:10px; }
+        #screen-create #task-desc { height:56px; min-height:56px; }
+        #screen-create #task-submit-btn { padding:10px; margin-top:4px; }
+        @media (max-width: 700px) {
+            #screen-create .create-grid { grid-template-columns:1fr; }
+        }
         .stage-row.selected { background:#2481cc !important; color:#fff !important; }
         button { transition: transform 0.1s ease, opacity 0.15s ease; }
         button:active { transform: scale(0.95); opacity:0.85; }
@@ -259,15 +272,19 @@
             <span class="text-sm font-extrabold text-gray-800">Yeni tapşırıq</span>
             <span></span>
         </div>
-        <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="create-form space-y-2 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+            <div class="create-grid">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
-            <div id="search-error" style="display:none;" class="text-red-500 text-[11px] font-bold">Min 7 rəqəm daxil edin.</div>
+            <div id="search-error" class="create-span-2 text-red-500 text-[11px] font-bold" style="display:none;">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="1">Əlaqə saxla</option><option value="2">Görüş</option><option value="4232112">Texniki tapşırıq</option><option value="3263995">Təqdimat</option><option value="3263999">Quraşdırma</option><option value="4232108">Import</option><option value="4239844">xatırlat müşt.</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Deadline:</label>
+                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
+            </div>
+            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none h-32 resize-none"></textarea></div>
+            <div class="create-span-2"><label class="text-xs font-bold text-gray-400 block mb-1">Səs yazısı:</label>
                 <div class="flex items-center gap-2">
                     <button type="button" id="voice-record-btn" onclick="toggleVoiceRecord()" class="bg-gray-100 border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5">🎙 Yaz</button>
                     <span id="voice-status" class="text-[11px] text-gray-500"></span>
@@ -275,8 +292,6 @@
                 </div>
                 <audio id="voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
             </div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1.5">Deadline:</label>
-                <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
             </div>
             <button id="task-submit-btn" onclick="submitTask()" class="w-full bg-[#2481cc] hover:bg-[#1d6fae] text-white font-bold py-3 rounded-xl text-xs transition-all shadow-md active:scale-95">🚀 Tapşırığı CRM-ə Göndər</button>
         </div>
@@ -690,7 +705,9 @@ let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['6824377548','7329891614','1289510272','6596538872','1142054888'];
+const ADMIN_IDS = ['1628569350'];
 if(SALARY_IDS.includes(CURRENT_USER_ID)) { employeeType = 'salary'; }
+if(ADMIN_IDS.includes(CURRENT_USER_ID)) { isAdmin = true; }
 document.addEventListener('DOMContentLoaded', () => { });
 
 function setUserDisplayName(name) {
@@ -866,6 +883,10 @@ function setPendingTabVisible() {
     if(tab) tab.style.display = isAdmin ? 'flex' : 'none';
     const sideTab = document.getElementById('side-tab-pending');
     if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
+    const hesabatTab = document.getElementById('tab-hesabat');
+    if(hesabatTab) hesabatTab.style.display = isAdmin ? 'none' : 'flex';
+    const sideHesabat = document.getElementById('side-tab-hesabat');
+    if(sideHesabat) sideHesabat.style.display = isAdmin ? 'none' : 'flex';
 }
 function setSidebarActive(tabId) {
     ['tab-tasks','tab-samil-deals','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending'].forEach(id => {
@@ -1412,36 +1433,26 @@ function showPendingConfirmPanel(action) {
     const overlay = document.createElement('div');
     overlay.id = 'pending-confirm-panel';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;';
-    let selectedStars = 0;
-    const starsHtml = [1,2,3,4,5].map(i => `<button data-star="${i}" style="background:none;border:none;font-size:32px;opacity:0.25;cursor:pointer;padding:4px;transition:opacity .15s;">⭐</button>`).join('');
     overlay.innerHTML = `
       <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:20px 20px 28px;box-shadow:0 -8px 30px rgba(0,0,0,0.2);">
         <div style="width:40px;height:4px;background:#d1d5db;border-radius:2px;margin:0 auto 16px;"></div>
         <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:4px;">Təsdiq et</div>
         <div style="font-size:12px;color:#64748b;margin-bottom:14px;">👤 ${(data.contact_name || data.client_name || '—')} · ${(data.sender_name ? '👷 ' + data.sender_name : '')}</div>
-        <div style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:4px;">KPI qiyməti (istəyə bağlı — seçməsəniz KPI təsir etmir):</div>
-        <div id="pcp-stars" style="display:flex;justify-content:center;gap:2px;margin-bottom:6px;">${starsHtml}</div>
-        <div id="pcp-stars-label" style="text-align:center;font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:14px;">Ulduz seçilməyib</div>
+        <label style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:4px;display:block;">Məbləğ (AZN) — əvvəlcə gözləməyə düşür:</label>
+        <input id="pcp-amount" type="number" min="0.01" step="0.01" placeholder="0.00" style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:12px;font-size:16px;font-weight:700;margin-bottom:14px;box-sizing:border-box;">
         <button id="pcp-confirm" style="width:100%;background:#10b981;color:#fff;font-weight:800;padding:14px;border:none;border-radius:14px;font-size:14px;cursor:pointer;">✅ Təsdiq et</button>
         <button id="pcp-cancel" style="width:100%;background:#f1f5f9;color:#64748b;font-weight:700;padding:12px;border:none;border-radius:14px;font-size:12px;margin-top:8px;cursor:pointer;">Ləğv et</button>
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => { if(e.target === overlay) overlay.remove(); });
-    overlay.querySelectorAll('#pcp-stars button').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const val = parseInt(btn.dataset.star);
-            selectedStars = (selectedStars === val) ? 0 : val; // tap same star again to deselect
-            overlay.querySelectorAll('#pcp-stars button').forEach(b => { b.style.opacity = parseInt(b.dataset.star) <= selectedStars ? '1' : '0.25'; });
-            const lbl = overlay.querySelector('#pcp-stars-label');
-            lbl.textContent = selectedStars ? `${selectedStars} ulduz (KPI: ${selectedStars * 20}/100)` : 'Ulduz seçilməyib';
-            lbl.style.color = selectedStars ? '#f59e0b' : '#94a3b8';
-        });
-    });
     overlay.querySelector('#pcp-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#pcp-amount').focus();
     overlay.querySelector('#pcp-confirm').addEventListener('click', () => {
-        if(!confirm('Təsdiq etmək istədiyinizə əminsiniz?' + (selectedStars ? ` (KPI: ${selectedStars} ulduz)` : ''))) return;
+        const amount = Number(overlay.querySelector('#pcp-amount').value);
+        if(!Number.isFinite(amount) || amount <= 0) { toast('Məbləği daxil edin!', true); return; }
+        if(!confirm('Təsdiq etmək istədiyinizə əminsiniz? (' + amount.toFixed(2) + ' AZN gözləməyə düşəcək)')) return;
         overlay.remove();
-        resolvePendingAction(action.id, 'Təsdiq et', null, selectedStars, true);
+        resolvePendingAction(action.id, 'Təsdiq et', null, 0, true, amount);
     });
 }
 
@@ -1517,7 +1528,7 @@ async function rejectPendingAction(actionId, card) {
     }
 }
 
-async function resolvePendingAction(actionId, choice, button, stars = 0, skipConfirm = false) {
+async function resolvePendingAction(actionId, choice, button, stars = 0, skipConfirm = false, amount = 0) {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); return; }
     if(choice === 'Təsdiq et' && !skipConfirm && !confirm('Təsdiq etmək istədiyinizə əminsiniz?')) return;
     showLoader();
@@ -1529,7 +1540,7 @@ async function resolvePendingAction(actionId, choice, button, stars = 0, skipCon
         const response = await fetch(API_BASE + '/api/pending_actions/resolve', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice, stars: stars || 0, kpi_score: card ? (parseInt(card.dataset.kpiScore) || 0) : 0}),
+            body: JSON.stringify({chat_id: CURRENT_USER_ID, id: actionId, choice, amount: amount || 0, stars: 0, kpi_score: 0}),
         });
         const payload = await response.json();
         if(!response.ok || !payload.success) throw new Error(payload.message || payload.error || 'Əməliyyat icra olunmadı');
@@ -2332,6 +2343,7 @@ function switchTab(tabId, updateHash = true) {
         if(employeeType === 'salary') { nav('screen-kpi-history'); loadKpiHistory(); }
         else { nav('screen-balance-history'); loadBalanceHistory(); }
     } else if(tabId === 'tab-hesabat') {
+        if(isAdmin) { switchTab('tab-tasks'); return; }
         const hesabatTab = document.getElementById('tab-hesabat');
         if(hesabatTab) hesabatTab.className = activeClass;
         nav('screen-hesabatlar');
