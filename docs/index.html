@@ -1098,6 +1098,7 @@ function closeCreateTaskModal() {
     document.getElementById('screen-create')?.classList.remove('open');
     saveSessionForms();
 }
+function nav(id) {
     if(id !== 'screen-pending') stopPendingActionPolling();
     closeBottomBar();
     document.getElementById('screen-success').style.display = 'none';
