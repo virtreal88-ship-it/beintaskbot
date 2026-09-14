@@ -102,6 +102,82 @@ RUFAT_STAGE_NAMES = {
 }
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
+HUSEYN_CHAT_ID = 7329891614
+RASIM_CHAT_ID = 7920785774
+NIZAMI_PIPELINE_ID = 14243944
+HUSEYN_PIPELINE_ID = 14358480
+RASIM_PIPELINE_ID = 14461812
+# Live Kommo snapshots. Nizami's pipeline is still the shared Gözləmə board.
+HUSEYN_STAGES = {
+    "nerazobrannoye": 110904704,
+    "sorgular": 110904708,
+    "icra_olunur": 110904712,
+    "gorusler": 110904716,
+    "qurashdirma": 110904792,
+    "gozleme": 111702228,
+    "muzakire": 111702232,
+    "ugurlu": 142,
+    "imtina": 143,
+}
+HUSEYN_STAGE_NAMES = {
+    110904704: "Неразобранное",
+    110904708: "Yeni sorgu",
+    110904712: "icra olunur",
+    110904716: "görüş",
+    110904792: "quraşdırma",
+    111702228: "gözləmə",
+    111702232: "müzakirə",
+    142: "Успешно реализовано",
+    143: "Закрыто и не реализовано",
+}
+RASIM_STAGES = {
+    "nerazobrannoye": 111700780,
+    "sorgular": 111700784,
+    "yeni_sifaris": 111700788,
+    "icra_olunur": 111700792,
+    "gozleme": 111702372,
+    "gorusler": 111702376,
+    "qurashdirma": 111702380,
+    "muzakire": 111702384,
+    "ugurlu": 142,
+    "imtina": 143,
+}
+RASIM_STAGE_NAMES = {
+    111700780: "Неразобранное",
+    111700784: "Sorgular",
+    111700788: "yeni sifariş",
+    111700792: "icra olunur",
+    111702372: "gözləmə",
+    111702376: "görüş",
+    111702380: "quraşdırma",
+    111702384: "müzakirə",
+    142: "Успешно реализовано",
+    143: "Закрыто и не реализовано",
+}
+NIZAMI_STAGES = {
+    "nerazobrannoye": 109988180,
+    "nizami": 109988196,
+    "soltan": 109988188,
+    "sermaye": 109988204,
+    "asya": 109988208,
+    "nurane": 109988212,
+    "gozleme": 110774676,
+    "muzakire": 110722180,
+    "ugurlu": 142,
+    "imtina": 143,
+}
+NIZAMI_STAGE_NAMES = {
+    109988180: "Неразобранное",
+    109988196: "Nizami Qasımov (Admin)",
+    109988188: "Soltan abbasov",
+    109988204: "Sərmayə Əhmədsoy",
+    109988208: "Asya Agayeva",
+    109988212: "Nuranə Şirinova",
+    110774676: "gözləmə",
+    110722180: "Müzakirə",
+    142: "Успешно реализовано",
+    143: "Закрыто и не реализовано",
+}
 TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
 _UPD_MARKER = {"Rüfət": ("Rüfət Həsənzadə", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
 
@@ -693,12 +769,9 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         # Route Rüfət to his personal pipeline/sorğular; keep existing routing for others.
         _lead_id_exec = action_data.get("lead_id")
         if _lead_id_exec:
-            if new_name == "Rüfət Həsənzadə":
-                _exec_pipeline = RUFAT_PIPELINE_ID
-                _exec_status = RUFAT_STAGES["sorgular"]
-            else:
-                _exec_pipeline = GOZLEME_PIPELINE_ID
-                _exec_status = TG_TO_STATUS_ID.get(NAME_TO_CHAT.get(new_name, 0))
+            _route = route_deal_for_employee(new_name, NAME_TO_CHAT.get(new_name))
+            _exec_pipeline = _route[0] if _route else None
+            _exec_status = _route[1] if _route else None
             if _exec_status:
                 try:
                     _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
@@ -839,12 +912,9 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             # Route the deal after assignment. Rüfət must always receive it in
             # his own pipeline at the exact `sorgular` stage.
             if _target_chat_ae:
-                if _ae_name == "Rüfət Həsənzadə":
-                    _ae_pipeline = RUFAT_PIPELINE_ID
-                    _ae_status = RUFAT_STAGES["sorgular"]
-                else:
-                    _ae_pipeline = GOZLEME_PIPELINE_ID
-                    _ae_status = TG_TO_STATUS_ID.get(int(_target_chat_ae))
+                _ae_route = route_deal_for_employee(_ae_name, _target_chat_ae)
+                _ae_pipeline = _ae_route[0] if _ae_route else None
+                _ae_status = _ae_route[1] if _ae_route else None
                 if _ae_status:
                     route_result = update_lead_kommo(
                         int(lead_id),
@@ -1263,20 +1333,229 @@ def is_rufat_chat(chat_id) -> bool:
         return False
 
 
+def _fold_stage_name(value: str) -> str:
+    table = str.maketrans({
+        "ə": "e", "ı": "i", "ö": "o", "ü": "u", "ğ": "g", "ş": "s", "ç": "c",
+        "Ə": "e", "İ": "i", "Ö": "o", "Ü": "u", "Ğ": "g", "Ş": "s", "Ç": "c",
+    })
+    return str(value or "").translate(table).casefold().strip()
+
+
+def _stage_key_from_kommo(name: str, status_id: int) -> str:
+    try:
+        sid = int(status_id)
+    except (TypeError, ValueError):
+        sid = 0
+    if sid == 142:
+        return "ugurlu"
+    if sid == 143:
+        return "imtina"
+    n = _fold_stage_name(name)
+    needles = (
+        ("nerazobrann", "nerazobrannoye"),
+        ("unparsed", "nerazobrannoye"),
+        ("sorgular", "sorgular"),
+        ("sorgu", "sorgular"),
+        ("danisiq", "danisiqlar"),
+        ("yeni sifaris", "yeni_sifaris"),
+        ("geri don", "geri_donusler"),
+        ("soyuq zeng", "soyuq_zeng"),
+        ("cavab gozlenilir", "cavab_gozlenilir"),
+        ("gorus", "gorusler"),
+        ("qurasdirma", "qurashdirma"),
+        ("qurashdirma", "qurashdirma"),
+        ("muzakire", "muzakire"),
+        ("icra olunur", "icra_olunur"),
+        ("gozleme", "gozleme"),
+        ("ugurlu", "ugurlu"),
+        ("imtina", "imtina"),
+        ("successfully", "ugurlu"),
+        ("closed - won", "ugurlu"),
+        ("closed - lost", "imtina"),
+    )
+    for needle, key in needles:
+        if needle in n:
+            return key
+    slug = re.sub(r"[^a-z0-9]+", "_", n).strip("_") or f"stage_{sid}"
+    return slug
+
+
+_pipeline_stage_cache: dict[int, tuple[dict, dict, list]] = {}
+
+
+def load_pipeline_stage_maps(pipeline_id: int) -> tuple[dict, dict, list]:
+    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
+    pid = int(pipeline_id)
+    cached = _pipeline_stage_cache.get(pid)
+    if cached:
+        return cached
+    packs = {
+        int(RUFAT_PIPELINE_ID): (RUFAT_STAGES, RUFAT_STAGE_NAMES),
+        int(HUSEYN_PIPELINE_ID): (HUSEYN_STAGES, HUSEYN_STAGE_NAMES),
+        int(RASIM_PIPELINE_ID): (RASIM_STAGES, RASIM_STAGE_NAMES),
+        int(NIZAMI_PIPELINE_ID): (NIZAMI_STAGES, NIZAMI_STAGE_NAMES),
+    }
+    pack = packs.get(pid)
+    if pack:
+        stages_map, names_map = pack
+        ui = [(key, names_map.get(sid, key)) for key, sid in stages_map.items()]
+        _pipeline_stage_cache[pid] = (dict(stages_map), dict(names_map), ui)
+        return _pipeline_stage_cache[pid]
+    stages: dict[str, int] = {}
+    names: dict[int, str] = {}
+    ui: list[tuple[str, str]] = []
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines/{pid}", headers=HEADERS, timeout=12)
+        if resp.status_code == 200:
+            statuses = (resp.json().get("_embedded") or {}).get("statuses") or []
+            statuses = sorted(statuses, key=lambda row: int(row.get("sort") or 0))
+            used = set()
+            for row in statuses:
+                try:
+                    sid = int(row.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                label = str(row.get("name") or sid)
+                key = _stage_key_from_kommo(label, sid)
+                if key in used:
+                    key = f"{key}_{sid}"
+                used.add(key)
+                stages[key] = sid
+                names[sid] = label
+                ui.append((key, label))
+    except Exception as exc:
+        logger.warning("Pipeline %s stage load failed: %s", pid, exc)
+    if not stages:
+        stages, names, ui = dict(RUFAT_STAGES), dict(RUFAT_STAGE_NAMES), [
+            (key, RUFAT_STAGE_NAMES.get(sid, key)) for key, sid in RUFAT_STAGES.items()
+        ]
+    _pipeline_stage_cache[pid] = (stages, names, ui)
+    return _pipeline_stage_cache[pid]
+
+
+def get_funnel_owner(chat_id) -> dict | None:
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    if cid in RUFAT_COMPAT_CHAT_IDS:
+        stages, names, ui = load_pipeline_stage_maps(RUFAT_PIPELINE_ID)
+        return {
+            "chat_id": RUFAT_CHAT_ID, "pipeline_id": int(RUFAT_PIPELINE_ID),
+            "name": "Rüfət Həsənzadə", "stages": stages, "stage_names": names, "ui_stages": ui,
+        }
+    mapping = {
+        ADMIN_CHAT_ID: (NIZAMI_PIPELINE_ID, "Nizami Qasımov"),
+        HUSEYN_CHAT_ID: (HUSEYN_PIPELINE_ID, "Hüseyn Səfərov"),
+        RASIM_CHAT_ID: (RASIM_PIPELINE_ID, "Rasim Əsgərov"),
+    }
+    row = mapping.get(cid)
+    if not row:
+        return None
+    pipeline_id, name = row
+    stages, names_map, ui = load_pipeline_stage_maps(pipeline_id)
+    return {
+        "chat_id": cid, "pipeline_id": int(pipeline_id),
+        "name": name, "stages": stages, "stage_names": names_map, "ui_stages": ui,
+    }
+
+
+def is_funnel_chat(chat_id) -> bool:
+    return get_funnel_owner(chat_id) is not None
+
+
+def all_personal_pipeline_ids() -> set[int]:
+    return {int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
+
+
+def owner_name_for_pipeline(pipeline_id: int) -> str:
+    return {
+        int(RUFAT_PIPELINE_ID): "Rüfət Həsənzadə",
+        int(NIZAMI_PIPELINE_ID): "Nizami Qasımov",
+        int(HUSEYN_PIPELINE_ID): "Hüseyn Səfərov",
+        int(RASIM_PIPELINE_ID): "Rasim Əsgərov",
+    }.get(int(pipeline_id), "")
+
+
+def personal_entry_stage(pipeline_id: int) -> tuple[int, int] | None:
+    stages, _names, ui = load_pipeline_stage_maps(pipeline_id)
+    skip = {"nerazobrannoye", "ugurlu", "imtina"}
+    for key, _label in ui:
+        if key in skip:
+            continue
+        status_id = stages.get(key)
+        if status_id:
+            return int(pipeline_id), int(status_id)
+    status_id = stages.get("sorgular") or stages.get("nizami")
+    if not status_id:
+        return None
+    return int(pipeline_id), int(status_id)
+
+
+def move_lead_to_icraci(lead_id, assignee_name: str) -> bool:
+    """Move a deal to the first stage of the selected icraçı funnel, else Gözləmə."""
+    if not lead_id or not assignee_name:
+        return False
+    route = route_deal_for_employee(assignee_name)
+    if not route:
+        return False
+    pipeline_id, status_id = route
+    ok = bool(update_lead_kommo(int(lead_id), {"pipeline_id": int(pipeline_id), "status_id": int(status_id)}))
+    if ok:
+        try:
+            invalidate_rufat_overview_cache()
+        except NameError:
+            pass
+    return ok
+
+
+def route_deal_for_employee(name: str = "", chat_id=None) -> tuple[int, int] | None:
+    """Put an assigned deal into that employee's personal funnel, else Gözləmə."""
+    owner = get_funnel_owner(chat_id) if chat_id else None
+    if not owner and name:
+        owner = get_funnel_owner(NAME_TO_CHAT.get(name))
+    if owner:
+        return personal_entry_stage(owner["pipeline_id"])
+    waiting_chat = chat_id
+    if waiting_chat is None and name:
+        waiting_chat = NAME_TO_CHAT.get(name)
+    try:
+        status_id = TG_TO_STATUS_ID.get(int(waiting_chat)) if waiting_chat else None
+    except (TypeError, ValueError):
+        status_id = None
+    if status_id:
+        return int(GOZLEME_PIPELINE_ID), int(status_id)
+    return None
+
+
 def get_pipeline_id_for_chat(chat_id=None) -> int:
-    return RUFAT_PIPELINE_ID if is_rufat_chat(chat_id) else PIPELINE_ID
+    owner = get_funnel_owner(chat_id)
+    if owner:
+        return int(owner["pipeline_id"])
+    return PIPELINE_ID
 
 
 def get_pipeline_stages_for_chat(chat_id=None) -> tuple[dict, dict]:
-    return (RUFAT_STAGES, RUFAT_STAGE_NAMES) if is_rufat_chat(chat_id) else (STAGES, STAGE_NAMES)
+    owner = get_funnel_owner(chat_id)
+    if owner:
+        return owner["stages"], owner["stage_names"]
+    return (STAGES, STAGE_NAMES)
 
 
-def get_rufat_completion_stage(pipeline_key: str, stage_key: str) -> tuple[int, int, str] | None:
-    """Resolve Rüfət's required completion-stage choice across both permitted pipelines."""
-    if pipeline_key in ("rufat", "samil"):
-        status_id = RUFAT_STAGES.get(stage_key)
-        if status_id:
-            return RUFAT_PIPELINE_ID, int(status_id), RUFAT_STAGE_NAMES.get(int(status_id), stage_key)
+def get_rufat_completion_stage(pipeline_key: str, stage_key: str, chat_id=None, lead_pipeline_id: int | None = None) -> tuple[int, int, str] | None:
+    """Resolve the completion-stage choice across a personal funnel and Əməliyyatlar."""
+    if pipeline_key in ("rufat", "samil", "own", "personal"):
+        owner = get_funnel_owner(chat_id)
+        pipeline_id = int(lead_pipeline_id or (owner or {}).get("pipeline_id") or 0)
+        if pipeline_id in all_personal_pipeline_ids():
+            stages, names, _ui = load_pipeline_stage_maps(pipeline_id)
+            status_id = stages.get(stage_key)
+            if status_id:
+                return pipeline_id, int(status_id), names.get(int(status_id), stage_key)
+        if owner:
+            status_id = owner["stages"].get(stage_key)
+            if status_id:
+                return int(owner["pipeline_id"]), int(status_id), owner["stage_names"].get(int(status_id), stage_key)
         return None
     if pipeline_key == "operations":
         if stage_key in ("samil", "shamil"):
@@ -1602,19 +1881,23 @@ def _lead_pipeline_id(lead) -> int:
         return 0
 
 
-def _rufat_permitted_pipeline_ids() -> set[int]:
-    return {int(RUFAT_PIPELINE_ID), int(GOZLEME_PIPELINE_ID)}
+def _rufat_permitted_pipeline_ids(chat_id=None) -> set[int]:
+    owner = get_funnel_owner(chat_id)
+    if owner:
+        return {int(owner["pipeline_id"])}
+    return {int(RUFAT_PIPELINE_ID)}
 
 
-def _rufat_may_use_lead(lead_id=None, lead=None) -> bool:
-    if lead is not None and _lead_pipeline_id(lead) in _rufat_permitted_pipeline_ids():
+def _rufat_may_use_lead(lead_id=None, lead=None, chat_id=None) -> bool:
+    permitted = _rufat_permitted_pipeline_ids(chat_id)
+    if lead is not None and _lead_pipeline_id(lead) in permitted:
         return True
     resolved_id = lead_id
     if resolved_id is None and isinstance(lead, dict):
         resolved_id = lead.get("id")
     if not resolved_id:
         return False
-    return _lead_pipeline_id(get_lead_details(int(resolved_id))) in _rufat_permitted_pipeline_ids()
+    return _lead_pipeline_id(get_lead_details(int(resolved_id))) in permitted
 
 
 def _leads_linked_to_contact(contact_id: int) -> list:
@@ -1659,11 +1942,13 @@ def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
 
 
 def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
-    return (not is_rufat_chat(chat_id)) or lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
+    if is_admin(chat_id) or not is_funnel_chat(chat_id):
+        return True
+    return lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
 
 
 def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
-    if not is_rufat_chat(chat_id):
+    if is_admin(chat_id) or not is_funnel_chat(chat_id):
         return True
     try:
         resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{int(task_id)}", headers=HEADERS, timeout=8)
@@ -1676,7 +1961,7 @@ def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
             return False
         entity_type = _normalize_kommo_entity_type(task.get("entity_type", "leads"))
         if entity_type == "leads":
-            allowed = _rufat_may_use_lead(lead_id=int(entity_id))
+            allowed = _rufat_may_use_lead(lead_id=int(entity_id), chat_id=chat_id)
             if not allowed:
                 logger.warning(
                     "task_allowed_for_chat: lead %s is outside Rüfət/Əməliyyatlar",
@@ -1688,6 +1973,7 @@ def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
                 _rufat_may_use_lead(
                     lead=lead,
                     lead_id=lead.get("id") if isinstance(lead, dict) else lead,
+                    chat_id=chat_id,
                 )
                 for lead in _leads_linked_to_contact(int(entity_id))
             )
@@ -1986,7 +2272,7 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         contact_name = client_name
     leads = (full_contact or {}).get("_embedded", {}).get("leads", [])
     allowed_pipeline = get_pipeline_id_for_chat(chat_id)
-    if is_rufat_chat(chat_id):
+    if is_funnel_chat(chat_id):
         leads = [lead for lead in leads if int(lead.get("pipeline_id", 0) or 0) == allowed_pipeline]
     lead_id = leads[0].get("id") if leads else None
     if not lead_id:
@@ -2049,17 +2335,19 @@ def execute_tool_change_stage(phone: str, stage: str, chat_id: int) -> dict:
     full_c = get_contact_details(contact["id"])
     leads = (full_c or {}).get("_embedded", {}).get("leads", [])
     allowed_pipeline = get_pipeline_id_for_chat(chat_id)
-    if is_rufat_chat(chat_id):
+    if is_funnel_chat(chat_id):
         leads = [lead for lead in leads if int(lead.get("pipeline_id", 0) or 0) == allowed_pipeline]
     if not leads:
-        return {"success": False, "message": "❌ Bu müştərinin Rüfət vоронкаsında sövdələşməsi tapılmadı." if is_rufat_chat(chat_id) else "❌ Müştərinin sövdələşməsi tapılmadı."}
+        owner = get_funnel_owner(chat_id)
+        owner_name = (owner or {}).get("name") or "öz"
+        return {"success": False, "message": f"❌ Bu müştərinin {owner_name} vоронкаsında sövdələşməsi tapılmadı." if owner else "❌ Müştərinin sövdələşməsi tapılmadı."}
     lead_id = leads[0]["id"]
     stage_map, _ = get_pipeline_stages_for_chat(chat_id)
     status_id = stage_map.get(stage)
     if not status_id:
         return {"success": False, "message": f"❌ Naməlum mərhələ: {stage}"}
     return {
-        "success": True, "needs_confirmation": not is_admin(chat_id) and not is_rufat_chat(chat_id),
+        "success": True, "needs_confirmation": not is_admin(chat_id) and not is_funnel_chat(chat_id),
         "lead_id": lead_id, "status_id": status_id, "stage": stage,
         "contact_name": contact.get("name", "Adsız"), "phone": phone
     }
@@ -4619,9 +4907,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Доступ запрещён."}, status=403)
             stage_key = str(data.get("stage_key") or "")
-            if stage_key not in RUFAT_STAGES:
+            lead = get_lead_details(lead_id) or {}
+            pipeline_id = _lead_pipeline_id(lead) or get_pipeline_id_for_chat(chat_id)
+            stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
+            if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
-            if not update_lead_kommo(lead_id, {"status_id": RUFAT_STAGES[stage_key], "pipeline_id": RUFAT_PIPELINE_ID}):
+            if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
             patch_rufat_overview_deal_stage(lead_id, stage_key)
             return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key})
@@ -4652,11 +4943,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             responsible_user_id = executor_ids.get(executor)
             if not responsible_user_id:
                 return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
-            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name="Rüfət Həsənzadə")
+            owner = get_funnel_owner(chat_id)
+            creator = (owner or {}).get("name") or get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
+            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name=creator)
             invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
         elif action == "info":
-            if is_rufat_chat(chat_id):
+            if is_funnel_chat(chat_id) and not is_admin(chat_id):
                 contacts = search_contact_by_phone(phone)
                 full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
                 if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
@@ -4681,7 +4974,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         note_payload = [{"note_type": "common", "params": {"text": text}}]
                         _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
                 except: pass
-            if phone and not task_id_note and is_rufat_chat(chat_id):
+            if phone and not task_id_note and is_funnel_chat(chat_id) and not is_admin(chat_id):
                 contacts = search_contact_by_phone(phone)
                 full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
                 if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
@@ -4832,11 +5125,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             priority = _normalize_task_priority(data.get("priority", ""))
             assignee_name_raw = normalize_assignee_name(data.get("assigneeName") or data.get("assignee_name"))
             creator_name = get_employee_name_by_chat_id(chat_id, "")
-            # Legacy Sahə Meneceri identity is no longer used as a Kommo
-            # executor; the actual Kommo assignee is Admin.
-            if is_rufat_chat(chat_id):
-                assignee_name_raw = "Rüfət Həsənzadə"
-            elif not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
+            if not assignee_name_raw or assignee_name_raw == KOMMO_USERS.get(15532668):
                 assignee_name_raw = creator_name or "Nizami Qasımov"
             # Routing: all legacy Sahə Meneceri assignments now go to Admin.
             if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
@@ -4939,12 +5228,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
-                # Move lead to assignee's stage in Əməliyyatlar pipeline
+                # Move the deal to the first stage of the selected icraçı funnel.
                 if True:
-                    _assignee_status = None
-                    _target_chat = get_chat_id_by_name(assignee_name_raw) if assignee_name_raw else None
-                    if _target_chat:
-                        _assignee_status = TG_TO_STATUS_ID.get(int(_target_chat))
                     _lead_id_to_move = result.get('entity_id') if result.get('entity_type') == 'leads' else None
                     if not _lead_id_to_move and result.get('entity_type') == 'contacts':
                         try:
@@ -4953,13 +5238,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 _leads = _cr.json().get('_embedded',{}).get('leads',[])
                                 if _leads: _lead_id_to_move = _leads[0]['id']
                         except: pass
-                    if _assignee_status and _lead_id_to_move:
+                    if assignee_name_raw and _lead_id_to_move:
                         try:
-                            _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_to_move}",
-                                headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _assignee_status}, timeout=8)
-                            logger.info(f"Moved lead {_lead_id_to_move} to Əməliyyatlar stage {_assignee_status}")
+                            if move_lead_to_icraci(_lead_id_to_move, assignee_name_raw):
+                                logger.info(f"Moved lead {_lead_id_to_move} to funnel of {assignee_name_raw}")
                         except Exception as _me:
-                            logger.error(f"Failed to move lead to Əməliyyatlar: {_me}")
+                            logger.error(f"Failed to move lead to icraçı funnel: {_me}")
                 # Also add task text as a note on the entity
                 try:
                     note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
@@ -5203,8 +5487,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     entity_type = t_data.get("entity_type", "leads")
                     # Move lead to new assignee's stage in Əməliyyatlar pipeline
                     if assignee_name_raw and entity_id:
-                        _target_chat = get_chat_id_by_name(assignee_name_raw)
-                        _new_status = TG_TO_STATUS_ID.get(int(_target_chat)) if _target_chat else None
                         _lead_to_move = entity_id if entity_type == "leads" else None
                         if not _lead_to_move and entity_type == "contacts":
                             try:
@@ -5213,11 +5495,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                     _cls = _clr.json().get('_embedded',{}).get('leads',[])
                                     if _cls: _lead_to_move = _cls[0]['id']
                             except: pass
-                        if _new_status and _lead_to_move:
+                        if _lead_to_move:
                             try:
-                                _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_to_move}",
-                                    headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": _new_status}, timeout=8)
-                                logger.info(f"Edit: moved lead {_lead_to_move} to stage {_new_status}")
+                                if move_lead_to_icraci(_lead_to_move, assignee_name_raw):
+                                    logger.info(f"Edit: moved lead {_lead_to_move} to funnel of {assignee_name_raw}")
                             except Exception as _me:
                                 logger.error(f"Edit: failed to move lead: {_me}")
                     entity_type = t_data.get("entity_type", "leads")
@@ -5296,12 +5577,20 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_type_id = int(task_data.get("task_type_id", 1) or 1)
             task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
             samil_completion_stage = None
-            if is_rufat_chat(chat_id):
+            if is_funnel_chat(chat_id) and not is_admin(chat_id):
                 selected_pipeline = str(data.get("completion_pipeline", "")).strip()
                 selected_stage = str(data.get("completion_stage", "")).strip()
-                samil_completion_stage = get_rufat_completion_stage(selected_pipeline, selected_stage)
+                lead_pipeline_id = None
+                if lead_id:
+                    try:
+                        lead_pipeline_id = _lead_pipeline_id(get_lead_details(int(lead_id)))
+                    except Exception:
+                        lead_pipeline_id = None
+                samil_completion_stage = get_rufat_completion_stage(
+                    selected_pipeline, selected_stage, chat_id=chat_id, lead_pipeline_id=lead_pipeline_id
+                )
                 if not samil_completion_stage:
-                    return web.json_response({"success": False, "error": "Mərhələ seçin: Rüfət Həsənzadə və ya Əməliyyatlar lövhəsi."})
+                    return web.json_response({"success": False, "error": "Mərhələ seçin: öz vоронка və ya Əməliyyatlar lövhəsi."})
 
             # Salary KPI is deterministic: on/before the Kommo deadline = 100,
             # after the deadline = 0. Admin can correct it afterward.
@@ -5334,13 +5623,14 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if result and lead_id:
                 if samil_completion_stage:
                     target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
-                    target_pipeline_name = "Rüfət Həsənzadə" if target_pipeline_id == RUFAT_PIPELINE_ID else "Əməliyyatlar lövhəsi"
+                    target_pipeline_name = owner_name_for_pipeline(target_pipeline_id) or "Əməliyyatlar lövhəsi"
                     if update_lead_kommo(
                         int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
                     ):
                         stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
+                        maps, _names, _ui = load_pipeline_stage_maps(int(target_pipeline_id)) if int(target_pipeline_id) in all_personal_pipeline_ids() else ({}, {}, [])
                         rufat_stage_key = next(
-                            (key for key, sid in RUFAT_STAGES.items() if int(sid) == int(target_status_id) and int(target_pipeline_id) == RUFAT_PIPELINE_ID),
+                            (key for key, sid in maps.items() if int(sid) == int(target_status_id)),
                             None,
                         )
                         if rufat_stage_key:
@@ -5961,10 +6251,15 @@ def _rufat_marker_name(task_text: str) -> str:
     }.get(match.group(1), match.group(1))
 
 
-async def build_rufat_overview(stage_key: str | None = None) -> dict:
-    """Load the complete Rüfət pipeline once for instant local stage switching."""
-    if stage_key is not None and stage_key not in RUFAT_STAGES:
-        stage_key = "sorgular"
+async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: int | None = None) -> dict:
+    """Load one personal Kommo funnel for local stage switching and task lists."""
+    owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
+    pipeline_id = int(owner["pipeline_id"])
+    funnel_stages = owner["stages"]
+    funnel_names = owner["stage_names"]
+    owner_name = owner["name"]
+    if stage_key is not None and stage_key not in funnel_stages:
+        stage_key = next(iter(funnel_stages), None)
 
     async def _load_all_rufat_leads() -> list[dict]:
         """Fetch every page from the pipeline so no stage is loaded on demand."""
@@ -5974,7 +6269,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             response = await _kommo_get_async(
                 f"{KOMMO_BASE_URL}/api/v4/leads",
                 params={
-                    "filter[pipeline_id]": RUFAT_PIPELINE_ID,
+                    "filter[pipeline_id]": pipeline_id,
                     "with": "contacts",
                     "limit": 250,
                     "page": page,
@@ -5995,8 +6290,8 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
 
     leads = await _load_all_rufat_leads()
 
-    status_to_key = {status_id: key for key, status_id in RUFAT_STAGES.items()}
-    stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in RUFAT_STAGES}
+    status_to_key = {status_id: key for key, status_id in funnel_stages.items()}
+    stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in funnel_stages}
     lead_by_id: dict[int, dict] = {}
     lead_by_contact_id: dict[int, dict] = {}
     for lead in leads:
@@ -6066,7 +6361,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
         deals.append({
             "id": lead_id,
             "stage_key": status_to_key.get(status_id, ""),
-            "stage_name": RUFAT_STAGE_NAMES.get(status_id, "Naməlum mərhələ"),
+            "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
             "contacts": contact_rows,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
@@ -6075,7 +6370,7 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
     deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
-    deals_by_stage = {key: [] for key in RUFAT_STAGES}
+    deals_by_stage = {key: [] for key in funnel_stages}
     for deal in deals:
         stage_deals = deals_by_stage.get(deal.get("stage_key"))
         if stage_deals is not None:
@@ -6170,11 +6465,11 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
             "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
             "lead_id": lead_id, "lead_name": lead.get("name", ""),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": phones,
-            "responsible": "Rüfət Həsənzadə", "assigneeName": "Rüfət Həsənzadə", "assignee_name": "Rüfət Həsənzadə",
+            "responsible": owner_name, "assigneeName": owner_name, "assignee_name": owner_name,
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
             "last_note": "", "priority": "",
-            "stage_name": RUFAT_STAGE_NAMES.get(lead.get("status_id", 0), ""),
+            "stage_name": funnel_names.get(lead.get("status_id", 0), ""),
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "", "created_by": "",
         }
         (reminder_tasks if task_type_id == XATIRLAT_TASK_TYPE_ID else normal_tasks).append(item)
@@ -6184,84 +6479,88 @@ async def build_rufat_overview(stage_key: str | None = None) -> dict:
     return {
         "tasks": normal_tasks, "gozleme": reminder_tasks, "deals": deals,
         "deals_by_stage": deals_by_stage, "stage_counts": stage_counts,
-        "user_name": get_employee_name_by_chat_id(RUFAT_CHAT_ID, "Rüfət Həsənzadə"),
+        "user_name": owner_name,
         "stage_key": None,
+        "ui_stages": owner.get("ui_stages") or [(key, funnel_names.get(sid, key)) for key, sid in funnel_stages.items()],
+        "pipeline_id": pipeline_id,
+        "funnel_owner": owner_name,
     }
 
 
 _rufat_overview_lock = asyncio.Lock()
-_rufat_overview_cache = None
-_rufat_overview_cache_at = 0.0
+_personal_overview_cache: dict[int, dict] = {}
+_personal_overview_cache_at: dict[int, float] = {}
 _RUFAT_OVERVIEW_CACHE_TTL = 90.0
 
 
 def invalidate_rufat_overview_cache() -> None:
-    """Drop the in-memory Sövdələşmələr snapshot after a mutating action."""
-    global _rufat_overview_cache, _rufat_overview_cache_at
-    _rufat_overview_cache = None
-    _rufat_overview_cache_at = 0.0
+    """Drop in-memory personal funnel snapshots after a mutating action."""
+    _personal_overview_cache.clear()
+    _personal_overview_cache_at.clear()
 
 
 def patch_rufat_overview_deal_stage(lead_id: int, stage_key: str) -> None:
-    """Keep the cached overview aligned with a successful Kommo stage PATCH."""
-    global _rufat_overview_cache_at
-    overview = _rufat_overview_cache
-    if not isinstance(overview, dict) or stage_key not in RUFAT_STAGES:
-        return
-    status_id = RUFAT_STAGES[stage_key]
-    stage_name = RUFAT_STAGE_NAMES.get(status_id, "Naməlum mərhələ")
-    deal = None
-    for item in overview.get("deals") or []:
-        if not isinstance(item, dict):
+    """Keep a cached overview aligned with a successful Kommo stage PATCH."""
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
             continue
-        try:
-            current_id = int(item.get("id"))
-        except (TypeError, ValueError):
+        pipeline_id = int(overview.get("pipeline_id") or 0)
+        stages, names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id else (RUFAT_STAGES, RUFAT_STAGE_NAMES, [])
+        if stage_key not in stages:
             continue
-        if current_id != lead_id:
+        status_id = stages[stage_key]
+        stage_name = names.get(status_id, "Naməlum mərhələ")
+        deal = None
+        for item in overview.get("deals") or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                current_id = int(item.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if current_id != lead_id:
+                continue
+            item["stage_key"] = stage_key
+            item["stage_name"] = stage_name
+            deal = item
+            break
+        if deal is None:
             continue
-        item["stage_key"] = stage_key
-        item["stage_name"] = stage_name
-        deal = item
-        break
-    by_stage = overview.get("deals_by_stage")
-    if isinstance(by_stage, dict):
-        for key, items in list(by_stage.items()):
-            by_stage[key] = [
-                item for item in (items or [])
-                if isinstance(item, dict) and int(item.get("id") or 0) != lead_id
-            ]
-        if deal is not None:
+        by_stage = overview.get("deals_by_stage")
+        if isinstance(by_stage, dict):
+            for key, items in list(by_stage.items()):
+                by_stage[key] = [
+                    item for item in (items or [])
+                    if isinstance(item, dict) and int(item.get("id") or 0) != lead_id
+                ]
             by_stage.setdefault(stage_key, []).append(deal)
-        overview["stage_counts"] = {
-            key: len(by_stage.get(key) or []) for key in RUFAT_STAGES
-        }
-    for task in list(overview.get("tasks") or []) + list(overview.get("gozleme") or []):
-        if not isinstance(task, dict):
-            continue
-        try:
-            task_lead_id = int(task.get("lead_id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if task_lead_id == lead_id:
-            task["stage_name"] = stage_name
-    _rufat_overview_cache_at = _time_module.monotonic()
+            overview["stage_counts"] = {key: len(by_stage.get(key) or []) for key in stages}
+        for task in list(overview.get("tasks") or []) + list(overview.get("gozleme") or []):
+            if not isinstance(task, dict):
+                continue
+            try:
+                task_lead_id = int(task.get("lead_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if task_lead_id == lead_id:
+                task["stage_name"] = stage_name
+        _personal_overview_cache_at[pipeline_id] = _time_module.monotonic()
+        return
 
 
-async def get_rufat_overview(*, force: bool = False) -> dict:
-    """Return the Rüfət workspace, reusing a short in-memory snapshot."""
-    global _rufat_overview_cache, _rufat_overview_cache_at
+async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None = None) -> dict:
+    """Return a personal funnel workspace, reusing a short in-memory snapshot."""
+    owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
+    pipeline_id = int(owner["pipeline_id"])
     async with _rufat_overview_lock:
         now = _time_module.monotonic()
-        if (
-            not force
-            and _rufat_overview_cache is not None
-            and now - _rufat_overview_cache_at < _RUFAT_OVERVIEW_CACHE_TTL
-        ):
-            return _rufat_overview_cache
-        overview = await build_rufat_overview()
-        _rufat_overview_cache = overview
-        _rufat_overview_cache_at = now
+        cached = _personal_overview_cache.get(pipeline_id)
+        cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
+        if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
+            return cached
+        overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
+        _personal_overview_cache[pipeline_id] = overview
+        _personal_overview_cache_at[pipeline_id] = now
         return overview
 
 
@@ -6277,17 +6576,16 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
         chat_id = int(raw_chat_id)
     except (TypeError, ValueError):
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    if not is_rufat_chat(chat_id):
-        logger.warning("Rüfət overview access denied for supplied user id")
+    if not is_funnel_chat(chat_id):
+        logger.warning("Personal funnel overview access denied for supplied user id")
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
     force = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
     try:
-        overview = await get_rufat_overview(force=force)
-        # The old Şamil link remains compatible, while the current UID must
-        # always receive Rüfət's employee identity in the web app.
-        if chat_id == RUFAT_CHAT_ID:
-            overview["user_name"] = "Rüfət Həsənzadə"
-        return web.json_response({"success": True, **overview, "is_admin": False})
+        overview = await get_rufat_overview(force=force, owner_chat_id=chat_id)
+        owner = get_funnel_owner(chat_id)
+        if owner:
+            overview["user_name"] = owner["name"]
+        return web.json_response({"success": True, **overview, "is_admin": is_admin(chat_id)})
     except Exception as exc:
         logger.error("Rüfət overview error: %s", exc)
         return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
@@ -6300,10 +6598,18 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         chat_id = int(tg_user_id) if tg_user_id else None
         if not chat_id:
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
-        if is_rufat_chat(chat_id):
-            overview = await get_rufat_overview()
+        if is_funnel_chat(chat_id) and not is_admin(chat_id):
+            overview = await get_rufat_overview(owner_chat_id=chat_id)
             return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
-                                      "user_name": overview["user_name"]})
+                                      "user_name": overview["user_name"], "ui_stages": overview.get("ui_stages")})
+        funnel_overlay = []
+        if is_admin(chat_id):
+            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID)]
+            overviews = await asyncio.gather(*[
+                get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
+            ])
+            for overview in overviews:
+                funnel_overlay.extend(overview.get("tasks") or [])
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
@@ -6584,6 +6890,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     # Fail open here: the responsible-user filter above is safer than
                     # showing nobody any task because a secondary leads request failed.
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
+        if funnel_overlay:
+            by_id = {item.get("id"): item for item in tasks_list}
+            for item in funnel_overlay:
+                by_id[item.get("id")] = item
+            tasks_list = sorted(
+                by_id.values(),
+                key=lambda item: (not item.get("is_overdue"), item.get("complete_till") or 9999999999),
+            )
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
@@ -6620,8 +6934,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         is_admin = kommo_user_id == ADMIN_KOMMO_USER_ID or chat_id == ADMIN_CHAT_ID
 
-        if is_rufat_chat(chat_id):
-            overview = await get_rufat_overview()
+        if is_funnel_chat(chat_id) and not is_admin:
+            overview = await get_rufat_overview(owner_chat_id=chat_id)
             reminders = overview["gozleme"]
             return web.json_response({"success": True, "items": reminders, "tasks": reminders,
                                       "count": len(reminders), "is_admin": False,

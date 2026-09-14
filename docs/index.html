@@ -638,18 +638,32 @@ function getUserId() {
 }
 const CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
-const SAMIL_UI_STAGES = [
+const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
+const FUNNEL_OWNER_NAME = {
+    '6824377548':'Rüfət Həsənzadə','7962757442':'Rüfət Həsənzadə','1628569350':'Nizami Qasımov',
+    '7329891614':'Hüseyn Səfərov','7920785774':'Rasim Əsgərov'
+}[CURRENT_USER_ID] || '';
+const FUNNEL_STAGE_PRESETS = {
+    '7329891614': [['sorgular','Yeni sorgu'],['icra_olunur','icra olunur'],['gorusler','görüş'],['qurashdirma','quraşdırma'],['gozleme','gözləmə'],['muzakire','müzakirə']],
+    '7920785774': [['sorgular','Sorgular'],['yeni_sifaris','yeni sifariş'],['icra_olunur','icra olunur'],['gozleme','gözləmə'],['gorusler','görüş'],['qurashdirma','quraşdırma'],['muzakire','müzakirə']],
+    '1628569350': [['nizami','Nizami Qasımov (Admin)'],['soltan','Soltan abbasov'],['sermaye','Sərmayə Əhmədsoy'],['asya','Asya Agayeva'],['nurane','Nuranə Şirinova'],['gozleme','gözləmə'],['muzakire','Müzakirə']]
+};
+let SAMIL_UI_STAGES = [
     ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],['geri_donusler','Geri dönüşlər'],
     ['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
     ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə']
 ];
-const SAMIL_ALL_STAGES = [
+let SAMIL_ALL_STAGES = [
     ['nerazobrannoye','Nerazobrannoye'],['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],
     ['geri_donusler','Geri dönüşlər'],['soyuq_zeng','Soyuq zəng'],['cavab_gozlenilir','Cavab gözlənilir'],['gorusler','Görüşlər'],
     ['qurashdirma','Quraşdırma'],['muzakire','Müzakirə'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
 ];
+if(FUNNEL_STAGE_PRESETS[CURRENT_USER_ID]) {
+    SAMIL_UI_STAGES = FUNNEL_STAGE_PRESETS[CURRENT_USER_ID];
+    SAMIL_ALL_STAGES = [['nerazobrannoye','Неразобранное'], ...SAMIL_UI_STAGES, ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']];
+}
 const SAMIL_COMPLETION_PIPELINES = {
-    samil: {label:'Rüfət Həsənzadə', stages:SAMIL_ALL_STAGES},
+    samil: {label: FUNNEL_OWNER_NAME || 'Öz vоронка', stages:SAMIL_ALL_STAGES},
     operations: {label:'Əməliyyatlar lövhəsi', stages:[
         ['samil','Rüfət Həsənzadə'],['soltan','Soltan Abbasov'],['huseyn','Hüseyn Səfərov'],
         ['nizami','Nizami Qasımov'],['rasim','Rasim Əsgərov'],['sermaye','Sərmayə Əhmədsoy'],
@@ -674,22 +688,20 @@ let samilDealDragState = null;
 const SAMIL_STAGE_COLORS = {
     nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
     geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
+    icra_olunur:'#0ea5e9', gozleme:'#64748b', nizami:'#2481cc', soltan:'#14b8a6', sermaye:'#f59e0b', asya:'#06b6d4', nurane:'#a855f7',
     qurashdirma:'#22c55e', muzakire:'#a855f7', ugurlu:'#10b981', imtina:'#ef4444'
 };
 function stageColor(stageKey) { return SAMIL_STAGE_COLORS[stageKey] || '#64748b'; }
 function applySamilUi() {
-    if(!IS_SAMIL) return;
+    if(!HAS_OWN_FUNNEL) return;
     const stageCards = SAMIL_UI_STAGES.map(([key,label]) => `<div class="option-card" onclick="sel('stage','${key}',this)">${label}</div>`).join('');
     const stageSelect = document.querySelector('#screen-stage-select .space-y-2');
     if(stageSelect) stageSelect.innerHTML = stageCards;
     const dealStages = document.querySelector('#screen-deal-create .space-y-2');
     if(dealStages) dealStages.innerHTML = stageCards;
-    // Rüfət may create a task for any active icraçı; do not narrow the list to himself.
-    ['task-assignee-select','edit-assignee-select'].forEach(id => {
-        const el = document.getElementById(id);
-        if(el) el.value = el.value || 'Rüfət Həsənzadə';
-    });
-    ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    if(!isAdmin) {
+        ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    }
     ['tab-samil-deals','side-tab-samil-deals'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='flex'; });
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
@@ -798,6 +810,14 @@ function applySamilWorkspace(payload) {
         const contactName = String(deal?.contact_name || '').trim();
         return {...deal, name: dealName, contact_name: contactName || '—'};
     };
+    if(Array.isArray(payload.ui_stages) && payload.ui_stages.length) {
+        SAMIL_ALL_STAGES = payload.ui_stages;
+        SAMIL_UI_STAGES = payload.ui_stages.filter(([key]) => key !== 'ugurlu' && key !== 'imtina' && key !== 'nerazobrannoye');
+        if(SAMIL_COMPLETION_PIPELINES.samil) {
+            SAMIL_COMPLETION_PIPELINES.samil.stages = SAMIL_ALL_STAGES;
+            SAMIL_COMPLETION_PIPELINES.samil.label = payload.funnel_owner || FUNNEL_OWNER_NAME || SAMIL_COMPLETION_PIPELINES.samil.label;
+        }
+    }
     samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
     samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
         ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal) : []]))
@@ -814,7 +834,7 @@ function applySamilWorkspace(payload) {
 }
 
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
-    if(!IS_SAMIL) return false;
+    if(!HAS_OWN_FUNNEL) return false;
     if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
@@ -915,7 +935,7 @@ async function initApp() {
 
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
-        if(IS_SAMIL) {
+        if(HAS_OWN_FUNNEL && !isAdmin) {
             if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
             loadSamilWorkspace();
         } else {
@@ -1063,7 +1083,7 @@ function showSuccessScreen(msg, link, isInfo) {
 function resumeEdit() { document.getElementById('screen-success').style.display = 'none'; if(currentEditScreen) nav(currentEditScreen); }
 
 async function syncNotifications(showError = false) {
-    if(IS_SAMIL) return loadSamilWorkspace(showError);
+    if(HAS_OWN_FUNNEL && !isAdmin) return loadSamilWorkspace(showError);
     try {
         const r = await fetch(API_BASE + '/api/notifications?_ts=' + Date.now(), {
             cache: 'no-store',
@@ -1185,7 +1205,6 @@ async function submitEditNote() {
 }
 
 function submitTask() {
-    if(IS_SAMIL) gd.assigneeName = 'Rüfət Həsənzadə';
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
     const textInput = textEl.value.trim();
     if(editingTaskId) {
@@ -1228,7 +1247,7 @@ function submitTask() {
 }
 
 function submitDeal() {
-    if(IS_SAMIL && !gd.stage) gd.stage = 'yeni_sifarisler';
+    if(HAS_OWN_FUNNEL && !gd.stage) gd.stage = SAMIL_UI_STAGES[0] ? SAMIL_UI_STAGES[0][0] : 'sorgular';
     const hs = document.getElementById('deal-subtask-toggle').checked;
     doFetch({action: 'create_deal', phone: gd.phone, customer_name: document.getElementById('deal-customer-name').value.trim(), stage: gd.stage || 'yeni_sifaris', create_subtask: hs, subtask_text: hs ? document.getElementById('deal-subtask-text').value.trim() : ''}, 'deal-submit-btn');
 }
@@ -1238,7 +1257,7 @@ function submitNoteFlow() {
 }
 function stageNextStep1() { if(!gd.stage) { toast('Mərhələ seçin!', true); return; } nav('screen-stage-assignee'); }
 function stageNextStep2() { if(!gd.assignee) { toast('İcraçı seçin!', true); return; } nav('screen-stage-deadline'); }
-function submitStage() { if(IS_SAMIL) gd.assignee = 'shamil'; if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
+function submitStage() { if(!gd.deadline) { toast('Deadline seçin!', true); return; } doFetch({action: 'stage', phone: gd.phone, stage: gd.stage, assignee: gd.assignee, deadline: gd.deadline}, 'stage-submit-btn'); }
 function submitClose() {
     const c = document.getElementById('job-comment').value.trim();
     if(!c) { document.getElementById('job-comment-error').style.display = 'block'; return; }
@@ -1248,7 +1267,7 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
-    if(IS_SAMIL) {
+    if(HAS_OWN_FUNNEL && !isAdmin) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored) renderNotifications(); else showLoader();
         await loadSamilWorkspace(!!forceRefresh || !restored);
@@ -1637,7 +1656,7 @@ async function openPendingActions() {
     await loadPendingActions();
 }
 
-let currentFilter = localStorage.getItem('pinned_filter') || 'all';
+let currentFilter = localStorage.getItem('pinned_filter') || (CURRENT_USER_ID === '1628569350' ? 'Nizami Qasımov' : 'all');
 let currentDateFilter = '';
 function filterTasks() { currentFilter = document.getElementById('filter-assignee').value; renderNotifications(); }
 function pinFilter() { const val = document.getElementById('filter-assignee').value; localStorage.setItem('pinned_filter', val); toast('📌 ' + (val === 'all' ? 'Filtr sıfırlandı' : val + ' bərkidildi'), false); }
@@ -2059,7 +2078,7 @@ function showDealModal(deal, mode) {
     modal.querySelector('#deal-modal-save').onclick=async()=>{try{const base={lead_id:deal.id}; let payload=mode==='edit'?{...base,action:'deal_edit',stage_key:modal.querySelector('#deal-modal-stage').value}:mode==='task'?{...base,action:'deal_add_task',text:modal.querySelector('#deal-modal-text').value.trim(),deadline_ts:modal.querySelector('#deal-modal-deadline').value?Math.floor(new Date(modal.querySelector('#deal-modal-deadline').value).getTime()/1000):0,executor:modal.querySelector('#deal-modal-assignee').value}:{...base,action:'deal_add_note',text:modal.querySelector('#deal-modal-text').value.trim()}; await samilDealAction(payload); modal.remove(); toast('Uğurla yadda saxlanıldı',false); if(mode==='edit'){ const nextStageKey=payload.stage_key; if(nextStageKey && nextStageKey!==deal.stage_key){ updateLocalSamilDealStage(deal.id, nextStageKey); samilStageFilter=nextStageKey; localStorage.setItem('samil_stage_filter', nextStageKey); renderSamilDeals(); } persistLocalSamilWorkspace(); } else { await loadSamilWorkspace(false, null, true); } }catch(e){toast(e.message,true)}};
 }
 async function openSamilDeals() {
-    if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+    if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
     nav('screen-samil-deals');
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
@@ -2127,8 +2146,8 @@ function showCompletePanel() {
     document.getElementById('postpone-fast-menu').style.display = 'none';
     const selector = document.getElementById('samil-completion-stage-selector');
     if(selector) {
-        selector.style.display = IS_SAMIL ? 'block' : 'none';
-        if(IS_SAMIL) renderSamilCompletionStages();
+        selector.style.display = (HAS_OWN_FUNNEL && !isAdmin) ? 'block' : 'none';
+        if(HAS_OWN_FUNNEL && !isAdmin) renderSamilCompletionStages();
     }
     const note = document.getElementById('complete-note-text');
     if(note) setTimeout(() => note.focus(), 100);
@@ -2139,9 +2158,10 @@ async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    const completionPipeline = IS_SAMIL ? document.getElementById('completion-pipeline-select')?.value : '';
-    const completionStage = IS_SAMIL ? document.getElementById('completion-stage-select')?.value : '';
-    if(IS_SAMIL && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
+    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin;
+    const completionPipeline = useFunnelComplete ? document.getElementById('completion-pipeline-select')?.value : '';
+    const completionStage = useFunnelComplete ? document.getElementById('completion-stage-select')?.value : '';
+    if(useFunnelComplete && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
     const completedId = task.id;
     const btn = document.getElementById('btn-confirm-complete');
     const origText = btn ? btn.innerHTML : '';
@@ -2329,7 +2349,7 @@ function switchTab(tabId, updateHash = true) {
         nav('screen-notifications');
         openNotifications();
     } else if(tabId === 'tab-samil-deals') {
-        if(!IS_SAMIL) { switchTab('tab-tasks'); return; }
+        if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
         const dealsTab = document.getElementById('tab-samil-deals');
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
@@ -2536,7 +2556,7 @@ function renderGozleme() {
 
 async function openGozleme() {
     nav('screen-gozleme');
-    if(IS_SAMIL) {
+    if(HAS_OWN_FUNNEL && !isAdmin) {
         const restored = gozlemeItems.length > 0 || restoreSamilWorkspaceFromCache();
         if(restored) renderGozleme(); else showLoader();
         await loadSamilWorkspace(!restored);
