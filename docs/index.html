@@ -56,39 +56,59 @@
             #tab-bar { max-width:600px; left:50%; transform:translateX(-50%); border-radius:16px 16px 0 0; }
             #bottom-action-bar { max-width:600px; left:0; right:0; margin-left:auto; margin-right:auto; border-radius:24px 24px 0 0; }
         }
-        /* Desktop: >= 1024px — top navbar CRM layout */
+        .sidebar-toggle-row { display:none; }
+        .sidebar-item-label { display:inline; }
+        #samil-stage-select { display:block; width:100%; }
+        #samil-stage-nav { display:none; }
+        /* Desktop: >= 1024px — left icon rail like Kommo */
         @media (min-width: 1024px) {
-            :root { --crm-nav-h: 60px; }
+            :root { --crm-nav-h: 0px; --crm-side-w: 56px; }
+            body.sidebar-open { --crm-side-w: 232px; }
             body { background:#f4f6f8; color:#0f172a; }
             button:active { transform:none; opacity:1; }
             #mobile-header, #tab-bar { display:none !important; }
             #desktop-sidebar {
-                display:flex; flex-direction:row; align-items:center; gap:12px;
-                position:fixed; top:0; left:0; right:0; bottom:auto; width:100%; height:var(--crm-nav-h);
-                background:#fff; color:#0f172a; z-index:50; padding:0 22px; box-sizing:border-box;
-                border-bottom:1px solid #e6e8eb; box-shadow:0 1px 0 rgba(15,23,42,.03);
+                display:flex; flex-direction:column; align-items:stretch; gap:0;
+                position:fixed; top:0; left:0; right:auto; bottom:0; width:var(--crm-side-w); height:100vh;
+                background:#f7f8fa; color:#0f172a; z-index:50; padding:10px 8px 12px; box-sizing:border-box;
+                border-right:1px solid #e6e8eb; box-shadow:none; overflow:hidden;
             }
-            #desktop-sidebar .sidebar-brand { padding:0 18px 0 0; border:0; margin:0; flex-shrink:0; }
-            #desktop-sidebar .sidebar-brand h1 { font-size:15px; font-weight:700; letter-spacing:-0.03em; margin:0; color:#0f172a; }
+            .sidebar-toggle-row { display:flex; align-items:center; gap:6px; padding:0 4px 10px; }
+            .sidebar-icon-btn {
+                width:40px; height:40px; border:0; border-radius:10px; background:transparent; color:#64748b;
+                font-size:18px; cursor:pointer; font-family:inherit; display:flex; align-items:center; justify-content:center;
+            }
+            .sidebar-icon-btn:hover { background:#eef1f4; color:#0f172a; }
+            .sidebar-icon-btn.active { background:#e2e8f0; color:#0f172a; }
+            #desktop-sidebar .sidebar-brand { padding:0 8px 12px; border:0; margin:0; flex-shrink:0; min-height:36px; }
+            #desktop-sidebar .sidebar-brand h1 { font-size:14px; font-weight:700; letter-spacing:-0.03em; margin:0; color:#0f172a; white-space:nowrap; overflow:hidden; }
             #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
-            #desktop-sidebar .sidebar-nav { display:flex; align-items:center; gap:4px; flex:1; min-width:0; overflow-x:auto; }
+            body:not(.sidebar-open) #desktop-sidebar .sidebar-brand h1,
+            body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
+            body:not(.sidebar-open) .sidebar-item-label,
+            body:not(.sidebar-open) #sidebar-user-name { display:none; }
+            body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
+            #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
             .sidebar-item {
-                display:flex; align-items:center; gap:8px; width:auto; padding:8px 12px; margin:0; border:none;
+                display:flex; align-items:center; justify-content:flex-start; gap:10px; width:100%; padding:10px 12px; margin:0; border:none;
                 background:transparent; color:#64748b; font-size:13px; font-weight:600; text-align:left;
-                border-radius:8px; cursor:pointer; font-family:inherit; white-space:nowrap;
+                border-radius:10px; cursor:pointer; font-family:inherit; white-space:nowrap;
             }
-            .sidebar-item:hover { background:#f1f5f9; color:#0f172a; }
-            .sidebar-item.active { background:#0f172a; color:#fff; box-shadow:none; }
-            .sidebar-item .sidebar-icon { font-size:14px; width:18px; text-align:center; flex-shrink:0; }
+            body:not(.sidebar-open) .sidebar-item { justify-content:center; padding:10px 0; gap:0; }
+            .sidebar-item:hover { background:#eef1f4; color:#0f172a; }
+            .sidebar-item.active { background:#dbeafe; color:#1d4ed8; box-shadow:none; }
+            .sidebar-item .sidebar-icon { font-size:16px; width:20px; text-align:center; flex-shrink:0; }
             .sidebar-badge {
-                margin-left:6px; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
+                margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
                 min-width:18px; height:18px; border-radius:9px; display:flex; align-items:center; justify-content:center; padding:0 5px;
             }
-            #sidebar-user { margin:0 0 0 auto; padding:0 0 0 16px; border:0; border-left:1px solid #e6e8eb; font-size:12px; font-weight:600; color:#475569; flex-shrink:0; }
+            body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
+            body:not(.sidebar-open) #side-tab-pending { position:relative; }
+            #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; font-size:12px; font-weight:600; color:#475569; }
             #sidebar-sync { display:none; align-items:center; gap:6px; font-size:10px; color:#94a3b8; margin-top:4px; }
             #content-area {
-                margin:0; width:auto; max-width:none; height:100vh; max-height:100vh;
-                padding:calc(var(--crm-nav-h) + 16px) 24px 20px; box-sizing:border-box;
+                margin:0 0 0 var(--crm-side-w); width:auto; max-width:none; height:100vh; max-height:100vh;
+                padding:16px 24px 20px; box-sizing:border-box;
                 background:#f4f6f8; flex:none; overflow:auto;
             }
             #content-area > .screen { max-width:1180px; margin-left:auto; margin-right:auto; }
@@ -134,7 +154,9 @@
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
         .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
         @media (min-width: 1024px) {
-            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - var(--crm-nav-h) - 36px); gap:10px; }
+            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
+            #samil-stage-select { display:none !important; }
+            #samil-stage-nav { display:none; }
             #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
@@ -165,31 +187,35 @@
 
 <!-- DESKTOP NAVBAR (>=1024px only) -->
 <nav id="desktop-sidebar" aria-label="Əsas naviqasiya">
+    <div class="sidebar-toggle-row">
+        <button type="button" id="toggle-sidebar-btn" class="sidebar-icon-btn" onclick="toggleDesktopSidebar()" aria-label="Menyunu aç/bağla">☰</button>
+        <button type="button" id="pin-sidebar-btn" class="sidebar-icon-btn" onclick="toggleSidebarPin()" aria-label="Menyunu bərkit">📌</button>
+    </div>
     <div class="sidebar-brand">
         <h1>Bein Systems</h1>
         <span>CRM</span>
     </div>
     <div class="sidebar-nav">
         <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
-            <span class="sidebar-icon">📋</span><span>Tapşırıqlar</span>
+            <span class="sidebar-icon">📋</span><span class="sidebar-item-label">Tapşırıqlar</span>
         </button>
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
-            <span class="sidebar-icon">🗂️</span><span>Sövdələşmələr</span>
+            <span class="sidebar-icon">🗂️</span><span class="sidebar-item-label">Sövdələşmələr</span>
         </button>
         <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
-            <span class="sidebar-icon">➕</span><span>Yeni</span>
+            <span class="sidebar-icon">➕</span><span class="sidebar-item-label">Yeni</span>
         </button>
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
-            <span class="sidebar-icon">💰</span><span id="side-tab-history-label">Maliyyə</span>
+            <span class="sidebar-icon">💰</span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon">🔔</span><span>Gözləmə</span>
+            <span class="sidebar-icon">🔔</span><span class="sidebar-item-label">Gözləmə</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
-            <span class="sidebar-icon">⏳</span><span>Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+            <span class="sidebar-icon">⏳</span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
         <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
-            <span class="sidebar-icon">📈</span><span>Hesabatlar</span>
+            <span class="sidebar-icon">📈</span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -258,7 +284,8 @@
             </div>
             <button onclick="loadSamilWorkspace(true, samilStageFilter)" class="bg-slate-900 text-white px-3 py-2 rounded-lg text-[11px] font-semibold">Yenilə</button>
         </div>
-        <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Şamilin mərhələləri"></div>
+        <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
+        <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
         <div class="samil-kanban-wrap custom-scroll">
             <div id="samil-deals-container" class="samil-kanban-board"></div>
@@ -702,7 +729,10 @@ function applySamilUi() {
     if(!isAdmin) {
         ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
     }
-    ['tab-samil-deals','side-tab-samil-deals'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='flex'; });
+    const sideDeals = document.getElementById('side-tab-samil-deals');
+    if(sideDeals) sideDeals.style.display = 'flex';
+    const mobileDeals = document.getElementById('tab-samil-deals');
+    if(mobileDeals) mobileDeals.style.display = isAdmin ? 'none' : 'flex';
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
@@ -898,6 +928,32 @@ function toast(m, err) {
     t.style.top = '20px'; setTimeout(() => t.style.top = '-60px', 3000);
 }
 
+const SIDEBAR_PIN_KEY = 'desktop_sidebar_pinned';
+function isSidebarPinned() { return localStorage.getItem(SIDEBAR_PIN_KEY) === '1'; }
+function applyDesktopSidebar() {
+    const pinned = isSidebarPinned();
+    const tempOpen = document.body.dataset.sidebarTemp === '1';
+    document.body.classList.toggle('sidebar-open', pinned || tempOpen);
+    const pin = document.getElementById('pin-sidebar-btn');
+    if(pin) pin.classList.toggle('active', pinned);
+}
+function toggleDesktopSidebar() {
+    if(isSidebarPinned()) {
+        localStorage.setItem(SIDEBAR_PIN_KEY, '0');
+        document.body.dataset.sidebarTemp = '0';
+    } else {
+        document.body.dataset.sidebarTemp = document.body.classList.contains('sidebar-open') ? '0' : '1';
+    }
+    applyDesktopSidebar();
+}
+function toggleSidebarPin() {
+    const next = isSidebarPinned() ? '0' : '1';
+    localStorage.setItem(SIDEBAR_PIN_KEY, next);
+    document.body.dataset.sidebarTemp = next === '1' ? '1' : '0';
+    applyDesktopSidebar();
+}
+applyDesktopSidebar();
+
 function setPendingTabVisible() {
     const tab = document.getElementById('tab-pending');
     if(tab) tab.style.display = isAdmin ? 'flex' : 'none';
@@ -929,6 +985,7 @@ async function initApp() {
     restoreSessionForms();
     applySamilUi();
     setPendingTabVisible();
+    applyDesktopSidebar();
     await openNotifications();
     applyHashRoute();
 }
@@ -1988,17 +2045,29 @@ async function moveSamilDealToStage(dealId, nextStageKey) {
 
 function renderSamilDeals() {
     const nav = document.getElementById('samil-stage-nav');
+    const stageSelect = document.getElementById('samil-stage-select');
     const container = document.getElementById('samil-deals-container');
     const count = document.getElementById('samil-deals-count');
-    if(!nav || !container || !count) return;
-    const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
+    if(!container || !count) return;
     const localCount = key => (Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0);
     const stageTotal = key => Number.isFinite(Number(samilStageCounts[key])) ? Number(samilStageCounts[key]) : localCount(key);
-    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    if(!SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) && SAMIL_UI_STAGES.length) {
+        samilStageFilter = SAMIL_UI_STAGES[0][0];
+    }
+    if(nav) {
+        const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
+        nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    }
+    if(stageSelect) {
+        stageSelect.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${key}" ${key === samilStageFilter ? 'selected' : ''}>${escapeHtml(label)} (${stageTotal(key)})</option>`).join('');
+        stageSelect.onchange = () => setSamilStageFilter(stageSelect.value);
+    }
     const totalDeals = SAMIL_UI_STAGES.reduce((sum, [key]) => sum + stageTotal(key), 0);
     count.textContent = `${totalDeals} aktiv sövdələşmə · Kartı başqa mərhələyə sürüşdürün`;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    const stagesToRender = isDesktop ? SAMIL_UI_STAGES : SAMIL_UI_STAGES.filter(([key]) => key === samilStageFilter);
     container.className = 'samil-kanban-board';
-    container.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => {
+    container.innerHTML = stagesToRender.map(([key, label]) => {
         const deals = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key] : samilDeals.filter(deal => deal.stage_key === key);
         const cardsHtml = deals.length ? deals.map(deal => {
             const dealTitle = escapeHtml(deal.name || '—');
@@ -2079,6 +2148,7 @@ function showDealModal(deal, mode) {
 }
 async function openSamilDeals() {
     if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
+    if(isAdmin && window.innerWidth < 1024) { switchTab('tab-tasks'); return; }
     nav('screen-samil-deals');
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
@@ -2662,8 +2732,9 @@ function renderBalanceTransaction(t, adminView = false) {
         : '<span class="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full text-[9px] font-bold">Təsdiqləndi</span>';
     const employeeId = Number(t.employee_id || 0);
     const taskId = Number(t.task_id || 0);
-    const confirmButton = adminView && isPending && employeeId > 0 && taskId > 0
-        ? `<button onclick="confirmBalanceTransaction(${employeeId}, ${taskId}, this)" class="bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold">Təsdiq et</button>`
+    const txId = String(t.id || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const confirmButton = adminView && isPending && employeeId > 0
+        ? `<button onclick="confirmBalanceTransaction(${employeeId}, ${taskId}, this, '${txId}')" class="bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold">Təsdiqlə</button>`
         : '';
     const employeeRow = adminView
         ? `<div class="text-[10px] font-bold text-gray-800 mb-1">Əməkdaş: ${escapeBalanceText(t.employee || t.executor)}</div>`
@@ -2737,7 +2808,8 @@ async function loadAdminBalances() {
         }).join('');
         if(j.recent && j.recent.length) {
             html += '<div class="mt-4 border-t pt-3"><span class="text-[10px] font-bold text-gray-500 uppercase">Son əməliyyatlar</span></div>';
-            html += j.recent.map(t => renderBalanceTransaction(t, true)).join('');
+            const rows = j.recent.slice().sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1));
+            html += rows.map(t => renderBalanceTransaction(t, true)).join('');
         }
         container.innerHTML = html || '<div class="text-center py-10 text-gray-400 text-xs">Məlumat yoxdur</div>';
     } catch(e) {
@@ -2745,7 +2817,7 @@ async function loadAdminBalances() {
     }
 }
 
-async function confirmBalanceTransaction(employeeId, taskId, button) {
+async function confirmBalanceTransaction(employeeId, taskId, button, txId) {
     if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
     const originalText = button ? button.textContent : '';
     if(button) { button.disabled = true; button.textContent = 'Təsdiqlənir...'; }
@@ -2753,7 +2825,7 @@ async function confirmBalanceTransaction(employeeId, taskId, button) {
         const r = await fetch(API_BASE + '/api/balance/confirm', {
             method:'POST',
             headers:{'Content-Type':'application/json', 'X-TG-User-ID':CURRENT_USER_ID},
-            body:JSON.stringify({chat_id:CURRENT_USER_ID, employee_id:String(employeeId), task_id:Number(taskId)})
+            body:JSON.stringify({chat_id:CURRENT_USER_ID, employee_id:String(employeeId), task_id:Number(taskId || 0), tx_id: txId || ''})
         });
         const j = await r.json();
         if(!r.ok || !j.success) throw new Error(j.error || 'Təsdiqlənmədi');

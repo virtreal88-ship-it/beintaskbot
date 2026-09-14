@@ -6,6 +6,7 @@ import json
 import base64
 import logging
 import threading
+import uuid
 import requests
 from datetime import datetime, timezone
 
@@ -221,6 +222,7 @@ def add_balance_transaction(
             if duplicate is not None:
                 return True
         transaction = {
+            "id": uuid.uuid4().hex,
             "task_id": normalized_task_id,
             "executor": executor_name,
             "client": client,
@@ -245,22 +247,38 @@ def add_balance_transaction(
     return False
 
 
-def confirm_balance_transaction(telegram_id: int, task_id: int):
-    """Confirm a pending task transaction and return its updated account totals."""
+def confirm_balance_transaction(telegram_id: int, task_id: int = 0, tx_id: str | None = None):
+    """Confirm a pending transaction by id, else by task_id."""
     filename = "balance.json"
     _load_file(filename)
     changed = False
-    normalized_task_id = int(task_id)
+    normalized_task_id = int(task_id or 0)
+    wanted_id = str(tx_id or "").strip()
     with _lock:
         data = _cache.setdefault(filename, {})
         account = _ensure_balance_account(data, str(telegram_id))
-        matching = [
-            item for item in reversed(account["transactions"])
-            if int(item.get("task_id", 0) or 0) == normalized_task_id
-        ]
-        transaction = next((
-            item for item in matching if _transaction_status(item) == "pending"
-        ), matching[0] if matching else None)
+        matching = list(reversed(account["transactions"]))
+        transaction = None
+        if wanted_id:
+            transaction = next((item for item in matching if str(item.get("id") or "") == wanted_id), None)
+            if transaction is None:
+                for item in matching:
+                    synthetic = f"{telegram_id}|{item.get('date')}|{item.get('task_id', 0)}|{item.get('amount')}"
+                    if synthetic == wanted_id:
+                        transaction = item
+                        break
+        if transaction is None and normalized_task_id:
+            by_task = [
+                item for item in matching
+                if int(item.get("task_id", 0) or 0) == normalized_task_id
+            ]
+            transaction = next((
+                item for item in by_task if _transaction_status(item) == "pending"
+            ), by_task[0] if by_task else None)
+        if transaction is None and not wanted_id and not normalized_task_id:
+            transaction = next((
+                item for item in matching if _transaction_status(item) == "pending"
+            ), None)
         if transaction is None:
             return None
         if _transaction_status(transaction) == "pending":
@@ -277,12 +295,7 @@ def confirm_balance_transaction(telegram_id: int, task_id: int):
         with _lock:
             transaction["status"] = "pending"
             account["balance"] = _transaction_total(account["transactions"], "confirmed")
-            result.update({
-                "transaction": dict(transaction),
-                "balance": account["balance"],
-                "pending_balance": _transaction_total(account["transactions"], "pending"),
-                "save_failed": True,
-            })
+        result["save_failed"] = True
         return result
     return result
 

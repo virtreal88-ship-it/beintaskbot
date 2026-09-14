@@ -8106,13 +8106,16 @@ async def handle_api_balance_confirm(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
     try:
         employee_id = int(data.get("employee_id", 0))
-        task_id = int(data.get("task_id", 0))
+        task_id = int(data.get("task_id", 0) or 0)
     except (TypeError, ValueError):
         return web.json_response({"success": False, "error": "Əməkdaş və ya tapşırıq ID-si yanlışdır."}, status=400)
-    if not employee_id or not task_id:
-        return web.json_response({"success": False, "error": "employee_id və task_id tələb olunur."}, status=400)
+    tx_id = str(data.get("tx_id") or data.get("id") or "").strip()
+    if not employee_id:
+        return web.json_response({"success": False, "error": "employee_id tələb olunur."}, status=400)
+    if not tx_id and not task_id:
+        return web.json_response({"success": False, "error": "tx_id və ya task_id tələb olunur."}, status=400)
 
-    result = confirm_balance_transaction(employee_id, task_id)
+    result = confirm_balance_transaction(employee_id, task_id, tx_id=tx_id or None)
     if result is None:
         return web.json_response({"success": False, "error": "Əməliyyat tapılmadı."}, status=404)
     if result.get("save_failed"):
@@ -8191,6 +8194,7 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         employees.append(emp_data)
     recent = get_all_recent_transactions(50)
     recent_fmt = [{
+        "id": r.get("id") or f"{r.get('telegram_id')}|{r.get('date')}|{r.get('task_id', 0)}|{r.get('amount')}",
         "employee_id": r.get("telegram_id", 0),
         "employee": r.get("executor") or _EMPLOYEE_NAMES_BY_TG.get(r.get("telegram_id", 0), str(r.get("telegram_id", ""))),
         "executor": r.get("executor", ""),
