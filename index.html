@@ -2089,7 +2089,7 @@ function renderDateKanban(container, items, mode) {
         const listEl = document.createElement('div');
         listEl.className = 'samil-kanban-list';
         if(!list.length) {
-            listEl.innerHTML = '<div class="samil-empty-column">Kart yoxdur</div>';
+            listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
         } else {
             list.forEach(t => {
                 if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
