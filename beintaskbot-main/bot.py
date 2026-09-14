@@ -6618,14 +6618,14 @@ def parse_deal_share_token(token: str) -> int | None:
 
 
 def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
+    if is_admin(chat_id):
+        return True
     try:
         pipeline_id = int(lead.get("pipeline_id") or 0)
     except (TypeError, ValueError):
         return False
     if pipeline_id not in all_personal_pipeline_ids():
         return False
-    if is_admin(chat_id):
-        return True
     owner = get_funnel_owner(chat_id)
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
 
@@ -7293,7 +7293,7 @@ async def handle_api_deal_view(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     if not _user_can_view_personal_lead(chat_id, lead):
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    deal = build_deal_view_payload(lead_id, lead)
+    deal = build_deal_view_payload(lead_id, lead, require_personal=not is_admin(chat_id))
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     return web.json_response({"success": True, "deal": deal, "share_token": make_deal_share_token(lead_id)})

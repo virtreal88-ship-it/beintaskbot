@@ -2000,6 +2000,18 @@ function deadlineForDateBucket(key) {
 }
 
 function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
+    const viewBtn = card.querySelector('.task-open-view');
+    if(viewBtn) viewBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        const leadId = t.lead_id || t.entity_id;
+        if(!leadId) { toast('Sövdələşmə tapılmadı', true); return; }
+        openDealViewModal({id: leadId});
+    });
+    const shareTaskBtn = card.querySelector('.task-open-share');
+    if(shareTaskBtn) shareTaskBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        shareDealFromUi({id: t.lead_id || t.entity_id, contact_name: t.contact_name, name: t.lead_name});
+    });
     card.addEventListener('click', event => {
         if(event.target.closest('a,button,audio')) return;
         selectedTaskId = t.id;
@@ -2097,7 +2109,10 @@ function createCrmTaskCard(t, mode) {
     const when = t.overdue_text || t.time || t.deadline || '';
     const phoneList = Array.isArray(t.phones) && t.phones.length ? t.phones : (t.phone ? [t.phone] : []);
     const phone = phoneList.filter(Boolean).join(', ');
+    const leadId = t.lead_id || t.entity_id || '';
     const link = t.kommo_link || '';
+    const kommoLink = (isAdmin && link) ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : '';
+    const shareBtn = (isAdmin && leadId) ? `<button type="button" class="task-open-share text-[11px] font-semibold text-blue-600 underline">Paylaş</button>` : '';
     card.innerHTML = `
         <div class="flex items-start justify-between gap-2 mb-1">
             <div class="min-w-0">
@@ -2109,7 +2124,7 @@ function createCrmTaskCard(t, mode) {
         <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
         <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
-            ${isAdmin && link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : '<span></span>'}
+            <div class="flex items-center gap-3 min-w-0 flex-wrap">${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : ''}${shareBtn}${kommoLink || (leadId ? '' : '<span></span>')}</div>
             <div class="desktop-task-actions gap-1">
                 <button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>
                 <button type="button" onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md text-[10px]">+2s</button>
@@ -2339,6 +2354,20 @@ async function copyText(value) {
 function closeDealViewModal() {
     document.getElementById('deal-view-modal')?.remove();
 }
+async function shareDealFromUi(dealLike) {
+    const id = dealLike && (dealLike.id || dealLike.lead_id || dealLike.entity_id);
+    if(!id) { toast('Sövdələşmə tapılmadı', true); return; }
+    showLoader();
+    try {
+        const snap = await loadDealSnapshot({id});
+        const token = snap.share_token || dealLike.share_token;
+        if(!token) { toast('Link hazır deyil', true); return; }
+        const result = await shareDealLink(buildDealShareUrl(id, token), snap.name || dealLike.contact_name || dealLike.name || 'Sövdələşmə');
+        if(result === 'copied') toast('Link kopyalandı');
+        else if(result === 'failed') toast('Linki paylaşmaq olmadı', true);
+    } catch(err) { toast(err.message, true); }
+    finally { hideLoader(); }
+}
 async function loadDealSnapshot(deal) {
     if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
     const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(deal.id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
@@ -2355,7 +2384,7 @@ function paintDealViewModal(deal, readonly) {
     modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(520px,100%);max-height:90vh;overflow:auto;box-shadow:0 8px 30px #0003">
         ${dealDetailSectionsHtml(deal, token)}
         <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            ${readonly ? '' : '<button type="button" id="deal-view-share" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Paylaş</button>'}
+            ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Paylaş</button>'}
             <button type="button" id="deal-view-close" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Bağla</button>
         </div>
     </div>`;
@@ -2423,6 +2452,8 @@ function bindSamilDealCard(card, deal) {
     if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
     const viewButton = card.querySelector('.deal-open-view');
     if(viewButton) viewButton.addEventListener('click', event => { event.stopPropagation(); openDealViewModal(deal); });
+    const shareButton = card.querySelector('.deal-open-share');
+    if(shareButton) shareButton.addEventListener('click', event => { event.stopPropagation(); shareDealFromUi(deal); });
     card.addEventListener('click', event => {
         if(event.target.closest('.deal-more-btn, .deal-drag-handle, a, audio, button')) return;
         openDealViewModal(deal);
@@ -2541,7 +2572,7 @@ function renderSamilDeals() {
                     <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3">${isAdmin && deal.kommo_link ? `<a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
+                    <div class="flex items-center gap-3 flex-wrap">${isAdmin && deal.kommo_link ? `<a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}${isAdmin ? `<button type="button" class="deal-open-share text-[11px] font-semibold text-blue-600 underline">Paylaş</button>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
