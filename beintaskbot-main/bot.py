@@ -5074,6 +5074,12 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             try: deadline_ts = int(data.get("deadline_ts") or (datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
             except (TypeError, ValueError): deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            try:
+                task_type_id = int(data.get("task_type_id") or data.get("task_type") or 4232112)
+            except (TypeError, ValueError):
+                task_type_id = 4232112
+            if task_type_id not in {4232112, XATIRLAT_TASK_TYPE_ID}:
+                task_type_id = 4232112
             executor = str(data.get("executor") or "Rüfət Həsənzadə").strip()
             executor_ids = {
                 "Nizami Qasımov": 10932455,
@@ -5090,7 +5096,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
             owner = get_funnel_owner(chat_id)
             creator = (owner or {}).get("name") or get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
-            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name=creator)
+            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", task_type_id=task_type_id, creator_name=creator)
             invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
         elif action == "info":
