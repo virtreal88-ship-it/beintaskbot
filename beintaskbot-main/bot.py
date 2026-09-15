@@ -772,15 +772,11 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         # Route Rüfət to his personal pipeline/sorğular; keep existing routing for others.
         _lead_id_exec = action_data.get("lead_id")
         if _lead_id_exec:
-            _route = route_deal_for_employee(new_name, NAME_TO_CHAT.get(new_name))
-            _exec_pipeline = _route[0] if _route else None
-            _exec_status = _route[1] if _route else None
-            if _exec_status:
-                try:
-                    _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
-                        headers=HEADERS, json={"pipeline_id": _exec_pipeline, "status_id": _exec_status}, timeout=8)
-                except Exception as exc:
-                    logger.warning("Failed to route assigned deal: %s", exc)
+            try:
+                if not move_lead_to_icraci(_lead_id_exec, new_name):
+                    logger.warning("Failed to route assigned deal %s to %s", _lead_id_exec, new_name)
+            except Exception as exc:
+                logger.warning("Failed to route assigned deal: %s", exc)
         # Notify cavabdeh (creator) about executor assignment
         _sender_name_uc = action_data.get("sender_name", "")
         _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
@@ -915,43 +911,35 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             # Route the deal after assignment. Rüfət must always receive it in
             # his own pipeline at the exact `sorgular` stage.
             if _target_chat_ae:
-                _ae_route = route_deal_for_employee(_ae_name, _target_chat_ae)
-                _ae_pipeline = _ae_route[0] if _ae_route else None
-                _ae_status = _ae_route[1] if _ae_route else None
-                if _ae_status:
-                    route_result = update_lead_kommo(
-                        int(lead_id),
-                        {"pipeline_id": _ae_pipeline, "status_id": _ae_status},
+                if not move_lead_to_icraci(int(lead_id), _ae_name):
+                    logger.error(
+                        "Failed to route assigned deal: lead=%s assignee=%s",
+                        lead_id, _ae_name,
                     )
-                    if not route_result:
-                        logger.error(
-                            "Failed to route assigned deal: lead=%s pipeline=%s status=%s",
-                            lead_id, _ae_pipeline, _ae_status,
+                    return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
+                if _ae_name == "Rüfət Həsənzadə":
+                    # Explicit notification is intentional: the stage-change
+                    # webhook may be delayed or suppressed as bot-initiated.
+                    _rufat_msg = (
+                        "📥 Rüfət Həsənzadə bölməsinə yeni sövdələşmə daxil oldu!\n\n"
+                        f"👤 {_client_ae or 'Adsız'}\n"
+                        f"📝 {task_text}\n"
+                        f"📞 {action_data.get('phone', '')}\n"
+                        f"📌 Mərhələ: sorğular\n"
+                        f"🔗 {_link_ae}"
+                    )
+                    try:
+                        asyncio.ensure_future(_bot_app.bot.send_message(
+                            int(_target_chat_ae), _rufat_msg,
+                            disable_web_page_preview=True,
+                        ))
+                        send_push_notification(
+                            str(_target_chat_ae),
+                            "📥 Yeni sövdələşmə: sorğular",
+                            f"{_client_ae or 'Adsız'} — {task_text}",
                         )
-                        return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
-                    if _ae_name == "Rüfət Həsənzadə":
-                        # Explicit notification is intentional: the stage-change
-                        # webhook may be delayed or suppressed as bot-initiated.
-                        _rufat_msg = (
-                            "📥 Rüfət Həsənzadə bölməsinə yeni sövdələşmə daxil oldu!\n\n"
-                            f"👤 {_client_ae or 'Adsız'}\n"
-                            f"📝 {task_text}\n"
-                            f"📞 {action_data.get('phone', '')}\n"
-                            f"📌 Mərhələ: sorğular\n"
-                            f"🔗 {_link_ae}"
-                        )
-                        try:
-                            asyncio.ensure_future(_bot_app.bot.send_message(
-                                int(_target_chat_ae), _rufat_msg,
-                                disable_web_page_preview=True,
-                            ))
-                            send_push_notification(
-                                str(_target_chat_ae),
-                                "📥 Yeni sövdələşmə: sorğular",
-                                f"{_client_ae or 'Adsız'} — {task_text}",
-                            )
-                        except Exception as exc:
-                            logger.warning("Rüfət notification failed: %s", exc)
+                    except Exception as exc:
+                        logger.warning("Rüfət notification failed: %s", exc)
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
@@ -1471,6 +1459,55 @@ def all_personal_pipeline_ids() -> set[int]:
     return {int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
 
 
+def employee_personal_pipeline_ids() -> set[int]:
+    """Funnels owned by Rüfət / Hüseyn / Rasim — not admin Gözləmə."""
+    return {int(RUFAT_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
+
+
+def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
+    if int(pipeline_id) in employee_personal_pipeline_ids():
+        return 15532668
+    return None
+
+
+def reassign_open_tasks_for_lead(lead_id: int, responsible_user_id: int) -> int:
+    """Point every open task on the lead (and its contacts) at the funnel owner."""
+    try:
+        lid = int(lead_id)
+        uid = int(responsible_user_id)
+    except (TypeError, ValueError):
+        return 0
+    entities = [("leads", lid)]
+    lead = get_lead_details(lid) or {}
+    for contact in (lead.get("_embedded") or {}).get("contacts") or []:
+        try:
+            entities.append(("contacts", int(contact["id"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    seen: set[int] = set()
+    updated = 0
+    for entity_type, entity_id in entities:
+        for task in get_entity_tasks(entity_id, entity_type):
+            try:
+                task_id = int(task.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            try:
+                current = int(task.get("responsible_user_id") or 0)
+            except (TypeError, ValueError):
+                current = 0
+            if current == uid:
+                continue
+            if update_task_kommo(task_id, {"responsible_user_id": uid}):
+                updated += 1
+    if updated:
+        logger.info("Reassigned %s open task(s) on lead %s to Kommo user %s", updated, lid, uid)
+    return updated
+
+
 def owner_name_for_pipeline(pipeline_id: int) -> str:
     return {
         int(RUFAT_PIPELINE_ID): "Rüfət Həsənzadə",
@@ -1509,6 +1546,12 @@ def move_lead_to_icraci(lead_id, assignee_name: str) -> bool:
             invalidate_rufat_overview_cache()
         except NameError:
             pass
+        owner_uid = kommo_user_id_for_employee_funnel(pipeline_id)
+        if owner_uid:
+            try:
+                reassign_open_tasks_for_lead(int(lead_id), owner_uid)
+            except Exception as exc:
+                logger.warning("Failed to reassign tasks for lead %s: %s", lead_id, exc)
     return ok
 
 
@@ -7390,14 +7433,6 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             overview = await get_rufat_overview(owner_chat_id=chat_id)
             return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
                                       "user_name": overview["user_name"], "ui_stages": overview.get("ui_stages")})
-        funnel_overlay = []
-        if is_admin(chat_id):
-            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID)]
-            overviews = await asyncio.gather(*[
-                get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
-            ])
-            for overview in overviews:
-                funnel_overlay.extend(overview.get("tasks") or [])
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
@@ -7463,6 +7498,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except: pass
                 # Fetch leads linked to contacts (to get stage)
                 contact_lead_stage = {}  # {contact_id: stage_name}
+                leads_pipeline_cache = {}  # {lead_id: pipeline_id}
+                contact_pipeline_ids = {}  # {contact_id: set[pipeline_id]}
+                _employee_funnels = employee_personal_pipeline_ids()
                 if contact_ids:
                     try:
                         # Batch: get leads with contacts filter
@@ -7474,9 +7512,21 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         if lr.status_code == 200:
                             for ld in lr.json().get("_embedded", {}).get("leads", []):
                                 st_name = get_pipeline_stages_for_chat(chat_id)[1].get(ld.get("status_id", 0), "")
+                                try:
+                                    _ld_id = int(ld["id"])
+                                    _ld_pipe = _lead_pipeline_id(ld)
+                                    leads_pipeline_cache[_ld_id] = _ld_pipe
+                                except (KeyError, TypeError, ValueError):
+                                    _ld_pipe = 0
                                 for lc in ld.get("_embedded", {}).get("contacts", []):
-                                    if lc["id"] in contact_ids and lc["id"] not in contact_lead_stage:
-                                        contact_lead_stage[lc["id"]] = st_name
+                                    try:
+                                        _cid = int(lc["id"])
+                                    except (KeyError, TypeError, ValueError):
+                                        continue
+                                    if _cid in contact_ids and _cid not in contact_lead_stage:
+                                        contact_lead_stage[_cid] = st_name
+                                    if _ld_pipe:
+                                        contact_pipeline_ids.setdefault(_cid, set()).add(_ld_pipe)
                     except: pass
                 # Batch fetch leads (get first contact from each)
                 leads_contact_cache = {}
@@ -7493,6 +7543,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 except (KeyError, TypeError, ValueError):
                                     continue
                                 leads_stage_cache[lid] = lead.get("status_id", 0)
+                                _ld_pipe = _lead_pipeline_id(lead)
+                                if _ld_pipe:
+                                    leads_pipeline_cache[lid] = _ld_pipe
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
                                 if emb_contacts:
                                     try:
@@ -7501,6 +7554,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                         continue
                                     leads_contact_cache[lid] = cid
                                     contact_ids.add(cid)
+                                    if _ld_pipe:
+                                        contact_pipeline_ids.setdefault(cid, set()).add(_ld_pipe)
                     except: pass
                     # Fetch any new contact_ids from leads
                     new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
@@ -7543,6 +7598,13 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except (TypeError, ValueError):
                         entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
+                    if is_admin(chat_id):
+                        if entity_type == "leads":
+                            _task_pipes = {leads_pipeline_cache[entity_id]} if leads_pipeline_cache.get(entity_id) else set()
+                        else:
+                            _task_pipes = set(contact_pipeline_ids.get(entity_id) or [])
+                        if _task_pipes & _employee_funnels:
+                            continue
                     contact_row = {}
                     if entity_type == "contacts":
                         contact_row = contacts_cache.get(entity_id) or {}
@@ -7678,14 +7740,6 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     # Fail open here: the responsible-user filter above is safer than
                     # showing nobody any task because a secondary leads request failed.
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
-        if funnel_overlay:
-            by_id = {item.get("id"): item for item in tasks_list}
-            for item in funnel_overlay:
-                by_id[item.get("id")] = item
-            tasks_list = sorted(
-                by_id.values(),
-                key=lambda item: (not item.get("is_overdue"), item.get("complete_till") or 9999999999),
-            )
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
