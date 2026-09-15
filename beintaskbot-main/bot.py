@@ -7508,6 +7508,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         # Kommo may serialize numeric IDs as strings in some responses.
         allowed_responsible_ids = {str(value) for value in allowed_responsible_ids}
         raw_tasks = []
+        leads_contact_cache = {}
         task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
         if not isinstance(task_priorities, dict):
             task_priorities = {}
@@ -7657,12 +7658,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except (TypeError, ValueError):
                         entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
-                    if is_admin(chat_id):
-                        _task_pipes = _task_entity_pipeline_ids(
-                            entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
-                        )
-                        if _task_pipes & _employee_funnels:
-                            continue
+                    _task_pipes = _task_entity_pipeline_ids(
+                        entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
+                    )
+                    if _task_pipes & _employee_funnels:
+                        continue
                     contact_row = {}
                     if entity_type == "contacts":
                         contact_row = contacts_cache.get(entity_id) or {}
@@ -7679,9 +7679,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Texniki tapşırıq|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Texniki tapşırıq|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Sərmayə|Asya|Nuranə|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
-                    _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki': TECHNICAL_SUPPORT_NAME}
+                    _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Sərmayə':'Sərmayə Əhmədsoy','Asya':'Asya Agayeva','Nuranə':'Nuranə Şirinova','Texniki': TECHNICAL_SUPPORT_NAME}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
                     # Fallback: determine assignee from Əməliyyatlar pipeline stage
@@ -7752,12 +7752,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
         except Exception as e:
             logger.error(f"Notifications fetch error: {e}")
-        # Filter by marker for non-admin users
+        # Gözləmə employees share Kommo licenses with funnel owners. Keep only
+        # tasks marked for this person or sitting in their Gözləmə column.
         if kommo_user_id != 10932455:
-            # Filter tasks by user's stage in Əməliyyatlar pipeline
             _user_status = TG_TO_STATUS_ID.get(chat_id)
+            _employee_name = get_employee_name_by_chat_id(chat_id, "")
+            _user_lead_ids = set()
+            _stage_ok = False
             if _user_status:
-                # Get leads on user's stage
                 try:
                     _stage_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads",
                         headers=HEADERS, params={
@@ -7765,38 +7767,33 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                             "filter[statuses][0][status_id]": _user_status,
                             "limit": 250
                         }, timeout=10)
-                    _user_lead_ids = set()
                     if _stage_resp.status_code == 200:
+                        _stage_ok = True
                         for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
-                            _user_lead_ids.add(_l['id'])
-                    # Keep tasks linked to the employee's Operations-stage leads. If the
-                    # optional stage lookup fails, do not erase the tasks already fetched.
-                    # A marker is also accepted because shared Kommo licenses are used by
-                    # several employees.
-                    _employee_name = get_employee_name_by_chat_id(chat_id, "")
-                    def _task_belongs_to_user(task_item):
-                        eid = task_item.get('entity_id')
-                        etype = task_item.get('entity_type', 'contacts')
-                        marker_name = task_item.get('assigneeName', '')
-                        if marker_name == _employee_name:
-                            return True
-                        if etype == 'leads' and eid in _user_lead_ids:
-                            return True
-                        if etype == 'contacts':
-                            for lid, cid in leads_contact_cache.items():
-                                if cid == eid and lid in _user_lead_ids:
-                                    return True
-                        return False
-                    # An empty result is valid only when Kommo successfully returned an
-                    # empty stage. On API failure, preserve the previously fetched list.
-                    if _stage_resp.status_code == 200 and _user_lead_ids:
-                        # Keep the responsible-user matches when Kommo returns no
-                        # stage leads (for example for contact-linked tasks).
-                        tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
+                            try:
+                                _user_lead_ids.add(int(_l['id']))
+                            except (KeyError, TypeError, ValueError):
+                                continue
                 except Exception as _fe:
                     logger.error(f"Stage filter error: {_fe}")
-                    # Fail open here: the responsible-user filter above is safer than
-                    # showing nobody any task because a secondary leads request failed.
+            def _task_belongs_to_user(task_item):
+                if _employee_name and task_item.get('assigneeName', '') == _employee_name:
+                    return True
+                if not _stage_ok:
+                    return False
+                try:
+                    eid = int(task_item.get('entity_id'))
+                except (TypeError, ValueError):
+                    eid = task_item.get('entity_id')
+                etype = _normalize_kommo_entity_type(task_item.get('entity_type', 'contacts'))
+                if etype == 'leads' and eid in _user_lead_ids:
+                    return True
+                if etype == 'contacts':
+                    for lid, cid in leads_contact_cache.items():
+                        if cid == eid and lid in _user_lead_ids:
+                            return True
+                return False
+            tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
