@@ -1,5 +1,33 @@
 [
   {
+    "id": "2b1ce18f",
+    "type": "assign_executor",
+    "created_at": "2026-09-15T12:54:18.348891+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Nərmin kiosk",
+      "phone": "+994502060677",
+      "lead_id": 76090333,
+      "task_text": "İnteqrasiya istəyi",
+      "deadline": "15.09.2026 15:53",
+      "sender_name": "Sərmayə Əhmədsoy",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76090333",
+      "conf_key": "4d71b113",
+      "creator_chat_id": 1289510272
+    },
+    "options": [
+      "Rüfət",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "9aade225",
     "type": "confirm_stage",
     "created_at": "2026-09-14T21:41:44.718171+04:00",
