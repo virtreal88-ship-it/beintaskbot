@@ -1859,14 +1859,16 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
 
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
-    old_pipeline_id = 0
+    old_pipeline_id = None
     new_pipeline_id = 0
     try:
         new_pipeline_id = int((data or {}).get("pipeline_id") or 0)
     except (TypeError, ValueError):
         new_pipeline_id = 0
     if new_pipeline_id and kommo_user_id_for_employee_funnel(new_pipeline_id):
-        old_pipeline_id = _lead_pipeline_id(get_lead_details(int(lead_id)))
+        details = get_lead_details(int(lead_id))
+        if details:
+            old_pipeline_id = _lead_pipeline_id(details)
     try:
         resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         if resp.status_code == 200:
@@ -1879,7 +1881,11 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
                 for k in list(_bot_changed_leads.keys()):
                     if _bot_changed_leads[k] < cutoff:
                         del _bot_changed_leads[k]
-            if new_pipeline_id and new_pipeline_id != old_pipeline_id:
+            if (
+                new_pipeline_id
+                and old_pipeline_id is not None
+                and new_pipeline_id != old_pipeline_id
+            ):
                 maybe_reassign_open_tasks_for_employee_funnel(lead_id, new_pipeline_id)
             return resp.json()
     except Exception as e:
@@ -1940,14 +1946,43 @@ def _normalize_kommo_entity_type(entity_type) -> str:
 
 
 def _lead_pipeline_id(lead) -> int:
+    raw = (lead or {}).get("pipeline_id", 0) if isinstance(lead, dict) else 0
+    if isinstance(raw, dict):
+        raw = raw.get("id") or raw.get("pipeline_id") or 0
     try:
-        return int((lead or {}).get("pipeline_id", 0) or 0)
+        return int(raw or 0)
     except (TypeError, ValueError):
         return 0
 
 
+def _cached_funnel_has_lead(chat_id, lead_id) -> bool:
+    owner = get_funnel_owner(chat_id)
+    if not owner or not lead_id:
+        return False
+    try:
+        lid = int(lead_id)
+        pid = int(owner["pipeline_id"])
+    except (TypeError, ValueError):
+        return False
+    cached = _personal_overview_cache.get(pid) or {}
+    for deal in cached.get("deals") or []:
+        try:
+            if int(deal.get("id")) == lid:
+                return True
+        except (TypeError, ValueError):
+            continue
+    for rows in (cached.get("deals_by_stage") or {}).values():
+        for deal in rows or []:
+            try:
+                if int(deal.get("id")) == lid:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
 def _task_entity_pipeline_ids(entity_type, entity_id, leads_pipeline_cache: dict, contact_pipeline_ids: dict) -> set[int]:
-    """Resolve pipeline ids for a task entity, fetching from Kommo when the cache misses."""
+    """Resolve pipeline ids from already-fetched lead/contact caches only."""
     etype = _normalize_kommo_entity_type(entity_type)
     try:
         eid = int(entity_id)
@@ -1955,28 +1990,8 @@ def _task_entity_pipeline_ids(entity_type, entity_id, leads_pipeline_cache: dict
         return set()
     if etype == "leads":
         pid = leads_pipeline_cache.get(eid)
-        if not pid:
-            pid = _lead_pipeline_id(get_lead_details(eid))
-            if pid:
-                leads_pipeline_cache[eid] = pid
         return {pid} if pid else set()
-    pipes = set(contact_pipeline_ids.get(eid) or [])
-    if pipes:
-        return pipes
-    for lead in _leads_linked_to_contact(eid):
-        pid = _lead_pipeline_id(lead)
-        try:
-            lid = int(lead.get("id") if isinstance(lead, dict) else lead)
-        except (TypeError, ValueError, AttributeError):
-            lid = 0
-        if not pid and lid:
-            pid = _lead_pipeline_id(get_lead_details(lid))
-        if pid:
-            pipes.add(pid)
-            if lid:
-                leads_pipeline_cache[lid] = pid
-    contact_pipeline_ids[eid] = pipes
-    return pipes
+    return set(contact_pipeline_ids.get(eid) or [])
 
 
 def _rufat_permitted_pipeline_ids(chat_id=None) -> set[int]:
@@ -1995,7 +2010,10 @@ def _rufat_may_use_lead(lead_id=None, lead=None, chat_id=None) -> bool:
         resolved_id = lead.get("id")
     if not resolved_id:
         return False
-    return _lead_pipeline_id(get_lead_details(int(resolved_id))) in permitted
+    details = get_lead_details(int(resolved_id))
+    if details:
+        return _lead_pipeline_id(details) in permitted
+    return _cached_funnel_has_lead(chat_id, resolved_id)
 
 
 def _leads_linked_to_contact(contact_id: int) -> list:
@@ -2036,7 +2054,15 @@ def _preferred_lead_for_rufat(leads: list) -> dict | None:
 
 def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
     lead = get_lead_details(int(lead_id))
-    return bool(lead and int(lead.get("pipeline_id", 0) or 0) == int(pipeline_id))
+    if lead:
+        return _lead_pipeline_id(lead) == int(pipeline_id)
+    owner = None
+    for chat_id in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID):
+        candidate = get_funnel_owner(chat_id)
+        if candidate and int(candidate["pipeline_id"]) == int(pipeline_id):
+            owner = candidate
+            break
+    return bool(owner and _cached_funnel_has_lead(owner["chat_id"], lead_id))
 
 
 def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
@@ -2075,6 +2101,8 @@ def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
                 )
                 for lead in _leads_linked_to_contact(int(entity_id))
             )
+            if not allowed:
+                allowed = _cached_funnel_has_lead(chat_id, entity_id)
             if not allowed:
                 logger.warning(
                     "task_allowed_for_chat: contact %s has no Rüfət/Əməliyyatlar lead",
@@ -4679,7 +4707,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         except (TypeError, ValueError):
             old_pipeline_id = 0
         if pipeline_id in employee_personal_pipeline_ids():
-            if pipeline_id != old_pipeline_id:
+            if old_pipeline_id and pipeline_id != old_pipeline_id:
                 maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id)
             if pipeline_id == RUFAT_PIPELINE_ID:
                 rufat_chat = NAME_TO_CHAT.get("Rüfət Həsənzadə")
@@ -5009,6 +5037,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
         if cid == tg_user_id:
             chat_id = int(cid)
             break
+    if not chat_id:
+        try:
+            chat_id = int(tg_user_id)
+        except (TypeError, ValueError):
+            chat_id = None
     if not chat_id:
         return web.json_response({"success": False, "error": "İstifadəçi tapılmadı. Botda /start yazın."}, status=403)
     action = data.get("action", "")
