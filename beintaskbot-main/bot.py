@@ -7828,6 +7828,26 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 return False
             tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
+        if is_admin(chat_id):
+            funnel_overlay = []
+            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID)]
+            overviews = await asyncio.gather(*[
+                get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
+            ])
+            for overview in overviews:
+                owner_name = overview.get("user_name") or overview.get("funnel_owner") or ""
+                for item in overview.get("tasks") or []:
+                    if not item.get("assigneeName"):
+                        item["assigneeName"] = owner_name
+                    funnel_overlay.append(item)
+            if funnel_overlay:
+                by_id = {item.get("id"): item for item in tasks_list}
+                for item in funnel_overlay:
+                    by_id[item.get("id")] = item
+                tasks_list = sorted(
+                    by_id.values(),
+                    key=lambda item: (not item.get("is_overdue"), item.get("complete_till") or 9999999999),
+                )
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
