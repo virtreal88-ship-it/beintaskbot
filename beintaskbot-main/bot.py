@@ -1505,7 +1505,22 @@ def reassign_open_tasks_for_lead(lead_id: int, responsible_user_id: int) -> int:
                 updated += 1
     if updated:
         logger.info("Reassigned %s open task(s) on lead %s to Kommo user %s", updated, lid, uid)
+        try:
+            invalidate_rufat_overview_cache()
+        except NameError:
+            pass
     return updated
+
+
+def maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id) -> int:
+    uid = kommo_user_id_for_employee_funnel(int(pipeline_id or 0))
+    if not uid or not lead_id:
+        return 0
+    try:
+        return reassign_open_tasks_for_lead(int(lead_id), uid)
+    except Exception as exc:
+        logger.warning("Failed to reassign tasks for lead %s: %s", lead_id, exc)
+        return 0
 
 
 def owner_name_for_pipeline(pipeline_id: int) -> str:
@@ -1546,12 +1561,6 @@ def move_lead_to_icraci(lead_id, assignee_name: str) -> bool:
             invalidate_rufat_overview_cache()
         except NameError:
             pass
-        owner_uid = kommo_user_id_for_employee_funnel(pipeline_id)
-        if owner_uid:
-            try:
-                reassign_open_tasks_for_lead(int(lead_id), owner_uid)
-            except Exception as exc:
-                logger.warning("Failed to reassign tasks for lead %s: %s", lead_id, exc)
     return ok
 
 
@@ -1850,6 +1859,14 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
 
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
+    old_pipeline_id = 0
+    new_pipeline_id = 0
+    try:
+        new_pipeline_id = int((data or {}).get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        new_pipeline_id = 0
+    if new_pipeline_id and kommo_user_id_for_employee_funnel(new_pipeline_id):
+        old_pipeline_id = _lead_pipeline_id(get_lead_details(int(lead_id)))
     try:
         resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         if resp.status_code == 200:
@@ -1862,6 +1879,8 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
                 for k in list(_bot_changed_leads.keys()):
                     if _bot_changed_leads[k] < cutoff:
                         del _bot_changed_leads[k]
+            if new_pipeline_id and new_pipeline_id != old_pipeline_id:
+                maybe_reassign_open_tasks_for_employee_funnel(lead_id, new_pipeline_id)
             return resp.json()
     except Exception as e:
         logger.error(f"Update lead error: {e}")
@@ -1925,6 +1944,39 @@ def _lead_pipeline_id(lead) -> int:
         return int((lead or {}).get("pipeline_id", 0) or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _task_entity_pipeline_ids(entity_type, entity_id, leads_pipeline_cache: dict, contact_pipeline_ids: dict) -> set[int]:
+    """Resolve pipeline ids for a task entity, fetching from Kommo when the cache misses."""
+    etype = _normalize_kommo_entity_type(entity_type)
+    try:
+        eid = int(entity_id)
+    except (TypeError, ValueError):
+        return set()
+    if etype == "leads":
+        pid = leads_pipeline_cache.get(eid)
+        if not pid:
+            pid = _lead_pipeline_id(get_lead_details(eid))
+            if pid:
+                leads_pipeline_cache[eid] = pid
+        return {pid} if pid else set()
+    pipes = set(contact_pipeline_ids.get(eid) or [])
+    if pipes:
+        return pipes
+    for lead in _leads_linked_to_contact(eid):
+        pid = _lead_pipeline_id(lead)
+        try:
+            lid = int(lead.get("id") if isinstance(lead, dict) else lead)
+        except (TypeError, ValueError, AttributeError):
+            lid = 0
+        if not pid and lid:
+            pid = _lead_pipeline_id(get_lead_details(lid))
+        if pid:
+            pipes.add(pid)
+            if lid:
+                leads_pipeline_cache[lid] = pid
+    contact_pipeline_ids[eid] = pipes
+    return pipes
 
 
 def _rufat_permitted_pipeline_ids(chat_id=None) -> set[int]:
@@ -4622,20 +4674,27 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         old_status_id = int(old_status_id) if old_status_id else 0
         new_status_id = int(new_status_id)
         pipeline_id = int(pipeline_id) if pipeline_id else 0
-        if pipeline_id not in (PIPELINE_ID, RUFAT_PIPELINE_ID):
+        try:
+            old_pipeline_id = int(data.get("leads[status][0][old_pipeline_id]") or 0)
+        except (TypeError, ValueError):
+            old_pipeline_id = 0
+        if pipeline_id in employee_personal_pipeline_ids():
+            if pipeline_id != old_pipeline_id:
+                maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id)
+            if pipeline_id == RUFAT_PIPELINE_ID:
+                rufat_chat = NAME_TO_CHAT.get("Rüfət Həsənzadə")
+                if rufat_chat and _bot_app:
+                    rufat_stage = RUFAT_STAGE_NAMES.get(new_status_id, "Naməlum")
+                    rufat_lead = get_lead_details(lead_id) or {}
+                    rufat_msg = (f"🔄 Sizin vоронкаda mərhələ dəyişdi:\n\n"
+                                  f"👤 {rufat_lead.get('name', lead_id)}\n📋 {rufat_lead.get('name', '')}\n📌 {rufat_stage}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}")
+                    try:
+                        await _bot_app.bot.send_message(rufat_chat, rufat_msg, disable_web_page_preview=True)
+                        send_push_notification(str(rufat_chat), "🔄 Mərhələ dəyişdi", f"{rufat_lead.get('name', lead_id)} — {rufat_stage}")
+                    except Exception:
+                        pass
             return web.Response(status=200, text="OK")
-        if pipeline_id == RUFAT_PIPELINE_ID:
-            rufat_chat = NAME_TO_CHAT.get("Rüfət Həsənzadə")
-            if rufat_chat and _bot_app:
-                rufat_stage = RUFAT_STAGE_NAMES.get(new_status_id, "Naməlum")
-                rufat_lead = get_lead_details(lead_id) or {}
-                rufat_msg = (f"🔄 Sizin vоронкаda mərhələ dəyişdi:\n\n"
-                              f"👤 {rufat_lead.get('name', lead_id)}\n📋 {rufat_lead.get('name', '')}\n📌 {rufat_stage}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}")
-                try:
-                    await _bot_app.bot.send_message(rufat_chat, rufat_msg, disable_web_page_preview=True)
-                    send_push_notification(str(rufat_chat), "🔄 Mərhələ dəyişdi", f"{rufat_lead.get('name', lead_id)} — {rufat_stage}")
-                except Exception:
-                    pass
+        if pipeline_id not in (PIPELINE_ID, RUFAT_PIPELINE_ID):
             return web.Response(status=200, text="OK")
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
@@ -7599,10 +7658,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
                     if is_admin(chat_id):
-                        if entity_type == "leads":
-                            _task_pipes = {leads_pipeline_cache[entity_id]} if leads_pipeline_cache.get(entity_id) else set()
-                        else:
-                            _task_pipes = set(contact_pipeline_ids.get(entity_id) or [])
+                        _task_pipes = _task_entity_pipeline_ids(
+                            entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
+                        )
                         if _task_pipes & _employee_funnels:
                             continue
                     contact_row = {}
