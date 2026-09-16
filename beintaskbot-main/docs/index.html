@@ -175,7 +175,7 @@
         .page-user-name { color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
-        #task-date-select, #gozleme-date-select, #pending-date-select { display:block; width:100%; }
+        #task-date-select, #gozleme-date-select, #pending-type-select { display:block; width:100%; }
         @media (max-width: 1023px) {
             #screen-notifications .samil-kanban-wrap, #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap { overflow-x:hidden; }
             #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board {
@@ -187,7 +187,7 @@
         @media (min-width: 1024px) {
             #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active, #content-area > #screen-pending.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #samil-stage-select { display:none !important; }
-            #task-date-select, #gozleme-date-select, #pending-date-select { display:none !important; }
+            #task-date-select, #gozleme-date-select, #pending-type-select { display:none !important; }
             #samil-stage-nav { display:none; }
             #pin-sidebar-btn { width:32px; height:32px; color:#94a3b8; font-size:13px; }
             #pin-sidebar-btn svg { width:14px; height:14px; }
@@ -197,12 +197,15 @@
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
             #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
-            #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board, #pending-actions-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
+            #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
+            #pending-actions-container.samil-kanban-board { grid-auto-columns:minmax(300px, 320px); height:100%; min-height:0; gap:14px; overflow-x:visible; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
-            .task-later-stack { display:flex; flex-direction:column; gap:10px; height:100%; min-height:0; overflow:hidden; min-width:0; }
-            .task-later-stack .samil-kanban-column { flex:1 1 0; height:auto; min-height:0; }
+            .task-later-stack { display:flex; flex-direction:column; gap:10px; height:100%; min-height:0; overflow-x:hidden; overflow-y:auto; min-width:0; }
+            .task-later-stack .samil-kanban-column { flex:0 0 auto; height:auto !important; max-height:none !important; overflow:visible; }
             .task-later-stack .samil-kanban-header { padding:8px 12px 4px; }
-            .task-later-stack .samil-kanban-list { padding:8px; }
+            .task-later-stack .samil-kanban-list { padding:8px; overflow:visible !important; flex:none; max-height:none; }
+            #pending-actions-container section { flex-shrink:0; overflow:visible; min-width:0; }
+            #pending-actions-container .samil-kanban-list { overflow-x:hidden; overflow-y:auto; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
         body.public-deal-only { overflow:auto; height:auto; background:#f4f6f8; }
@@ -570,7 +573,7 @@
             </div>
             <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
-        <select id="pending-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
+        <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Növ"></select>
         <div class="samil-kanban-wrap custom-scroll">
             <div id="pending-actions-container" class="samil-kanban-board"></div>
         </div>
@@ -1567,24 +1570,12 @@ function appendPendingDetail(container, icon, label, value) {
     container.appendChild(row);
 }
 
-function pendingDeadlineTs(action) {
-    const data = action.data || {};
-    const ts = Number(data.deadline_ts || data.complete_till || 0);
-    if(ts > 1e12) return Math.floor(ts / 1000);
-    if(ts > 0) return ts;
-    const raw = data.deadline || action.created_at;
-    if(raw == null || raw === '') return 0;
-    if(typeof raw === 'number') return raw > 1e12 ? Math.floor(raw / 1000) : raw;
-    const d = new Date(raw);
-    if(!Number.isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
-    return 0;
-}
-
 function createPendingActionCard(action) {
         const data = action.data || {};
         const card = document.createElement('section');
-        card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 relative overflow-hidden';
+        card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 relative overflow-visible';
         card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+        card.style.flexShrink = '0';
         card.dataset.actionId = action.id;
         // Swipe handling: right = confirm panel (stars + Təsdiq et), left = İmtina
         let startX = 0, currentX = 0, swiping = false;
@@ -1611,6 +1602,7 @@ function createPendingActionCard(action) {
 
         const details = document.createElement('div');
         details.className = 'space-y-1.5 bg-slate-50 rounded-xl p-3';
+        details.style.cssText = 'overflow:visible;word-break:break-word;white-space:normal;';
         const description = data.task_text || data.description ||
             (data.stage_name ? `Mərhələ: ${data.stage_name}` : 'Sorğu üçün seçim gözlənilir.');
         appendPendingDetail(details, '👤', 'Müştəri', data.contact_name || data.client_name);
@@ -1694,21 +1686,41 @@ function renderPendingActions() {
     if(playingPendingAudio && !playingPendingAudio.paused) return;
     const container = document.getElementById('pending-actions-container');
     if(!container) return;
-    const items = pendingActions.map(action => ({ ...action, complete_till: pendingDeadlineTs(action) }));
-    const dateSelect = document.getElementById('pending-date-select');
-    if(dateSelect) {
-        if(pendingKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === pendingKanbanFilter)) pendingKanbanFilter = 'all';
-        dateSelect.innerHTML = `<option value="all" ${pendingKanbanFilter === 'all' ? 'selected' : ''}>Müddətsiz (${items.length})</option>` + DATE_KANBAN_COLS.map(col => {
-            const n = items.filter(t => crmDateBucket(t) === col.key).length;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    const knownKeys = PENDING_KANBAN_COLS.map(col => col.key);
+    if(pendingKanbanFilter !== 'all' && !knownKeys.includes(pendingKanbanFilter)) pendingKanbanFilter = 'all';
+    const hasOther = pendingActions.some(action => pendingTypeKey(action) === 'other');
+    let cols = PENDING_KANBAN_COLS.filter(col => col.key !== 'other' || hasOther);
+    const typeSelect = document.getElementById('pending-type-select');
+    if(typeSelect) {
+        typeSelect.innerHTML = `<option value="all" ${pendingKanbanFilter === 'all' ? 'selected' : ''}>Hamısı (${pendingActions.length})</option>` + cols.map(col => {
+            const n = pendingActions.filter(action => pendingTypeKey(action) === col.key).length;
             return `<option value="${col.key}" ${col.key === pendingKanbanFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
         }).join('');
-        dateSelect.onchange = () => {
-            pendingKanbanFilter = dateSelect.value;
-            localStorage.setItem('pending_date_bucket', pendingKanbanFilter);
+        typeSelect.onchange = () => {
+            pendingKanbanFilter = typeSelect.value;
+            localStorage.setItem('pending_type_bucket', pendingKanbanFilter);
             renderPendingActions();
         };
     }
-    renderDateKanban(container, items, 'pending', item => createPendingActionCard(item));
+    if(!isDesktop && pendingKanbanFilter !== 'all') cols = cols.filter(col => col.key === pendingKanbanFilter);
+    container.className = 'samil-kanban-board';
+    container.innerHTML = '';
+    cols.forEach(col => {
+        const list = pendingActions.filter(action => pendingTypeKey(action) === col.key);
+        const column = document.createElement('div');
+        column.className = 'samil-kanban-column';
+        column.innerHTML = `<div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><span class="text-xs font-extrabold text-slate-800 flex items-center gap-2"><span class="stage-dot" style="background:${col.color}"></span>${col.label}</span><span class="text-[11px] font-bold text-slate-500">${list.length}</span></div></div>`;
+        const listEl = document.createElement('div');
+        listEl.className = 'samil-kanban-list';
+        if(!list.length) {
+            listEl.innerHTML = '<div class="samil-empty-column">Sorğu yoxdur</div>';
+        } else {
+            list.forEach(action => listEl.appendChild(createPendingActionCard(action)));
+        }
+        column.appendChild(listEl);
+        container.appendChild(column);
+    });
 }
 
 // Swipe-right confirm panel: optional KPI stars + Təsdiq et
@@ -1973,7 +1985,19 @@ const DATE_KANBAN_COLS = [
 ];
 let taskDateFilter = localStorage.getItem('task_date_bucket') || 'all';
 let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_bucket') || 'all';
-let pendingKanbanFilter = localStorage.getItem('pending_date_bucket') || 'all';
+let pendingKanbanFilter = localStorage.getItem('pending_type_bucket') || 'all';
+const PENDING_KANBAN_COLS = [
+    {key:'change_stage', label:'Tapşırıq tamamlandı', color:'#10b981'},
+    {key:'reassign_task', label:'İcraçı dəyişikliyi', color:'#8b5cf6'},
+    {key:'assign_executor', label:'İcraçı seçimi', color:'#2563eb'},
+    {key:'confirm_stage', label:'Mərhələ təsdiqi', color:'#f59e0b'},
+    {key:'other', label:'Admin sorğusu', color:'#64748b'}
+];
+function pendingTypeKey(action) {
+    const type = String(action?.type || '');
+    if(PENDING_KANBAN_COLS.some(col => col.key === type && col.key !== 'other')) return type;
+    return 'other';
+}
 let taskKanbanDragState = null;
 function isDateFilterKey(key) {
     return key === 'all' || DATE_KANBAN_COLS.some(col => col.key === key);
@@ -2184,7 +2208,7 @@ function appendDateKanbanColumn(parent, col, items, mode, makeCard) {
     const listEl = document.createElement('div');
     listEl.className = 'samil-kanban-list';
     if(!list.length) {
-        listEl.innerHTML = mode === 'pending' ? '<div class="samil-empty-column">Sorğu yoxdur</div>' : '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
+        listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
     } else {
         list.forEach(t => {
             if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
@@ -2200,19 +2224,18 @@ function renderDateKanban(container, items, mode, makeCard) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
-    const isMobileBoard = (mode === 'task' || mode === 'gozleme' || mode === 'pending') && !isDesktop;
+    const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !isDesktop;
     const validKeys = ['all', ...DATE_KANBAN_COLS.map(col => col.key)];
-    const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : mode === 'pending' ? pendingKanbanFilter : taskDateFilter;
+    const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
     if(isMobileBoard && !validKeys.includes(filterKey)) {
         if(mode === 'gozleme') gozlemeKanbanFilter = 'all';
-        else if(mode === 'pending') pendingKanbanFilter = 'all';
         else taskDateFilter = 'all';
     }
-    const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : mode === 'pending' ? pendingKanbanFilter : taskDateFilter;
+    const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
     const cols = (!isMobileBoard || activeFilter === 'all')
         ? DATE_KANBAN_COLS
         : DATE_KANBAN_COLS.filter(col => col.key === activeFilter);
-    const stackLater = isDesktop && (mode === 'task' || mode === 'gozleme' || mode === 'pending') && activeFilter === 'all';
+    const stackLater = isDesktop && (mode === 'task' || mode === 'gozleme') && activeFilter === 'all';
     if(stackLater) {
         const early = DATE_KANBAN_COLS.filter(col => col.key === 'overdue' || col.key === 'today' || col.key === 'tomorrow');
         const later = DATE_KANBAN_COLS.filter(col => col.key === 'week' || col.key === 'nextweek' || col.key === 'future');
