@@ -128,10 +128,10 @@
             .screen input, .screen select, .screen textarea, .screen .space-y-3, .screen .bg-white { box-sizing:border-box; }
             #content-area .text-\[11px\] { font-size:12px; }
             #content-area .text-\[10px\] { font-size:11px; }
-            #notifications-container:not(.samil-kanban-board), #pending-actions-container, #balance-history-container, #kpi-history-container, #gozleme-container:not(.samil-kanban-board), #hesabat-history-container {
+            #notifications-container:not(.samil-kanban-board), #pending-actions-container:not(.samil-kanban-board), #balance-history-container, #kpi-history-container, #gozleme-container:not(.samil-kanban-board), #hesabat-history-container {
                 display:flex; flex-direction:column; gap:10px; align-items:stretch;
             }
-            #notifications-container:not(.samil-kanban-board) > *, #pending-actions-container > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container:not(.samil-kanban-board) > *, #hesabat-history-container > * { margin:0 !important; }
+            #notifications-container:not(.samil-kanban-board) > *, #pending-actions-container:not(.samil-kanban-board) > *, #balance-history-container > *, #kpi-history-container > *, #gozleme-container:not(.samil-kanban-board) > *, #hesabat-history-container > * { margin:0 !important; }
             #content-area .bg-white { border-color:#e6e8eb !important; box-shadow:0 1px 2px rgba(15,23,42,.04) !important; border-radius:12px !important; }
             .filter-pill { background:#fff; border-color:#e6e8eb; border-radius:8px !important; }
             .filter-pill.active { background:#0f172a; border-color:#0f172a; }
@@ -142,8 +142,8 @@
         }
         .desktop-task-actions, .desktop-pending-actions { display:none; }
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
-        #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
-        #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > * { margin:0 !important; }
+        #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
+        #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > *, #pending-actions-container.samil-kanban-board > * { margin:0 !important; }
         .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; min-width:0; }
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
         .samil-kanban-header { padding:12px 12px 8px; flex-shrink:0; }
@@ -175,30 +175,29 @@
         .page-user-name { color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
-        #task-date-select, #gozleme-date-select { display:block; width:100%; }
+        #task-date-select, #gozleme-date-select, #pending-date-select { display:block; width:100%; }
         @media (max-width: 1023px) {
-            #screen-notifications .samil-kanban-wrap, #screen-gozleme .samil-kanban-wrap { overflow-x:hidden; }
-            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board {
+            #screen-notifications .samil-kanban-wrap, #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap { overflow-x:hidden; }
+            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board {
                 display:flex; flex-direction:column; grid-auto-flow:row; grid-auto-columns:unset;
                 grid-template-columns:none; min-height:0; height:auto;
             }
-            #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column { max-height:none; min-height:0; height:auto; }
+            #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column { max-height:none; min-height:0; height:auto; }
         }
         @media (min-width: 1024px) {
-            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
+            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active, #content-area > #screen-pending.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #samil-stage-select { display:none !important; }
-            #task-date-select, #gozleme-date-select { display:none !important; }
+            #task-date-select, #gozleme-date-select, #pending-date-select { display:none !important; }
             #samil-stage-nav { display:none; }
             #pin-sidebar-btn { width:32px; height:32px; color:#94a3b8; font-size:13px; }
             #pin-sidebar-btn svg { width:14px; height:14px; }
             #pin-sidebar-btn:hover { color:#64748b; }
             .page-user-name { font-size:13px !important; }
-            #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
+            #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between, #screen-pending > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
             #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
-            #gozleme-container.samil-kanban-board { grid-auto-columns:calc((100% - 28px) / 3); height:100%; min-height:0; gap:14px; }
-            #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
+            #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board, #pending-actions-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
             .task-later-stack { display:flex; flex-direction:column; gap:10px; height:100%; min-height:0; overflow:hidden; min-width:0; }
             .task-later-stack .samil-kanban-column { flex:1 1 0; height:auto; min-height:0; }
@@ -571,7 +570,10 @@
             </div>
             <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
-        <div id="pending-actions-container" class="space-y-3"></div>
+        <select id="pending-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
+        <div class="samil-kanban-wrap custom-scroll">
+            <div id="pending-actions-container" class="samil-kanban-board"></div>
+        </div>
     </div>
 
     <!-- SCREEN: GÖZLƏMƏ -->
@@ -1565,19 +1567,20 @@ function appendPendingDetail(container, icon, label, value) {
     container.appendChild(row);
 }
 
-function renderPendingActions() {
-    const container = document.getElementById('pending-actions-container');
-    if(!container) return;
-    container.innerHTML = '';
-    if(!pendingActions.length) {
-        const empty = document.createElement('div');
-        empty.className = 'text-center py-12 text-gray-400 text-xs font-semibold';
-        empty.textContent = 'Hazırda gözləyən sorğu yoxdur.';
-        container.appendChild(empty);
-        return;
-    }
+function pendingDeadlineTs(action) {
+    const data = action.data || {};
+    const ts = Number(data.deadline_ts || data.complete_till || 0);
+    if(ts > 1e12) return Math.floor(ts / 1000);
+    if(ts > 0) return ts;
+    const raw = data.deadline || action.created_at;
+    if(raw == null || raw === '') return 0;
+    if(typeof raw === 'number') return raw > 1e12 ? Math.floor(raw / 1000) : raw;
+    const d = new Date(raw);
+    if(!Number.isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
+    return 0;
+}
 
-    pendingActions.forEach(action => {
+function createPendingActionCard(action) {
         const data = action.data || {};
         const card = document.createElement('section');
         card.className = 'bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3 relative overflow-hidden';
@@ -1683,8 +1686,29 @@ function renderPendingActions() {
         hint.className = 'swipe-hint flex justify-between text-[9px] text-gray-300 font-semibold pt-0.5';
         hint.innerHTML = '<span>← İmtina</span><span>Təsdiq et →</span>';
         card.appendChild(hint);
-        container.appendChild(card);
-    });
+        return card;
+}
+
+function renderPendingActions() {
+    const playingPendingAudio = document.querySelector('#pending-actions-container audio');
+    if(playingPendingAudio && !playingPendingAudio.paused) return;
+    const container = document.getElementById('pending-actions-container');
+    if(!container) return;
+    const items = pendingActions.map(action => ({ ...action, complete_till: pendingDeadlineTs(action) }));
+    const dateSelect = document.getElementById('pending-date-select');
+    if(dateSelect) {
+        if(pendingKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === pendingKanbanFilter)) pendingKanbanFilter = 'all';
+        dateSelect.innerHTML = `<option value="all" ${pendingKanbanFilter === 'all' ? 'selected' : ''}>Müddətsiz (${items.length})</option>` + DATE_KANBAN_COLS.map(col => {
+            const n = items.filter(t => crmDateBucket(t) === col.key).length;
+            return `<option value="${col.key}" ${col.key === pendingKanbanFilter ? 'selected' : ''}>${col.label} (${n})</option>`;
+        }).join('');
+        dateSelect.onchange = () => {
+            pendingKanbanFilter = dateSelect.value;
+            localStorage.setItem('pending_date_bucket', pendingKanbanFilter);
+            renderPendingActions();
+        };
+    }
+    renderDateKanban(container, items, 'pending', item => createPendingActionCard(item));
 }
 
 // Swipe-right confirm panel: optional KPI stars + Təsdiq et
@@ -1949,6 +1973,7 @@ const DATE_KANBAN_COLS = [
 ];
 let taskDateFilter = localStorage.getItem('task_date_bucket') || 'all';
 let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_bucket') || 'all';
+let pendingKanbanFilter = localStorage.getItem('pending_date_bucket') || 'all';
 let taskKanbanDragState = null;
 function isDateFilterKey(key) {
     return key === 'all' || DATE_KANBAN_COLS.some(col => col.key === key);
@@ -2150,7 +2175,7 @@ function createCrmTaskCard(t, mode) {
     return card;
 }
 
-function appendDateKanbanColumn(parent, col, items, mode) {
+function appendDateKanbanColumn(parent, col, items, mode, makeCard) {
     const column = document.createElement('div');
     column.className = 'samil-kanban-column';
     column.dataset.dateColumn = col.key;
@@ -2159,45 +2184,46 @@ function appendDateKanbanColumn(parent, col, items, mode) {
     const listEl = document.createElement('div');
     listEl.className = 'samil-kanban-list';
     if(!list.length) {
-        listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
+        listEl.innerHTML = mode === 'pending' ? '<div class="samil-empty-column">Sorğu yoxdur</div>' : '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
     } else {
         list.forEach(t => {
             if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
-            listEl.appendChild(createCrmTaskCard(t, mode));
+            listEl.appendChild(makeCard ? makeCard(t) : createCrmTaskCard(t, mode));
         });
     }
     column.appendChild(listEl);
-    bindTaskColumnDrop(column);
+    if(mode !== 'pending') bindTaskColumnDrop(column);
     parent.appendChild(column);
 }
 
-function renderDateKanban(container, items, mode) {
+function renderDateKanban(container, items, mode, makeCard) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
-    const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !isDesktop;
+    const isMobileBoard = (mode === 'task' || mode === 'gozleme' || mode === 'pending') && !isDesktop;
     const validKeys = ['all', ...DATE_KANBAN_COLS.map(col => col.key)];
-    const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
+    const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : mode === 'pending' ? pendingKanbanFilter : taskDateFilter;
     if(isMobileBoard && !validKeys.includes(filterKey)) {
         if(mode === 'gozleme') gozlemeKanbanFilter = 'all';
+        else if(mode === 'pending') pendingKanbanFilter = 'all';
         else taskDateFilter = 'all';
     }
-    const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
+    const activeFilter = mode === 'gozleme' ? gozlemeKanbanFilter : mode === 'pending' ? pendingKanbanFilter : taskDateFilter;
     const cols = (!isMobileBoard || activeFilter === 'all')
         ? DATE_KANBAN_COLS
         : DATE_KANBAN_COLS.filter(col => col.key === activeFilter);
-    const stackLater = isDesktop && mode === 'task' && activeFilter === 'all';
+    const stackLater = isDesktop && (mode === 'task' || mode === 'gozleme' || mode === 'pending') && activeFilter === 'all';
     if(stackLater) {
         const early = DATE_KANBAN_COLS.filter(col => col.key === 'overdue' || col.key === 'today' || col.key === 'tomorrow');
         const later = DATE_KANBAN_COLS.filter(col => col.key === 'week' || col.key === 'nextweek' || col.key === 'future');
-        early.forEach(col => appendDateKanbanColumn(container, col, items, mode));
+        early.forEach(col => appendDateKanbanColumn(container, col, items, mode, makeCard));
         const stack = document.createElement('div');
         stack.className = 'task-later-stack';
-        later.forEach(col => appendDateKanbanColumn(stack, col, items, mode));
+        later.forEach(col => appendDateKanbanColumn(stack, col, items, mode, makeCard));
         container.appendChild(stack);
         return;
     }
-    cols.forEach(col => appendDateKanbanColumn(container, col, items, mode));
+    cols.forEach(col => appendDateKanbanColumn(container, col, items, mode, makeCard));
 }
 
 function renderNotifications() {
@@ -2231,6 +2257,7 @@ function renderNotifications() {
 window.addEventListener('resize', () => {
     if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
     if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
+    if(document.getElementById('screen-pending')?.classList.contains('active')) renderPendingActions();
 });
 
 function escapeHtml(value) {
