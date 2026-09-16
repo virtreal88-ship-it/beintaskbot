@@ -234,9 +234,9 @@ TASK_TYPE_NAMES = {
     3263999: "Quraşdırma",
     3267595: "Zəng et",
     4229224: "Cavab gözlənilir",
-    4232112: "aktiv tapşırıq",
+    4232112: "aktiv",
     4232108: "Import",
-    4239844: "passiv tapşırıq",
+    4239844: "passiv",
 }
 
 # Logging
@@ -2150,49 +2150,82 @@ def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
     return lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
 
 
+def get_kommo_task(task_id) -> dict | None:
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{tid}", headers=HEADERS, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json() or {}
+            if isinstance(data, dict) and data.get("id"):
+                return data
+            embedded = (data.get("_embedded") or {}).get("tasks") or []
+            if embedded:
+                return embedded[0]
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/tasks",
+            headers=HEADERS,
+            params={"filter[id][]": tid, "limit": 1},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            tasks = (resp.json() or {}).get("_embedded", {}).get("tasks") or []
+            if tasks:
+                return tasks[0]
+        logger.warning("get_kommo_task %s HTTP %s", tid, getattr(resp, "status_code", "?"))
+    except Exception as exc:
+        logger.error("get_kommo_task error: %s", exc)
+    return None
+
+
+def task_payload_allowed_for_chat(task: dict, chat_id: int) -> bool:
+    if is_admin(chat_id) or not is_funnel_chat(chat_id):
+        return True
+    entity_id = (task or {}).get("entity_id")
+    if not entity_id:
+        return False
+    entity_type = _normalize_kommo_entity_type((task or {}).get("entity_type", "leads"))
+    if entity_type == "leads":
+        allowed = _rufat_may_use_lead(lead_id=int(entity_id), chat_id=chat_id)
+        if not allowed:
+            allowed = _cached_funnel_has_lead(chat_id, entity_id)
+        if not allowed:
+            logger.warning(
+                "task_allowed_for_chat: lead %s is outside this funnel",
+                entity_id,
+            )
+        return allowed
+    if entity_type == "contacts":
+        allowed = any(
+            _rufat_may_use_lead(
+                lead=lead,
+                lead_id=lead.get("id") if isinstance(lead, dict) else lead,
+                chat_id=chat_id,
+            )
+            for lead in _leads_linked_to_contact(int(entity_id))
+        )
+        if not allowed:
+            allowed = _cached_funnel_has_lead(chat_id, entity_id)
+        if not allowed:
+            logger.warning(
+                "task_allowed_for_chat: contact %s has no funnel lead",
+                entity_id,
+            )
+        return allowed
+    logger.warning("task_allowed_for_chat: unsupported entity_type %s", entity_type)
+    return False
+
+
 def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
     if is_admin(chat_id) or not is_funnel_chat(chat_id):
         return True
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{int(task_id)}", headers=HEADERS, timeout=8)
-        if resp.status_code != 200:
-            logger.warning("task_allowed_for_chat: task %s HTTP %s", task_id, resp.status_code)
-            return False
-        task = resp.json()
-        entity_id = task.get("entity_id")
-        if not entity_id:
-            return False
-        entity_type = _normalize_kommo_entity_type(task.get("entity_type", "leads"))
-        if entity_type == "leads":
-            allowed = _rufat_may_use_lead(lead_id=int(entity_id), chat_id=chat_id)
-            if not allowed:
-                logger.warning(
-                    "task_allowed_for_chat: lead %s is outside Rüfət/Əməliyyatlar",
-                    entity_id,
-                )
-            return allowed
-        if entity_type == "contacts":
-            allowed = any(
-                _rufat_may_use_lead(
-                    lead=lead,
-                    lead_id=lead.get("id") if isinstance(lead, dict) else lead,
-                    chat_id=chat_id,
-                )
-                for lead in _leads_linked_to_contact(int(entity_id))
-            )
-            if not allowed:
-                allowed = _cached_funnel_has_lead(chat_id, entity_id)
-            if not allowed:
-                logger.warning(
-                    "task_allowed_for_chat: contact %s has no Rüfət/Əməliyyatlar lead",
-                    entity_id,
-                )
-            return allowed
-        logger.warning("task_allowed_for_chat: unsupported entity_type %s for task %s", entity_type, task_id)
+    task = get_kommo_task(task_id)
+    if not task:
+        logger.warning("task_allowed_for_chat: task %s not found", task_id)
         return False
-    except Exception:
-        logger.exception("task_allowed_for_chat failed for task %s", task_id)
-        return False
+    return task_payload_allowed_for_chat(task, chat_id)
 
 
 def get_leads_by_status(status_id: int, chat_id: int = None) -> list:
@@ -4607,7 +4640,7 @@ async def _handle_kommo_task_webhook(data: dict):
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
         3267595: "Zəng et", 4229224: "Cavab gözlənilir",
-        4232112: "aktiv tapşırıq", 4232108: "Import", 4239844: "passiv tapşırıq"
+        4232112: "aktiv", 4232108: "Import", 4239844: "passiv"
     }
     task_type_name = ""
     if task_type_id_raw:
@@ -5798,19 +5831,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
             started = has_active_session(chat_id, int(task_id))
             return web.json_response({"success": True, "started": started})
         elif action == "complete_task":
-            task_id = data.get("task_id")
+            try:
+                task_id = int(data.get("task_id"))
+            except (TypeError, ValueError):
+                task_id = 0
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            if not task_allowed_for_chat(task_id, chat_id):
+            task_data = get_kommo_task(task_id)
+            if not task_data:
+                return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
+            if not task_payload_allowed_for_chat(task_data, chat_id):
                 return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-            try:
-                task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                if task_resp.status_code != 200:
-                    return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
-                task_data = task_resp.json()
-            except Exception as exc:
-                logger.error(f"complete_task task lookup error: {exc}")
-                return web.json_response({"success": False, "error": "Tapşırıq məlumatı alınmadı."})
 
             task_context = get_task_deal_context(task_data)
             lead_id = task_context["lead_id"]
@@ -6667,8 +6698,8 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
     reminder_tasks: list[dict] = []
     task_type_names = {
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq",
-        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv tapşırıq",
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv",
+        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv",
     }
     for task in _rufat_tasks:
         try:
@@ -7816,7 +7847,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq", 4232108: "Import", 4239844: "passiv tapşırıq"}
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv", 4232108: "Import", 4239844: "passiv"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
@@ -8028,8 +8059,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         _SHORT_TO_FULL = {'Rüfət': 'Rüfət Həsənzadə', 'Soltan': 'Soltan Abbasov', 'Hüseyn': 'Hüseyn Səfərov',
                           'Nizami': 'Nizami Qasımov', 'Rasim': 'Rasim Əsgərov', 'Texniki': TECHNICAL_SUPPORT_NAME}
         _TASK_TYPE_NAMES_GOZ = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq",
-                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv tapşırıq"}
+                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv",
+                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv"}
 
         lead_map = {}          # {lead_id: lead}
         lead_contact_id = {}   # {lead_id: contact_id}
@@ -8186,7 +8217,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "assignee_name": assignee_name,
                     "kommo_link": f"https://texnikidestek50.kommo.com/leads/detail/{lead_id}",
                     "complete_till": deadline_ts,
-                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "passiv tapşırıq"),
+                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "passiv"),
                     "task_type_id": task.get("task_type_id", XATIRLAT_TASK_TYPE_ID),
                     "last_note": last_note,
                     "priority": task_priorities.get(str(task.get("id")), task_priorities.get(task.get("id"), "")),
