@@ -1,5 +1,33 @@
 [
   {
+    "id": "3f985184",
+    "type": "assign_executor",
+    "created_at": "2026-09-16T14:34:22.335813+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Xanbagirestaurant",
+      "phone": "0703344211",
+      "lead_id": 77958227,
+      "task_text": "Qrmenyu yaradılmalıdır.",
+      "deadline": "16.09.2026 14:29",
+      "sender_name": "Nuranə Şirinova",
+      "assignee_name_raw": "Rasim Əsgərov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77958227",
+      "conf_key": "0d41850a",
+      "creator_chat_id": 1142054888
+    },
+    "options": [
+      "Rüfət",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "2b1ce18f",
     "type": "assign_executor",
     "created_at": "2026-09-15T12:54:18.348891+04:00",
