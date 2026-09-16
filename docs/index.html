@@ -197,8 +197,13 @@
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
             #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
-            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board { grid-auto-columns:calc((100% - 28px) / 3); height:100%; min-height:0; gap:14px; }
+            #gozleme-container.samil-kanban-board { grid-auto-columns:calc((100% - 28px) / 3); height:100%; min-height:0; gap:14px; }
+            #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
+            .task-later-stack { display:flex; flex-direction:column; gap:10px; height:100%; min-height:0; overflow:hidden; min-width:0; }
+            .task-later-stack .samil-kanban-column { flex:1 1 0; height:auto; min-height:0; }
+            .task-later-stack .samil-kanban-header { padding:8px 12px 4px; }
+            .task-later-stack .samil-kanban-list { padding:8px; }
             .deal-drag-hint, .deal-drag-handle { display:inline; }
         }
         body.public-deal-only { overflow:auto; height:auto; background:#f4f6f8; }
@@ -2145,10 +2150,32 @@ function createCrmTaskCard(t, mode) {
     return card;
 }
 
+function appendDateKanbanColumn(parent, col, items, mode) {
+    const column = document.createElement('div');
+    column.className = 'samil-kanban-column';
+    column.dataset.dateColumn = col.key;
+    const list = items.filter(t => crmDateBucket(t) === col.key);
+    column.innerHTML = `<div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><span class="text-xs font-extrabold text-slate-800 flex items-center gap-2"><span class="stage-dot" style="background:${col.color}"></span>${col.label}</span><span class="text-[11px] font-bold text-slate-500">${list.length}</span></div></div>`;
+    const listEl = document.createElement('div');
+    listEl.className = 'samil-kanban-list';
+    if(!list.length) {
+        listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
+    } else {
+        list.forEach(t => {
+            if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
+            listEl.appendChild(createCrmTaskCard(t, mode));
+        });
+    }
+    column.appendChild(listEl);
+    bindTaskColumnDrop(column);
+    parent.appendChild(column);
+}
+
 function renderDateKanban(container, items, mode) {
     container.className = 'samil-kanban-board';
     container.innerHTML = '';
-    const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !window.matchMedia('(min-width: 1024px)').matches;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    const isMobileBoard = (mode === 'task' || mode === 'gozleme') && !isDesktop;
     const validKeys = ['all', ...DATE_KANBAN_COLS.map(col => col.key)];
     const filterKey = mode === 'gozleme' ? gozlemeKanbanFilter : taskDateFilter;
     if(isMobileBoard && !validKeys.includes(filterKey)) {
@@ -2159,26 +2186,18 @@ function renderDateKanban(container, items, mode) {
     const cols = (!isMobileBoard || activeFilter === 'all')
         ? DATE_KANBAN_COLS
         : DATE_KANBAN_COLS.filter(col => col.key === activeFilter);
-    cols.forEach(col => {
-        const column = document.createElement('div');
-        column.className = 'samil-kanban-column';
-        column.dataset.dateColumn = col.key;
-        const list = items.filter(t => crmDateBucket(t) === col.key);
-        column.innerHTML = `<div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><span class="text-xs font-extrabold text-slate-800 flex items-center gap-2"><span class="stage-dot" style="background:${col.color}"></span>${col.label}</span><span class="text-[11px] font-bold text-slate-500">${list.length}</span></div></div>`;
-        const listEl = document.createElement('div');
-        listEl.className = 'samil-kanban-list';
-        if(!list.length) {
-            listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
-        } else {
-            list.forEach(t => {
-                if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
-                listEl.appendChild(createCrmTaskCard(t, mode));
-            });
-        }
-        column.appendChild(listEl);
-        bindTaskColumnDrop(column);
-        container.appendChild(column);
-    });
+    const stackLater = isDesktop && mode === 'task' && activeFilter === 'all';
+    if(stackLater) {
+        const early = DATE_KANBAN_COLS.filter(col => col.key === 'overdue' || col.key === 'today' || col.key === 'tomorrow');
+        const later = DATE_KANBAN_COLS.filter(col => col.key === 'week' || col.key === 'nextweek' || col.key === 'future');
+        early.forEach(col => appendDateKanbanColumn(container, col, items, mode));
+        const stack = document.createElement('div');
+        stack.className = 'task-later-stack';
+        later.forEach(col => appendDateKanbanColumn(stack, col, items, mode));
+        container.appendChild(stack);
+        return;
+    }
+    cols.forEach(col => appendDateKanbanColumn(container, col, items, mode));
 }
 
 function renderNotifications() {

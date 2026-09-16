@@ -1201,6 +1201,7 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 # ─── Bot-created tasks (suppress webhook echo) ──────────────────────────────
 _bot_created_tasks: set = set()
 _bot_created_tasks_ts: dict = {}  # {task_id: timestamp} for time-based expiry
+_pending_bot_task_leads: dict = {}  # {lead_id: timestamp} - suppress webhook before created id is known
 _notified_task_webhooks: dict = {}  # {task_id: timestamp} - prevent duplicate webhook notifications
 # Completion notification override for the synchronous AI completion flow.
 _last_completed_task_creator_chat_id: int | None = None
@@ -1800,6 +1801,81 @@ def get_all_incomplete_tasks() -> list:
         pass
     return []
 
+_BOT_CREATED_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_bot_created_cache.json")
+
+
+def _save_bot_created_cache():
+    try:
+        cutoff = _time_module.time() - 180
+        payload = {
+            "tasks": {str(k): v for k, v in _bot_created_tasks_ts.items() if v >= cutoff},
+            "leads": {str(k): v for k, v in _pending_bot_task_leads.items() if v >= cutoff},
+        }
+        with open(_BOT_CREATED_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+
+def _load_bot_created_cache():
+    try:
+        with open(_BOT_CREATED_CACHE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+        cutoff = _time_module.time() - 180
+        for k, v in (payload.get("tasks") or {}).items():
+            ts = float(v or 0)
+            if ts >= cutoff:
+                _bot_created_tasks.add(int(k))
+                _bot_created_tasks_ts[int(k)] = ts
+        for k, v in (payload.get("leads") or {}).items():
+            ts = float(v or 0)
+            if ts >= cutoff:
+                _pending_bot_task_leads[int(k)] = ts
+    except Exception:
+        pass
+
+
+def _mark_pending_bot_task_lead(entity_id: int):
+    try:
+        lid = int(entity_id)
+    except (TypeError, ValueError):
+        return
+    _pending_bot_task_leads[lid] = _time_module.time()
+    if len(_pending_bot_task_leads) > 200:
+        cutoff = _time_module.time() - 120
+        for key, ts in list(_pending_bot_task_leads.items()):
+            if ts < cutoff:
+                _pending_bot_task_leads.pop(key, None)
+    _save_bot_created_cache()
+
+
+def _is_bot_created_task_webhook(task_id, entity_id) -> bool:
+    _load_bot_created_cache()
+    now = _time_module.time()
+    if task_id:
+        try:
+            tid = int(task_id)
+        except (TypeError, ValueError):
+            tid = None
+        if tid is not None:
+            if tid in _bot_created_tasks:
+                ts = _bot_created_tasks_ts.get(tid, 0)
+                if now - ts < 180:
+                    return True
+                _bot_created_tasks.discard(tid)
+                _bot_created_tasks_ts.pop(tid, None)
+    if entity_id:
+        try:
+            lid = int(entity_id)
+        except (TypeError, ValueError):
+            lid = None
+        if lid is not None:
+            ts = _pending_bot_task_leads.get(lid, 0)
+            if ts and now - ts < 180:
+                return True
+    return False
+
+
 def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1, creator_name: str = "") -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     task_payload = {
@@ -1813,6 +1889,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
         task_payload["task_type_id"] = task_type_id
     payload = [task_payload]
     logger.info(f"create_task: entity_id={entity_id}, text={text[:50]}, resp_user={responsible_user_id}, type_id={task_type_id}")
+    _mark_pending_bot_task_lead(entity_id)
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code not in (200, 201):
@@ -1825,6 +1902,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
                     import time as _time
                     _bot_created_tasks.add(int(created_id))
                     _bot_created_tasks_ts[int(created_id)] = _time.time()
+                    _save_bot_created_cache()
                     if len(_bot_created_tasks) > 500:
                         oldest = next(iter(_bot_created_tasks))
                         _bot_created_tasks.discard(oldest)
@@ -4521,7 +4599,7 @@ async def _handle_kommo_task_webhook(data: dict):
     entity_id_raw = _get("element_id")
     entity_type_raw = _get("element_type")
     deadline_raw = _get("complete_till")
-    created_by_raw = _get("created_by")
+    created_by_raw = _get("created_by") or _get("created_user_id") or _get("created_by_id")
     task_type_id_raw = _get("task_type_id") or _get("task_type")
     # Task type names mapping
     _TASK_TYPE_NAMES = {
@@ -4567,15 +4645,9 @@ async def _handle_kommo_task_webhook(data: dict):
                 return
             else:
                 del _bot_updated_tasks[tid]
-        # Suppress if bot created this task
-        if tid in _bot_created_tasks:
-            ts = _bot_created_tasks_ts.get(tid, 0)
-            if _time.time() - ts < 120:
-                logger.info(f"Webhook suppressed: bot-created task {tid}")
-                return
-            else:
-                _bot_created_tasks.discard(tid)
-                _bot_created_tasks_ts.pop(tid, None)
+    if _is_bot_created_task_webhook(task_id_raw, entity_id):
+        logger.info(f"Webhook suppressed: bot-created task {task_id_raw} lead={entity_id}")
+        return
     # Suppress duplicate webhook for same task_id (Kommo sends multiple add webhooks)
     if is_add and task_id_raw:
         tid = int(task_id_raw)
@@ -5097,6 +5169,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
             owner = get_funnel_owner(chat_id)
             creator = (owner or {}).get("name") or get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
             result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", task_type_id=task_type_id, creator_name=creator)
+            if result:
+                executor_chat = get_chat_id_by_name(executor)
+                try:
+                    creator_chat = int(chat_id)
+                except (TypeError, ValueError):
+                    creator_chat = None
+                if executor_chat and creator_chat and int(executor_chat) != creator_chat:
+                    dl = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                    _send_telegram_text(
+                        executor_chat,
+                        f"📋 Yeni tapşırıq ({creator}):\n\n📝 {text}\n👤 {executor}\n⏰ {dl}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                    )
+                    send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
             invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
         elif action == "info":
