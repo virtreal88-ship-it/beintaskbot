@@ -966,7 +966,7 @@
     "id": "f7c2e8bd",
     "type": "assign_executor",
     "created_at": "2026-09-01T14:42:23.199904+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Tural Alhuseynov Nugmas",
       "phone": "994506223252",
@@ -988,7 +988,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-09-16T15:13:39.304785+04:00",
+    "resolved_by": "bot.py:828",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "4e3f64ab",
