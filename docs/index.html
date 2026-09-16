@@ -242,7 +242,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="task-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
             <div id="search-error" class="create-span-2 text-red-500 text-[11px] font-bold" style="display:none;">Min 7 rəqəm daxil edin.</div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">Texniki tapşırıq</option><option value="4239844">xatırlat müşt.</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">aktiv tapşırıq</option><option value="4239844">passiv tapşırıq</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Deadline:</label>
@@ -299,7 +299,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg></span><span class="sidebar-item-label">Tapşırıqlar</span>
         </button>
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sövdələşmələr</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sifarışlər</span>
         </button>
         <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="sidebar-item-label">Yeni</span>
@@ -308,7 +308,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Gözləmə</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Passiv tapşırıqlar</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
@@ -379,12 +379,12 @@
     <div id="screen-samil-deals" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
-                <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
+                <div class="text-sm font-extrabold text-gray-800">Sifarışlər</div>
                 <div id="deals-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-                <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sövdələşmə</span></button>
+                <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sifariş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sifariş</span></button>
             </div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
@@ -493,7 +493,7 @@
         <div class="space-y-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="edit-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Telefon:</label><input type="text" id="edit-phone" readonly class="w-full p-2.5 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl outline-none"></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">Texniki tapşırıq</option><option value="4239844">xatırlat müşt.</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">aktiv tapşırıq</option><option value="4239844">passiv tapşırıq</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
@@ -584,7 +584,7 @@
     <div id="screen-gozleme" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
-                <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
+                <div class="text-sm font-extrabold text-gray-800">Passiv tapşırıqlar</div>
                 <div class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
@@ -667,8 +667,8 @@
         <textarea id="modal-task-desc" placeholder="Mətni yazın..."></textarea>
         <input type="datetime-local" id="modal-task-deadline" class="mt-3">
         <select id="modal-task-type" class="mt-3">
-            <option value="4232112">Texniki tapşırıq</option>
-            <option value="4239844">xatırlat müşt.</option>
+            <option value="4232112">aktiv tapşırıq</option>
+            <option value="4239844">passiv tapşırıq</option>
         </select>
         <div class="task-edit-actions">
             <button type="button" onclick="closeTaskEditModal()" class="bg-slate-100 text-slate-600">Ləğv et</button>
@@ -683,7 +683,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg><span class="mt-0.5">Tapşırıqlar</span>
     </button>
     <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sövdələşmələr</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sifarışlər</span>
     </button>
     <button id="tab-create" onclick="switchTab('tab-create')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="mt-0.5">Yeni</span>
@@ -692,7 +692,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Gözləmə</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Passiv tapş.</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
@@ -1441,7 +1441,7 @@ function openCreateDealModal() {
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     modal.onclick = (event) => { if(event.target === modal) closeCreateDealModal(); };
     modal.innerHTML = `<div style="background:#fff;border-radius:20px;padding:18px;width:min(420px,100%);box-shadow:0 18px 50px rgba(15,23,42,.18)" onclick="event.stopPropagation()">
-        <div style="font-size:16px;font-weight:800;margin-bottom:12px">Yeni sövdələşmə</div>
+        <div style="font-size:16px;font-weight:800;margin-bottom:12px">Yeni sifariş</div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı</label>
         <input id="create-deal-name" type="text" placeholder="Ad Soyad" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
         <label class="text-xs font-bold text-gray-400 block mb-1">Telefon</label>
@@ -1878,7 +1878,7 @@ function openSubtaskFromPending(action) {
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
-        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="4232112">Texniki tapşırıq</option><option value="4239844">xatırlat müşt.</option></select>
+        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="4232112">aktiv tapşırıq</option><option value="4239844">passiv tapşırıq</option></select>
         <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
         <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${assigneeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>
@@ -1943,7 +1943,7 @@ async function openPendingActions() {
 let currentFilter = localStorage.getItem('pinned_filter') || (CURRENT_USER_ID === '1628569350' ? 'Nizami Qasımov' : 'all');
 let taskListSearch = '';
 let dealListSearch = '';
-const TASK_TYPE_OPTIONS_HTML = '<option value="4232112">Texniki tapşırıq</option><option value="4239844">xatırlat müşt.</option>';
+const TASK_TYPE_OPTIONS_HTML = '<option value="4232112">aktiv tapşırıq</option><option value="4239844">passiv tapşırıq</option>';
 function normalizeSearchDigits(value) { return String(value || '').replace(/\D/g, ''); }
 function crmRecordMatchesSearch(record, query) {
     const q = String(query || '').trim().toLowerCase();
@@ -3240,14 +3240,14 @@ async function loadGozleme(showFeedback = false) {
     try {
         const r = await fetch(API_BASE + '/api/gozleme', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(!r.ok || !j.success) throw new Error(j.error || 'Gözləmə yükləndi');
+        if(!r.ok || !j.success) throw new Error(j.error || 'Passiv tapşırıqlar yükləndi');
         gozlemeItems = j.items || j.tasks || [];
         setCachedGozleme(gozlemeItems);
         renderGozleme();
-        if(showFeedback) toast('Gözləmə yeniləndi', false);
+        if(showFeedback) toast('Passiv tapşırıqlar yeniləndi', false);
     } catch(e) {
         renderGozleme();
-        if(showFeedback) toast('Gözləmə yükləndi', true);
+        if(showFeedback) toast('Passiv tapşırıqlar yükləndi', true);
     }
 }
 
@@ -3294,7 +3294,7 @@ function renderGozleme() {
     const tc = document.getElementById('gozleme-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
     const countEl = document.getElementById('gozleme-count');
-    if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    if(countEl) countEl.textContent = `Passiv tapşırıqlar (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
     const dateSelect = document.getElementById('gozleme-date-select');
     if(dateSelect) {
         if(gozlemeKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'all';
@@ -3346,7 +3346,7 @@ function openSubtask(taskId) {
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
-        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="4232112">Texniki tapşırıq</option><option value="4239844">xatırlat müşt.</option></select>
+        <select id="sub-type" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;"><option value="4232112">aktiv tapşırıq</option><option value="4239844">passiv tapşırıq</option></select>
         <label style="font-size:11px;color:#888;font-weight:600;">İcraçı:</label>
         <select id="sub-assignee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${assigneeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Təsvir:</label>

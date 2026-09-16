@@ -234,8 +234,9 @@ TASK_TYPE_NAMES = {
     3263999: "Quraşdırma",
     3267595: "Zəng et",
     4229224: "Cavab gözlənilir",
-    4232112: "Texniki tapşırıq",
+    4232112: "aktiv tapşırıq",
     4232108: "Import",
+    4239844: "passiv tapşırıq",
 }
 
 # Logging
@@ -4606,7 +4607,7 @@ async def _handle_kommo_task_webhook(data: dict):
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
         3267595: "Zəng et", 4229224: "Cavab gözlənilir",
-        4232112: "Texniki tapşırıq", 4232108: "Import"
+        4232112: "aktiv tapşırıq", 4232108: "Import", 4239844: "passiv tapşırıq"
     }
     task_type_name = ""
     if task_type_id_raw:
@@ -6666,8 +6667,8 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
     reminder_tasks: list[dict] = []
     task_type_names = {
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
-        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt.",
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq",
+        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv tapşırıq",
     }
     for task in _rufat_tasks:
         try:
@@ -7815,7 +7816,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq", 4232108: "Import"}
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq", 4232108: "Import", 4239844: "passiv tapşırıq"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
@@ -8027,8 +8028,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         _SHORT_TO_FULL = {'Rüfət': 'Rüfət Həsənzadə', 'Soltan': 'Soltan Abbasov', 'Hüseyn': 'Hüseyn Səfərov',
                           'Nizami': 'Nizami Qasımov', 'Rasim': 'Rasim Əsgərov', 'Texniki': TECHNICAL_SUPPORT_NAME}
         _TASK_TYPE_NAMES_GOZ = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
-                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt."}
+                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv tapşırıq",
+                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv tapşırıq"}
 
         lead_map = {}          # {lead_id: lead}
         lead_contact_id = {}   # {lead_id: contact_id}
@@ -8185,7 +8186,7 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "assignee_name": assignee_name,
                     "kommo_link": f"https://texnikidestek50.kommo.com/leads/detail/{lead_id}",
                     "complete_till": deadline_ts,
-                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "xatırlat müşt."),
+                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "passiv tapşırıq"),
                     "task_type_id": task.get("task_type_id", XATIRLAT_TASK_TYPE_ID),
                     "last_note": last_note,
                     "priority": task_priorities.get(str(task.get("id")), task_priorities.get(task.get("id"), "")),
