@@ -1,5 +1,31 @@
 [
   {
+    "id": "1caf025f",
+    "type": "confirm_stage",
+    "created_at": "2026-09-16T15:39:53.994238+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Orxan",
+      "phone": "+994555555181",
+      "lead_id": 75311001,
+      "task_id": 94397229,
+      "status_id": 142,
+      "stage_name": "Успешно реализовано",
+      "stage_key": "ugurlu",
+      "pipeline_id": 14461812,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "conf_key": "1a1cd2f2",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/75311001",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 8443
+    },
+    "options": [
+      "Təsdiq et",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "aae7f49c",
     "type": "change_stage",
     "created_at": "2026-09-16T15:36:15.257692+04:00",
