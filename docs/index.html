@@ -141,6 +141,7 @@
             .desktop-pending-actions { display:flex !important; }
         }
         .desktop-task-actions, .desktop-pending-actions { display:none; }
+        .task-board-actions { display:flex !important; }
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
         #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
         #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > *, #pending-actions-container.samil-kanban-board > * { margin:0 !important; }
@@ -2194,8 +2195,11 @@ function createCrmTaskCard(t, mode) {
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
         <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
             <div class="flex items-center gap-3 min-w-0 flex-wrap">${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : ''}${kommoLink || (leadId ? '' : '<span></span>')}</div>
-            <div class="desktop-task-actions gap-1">
-                <button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>
+            <div class="desktop-task-actions gap-1${mode === 'task' ? ' task-board-actions' : ''}">
+                ${mode === 'task'
+                    ? `<button type="button" onclick="event.stopPropagation(); desktopCloseDealStage(${t.id},'ugurlu');" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]" title="Uğurlu">✓</button>
+                <button type="button" onclick="event.stopPropagation(); desktopCloseDealStage(${t.id},'imtina');" class="bg-red-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">İmtina</button>`
+                    : `<button type="button" onclick="event.stopPropagation(); desktopCompleteTask(${t.id});" class="bg-emerald-500 text-white font-bold px-2 py-1 rounded-md text-[10px]">✓</button>`}
                 <button type="button" onclick="event.stopPropagation(); selectedTaskId=${t.id}; showPostponeReasonModal();" class="bg-amber-100 text-amber-700 font-bold px-2 py-1 rounded-md text-[10px]">+2s</button>
             </div>
         </div>`;
@@ -2788,6 +2792,49 @@ function desktopCompleteTask(taskId) {
     const assigneeName = t.assigneeName || t.responsible_user_name || '';
     clickNotification(t.id, displayDesc, `Müştəri: ${t.contact_name || ''} | İcraçı: ${assigneeName}`);
     showCompletePanel();
+}
+async function desktopCloseDealStage(taskId, stageKey) {
+    const task = mockTasks.find(x => x.id === taskId);
+    if(!task) return;
+    const isLost = stageKey === 'imtina';
+    const label = isLost ? 'İmtina olundu' : 'Uğurlu';
+    if(!confirm(isLost ? 'Sövdələşmə imtina mərhələsinə keçsin?' : 'Sövdələşmə uğurlu mərhələyə keçsin?')) return;
+    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin;
+    const completedId = task.id;
+    const leadId = Number(task.lead_id || task.entity_id || 0);
+    showLoader();
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify({
+                action: 'complete_task',
+                task_id: completedId,
+                phone: task.phone || '',
+                note: label,
+                completion_pipeline: useFunnelComplete ? 'samil' : '',
+                completion_stage: useFunnelComplete ? stageKey : ''
+            })
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok || !j.success) { toast(j.error || j.message || 'Tapşırıq tamamlanmadı', true); return; }
+        if(!useFunnelComplete && leadId) {
+            try { await samilDealAction({action:'deal_edit', lead_id: leadId, stage_key: stageKey}); } catch(e) {}
+        }
+    } catch(e) {
+        toast('Xəta! Tapşırıq bağlanmadı', true);
+        return;
+    } finally {
+        hideLoader();
+    }
+    _completedTaskIds[completedId] = Date.now();
+    mockTasks = mockTasks.filter(t => t.id !== completedId);
+    setCachedTasks(mockTasks);
+    renderNotifications();
+    await syncNotifications();
+    toast(isLost ? 'İmtina olundu' : '✓ Uğurlu', false);
+    setTimeout(() => { delete _completedTaskIds[completedId]; }, 60000);
+    if(employeeType === 'salary') { loadKpi(); loadBalance(); }
 }
 function clickNotification(id, desc, metaText) {
     selectedTaskId = id;
