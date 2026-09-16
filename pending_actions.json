@@ -1,5 +1,31 @@
 [
   {
+    "id": "f9a19c03",
+    "type": "confirm_stage",
+    "created_at": "2026-09-16T17:56:29.187040+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Xanbagirestaurant",
+      "phone": "0703344211",
+      "lead_id": 77958227,
+      "task_id": 94398105,
+      "status_id": 142,
+      "stage_name": "Uğurla tamamlandı",
+      "stage_key": "ugurlu",
+      "pipeline_id": 14243944,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "conf_key": "279e13b5",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77958227",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 8448
+    },
+    "options": [
+      "Təsdiq et",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "2eef39c8",
     "type": "change_stage",
     "created_at": "2026-09-16T15:39:56.424262+04:00",
