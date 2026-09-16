@@ -1,5 +1,41 @@
 [
   {
+    "id": "3b3b365a",
+    "type": "change_stage",
+    "created_at": "2026-09-16T17:56:32.921028+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Xanbagirestaurant",
+      "phone": "0703344211",
+      "lead_id": 77958227,
+      "task_id": 94398105,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "task_text": "Qrmenyu yaradılmalıdır.",
+      "task_price": "",
+      "note": "uğurlu",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77958227",
+      "callback_key": "7924d23e"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "f9a19c03",
     "type": "confirm_stage",
     "created_at": "2026-09-16T17:56:29.187040+04:00",
