@@ -2453,17 +2453,56 @@ def collect_utm_blob(entity: dict | None) -> str:
     for cf in entity.get("custom_fields_values") or []:
         code = str(cf.get("field_code") or "").casefold()
         name = str(cf.get("field_name") or "").casefold()
-        if not any(token in f"{code} {name}" for token in ("utm", "source", "источник", "mənbə", "menbe", "referr")):
-            continue
-        for val in cf.get("values") or []:
-            parts.append(str(val.get("value") or ""))
+        values = [str(val.get("value") or "") for val in (cf.get("values") or [])]
+        joined_values = " ".join(values)
+        if any(token in f"{code} {name}" for token in ("utm", "source", "источник", "mənbə", "menbe", "referr")):
+            parts.extend(values)
+        elif re.search(r"utm[_-]?(source|medium|campaign|content|term)=", joined_values, re.I):
+            parts.append(joined_values)
     meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
-    for key in ("utm_source", "utm_medium", "utm_campaign", "referrer", "referer"):
+    for key in ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "referrer", "referer"):
         parts.append(str(meta.get(key) or ""))
     source = ((entity.get("_embedded") or {}).get("source") or {})
     if isinstance(source, dict):
         parts.append(str(source.get("name") or ""))
     return " ".join(part for part in parts if part)
+
+
+_MENBE_BACKFILL_LIMIT = 20
+
+
+def backfill_overview_menbe(deals: list[dict], lead_by_id: dict, contacts: dict) -> None:
+    """Write mənbə on existing deals that already have UTM but no source."""
+    filled = 0
+    for deal in deals:
+        if filled >= _MENBE_BACKFILL_LIMIT:
+            break
+        if not isinstance(deal, dict) or deal.get("source") or deal.get("menbe"):
+            continue
+        try:
+            lead_id = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not lead_id:
+            continue
+        lead = lead_by_id.get(lead_id) or {}
+        contact_id = None
+        rows = deal.get("contacts") or []
+        if rows and isinstance(rows[0], dict) and rows[0].get("id"):
+            try:
+                contact_id = int(rows[0]["id"])
+            except (TypeError, ValueError):
+                contact_id = None
+        contact = contacts.get(contact_id or 0, {})
+        blob = " ".join((collect_utm_blob(lead), collect_utm_blob(contact)))
+        label = menbe_from_utm(blob)
+        if not label:
+            continue
+        applied = apply_menbe(contact_id, lead_id, label, utm_blob=blob, overwrite=False)
+        if applied:
+            deal["source"] = applied
+            deal["menbe"] = applied
+            filled += 1
 
 
 def menbe_field_payload(label: str) -> dict | None:
@@ -6852,6 +6891,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
+    await asyncio.to_thread(backfill_overview_menbe, deals, lead_by_id, contacts)
     deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
     deals_by_stage = {key: [] for key in funnel_stages}
     for deal in deals:

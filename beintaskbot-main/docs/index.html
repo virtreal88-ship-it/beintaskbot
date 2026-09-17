@@ -153,6 +153,13 @@
         .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
+        .source-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:800; line-height:1; letter-spacing:.02em; padding:4px 8px; border-radius:999px; background:#1e293b; color:#fff; }
+        .source-badge[data-source="Partner"] { background:#7c3aed; }
+        .source-badge[data-source="Instagram"] { background:#db2777; }
+        .source-badge[data-source="TikTok"] { background:#0f172a; }
+        .source-badge[data-source="Facebook"] { background:#2563eb; }
+        .source-badge[data-source="SEO"] { background:#0f766e; }
+        .source-badge[data-source="WhatsApp"] { background:#15803d; }
         .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
         #task-edit-modal { position:fixed; inset:0; z-index:80; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
         #task-edit-modal.open { display:flex; }
@@ -929,11 +936,15 @@ function findWorkspaceTask(taskId) {
 function dealSourceLabel(record) {
     return String(record?.source || record?.menbe || '').trim();
 }
-function sourceLineHtml(record) {
+function sourceBadgeHtml(record) {
     const source = dealSourceLabel(record);
-    const client = String(record?.contact_name || '').trim();
-    if(!source || !client || client === '—') return '';
-    return `<div class="truncate">🔖 <b>Mənbə:</b> ${escapeHtml(source)}</div>`;
+    if(!source) return '';
+    return `<span class="source-badge" data-source="${escapeHtml(source)}">${escapeHtml(source)}</span>`;
+}
+function sourceLineHtml(record) {
+    const badge = sourceBadgeHtml(record);
+    if(!badge) return '';
+    return `<div class="flex items-center gap-2 flex-wrap mt-1"><span class="text-[10px] font-extrabold uppercase tracking-wide text-slate-500">Mənbə</span>${badge}</div>`;
 }
 function sourceSelectHtml(selected) {
     const current = String(selected || '');
@@ -2268,12 +2279,12 @@ function createCrmTaskCard(t, mode) {
             <div class="min-w-0">
                 <div class="text-[11px] font-semibold ${isOverdue ? 'text-red-500' : 'text-slate-400'}">${escapeHtml(when)}</div>
                 <div class="text-sm font-semibold text-slate-900 leading-snug truncate">${escapeHtml(title)}</div>
+                ${sourceLineHtml(t)}
             </div>
             ${assigneeName ? `<span class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${escapeHtml(assigneeName)}</span>` : ''}
         </div>
         <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
-        ${sourceLineHtml(t)}
         <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
             <div class="flex items-center gap-3 min-w-0 flex-wrap">${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : ''}${kommoLink || (leadId ? '' : '<span></span>')}</div>
             <div class="desktop-task-actions gap-1${mode === 'task' ? ' task-board-actions' : ''}">
@@ -2732,8 +2743,10 @@ function renderSamilDeals() {
                     </div>
                 </div>
                 <div class="space-y-1 text-[11px] text-gray-600">
-                    <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
-                    ${sourceLineHtml(deal)}
+                    <div class="flex items-center gap-2 flex-wrap min-w-0">
+                        <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
+                        ${sourceBadgeHtml(deal)}
+                    </div>
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
