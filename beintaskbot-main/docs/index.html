@@ -795,7 +795,9 @@ let samilStageFilter = localStorage.getItem('samil_stage_filter') || 'sorgular';
 let samilWorkspaceRequest = null;
 let samilWorkspaceLoadedAt = 0;
 const samilPendingStageMoves = new Map();
+const samilPendingTaskMoves = new Map();
 let samilDealDragState = null;
+const DEAL_SOURCE_OPTIONS = ['Partner', 'Instagram', 'TikTok', 'Facebook', 'SEO', 'WhatsApp'];
 const SAMIL_STAGE_COLORS = {
     nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
     geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
@@ -915,10 +917,66 @@ function updateLocalSamilDealStage(dealId, stageKey, trackPending = true) {
     if (trackPending) samilPendingStageMoves.set(String(dealId), {stageKey, at: Date.now()});
 }
 
+function workspaceTaskId(item) {
+    return String(item?.task_id || item?.id || '');
+}
+function findWorkspaceTask(taskId) {
+    const id = String(taskId);
+    return (mockTasks || []).find(item => workspaceTaskId(item) === id)
+        || (gozlemeItems || []).find(item => workspaceTaskId(item) === id)
+        || null;
+}
+function dealSourceLabel(record) {
+    return String(record?.source || record?.menbe || '').trim();
+}
+function sourceLineHtml(record) {
+    const source = dealSourceLabel(record);
+    const client = String(record?.contact_name || '').trim();
+    if(!source || !client || client === '—') return '';
+    return `<div class="truncate">🔖 <b>Mənbə:</b> ${escapeHtml(source)}</div>`;
+}
+function sourceSelectHtml(selected) {
+    const current = String(selected || '');
+    const options = ['<option value="">Seçin</option>'].concat(DEAL_SOURCE_OPTIONS.map(label => (
+        `<option value="${escapeHtml(label)}" ${label === current ? 'selected' : ''}>${escapeHtml(label)}</option>`
+    )));
+    return options.join('');
+}
+function applyPendingTaskMoves(taskList, gozlemeList) {
+    const now = Date.now();
+    samilPendingTaskMoves.forEach((move, taskId) => {
+        if (!move || now - Number(move.at || 0) > 120000) {
+            samilPendingTaskMoves.delete(taskId);
+            return;
+        }
+        const lists = [taskList, gozlemeList];
+        let found = false;
+        lists.forEach(list => {
+            const task = (list || []).find(item => workspaceTaskId(item) === String(taskId));
+            if (!task) return;
+            found = true;
+            if (Number(task.complete_till || 0) === Number(move.complete_till)) {
+                samilPendingTaskMoves.delete(taskId);
+                return;
+            }
+            task.complete_till = move.complete_till;
+            task.deadline_ts = move.complete_till;
+            task.is_overdue = false;
+            task.time = move.time;
+            if (move.time) task.deadline = move.time;
+        });
+        if (!found && move.snapshot) {
+            const dest = move.kind === 'gozleme' ? gozlemeList : taskList;
+            if (Array.isArray(dest)) dest.push({...move.snapshot, complete_till: move.complete_till, deadline_ts: move.complete_till, is_overdue: false, time: move.time});
+        }
+    });
+}
+
 function applySamilWorkspace(payload) {
     syncSamilStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
+    applyPendingTaskMoves(mockTasks, gozlemeItems);
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
@@ -1451,6 +1509,8 @@ function openCreateDealModal() {
         </div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Qeyd</label>
         <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
+        <label class="text-xs font-bold text-gray-400 block mb-1">Mənbə</label>
+        <select id="create-deal-source" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">${sourceSelectHtml('')}</select>
         <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
         <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
         <div style="display:flex;gap:8px;margin-top:14px">
@@ -1468,6 +1528,7 @@ async function submitCreateDeal() {
     const name = document.getElementById('create-deal-name')?.value.trim() || '';
     const phone = document.getElementById('create-deal-phone')?.value.trim() || '';
     const note = document.getElementById('create-deal-note')?.value.trim() || '';
+    const source = document.getElementById('create-deal-source')?.value || '';
     const stageKey = document.getElementById('create-deal-stage')?.value || '';
     if(!name) { toast('Müştəri adını daxil edin!', true); return; }
     if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
@@ -1480,7 +1541,7 @@ async function submitCreateDeal() {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note})
+            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note, source})
         });
         const j = await r.json();
         if(r.ok && j.success) {
@@ -1949,7 +2010,7 @@ function crmRecordMatchesSearch(record, query) {
     const q = String(query || '').trim().toLowerCase();
     if(!q) return true;
     const phones = Array.isArray(record.phones) && record.phones.length ? record.phones : (record.phone ? [record.phone] : []);
-    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, phones.join(' ')].join(' ').toLowerCase();
+    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, record.source, record.menbe, phones.join(' ')].join(' ').toLowerCase();
     if(haystack.includes(q)) return true;
     const digits = normalizeSearchDigits(q);
     if(digits.length >= 3 && phones.map(normalizeSearchDigits).join(' ').includes(digits)) return true;
@@ -2127,42 +2188,61 @@ function bindTaskColumnDrop(column) {
         const taskId = event.dataTransfer.getData('text/plain') || taskKanbanDragState?.taskId;
         const nextBucket = column.dataset.dateColumn;
         if(!taskId || !nextBucket || nextBucket === 'overdue') return;
+        event.stopPropagation();
         await moveTaskToDateBucket(taskId, nextBucket);
     });
 }
 
 async function moveTaskToDateBucket(taskId, nextBucket) {
-    const task = mockTasks.find(item => String(item.id) === String(taskId));
+    const task = findWorkspaceTask(taskId);
     if(!task) return;
     const nextDate = deadlineForDateBucket(nextBucket);
     if(!nextDate) return;
     const previousTill = task.complete_till;
     const previousOverdue = task.is_overdue;
     const previousTime = task.time;
-    task.complete_till = Math.floor(nextDate.getTime() / 1000);
+    const previousDeadline = task.deadline;
+    const nextTill = Math.floor(nextDate.getTime() / 1000);
+    const nextTime = nextDate.toLocaleString('az-AZ');
+    task.complete_till = nextTill;
+    task.deadline_ts = nextTill;
     task.is_overdue = false;
-    task.time = nextDate.toLocaleString('az-AZ');
-    const gTask = (typeof gozlemeItems !== 'undefined' ? gozlemeItems : []).find(item => String(item.id) === String(taskId));
-    if(gTask) { gTask.complete_till = task.complete_till; gTask.is_overdue = false; gTask.time = task.time; }
+    task.time = nextTime;
+    const inGozleme = (gozlemeItems || []).some(item => workspaceTaskId(item) === workspaceTaskId(task));
+    samilPendingTaskMoves.set(workspaceTaskId(task), {
+        complete_till: nextTill,
+        time: nextTime,
+        at: Date.now(),
+        kind: inGozleme && !(mockTasks || []).some(item => workspaceTaskId(item) === workspaceTaskId(task)) ? 'gozleme' : 'task',
+        snapshot: {...task}
+    });
+    persistLocalSamilWorkspace();
     setCachedTasks(mockTasks);
+    setCachedGozleme(gozlemeItems);
     renderNotifications();
     renderGozleme();
-    document.querySelector(`[data-task-id="${taskId}"]`)?.classList.add('is-saving');
+    document.querySelector(`[data-task-id="${workspaceTaskId(task)}"]`)?.classList.add('is-saving');
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method:'POST',
             headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
-            body: JSON.stringify({action:'update_task', task_id:Number(taskId), deadline: toCustomDeadline(nextDate)})
+            body: JSON.stringify({action:'update_task', task_id:Number(task.task_id || task.id), deadline: toCustomDeadline(nextDate)})
         });
         const j = await r.json();
         if(!r.ok || !j.success) throw new Error(j.error || 'Vaxt dəyişmədi');
         toast('Tarix dəyişdirildi', false);
-        document.querySelector(`[data-task-id="${taskId}"]`)?.classList.remove('is-saving');
+        document.querySelector(`[data-task-id="${workspaceTaskId(task)}"]`)?.classList.remove('is-saving');
+        persistLocalSamilWorkspace();
     } catch(error) {
+        samilPendingTaskMoves.delete(workspaceTaskId(task));
         task.complete_till = previousTill;
+        task.deadline_ts = previousTill;
         task.is_overdue = previousOverdue;
         task.time = previousTime;
+        task.deadline = previousDeadline;
         setCachedTasks(mockTasks);
+        setCachedGozleme(gozlemeItems);
+        persistLocalSamilWorkspace();
         renderNotifications();
         renderGozleme();
         toast(error.message || 'Vaxt dəyişmədi', true);
@@ -2193,6 +2273,7 @@ function createCrmTaskCard(t, mode) {
         </div>
         <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
+        ${sourceLineHtml(t)}
         <div class="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-gray-100">
             <div class="flex items-center gap-3 min-w-0 flex-wrap">${leadId ? `<button type="button" class="task-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button>` : ''}${kommoLink || (leadId ? '' : '<span></span>')}</div>
             <div class="desktop-task-actions gap-1${mode === 'task' ? ' task-board-actions' : ''}">
@@ -2219,7 +2300,6 @@ function appendDateKanbanColumn(parent, col, items, mode, makeCard) {
         listEl.innerHTML = '<div class="samil-empty-column">Tapşırıq yoxdur</div>';
     } else {
         list.forEach(t => {
-            if(mode === 'gozleme' && !mockTasks.find(x => x.id === t.id)) mockTasks.push(t);
             listEl.appendChild(makeCard ? makeCard(t) : createCrmTaskCard(t, mode));
         });
     }
@@ -2388,6 +2468,7 @@ function dealDetailSectionsHtml(deal, token) {
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
                 <div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
+                ${sourceLineHtml(deal)}
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
@@ -2652,6 +2733,7 @@ function renderSamilDeals() {
                 </div>
                 <div class="space-y-1 text-[11px] text-gray-600">
                     <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
+                    ${sourceLineHtml(deal)}
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
@@ -2707,7 +2789,9 @@ function showDealModal(deal, mode) {
         .map(name => `<option value="${name}" ${name === ownerName ? 'selected' : ''}>${name}</option>`).join('');
     let body = '';
     if(mode === 'edit') {
-        body = `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>`;
+        body = `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
+        <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Mənbə</label>
+        <select id="deal-modal-source" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${sourceSelectHtml(dealSourceLabel(deal))}</select>`;
     } else {
         body = `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>`;
         if(mode === 'task') {
@@ -2726,7 +2810,7 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
-            payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value};
+            payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, source: modal.querySelector('#deal-modal-source')?.value || ''};
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
@@ -2753,12 +2837,23 @@ function showDealModal(deal, mode) {
             toast('Uğurla yadda saxlanıldı', false);
             if(mode === 'edit') {
                 const nextStageKey = payload.stage_key;
+                const nextSource = payload.source || '';
+                if(nextSource) {
+                    deal.source = nextSource;
+                    deal.menbe = nextSource;
+                    (samilDeals || []).forEach(item => {
+                        if(String(item.id) === String(deal.id)) { item.source = nextSource; item.menbe = nextSource; }
+                    });
+                    (mockTasks || []).concat(gozlemeItems || []).forEach(item => {
+                        if(String(item.lead_id) === String(deal.id)) { item.source = nextSource; item.menbe = nextSource; }
+                    });
+                }
                 if(nextStageKey && nextStageKey !== deal.stage_key) {
                     updateLocalSamilDealStage(deal.id, nextStageKey);
                     samilStageFilter = nextStageKey;
                     localStorage.setItem('samil_stage_filter', nextStageKey);
-                    renderSamilDeals();
                 }
+                renderSamilDeals();
                 persistLocalSamilWorkspace();
             } else {
                 await loadSamilWorkspace(false, null, true);

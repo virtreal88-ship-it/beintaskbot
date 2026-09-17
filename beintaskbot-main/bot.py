@@ -1709,10 +1709,13 @@ def _contact_phones(contact: dict | None) -> list[str]:
 
 def _contact_cache_entry(contact: dict | None) -> dict:
     phones = _contact_phones(contact)
+    source = extract_menbe(contact)
     return {
         "name": (contact or {}).get("name", ""),
         "phone": phones[0] if phones else "",
         "phones": phones,
+        "source": source,
+        "menbe": source,
     }
 
 
@@ -2342,6 +2345,12 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
     return msg
 
 # ─── Partner helpers ─────────────────────────────────────────────────────────
+MENBE_FIELD_ID = 2989615
+MENBE_LABELS = ("Partner", "Instagram", "TikTok", "Facebook", "SEO", "WhatsApp")
+_menbe_enums_cache: list | None = None
+_menbe_enums_entity = ""
+
+
 def fetch_partner_enums() -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/custom_fields"
     try:
@@ -2349,11 +2358,176 @@ def fetch_partner_enums() -> list:
         if resp.status_code == 200:
             fields = resp.json().get("_embedded", {}).get("custom_fields", [])
             for f in fields:
-                if f.get("id") == 2989615:  # Partnyor field
+                if f.get("id") == MENBE_FIELD_ID:
                     return f.get("enums", [])
     except:
         pass
     return []
+
+
+def fetch_menbe_enums() -> list:
+    """Load select options for contact/lead field mənbə (id 2989615)."""
+    global _menbe_enums_cache, _menbe_enums_entity
+    if _menbe_enums_cache:
+        return _menbe_enums_cache
+    for path, entity in (("contacts/custom_fields", "contacts"), ("leads/custom_fields", "leads")):
+        try:
+            resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{path}", headers=HEADERS, timeout=8)
+            if resp.status_code != 200:
+                continue
+            fields = (resp.json().get("_embedded") or {}).get("custom_fields", []) or []
+            for field in fields:
+                if int(field.get("id") or 0) != MENBE_FIELD_ID:
+                    continue
+                enums = field.get("enums") or []
+                if enums:
+                    _menbe_enums_cache = enums
+                    _menbe_enums_entity = entity
+                    return enums
+        except Exception as exc:
+            logger.warning("mənbə enums %s failed: %s", path, exc)
+    return fetch_partner_enums()
+
+
+def normalize_menbe_label(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    aliases = {
+        "partner": "Partner", "partnyor": "Partner", "referral": "Partner",
+        "instagram": "Instagram", "ig": "Instagram",
+        "tiktok": "TikTok", "tt": "TikTok",
+        "facebook": "Facebook", "fb": "Facebook", "meta": "Facebook",
+        "seo": "SEO", "google": "SEO", "organic": "SEO", "yandex": "SEO",
+        "whatsapp": "WhatsApp", "wa": "WhatsApp", "whats-app": "WhatsApp",
+        "mənbə": "", "menbe": "",
+    }
+    folded = raw.casefold()
+    if folded in aliases:
+        return aliases[folded]
+    for label in MENBE_LABELS:
+        if label.casefold() == folded:
+            return label
+    return ""
+
+
+def menbe_from_utm(*parts: str) -> str:
+    blob = " ".join(str(part or "") for part in parts).casefold()
+    if not blob.strip():
+        return ""
+    checks = (
+        (("tiktok", "tt."), "TikTok"),
+        (("instagram", "ig."), "Instagram"),
+        (("facebook", "fb.", " fb "), "Facebook"),
+        (("whatsapp", "whats-app", " wa.", " wa "), "WhatsApp"),
+        (("seo", "google", "organic", "yandex"), "SEO"),
+        (("partner", "partnyor", "referral"), "Partner"),
+    )
+    for needles, label in checks:
+        if any(needle in blob for needle in needles):
+            return label
+    return normalize_menbe_label(blob)
+
+
+def extract_menbe(entity: dict | None) -> str:
+    if not isinstance(entity, dict):
+        return ""
+    for cf in entity.get("custom_fields_values") or []:
+        try:
+            field_id = int(cf.get("field_id") or 0)
+        except (TypeError, ValueError):
+            field_id = 0
+        if field_id != MENBE_FIELD_ID:
+            continue
+        vals = cf.get("values") or []
+        if not vals:
+            continue
+        return normalize_menbe_label(vals[0].get("value") or "") or str(vals[0].get("value") or "")
+    return ""
+
+
+def collect_utm_blob(entity: dict | None) -> str:
+    if not isinstance(entity, dict):
+        return ""
+    parts: list[str] = []
+    for cf in entity.get("custom_fields_values") or []:
+        code = str(cf.get("field_code") or "").casefold()
+        name = str(cf.get("field_name") or "").casefold()
+        if not any(token in f"{code} {name}" for token in ("utm", "source", "источник", "mənbə", "menbe", "referr")):
+            continue
+        for val in cf.get("values") or []:
+            parts.append(str(val.get("value") or ""))
+    meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+    for key in ("utm_source", "utm_medium", "utm_campaign", "referrer", "referer"):
+        parts.append(str(meta.get(key) or ""))
+    source = ((entity.get("_embedded") or {}).get("source") or {})
+    if isinstance(source, dict):
+        parts.append(str(source.get("name") or ""))
+    return " ".join(part for part in parts if part)
+
+
+def menbe_field_payload(label: str) -> dict | None:
+    normalized = normalize_menbe_label(label)
+    if not normalized:
+        return None
+    values = [{"value": normalized}]
+    for enum in fetch_menbe_enums():
+        if str(enum.get("value") or "").casefold() == normalized.casefold():
+            if enum.get("id"):
+                values[0]["enum_id"] = enum.get("id")
+            break
+    return {"field_id": MENBE_FIELD_ID, "values": values}
+
+
+def set_contact_menbe(contact_id: int, label: str, *, overwrite: bool = True) -> bool:
+    payload = menbe_field_payload(label)
+    if not payload or not contact_id:
+        return False
+    if not overwrite:
+        details = get_contact_details(int(contact_id)) or {}
+        if extract_menbe(details):
+            return True
+    return bool(update_contact_kommo(int(contact_id), {"custom_fields_values": [payload]}))
+
+
+def set_lead_menbe(lead_id: int, label: str) -> bool:
+    payload = menbe_field_payload(label)
+    if not payload or not lead_id:
+        return False
+    return bool(update_lead_kommo(int(lead_id), {"custom_fields_values": [payload]}))
+
+
+def apply_menbe(contact_id: int | None, lead_id: int | None, source_label: str = "", utm_blob: str = "", *, overwrite: bool = False) -> str:
+    global _menbe_enums_entity
+    label = normalize_menbe_label(source_label) or menbe_from_utm(utm_blob)
+    if not label:
+        return ""
+    if contact_id:
+        set_contact_menbe(int(contact_id), label, overwrite=overwrite or bool(normalize_menbe_label(source_label)))
+    if lead_id:
+        fetch_menbe_enums()
+        if _menbe_enums_entity == "leads":
+            set_lead_menbe(int(lead_id), label)
+    return label
+
+
+def maybe_fill_menbe_from_lead(lead_id: int) -> str:
+    lead = get_lead_details(int(lead_id)) or {}
+    contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    contact_id = 0
+    contact = {}
+    if contacts:
+        try:
+            contact_id = int(contacts[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+        if contact_id:
+            contact = get_contact_details(contact_id) or contacts[0]
+    existing = extract_menbe(contact) or extract_menbe(lead)
+    if existing:
+        return existing
+    blob = " ".join((collect_utm_blob(lead), collect_utm_blob(contact)))
+    return apply_menbe(contact_id or None, lead_id, utm_blob=blob, overwrite=False)
 
 # ─── OpenAI Function Calling Tools ──────────────────────────────────────────
 AI_TOOLS = [
@@ -4794,6 +4968,13 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         if is_task_event:
             await _handle_kommo_task_webhook(data)
             return web.Response(status=200, text="OK")
+        add_lead_id = data.get("leads[add][0][id]")
+        if add_lead_id:
+            try:
+                maybe_fill_menbe_from_lead(int(add_lead_id))
+                invalidate_rufat_overview_cache()
+            except Exception as exc:
+                logger.warning("mənbə from new lead %s failed: %s", add_lead_id, exc)
         # Lead status change
         lead_keys = [k for k in data.keys() if k.startswith("leads[status][0]")]
         if not lead_keys:
@@ -5163,10 +5344,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
             stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
             if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
+            source_label = str(data.get("source") or data.get("menbe") or "").strip()
             if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
+            if source_label:
+                contacts = (lead.get("_embedded") or {}).get("contacts") or []
+                contact_id = int(contacts[0]["id"]) if contacts and contacts[0].get("id") else None
+                apply_menbe(contact_id, lead_id, source_label, overwrite=True)
+                invalidate_rufat_overview_cache()
             patch_rufat_overview_deal_stage(lead_id, stage_key)
-            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key})
+            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key, "source": normalize_menbe_label(source_label)})
         elif action == "deal_add_note":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
@@ -5626,19 +5813,32 @@ async def handle_api_action(request: web.Request) -> web.Response:
             }
             if stage_key not in stages or (working_keys and stage_key not in working_keys):
                 return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+            source_label = str(data.get("source") or data.get("menbe") or "").strip()
+            utm_blob = " ".join((
+                str(data.get("utm_source") or ""),
+                str(data.get("utm_medium") or ""),
+                str(data.get("utm_campaign") or ""),
+                note_text,
+            ))
+            menbe_cf = menbe_field_payload(normalize_menbe_label(source_label) or menbe_from_utm(utm_blob))
+            extra_fields = [menbe_cf] if menbe_cf else None
             contacts = search_contact_by_phone(phone_raw)
             contact_id = None
             if contacts:
                 contact_id = int(contacts[0]["id"])
-                update_contact_kommo(contact_id, {"name": customer_name})
+                update_payload = {"name": customer_name}
+                if extra_fields:
+                    update_payload["custom_fields_values"] = extra_fields
+                update_contact_kommo(contact_id, update_payload)
             else:
-                created = create_contact_kommo(customer_name, phone_raw)
+                created = create_contact_kommo(customer_name, phone_raw, extra_fields)
                 contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
             if not contact_id:
                 return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
             lead_id = create_lead_for_contact(int(contact_id), customer_name, owner["pipeline_id"], stages[stage_key])
             if not lead_id:
                 return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
+            applied_source = apply_menbe(int(contact_id), int(lead_id), source_label, utm_blob, overwrite=bool(source_label))
             if note_text:
                 add_note(int(lead_id), note_text, "leads")
             invalidate_rufat_overview_cache()
@@ -5648,6 +5848,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
                 "lead_id": int(lead_id),
                 "stage_key": stage_key,
+                "source": applied_source,
                 "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
             })
         elif action == "update_task":
@@ -5774,6 +5975,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!", "entity_id": _eid, "entity_type": _etype})
             result = update_task_kommo(task_id, update_data)
             if result:
+                invalidate_rufat_overview_cache()
                 link = ""
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
@@ -5812,6 +6014,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             else:
                 new_dl = now + timedelta(hours=2)
             result = update_task_kommo(task_id, {"complete_till": int(new_dl.timestamp())})
+            if result:
+                invalidate_rufat_overview_cache()
             # If reason is employee's fault, record KPI=0
             if reason == "Çatdıra bilmirəm" and get_employee_type(chat_id) == "salary":
                 # Auto-create session and finish with KPI=0 (missed deadline)
@@ -6635,12 +6839,14 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             status_id = int(lead.get("status_id", 0) or 0)
         except (TypeError, ValueError):
             status_id = 0
+        source = extract_menbe(contact) or extract_menbe(lead)
         deals.append({
             "id": lead_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
             "contacts": contact_rows,
+            "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
             "last_note": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
@@ -6742,6 +6948,8 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
             "lead_id": lead_id, "lead_name": lead.get("name", ""),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": phones,
+            "source": (deal or {}).get("source") or extract_menbe(contact) or extract_menbe(lead),
+            "menbe": (deal or {}).get("source") or extract_menbe(contact) or extract_menbe(lead),
             "responsible": owner_name, "assigneeName": owner_name, "assignee_name": owner_name,
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
@@ -7386,6 +7594,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     contact_rows = []
     all_phones: list[str] = []
     contact_ids: list[int] = []
+    source = extract_menbe(lead)
     for linked in lead_contacts:
         if not isinstance(linked, dict):
             continue
@@ -7401,6 +7610,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
             if phone not in all_phones:
                 all_phones.append(phone)
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
+        source = extract_menbe(full) or source
     contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
     note_rows = _fetch_entity_notes("leads", lid)
     for contact_id in contact_ids:
@@ -7513,6 +7723,8 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "phone": all_phones[0] if all_phones else "",
         "phones": all_phones,
         "contacts": contact_rows,
+        "source": source,
+        "menbe": source,
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
@@ -7892,6 +8104,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "contact_name": contact_name,
                         "phone": phone,
                         "phones": phones,
+                        "source": contact_row.get("source") or "",
+                        "menbe": contact_row.get("source") or "",
                         "responsible": responsible_name,
                         "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
@@ -8212,6 +8426,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "contact_name": contact_name,
                     "phone": contact_phone,
                     "phones": contact_phones,
+                    "source": contact_row.get("source") or extract_menbe(lead),
+                    "menbe": contact_row.get("source") or extract_menbe(lead),
                     "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
                     "assigneeName": assignee_name,
                     "assignee_name": assignee_name,
