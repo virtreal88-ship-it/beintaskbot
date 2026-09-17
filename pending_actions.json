@@ -3,7 +3,7 @@
     "id": "3b3b365a",
     "type": "change_stage",
     "created_at": "2026-09-16T17:56:32.921028+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Xanbagirestaurant",
       "phone": "0703344211",
@@ -33,7 +33,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-17T14:44:52.799509+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "f9a19c03",
