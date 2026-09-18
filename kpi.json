@@ -3779,10 +3779,17 @@
     "sessions": [
       {
         "start_time": "2026-09-18 13:05:37",
-        "end_time": null,
-        "actual_minutes": null,
+        "end_time": "2026-09-18 13:05:39",
+        "actual_minutes": 0.0,
         "paused": false
       }
-    ]
+    ],
+    "kpi_score": 100,
+    "target_minutes": 60,
+    "actual_minutes": 0,
+    "deadline_ts": 1789737300,
+    "completed_before_deadline": true,
+    "delay_reason": "",
+    "completed_at": "2026-09-18 13:05:39"
   }
 }
