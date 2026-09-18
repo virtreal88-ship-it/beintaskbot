@@ -6852,6 +6852,60 @@ def _rufat_marker_name(task_text: str) -> str:
     }.get(match.group(1), match.group(1))
 
 
+async def _load_personal_funnel_contact_ids() -> set[int]:
+    """Contact IDs that already have a deal in Rüfət / Hüseyn / Rasim funnels."""
+    ids: set[int] = set()
+    for pid in employee_personal_pipeline_ids():
+        cached = _personal_overview_cache.get(int(pid))
+        deals = cached.get("deals") if isinstance(cached, dict) else None
+        if isinstance(deals, list) and deals:
+            for deal in deals:
+                if not isinstance(deal, dict):
+                    continue
+                for row in deal.get("contacts") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        ids.add(int(row.get("id")))
+                    except (TypeError, ValueError):
+                        continue
+            continue
+        page = 1
+        while True:
+            try:
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    params={
+                        "filter[pipeline_id]": int(pid),
+                        "with": "contacts",
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            except Exception as exc:
+                logger.warning("Personal funnel %s page %s unavailable: %s", pid, page, exc)
+                break
+            if response.status_code == 204:
+                break
+            if response.status_code != 200:
+                logger.warning("Personal funnel %s page %s failed: %s", pid, page, response.status_code)
+                break
+            batch = response.json().get("_embedded", {}).get("leads", []) or []
+            for lead in batch:
+                if not isinstance(lead, dict):
+                    continue
+                for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
+                    try:
+                        ids.add(int(contact.get("id")))
+                    except (TypeError, ValueError):
+                        continue
+            if len(batch) < 250:
+                break
+            page += 1
+    return ids
+
+
 async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: int | None = None) -> dict:
     """Load one personal Kommo funnel for local stage switching and task lists."""
     owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
@@ -6890,6 +6944,23 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         return all_leads
 
     leads = await _load_all_rufat_leads()
+    if pipeline_id == int(NIZAMI_PIPELINE_ID):
+        hide_contacts = await _load_personal_funnel_contact_ids()
+        employee_pipelines = employee_personal_pipeline_ids()
+        filtered_leads = []
+        for lead in leads:
+            if _lead_pipeline_id(lead) in employee_pipelines:
+                continue
+            linked_ids = set()
+            for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
+                try:
+                    linked_ids.add(int(contact.get("id")))
+                except (TypeError, ValueError):
+                    continue
+            if hide_contacts and linked_ids & hide_contacts:
+                continue
+            filtered_leads.append(lead)
+        leads = filtered_leads
 
     status_to_key = {status_id: key for key, status_id in funnel_stages.items()}
     stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in funnel_stages}
