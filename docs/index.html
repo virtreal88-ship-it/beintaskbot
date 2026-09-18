@@ -154,6 +154,7 @@
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
         .source-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:800; line-height:1; letter-spacing:.02em; padding:4px 8px; border-radius:999px; background:#1e293b; color:#fff; }
+        .partner-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:800; line-height:1; padding:4px 8px; border-radius:999px; background:#7c3aed; color:#fff; }
         .source-badge[data-source="Partner"] { background:#7c3aed; }
         .source-badge[data-source="Instagram"] { background:#db2777; }
         .source-badge[data-source="TikTok"] { background:#0f172a; }
@@ -699,7 +700,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Passiv tapş.</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
@@ -804,7 +805,7 @@ let samilWorkspaceLoadedAt = 0;
 const samilPendingStageMoves = new Map();
 const samilPendingTaskMoves = new Map();
 let samilDealDragState = null;
-const DEAL_SOURCE_OPTIONS = ['Partner', 'Instagram', 'TikTok', 'Facebook', 'SEO', 'WhatsApp'];
+let employeePartners = [];
 const SAMIL_STAGE_COLORS = {
     nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
     geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
@@ -884,6 +885,7 @@ function persistLocalSamilWorkspace() {
             stage_counts: samilStageCounts,
             tasks: mockTasks,
             gozleme: gozlemeItems,
+            partners: employeePartners,
             stage_key: null,
         });
     } catch (e) {}
@@ -933,25 +935,64 @@ function findWorkspaceTask(taskId) {
         || (gozlemeItems || []).find(item => workspaceTaskId(item) === id)
         || null;
 }
-function dealSourceLabel(record) {
-    return String(record?.source || record?.menbe || '').trim();
+function dealPartnerLabel(record) {
+    return String(record?.partner || '').trim();
 }
-function sourceBadgeHtml(record) {
-    const source = dealSourceLabel(record);
-    if(!source) return '';
-    return `<span class="source-badge" data-source="${escapeHtml(source)}">${escapeHtml(source)}</span>`;
+const UTM_TAGS = ['Partner', 'Instagram', 'TikTok', 'Facebook', 'SEO', 'WhatsApp'];
+function dealUtmLabel(record) {
+    const utm = String(record?.utm || record?.utm_tag || '').trim();
+    if(utm) return utm;
+    const src = String(record?.source || record?.menbe || '').trim();
+    return UTM_TAGS.includes(src) ? src : '';
+}
+function partnerBadgeHtml(record) {
+    const partner = dealPartnerLabel(record);
+    if(!partner) return '';
+    return `<span class="partner-badge">${escapeHtml(partner)}</span>`;
+}
+function utmBadgeHtml(record) {
+    const utm = dealUtmLabel(record);
+    if(!utm) return '';
+    return `<span class="source-badge" data-source="${escapeHtml(utm)}">${escapeHtml(utm)}</span>`;
 }
 function sourceLineHtml(record) {
-    const badge = sourceBadgeHtml(record);
-    if(!badge) return '';
-    return `<div class="flex items-center gap-2 flex-wrap mt-1"><span class="text-[10px] font-extrabold uppercase tracking-wide text-slate-500">Mənbə</span>${badge}</div>`;
+    const badges = [partnerBadgeHtml(record), utmBadgeHtml(record)].filter(Boolean).join('');
+    if(!badges) return '';
+    return `<div class="flex items-center gap-2 flex-wrap mt-1">${badges}</div>`;
 }
-function sourceSelectHtml(selected) {
+function partnerSelectHtml(selected) {
     const current = String(selected || '');
-    const options = ['<option value="">Seçin</option>'].concat(DEAL_SOURCE_OPTIONS.map(label => (
+    const names = employeePartners.slice();
+    if(current && !names.includes(current)) names.unshift(current);
+    const options = ['<option value="">Seçin</option>'].concat(names.map(label => (
         `<option value="${escapeHtml(label)}" ${label === current ? 'selected' : ''}>${escapeHtml(label)}</option>`
     )));
     return options.join('');
+}
+function partnerFieldHtml(selectId, selected) {
+    return `<div style="display:flex;gap:8px;align-items:center">
+        <select id="${selectId}" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" style="flex:1">${partnerSelectHtml(selected)}</select>
+        <button type="button" onclick="addPartnerOption('${selectId}')" aria-label="Partner əlavə et" style="width:42px;height:42px;border:0;border-radius:12px;background:#7c3aed;color:#fff;font-size:22px;font-weight:800;line-height:1">+</button>
+    </div>`;
+}
+async function addPartnerOption(selectId) {
+    const name = String(window.prompt('Partner adı') || '').trim();
+    if(!name) return;
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body: JSON.stringify({action:'add_partner', name})
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok || !j.success) throw new Error(j.error || 'Əlavə olunmadı');
+        employeePartners = Array.isArray(j.partners) ? j.partners : employeePartners;
+        if(!employeePartners.includes(name)) employeePartners.push(name);
+        const sel = document.getElementById(selectId);
+        if(sel) { sel.innerHTML = partnerSelectHtml(name); sel.value = name; }
+    } catch(error) {
+        toast(error.message || 'Partner əlavə olunmadı', true);
+    }
 }
 function applyPendingTaskMoves(taskList, gozlemeList) {
     const now = Date.now();
@@ -988,6 +1029,7 @@ function applySamilWorkspace(payload) {
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
     applyPendingTaskMoves(mockTasks, gozlemeItems);
+    if(Array.isArray(payload.partners)) employeePartners = payload.partners.map(name => String(name || '').trim()).filter(Boolean);
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
@@ -1520,8 +1562,8 @@ function openCreateDealModal() {
         </div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Qeyd</label>
         <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
-        <label class="text-xs font-bold text-gray-400 block mb-1">Mənbə</label>
-        <select id="create-deal-source" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">${sourceSelectHtml('')}</select>
+        <label class="text-xs font-bold text-gray-400 block mb-1">Partner</label>
+        <div class="mb-2">${partnerFieldHtml('create-deal-partner','')}</div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
         <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
         <div style="display:flex;gap:8px;margin-top:14px">
@@ -1539,7 +1581,7 @@ async function submitCreateDeal() {
     const name = document.getElementById('create-deal-name')?.value.trim() || '';
     const phone = document.getElementById('create-deal-phone')?.value.trim() || '';
     const note = document.getElementById('create-deal-note')?.value.trim() || '';
-    const source = document.getElementById('create-deal-source')?.value || '';
+    const partner = document.getElementById('create-deal-partner')?.value || '';
     const stageKey = document.getElementById('create-deal-stage')?.value || '';
     if(!name) { toast('Müştəri adını daxil edin!', true); return; }
     if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
@@ -1552,7 +1594,7 @@ async function submitCreateDeal() {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note, source})
+            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note, partner})
         });
         const j = await r.json();
         if(r.ok && j.success) {
@@ -2021,7 +2063,7 @@ function crmRecordMatchesSearch(record, query) {
     const q = String(query || '').trim().toLowerCase();
     if(!q) return true;
     const phones = Array.isArray(record.phones) && record.phones.length ? record.phones : (record.phone ? [record.phone] : []);
-    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, record.source, record.menbe, phones.join(' ')].join(' ').toLowerCase();
+    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, record.partner, record.utm, record.utm_tag, record.source, record.menbe, phones.join(' ')].join(' ').toLowerCase();
     if(haystack.includes(q)) return true;
     const digits = normalizeSearchDigits(q);
     if(digits.length >= 3 && phones.map(normalizeSearchDigits).join(' ').includes(digits)) return true;
@@ -2745,7 +2787,8 @@ function renderSamilDeals() {
                 <div class="space-y-1 text-[11px] text-gray-600">
                     <div class="flex items-center gap-2 flex-wrap min-w-0">
                         <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
-                        ${sourceBadgeHtml(deal)}
+                        ${partnerBadgeHtml(deal)}
+                        ${utmBadgeHtml(deal)}
                     </div>
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
@@ -2803,8 +2846,8 @@ function showDealModal(deal, mode) {
     let body = '';
     if(mode === 'edit') {
         body = `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
-        <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Mənbə</label>
-        <select id="deal-modal-source" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${sourceSelectHtml(dealSourceLabel(deal))}</select>`;
+        <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Partner</label>
+        <div class="mt-1">${partnerFieldHtml('deal-modal-partner', dealPartnerLabel(deal))}</div>`;
     } else {
         body = `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>`;
         if(mode === 'task') {
@@ -2823,7 +2866,7 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
-            payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, source: modal.querySelector('#deal-modal-source')?.value || ''};
+            payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
@@ -2850,17 +2893,14 @@ function showDealModal(deal, mode) {
             toast('Uğurla yadda saxlanıldı', false);
             if(mode === 'edit') {
                 const nextStageKey = payload.stage_key;
-                const nextSource = payload.source || '';
-                if(nextSource) {
-                    deal.source = nextSource;
-                    deal.menbe = nextSource;
-                    (samilDeals || []).forEach(item => {
-                        if(String(item.id) === String(deal.id)) { item.source = nextSource; item.menbe = nextSource; }
-                    });
-                    (mockTasks || []).concat(gozlemeItems || []).forEach(item => {
-                        if(String(item.lead_id) === String(deal.id)) { item.source = nextSource; item.menbe = nextSource; }
-                    });
-                }
+                const nextPartner = payload.partner || '';
+                deal.partner = nextPartner;
+                (samilDeals || []).forEach(item => {
+                    if(String(item.id) === String(deal.id)) item.partner = nextPartner;
+                });
+                (mockTasks || []).concat(gozlemeItems || []).forEach(item => {
+                    if(String(item.lead_id) === String(deal.id)) item.partner = nextPartner;
+                });
                 if(nextStageKey && nextStageKey !== deal.stage_key) {
                     updateLocalSamilDealStage(deal.id, nextStageKey);
                     samilStageFilter = nextStageKey;

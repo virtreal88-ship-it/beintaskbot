@@ -2468,22 +2468,77 @@ def collect_utm_blob(entity: dict | None) -> str:
     return " ".join(part for part in parts if part)
 
 
-_MENBE_BACKFILL_LIMIT = 20
+_PARTNER_LISTS_FILE = "partner_lists.json"
+_DEAL_PARTNERS_FILE = "deal_partners.json"
 
 
-def backfill_overview_menbe(deals: list[dict], lead_by_id: dict, contacts: dict) -> None:
-    """Write mənbə on existing deals that already have UTM but no source."""
-    filled = 0
+def _load_json_dict(name: str) -> dict:
+    data = read_json(name) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_partner_list_for_chat(chat_id) -> list[str]:
+    items = _load_json_dict(_PARTNER_LISTS_FILE).get(str(chat_id)) or []
+    names: list[str] = []
+    for raw in items:
+        name = str(raw or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def add_partner_for_chat(chat_id, name: str) -> list[str]:
+    name = str(name or "").strip()
+    items = get_partner_list_for_chat(chat_id)
+    if name and name not in items:
+        items.append(name)
+        data = _load_json_dict(_PARTNER_LISTS_FILE)
+        data[str(chat_id)] = items
+        write_json(_PARTNER_LISTS_FILE, data)
+    return items
+
+
+def get_deal_partner(lead_id) -> str:
+    if not lead_id:
+        return ""
+    row = _load_json_dict(_DEAL_PARTNERS_FILE).get(str(int(lead_id)))
+    if isinstance(row, dict):
+        return str(row.get("name") or "").strip()
+    return str(row or "").strip()
+
+
+def set_deal_partner(lead_id, name: str, owner_chat_id=None) -> str:
+    name = str(name or "").strip()
+    data = _load_json_dict(_DEAL_PARTNERS_FILE)
+    key = str(int(lead_id))
+    if not name:
+        data.pop(key, None)
+    else:
+        data[key] = {"name": name, "owner": owner_chat_id}
+    write_json(_DEAL_PARTNERS_FILE, data)
+    return name
+
+
+def split_partner_and_utm(cf_value: str, utm_blob: str, lead_id: int | None = None) -> tuple[str, str]:
+    cf_value = str(cf_value or "").strip()
+    utm = menbe_from_utm(utm_blob)
+    if not utm and cf_value in MENBE_LABELS:
+        utm = cf_value
+    partner = get_deal_partner(lead_id) if lead_id else ""
+    if cf_value and cf_value not in MENBE_LABELS:
+        partner = partner or cf_value
+    return partner, utm
+
+
+def attach_utm_and_partner(deals: list[dict], lead_by_id: dict, contacts: dict) -> None:
+    """Fill Partner (personal) and UTM tag on overview deals without mixing them."""
+    stored = _load_json_dict(_DEAL_PARTNERS_FILE)
     for deal in deals:
-        if filled >= _MENBE_BACKFILL_LIMIT:
-            break
-        if not isinstance(deal, dict) or deal.get("source") or deal.get("menbe"):
+        if not isinstance(deal, dict):
             continue
         try:
             lead_id = int(deal.get("id") or 0)
         except (TypeError, ValueError):
-            continue
-        if not lead_id:
             continue
         lead = lead_by_id.get(lead_id) or {}
         contact_id = None
@@ -2494,15 +2549,17 @@ def backfill_overview_menbe(deals: list[dict], lead_by_id: dict, contacts: dict)
             except (TypeError, ValueError):
                 contact_id = None
         contact = contacts.get(contact_id or 0, {})
+        cf_value = extract_menbe(contact) or extract_menbe(lead)
         blob = " ".join((collect_utm_blob(lead), collect_utm_blob(contact)))
-        label = menbe_from_utm(blob)
-        if not label:
-            continue
-        applied = apply_menbe(contact_id, lead_id, label, utm_blob=blob, overwrite=False)
-        if applied:
-            deal["source"] = applied
-            deal["menbe"] = applied
-            filled += 1
+        row = stored.get(str(lead_id))
+        stored_name = str((row.get("name") if isinstance(row, dict) else row) or "").strip()
+        partner, utm = split_partner_and_utm(cf_value, blob, None)
+        partner = stored_name or partner
+        deal["partner"] = partner
+        deal["utm"] = utm
+        deal["utm_tag"] = utm
+        deal["source"] = utm
+        deal["menbe"] = utm
 
 
 def menbe_field_payload(label: str) -> dict | None:
@@ -5384,15 +5441,33 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
             source_label = str(data.get("source") or data.get("menbe") or "").strip()
+            partner_name = str(data.get("partner") or "").strip()
             if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
-            if source_label:
+            if "partner" in data:
+                set_deal_partner(lead_id, partner_name, chat_id)
+                if partner_name:
+                    add_partner_for_chat(chat_id, partner_name)
+                invalidate_rufat_overview_cache()
+            elif source_label:
                 contacts = (lead.get("_embedded") or {}).get("contacts") or []
                 contact_id = int(contacts[0]["id"]) if contacts and contacts[0].get("id") else None
                 apply_menbe(contact_id, lead_id, source_label, overwrite=True)
                 invalidate_rufat_overview_cache()
             patch_rufat_overview_deal_stage(lead_id, stage_key)
-            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key, "source": normalize_menbe_label(source_label)})
+            return web.json_response({
+                "success": True,
+                "message": "Sövdələşmə yeniləndi.",
+                "stage_key": stage_key,
+                "partner": get_deal_partner(lead_id),
+                "partners": get_partner_list_for_chat(chat_id),
+            })
+        elif action == "add_partner":
+            name = str(data.get("name") or data.get("partner") or "").strip()
+            if not name:
+                return web.json_response({"success": False, "error": "Partner adını daxil edin."})
+            partners = add_partner_for_chat(chat_id, name)
+            return web.json_response({"success": True, "partners": partners, "partner": name})
         elif action == "deal_add_note":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
@@ -5852,14 +5927,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
             }
             if stage_key not in stages or (working_keys and stage_key not in working_keys):
                 return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
-            source_label = str(data.get("source") or data.get("menbe") or "").strip()
+            partner_name = str(data.get("partner") or "").strip()
             utm_blob = " ".join((
                 str(data.get("utm_source") or ""),
                 str(data.get("utm_medium") or ""),
                 str(data.get("utm_campaign") or ""),
                 note_text,
             ))
-            menbe_cf = menbe_field_payload(normalize_menbe_label(source_label) or menbe_from_utm(utm_blob))
+            utm_label = menbe_from_utm(utm_blob)
+            menbe_cf = menbe_field_payload(utm_label) if utm_label else None
             extra_fields = [menbe_cf] if menbe_cf else None
             contacts = search_contact_by_phone(phone_raw)
             contact_id = None
@@ -5877,7 +5953,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             lead_id = create_lead_for_contact(int(contact_id), customer_name, owner["pipeline_id"], stages[stage_key])
             if not lead_id:
                 return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
-            applied_source = apply_menbe(int(contact_id), int(lead_id), source_label, utm_blob, overwrite=bool(source_label))
+            applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
+            if partner_name:
+                set_deal_partner(int(lead_id), partner_name, chat_id)
+                add_partner_for_chat(chat_id, partner_name)
             if note_text:
                 add_note(int(lead_id), note_text, "leads")
             invalidate_rufat_overview_cache()
@@ -5887,7 +5966,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
                 "lead_id": int(lead_id),
                 "stage_key": stage_key,
-                "source": applied_source,
+                "partner": partner_name,
+                "utm": applied_utm,
+                "partners": get_partner_list_for_chat(chat_id),
                 "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
             })
         elif action == "update_task":
@@ -6891,7 +6972,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
-    await asyncio.to_thread(backfill_overview_menbe, deals, lead_by_id, contacts)
+    attach_utm_and_partner(deals, lead_by_id, contacts)
     deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
     deals_by_stage = {key: [] for key in funnel_stages}
     for deal in deals:
@@ -6988,8 +7069,11 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
             "lead_id": lead_id, "lead_name": lead.get("name", ""),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": phones,
-            "source": (deal or {}).get("source") or extract_menbe(contact) or extract_menbe(lead),
-            "menbe": (deal or {}).get("source") or extract_menbe(contact) or extract_menbe(lead),
+            "partner": (deal or {}).get("partner") or "",
+            "utm": (deal or {}).get("utm") or (deal or {}).get("utm_tag") or "",
+            "utm_tag": (deal or {}).get("utm_tag") or (deal or {}).get("utm") or "",
+            "source": (deal or {}).get("utm") or (deal or {}).get("source") or "",
+            "menbe": (deal or {}).get("utm") or (deal or {}).get("menbe") or "",
             "responsible": owner_name, "assigneeName": owner_name, "assignee_name": owner_name,
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
@@ -7009,6 +7093,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         "ui_stages": owner.get("ui_stages") or [(key, funnel_names.get(sid, key)) for key, sid in funnel_stages.items()],
         "pipeline_id": pipeline_id,
         "funnel_owner": owner_name,
+        "partners": get_partner_list_for_chat(owner.get("chat_id")),
     }
 
 
@@ -7082,11 +7167,17 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
         if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
-            return cached
+            return _overview_with_partners(cached, owner)
         overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
         _personal_overview_cache[pipeline_id] = overview
         _personal_overview_cache_at[pipeline_id] = now
-        return overview
+        return _overview_with_partners(overview, owner)
+
+
+def _overview_with_partners(overview: dict, owner: dict) -> dict:
+    payload = dict(overview or {})
+    payload["partners"] = get_partner_list_for_chat((owner or {}).get("chat_id"))
+    return payload
 
 
 _DEAL_SHARE_TTL_SEC = 30 * 24 * 3600
@@ -7635,6 +7726,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     all_phones: list[str] = []
     contact_ids: list[int] = []
     source = extract_menbe(lead)
+    utm_blob = collect_utm_blob(lead)
     for linked in lead_contacts:
         if not isinstance(linked, dict):
             continue
@@ -7651,6 +7743,8 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
                 all_phones.append(phone)
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
         source = extract_menbe(full) or source
+        utm_blob = " ".join((utm_blob, collect_utm_blob(full)))
+    partner, utm = split_partner_and_utm(source, utm_blob, lid)
     contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
     note_rows = _fetch_entity_notes("leads", lid)
     for contact_id in contact_ids:
@@ -7763,8 +7857,11 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "phone": all_phones[0] if all_phones else "",
         "phones": all_phones,
         "contacts": contact_rows,
-        "source": source,
-        "menbe": source,
+        "partner": partner,
+        "utm": utm,
+        "utm_tag": utm,
+        "source": utm,
+        "menbe": utm,
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
@@ -8146,6 +8243,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "phones": phones,
                         "source": contact_row.get("source") or "",
                         "menbe": contact_row.get("source") or "",
+                        "utm": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                        "utm_tag": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                        "partner": get_deal_partner(entity_id) if entity_type == "leads" else "",
                         "responsible": responsible_name,
                         "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
@@ -8468,6 +8568,9 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "phones": contact_phones,
                     "source": contact_row.get("source") or extract_menbe(lead),
                     "menbe": contact_row.get("source") or extract_menbe(lead),
+                    "utm": (contact_row.get("source") or extract_menbe(lead)) if (contact_row.get("source") or extract_menbe(lead)) in MENBE_LABELS else menbe_from_utm(collect_utm_blob(lead)),
+                    "utm_tag": (contact_row.get("source") or extract_menbe(lead)) if (contact_row.get("source") or extract_menbe(lead)) in MENBE_LABELS else menbe_from_utm(collect_utm_blob(lead)),
+                    "partner": get_deal_partner(lead_id),
                     "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
                     "assigneeName": assignee_name,
                     "assignee_name": assignee_name,
