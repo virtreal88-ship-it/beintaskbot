@@ -1,5 +1,41 @@
 [
   {
+    "id": "e7c50e70",
+    "type": "change_stage",
+    "created_at": "2026-09-18T16:38:09.847195+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Eziz",
+      "phone": "+994504331393",
+      "lead_id": 77123589,
+      "task_id": 94407423,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "task_text": "1əd çek p\n1əd pc\n1əd barkod p\n1əd skayner\n1əd pul yeşiyi\n\n950azn",
+      "task_price": "",
+      "note": "login | elif8km",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77123589",
+      "callback_key": "278c6132"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "4cf65ff3",
     "type": "confirm_stage",
     "created_at": "2026-09-18T16:38:06.406509+04:00",
