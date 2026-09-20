@@ -377,7 +377,7 @@
             </select>
             <button onclick="pinFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
-        <input id="task-list-search" type="search" placeholder="Ad və ya telefon..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
+        <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
         <div class="samil-kanban-wrap custom-scroll">
             <div id="notifications-container" class="samil-kanban-board"></div>
         </div>
@@ -396,7 +396,7 @@
             </div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
-        <input id="deal-list-search" type="search" placeholder="Ad və ya telefon..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
+        <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
         <div class="samil-kanban-wrap custom-scroll">
@@ -2063,8 +2063,13 @@ function crmRecordMatchesSearch(record, query) {
     const q = String(query || '').trim().toLowerCase();
     if(!q) return true;
     const phones = Array.isArray(record.phones) && record.phones.length ? record.phones : (record.phone ? [record.phone] : []);
-    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, record.partner, record.utm, record.utm_tag, record.source, record.menbe, phones.join(' ')].join(' ').toLowerCase();
-    if(haystack.includes(q)) return true;
+    let partner = String(record.partner || '').toLowerCase();
+    if(!partner && record.lead_id && Array.isArray(samilDeals)) {
+        const deal = samilDeals.find(item => String(item.id) === String(record.lead_id));
+        partner = String(deal?.partner || '').toLowerCase();
+    }
+    const haystack = [record.contact_name, record.lead_name, record.name, record.phone, partner, phones.join(' ')].join(' ').toLowerCase();
+    if(haystack.includes(q) || (partner && partner.includes(q))) return true;
     const digits = normalizeSearchDigits(q);
     if(digits.length >= 3 && phones.map(normalizeSearchDigits).join(' ').includes(digits)) return true;
     return false;
