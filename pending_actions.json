@@ -1314,7 +1314,7 @@
     "id": "4e3f64ab",
     "type": "change_stage",
     "created_at": "2026-09-01T13:56:51.727072+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Автоконтакт +994775224222",
       "phone": "+994775224222",
@@ -1343,7 +1343,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:54:38.580720+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "ce8453e3",
