@@ -1232,7 +1232,7 @@
     "id": "92223b0d",
     "type": "assign_executor",
     "created_at": "2026-09-01T17:44:46.141776+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Aqil",
       "phone": "+994504930181",
@@ -1254,7 +1254,10 @@
       "Texniki",
       "Özüm",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-09-20T18:00:32.984443+04:00",
+    "resolved_by": "bot.py:829",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "997efddc",
