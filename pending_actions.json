@@ -608,7 +608,7 @@
     "id": "fc5ac78a",
     "type": "change_stage",
     "created_at": "2026-09-12T01:19:49.741176+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "RR",
       "phone": "+994502298080",
@@ -637,7 +637,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:34:07.536401+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "752b5de5",
