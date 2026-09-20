@@ -421,7 +421,7 @@
     "id": "4995518b",
     "type": "change_stage",
     "created_at": "2026-09-12T01:25:57.322587+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Turan _36 Aptek",
       "phone": "+0552158229",
@@ -450,7 +450,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:36:15.669950+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "f3943f5a",
