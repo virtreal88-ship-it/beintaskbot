@@ -839,7 +839,7 @@
     "id": "73cd8e06",
     "type": "change_stage",
     "created_at": "2026-09-07T14:21:45.063500+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "JLR_888",
       "phone": "—",
@@ -868,7 +868,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:40:58.928114+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "4659aa5e",
