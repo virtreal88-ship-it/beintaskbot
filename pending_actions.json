@@ -646,7 +646,7 @@
     "id": "752b5de5",
     "type": "change_stage",
     "created_at": "2026-09-10T20:28:38.596964+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Rəvan Harinov",
       "phone": "+994554336609",
@@ -675,7 +675,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:35:59.766170+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "3c986d12",
