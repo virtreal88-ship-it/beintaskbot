@@ -532,7 +532,7 @@
     "id": "d6ed2470",
     "type": "change_stage",
     "created_at": "2026-09-12T01:22:23.490087+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Автоконтакт +994554591103",
       "phone": "+994554591103",
@@ -561,7 +561,10 @@
       "Düşünür",
       "uğurlu sifariş",
       "imtina olundu"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:31:52.975009+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "2c926611",
