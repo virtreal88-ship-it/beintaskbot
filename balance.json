@@ -972,6 +972,21 @@
         "kpi": 0,
         "type": "məxaric",
         "date": "2026-09-14 15:56:52"
+      },
+      {
+        "id": "ea6a8d305ab0498aa54c15909fb2cce4",
+        "task_id": 94407423,
+        "executor": "Rasim Əsgərov",
+        "client": "Eziz",
+        "phone": "+994504331393",
+        "task_type": "",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Tapşırıq təsdiqləndi (100.00 AZN)",
+        "result_text": "login | elif8km",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-20 13:28:12"
       }
     ],
     "balance": -100.0
