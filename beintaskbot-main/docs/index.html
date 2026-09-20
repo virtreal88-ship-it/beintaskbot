@@ -2075,6 +2075,20 @@ function crmRecordMatchesSearch(record, query) {
     return false;
 }
 let currentDateFilter = '';
+function nizamiFunnelStageMatch(stage) {
+    const s = String(stage || '').toLowerCase();
+    if(!s) return false;
+    return s.includes('nizami') || s.includes('soltan') || s.includes('sərmayə') || s.includes('sermaye')
+        || s.includes('asya') || s.includes('nuran') || s.includes('gözləmə') || s.includes('gozleme')
+        || s.includes('müzakirə') || s.includes('muzakire');
+}
+function taskMatchesPinnedAssignee(t) {
+    if(currentFilter === 'all') return true;
+    const name = t.assigneeName || '';
+    if(name === currentFilter) return true;
+    if(CURRENT_USER_ID === '1628569350' && currentFilter === 'Nizami Qasımov' && nizamiFunnelStageMatch(t.stage_name)) return true;
+    return false;
+}
 function filterTasks() { currentFilter = document.getElementById('filter-assignee').value; renderNotifications(); }
 function pinFilter() { const val = document.getElementById('filter-assignee').value; localStorage.setItem('pinned_filter', val); toast('📌 ' + (val === 'all' ? 'Filtr sıfırlandı' : val + ' bərkidildi'), false); }
 
@@ -2401,7 +2415,7 @@ function renderNotifications() {
     const container = document.getElementById('notifications-container');
     if(!container) return;
     let filtered = mockTasks;
-    if(currentFilter !== 'all') filtered = filtered.filter(t => (t.assigneeName || '') === currentFilter);
+    if(currentFilter !== 'all') filtered = filtered.filter(t => taskMatchesPinnedAssignee(t));
     if(taskListSearch) filtered = filtered.filter(t => crmRecordMatchesSearch(t, taskListSearch));
     const overdueCount = filtered.filter(t => t.is_overdue).length;
     const oc = document.getElementById('overdue-count');

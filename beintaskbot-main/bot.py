@@ -8260,8 +8260,10 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Sərmayə':'Sərmayə Əhmədsoy','Asya':'Asya Agayeva','Nuranə':'Nuranə Şirinova','Texniki': TECHNICAL_SUPPORT_NAME}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
-                    # Fallback: determine assignee from Əməliyyatlar pipeline stage
-                    if not assignee_name_from_marker and entity_type == 'leads':
+                    # Fallback: determine assignee from Gözləmə columns. Admin Nizami
+                    # owns that board — do not treat Soltan/Sərmayə columns as a
+                    # different icraçı (that hid his funnel tasks after sync).
+                    if not assignee_name_from_marker and entity_type == 'leads' and not is_admin(chat_id):
                         _lead_status = leads_stage_cache.get(entity_id, 0)
                         _STATUS_TO_NAME = {109988184: 'Rüfət Həsənzadə', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
                         assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
@@ -8378,7 +8380,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
         if is_admin(chat_id):
             funnel_overlay = []
-            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID)]
+            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID)]
             overviews = await asyncio.gather(*[
                 get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
             ])
