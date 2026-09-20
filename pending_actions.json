@@ -104,7 +104,7 @@
     "id": "f9a19c03",
     "type": "confirm_stage",
     "created_at": "2026-09-16T17:56:29.187040+04:00",
-    "resolved": false,
+    "resolved": true,
     "data": {
       "contact_name": "Xanbagirestaurant",
       "phone": "0703344211",
@@ -124,7 +124,10 @@
     "options": [
       "Təsdiq et",
       "Rədd et"
-    ]
+    ],
+    "resolved_at": "2026-09-20T17:24:02.333994+04:00",
+    "resolved_by": "bot.py:1082",
+    "resolved_choice": "Təsdiq et"
   },
   {
     "id": "2eef39c8",
