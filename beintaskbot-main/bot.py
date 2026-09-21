@@ -7548,6 +7548,208 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
     return list(talks.values())
 
 
+def _talk_is_open(talk: dict) -> bool:
+    if not isinstance(talk, dict):
+        return False
+    if talk.get("is_closed") in {True, 1, "1", "true", "True"}:
+        return False
+    if talk.get("closed_at"):
+        return False
+    status = str(talk.get("status") or "").lower()
+    if status in {"2", "closed"}:
+        return False
+    return True
+
+
+def _talk_reply_rank(talk: dict) -> tuple:
+    origin = str(talk.get("origin") or talk.get("source") or "").lower()
+    wa = 1 if any(token in origin for token in ("whats", "waba", "wa")) else 0
+    opened = 1 if _talk_is_open(talk) else 0
+    try:
+        updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    return (opened, wa, updated)
+
+
+def _talk_id_of(talk: dict) -> int:
+    try:
+        return int(talk.get("talk_id") or talk.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ranked_reply_talk_ids(talks: list[dict]) -> list[int]:
+    ranked = []
+    seen: set[int] = set()
+    for talk in talks or []:
+        talk_id = _talk_id_of(talk)
+        if not talk_id or talk_id in seen:
+            continue
+        seen.add(talk_id)
+        ranked.append((_talk_reply_rank(talk), talk_id))
+    ranked.sort(reverse=True)
+    return [item[1] for item in ranked]
+
+
+def _kommo_error_detail(resp) -> str:
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {}
+    if isinstance(payload, dict):
+        detail = str(payload.get("detail") or payload.get("title") or payload.get("error") or "").strip()
+        if detail:
+            return detail
+    return (resp.text or "")[:240]
+
+
+def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
+    url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
+    try:
+        resp = _http.post(url, headers=HEADERS, json={"text": text}, timeout=15)
+    except Exception as exc:
+        logger.warning("Talk send failed: %s", exc)
+        return False, "Kommo çata göndərmək alınmadı.", 0
+    if resp.status_code in {200, 202}:
+        return True, "", resp.status_code
+    detail = _kommo_error_detail(resp)
+    logger.warning("Talk send status %s: %s", resp.status_code, detail)
+    if resp.status_code == 403:
+        return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", resp.status_code
+    if resp.status_code == 422:
+        return False, "Çat bağlıdır. Kommo-da söhbəti açın.", resp.status_code
+    if resp.status_code == 402:
+        return False, "Kommo Chat API limiti bitib.", resp.status_code
+    return False, detail or "Mesaj göndərilmədi.", resp.status_code
+
+
+def _normalize_wa_number(phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = "994" + digits[1:]
+    return digits
+
+
+def _send_whatsapp_cloud_text(phone: str, text: str) -> tuple[bool, str]:
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or ""
+    phone_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID") or ""
+    if not token or not phone_id:
+        return False, ""
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı."
+    url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
+    try:
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text, "preview_url": False}},
+            timeout=15,
+        )
+    except Exception as exc:
+        logger.warning("WhatsApp Cloud send failed: %s", exc)
+        return False, "WhatsApp API xətası."
+    if resp.status_code in {200, 201}:
+        return True, ""
+    logger.warning("WhatsApp Cloud status %s: %s", resp.status_code, resp.text[:240])
+    return False, "WhatsApp mesajı göndərilmədi."
+
+
+def _collect_deal_chat(lid: int, contact_ids: list[int]) -> tuple[list[dict], bool, int]:
+    chat: list[dict] = []
+    seen_chat: set[tuple] = set()
+    chat_blocked = False
+
+    def _add_chat(item: dict | None) -> None:
+        if not item:
+            return
+        key = (str(item.get("id") or ""), str(item.get("text") or ""), int(item.get("created_at") or 0), str(item.get("file_uuid") or ""))
+        if key in seen_chat:
+            return
+        seen_chat.add(key)
+        chat.append(item)
+
+    talks = _fetch_talks(lid, contact_ids)
+    reply_talk_id = (_ranked_reply_talk_ids(talks) or [0])[0]
+    for talk in talks:
+        origin = str(talk.get("origin") or "")
+        talk_id = _talk_id_of(talk)
+        if talk_id:
+            messages, blocked = _fetch_talk_messages(talk_id)
+            chat_blocked = chat_blocked or blocked
+            for message in messages:
+                _add_chat(_format_chat_message(message, origin))
+        chat_id = str(talk.get("chat_id") or "").strip()
+        if chat_id:
+            for message in _fetch_chat_history_by_chat_id(chat_id):
+                _add_chat(_format_chat_message(message, origin))
+    for contact_id in contact_ids:
+        try:
+            chats_resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/contacts/chats",
+                headers=HEADERS,
+                params={"contact_id": int(contact_id)},
+                timeout=8,
+            )
+        except Exception:
+            chats_resp = None
+        if chats_resp is not None and chats_resp.status_code == 200:
+            for row in (chats_resp.json().get("_embedded") or {}).get("chats", []) or []:
+                chat_id = str(row.get("chat_id") or "").strip()
+                if chat_id:
+                    for message in _fetch_chat_history_by_chat_id(chat_id):
+                        _add_chat(_format_chat_message(message, "contact"))
+    event_items, events_without_text = _fetch_chat_events(lid, contact_ids)
+    chat_blocked = chat_blocked or events_without_text
+    for event_item in event_items:
+        _add_chat(event_item)
+    note_rows = _fetch_entity_notes("leads", lid)
+    for contact_id in contact_ids:
+        note_rows.extend(_fetch_entity_notes("contacts", contact_id))
+    for note in note_rows:
+        if not note.get("is_chat"):
+            continue
+        _add_chat({
+            "id": note.get("id"),
+            "direction": "incoming" if str(note.get("type") or "").endswith("_in") else "outgoing",
+            "incoming": str(note.get("type") or "").endswith("_in") or note.get("type") in {"attachment", "file"},
+            "author": "",
+            "text": note.get("text") or "",
+            "message_type": note.get("message_type") or "text",
+            "created_at": note.get("created_at") or 0,
+            "created": note.get("created") or "",
+            "origin": note.get("type") or "",
+            "media_url": note.get("media_url") or "",
+            "file_uuid": note.get("file_uuid") or "",
+            "file_name": note.get("file_name") or "",
+        })
+    for entity_type, entity_id in [("leads", lid)] + [("contacts", cid) for cid in contact_ids]:
+        for file_item in _fetch_entity_files_as_chat(entity_type, entity_id):
+            _add_chat(file_item)
+    if str(lid) in _voice_urls:
+        _add_chat({
+            "id": f"voice-{lid}",
+            "direction": "outgoing",
+            "incoming": False,
+            "author": "",
+            "text": "Səs mesajı",
+            "message_type": "audio",
+            "created_at": 0,
+            "created": "",
+            "origin": "app",
+            "media_url": f"/api/voice/{lid}",
+            "file_uuid": "",
+            "file_name": "voice.ogg",
+        })
+    chat.sort(key=lambda item: int(item.get("created_at") or 0))
+    if len(chat) > 120:
+        chat = chat[-120:]
+    return chat, bool(chat_blocked and not chat), int(reply_talk_id or 0)
+
+
 def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool]:
     rows: list[dict] = []
     blocked = False
@@ -7830,93 +8032,8 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         seen_notes.add(key)
         unique_notes.append(note)
     notes = [item for item in unique_notes if not item.get("is_chat")]
-    chat_from_notes = [item for item in unique_notes if item.get("is_chat")]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
-    chat: list[dict] = []
-    seen_chat: set[tuple] = set()
-    chat_blocked = False
-
-    def _add_chat(item: dict | None) -> None:
-        if not item:
-            return
-        key = (str(item.get("id") or ""), str(item.get("text") or ""), int(item.get("created_at") or 0), str(item.get("file_uuid") or ""))
-        if key in seen_chat:
-            return
-        seen_chat.add(key)
-        chat.append(item)
-
-    for talk in _fetch_talks(lid, contact_ids):
-        origin = str(talk.get("origin") or "")
-        raw_talk_id = talk.get("talk_id") or talk.get("id")
-        try:
-            talk_id = int(raw_talk_id)
-        except (TypeError, ValueError):
-            talk_id = 0
-        if talk_id:
-            messages, blocked = _fetch_talk_messages(talk_id)
-            chat_blocked = chat_blocked or blocked
-            for message in messages:
-                _add_chat(_format_chat_message(message, origin))
-        chat_id = str(talk.get("chat_id") or "").strip()
-        if chat_id:
-            for message in _fetch_chat_history_by_chat_id(chat_id):
-                _add_chat(_format_chat_message(message, origin))
-    for contact_id in contact_ids:
-        try:
-            chats_resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/contacts/chats",
-                headers=HEADERS,
-                params={"contact_id": int(contact_id)},
-                timeout=8,
-            )
-        except Exception:
-            chats_resp = None
-        if chats_resp is not None and chats_resp.status_code == 200:
-            for row in (chats_resp.json().get("_embedded") or {}).get("chats", []) or []:
-                chat_id = str(row.get("chat_id") or "").strip()
-                if chat_id:
-                    for message in _fetch_chat_history_by_chat_id(chat_id):
-                        _add_chat(_format_chat_message(message, "contact"))
-    event_items, events_without_text = _fetch_chat_events(lid, contact_ids)
-    chat_blocked = chat_blocked or events_without_text
-    for event_item in event_items:
-        _add_chat(event_item)
-    for note in reversed(chat_from_notes):
-        _add_chat({
-            "id": note.get("id"),
-            "direction": "incoming" if str(note.get("type") or "").endswith("_in") else "outgoing",
-            "incoming": str(note.get("type") or "").endswith("_in") or note.get("type") in {"attachment", "file"},
-            "author": "",
-            "text": note.get("text") or "",
-            "message_type": note.get("message_type") or "text",
-            "created_at": note.get("created_at") or 0,
-            "created": note.get("created") or "",
-            "origin": note.get("type") or "",
-            "media_url": note.get("media_url") or "",
-            "file_uuid": note.get("file_uuid") or "",
-            "file_name": note.get("file_name") or "",
-        })
-    for entity_type, entity_id in [("leads", lid)] + [("contacts", cid) for cid in contact_ids]:
-        for file_item in _fetch_entity_files_as_chat(entity_type, entity_id):
-            _add_chat(file_item)
-    if str(lid) in _voice_urls:
-        _add_chat({
-            "id": f"voice-{lid}",
-            "direction": "outgoing",
-            "incoming": False,
-            "author": "",
-            "text": "Səs mesajı",
-            "message_type": "audio",
-            "created_at": 0,
-            "created": "",
-            "origin": "app",
-            "media_url": f"/api/voice/{lid}",
-            "file_uuid": "",
-            "file_name": "voice.ogg",
-        })
-    chat.sort(key=lambda item: int(item.get("created_at") or 0))
-    if len(chat) > 120:
-        chat = chat[-120:]
+    chat, chat_blocked, reply_talk_id = _collect_deal_chat(lid, contact_ids)
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
     return {
@@ -7943,6 +8060,8 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "tasks": tasks,
         "chat": chat,
         "chat_blocked": bool(chat_blocked and not chat),
+        "reply_talk_id": int(reply_talk_id or 0),
+        "can_reply": bool(reply_talk_id) or bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
@@ -7975,6 +8094,124 @@ async def handle_api_deal_view(request: web.Request) -> web.Response:
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     return web.json_response({"success": True, "deal": deal, "share_token": make_deal_share_token(lead_id)})
+
+
+def _deal_request_user(request: web.Request):
+    raw_chat_id = (
+        request.headers.get("X-TG-User-ID")
+        or request.rel_url.query.get("uid")
+        or ""
+    )
+    try:
+        return int(raw_chat_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _authorized_deal_lead(chat_id: int, lead_id: int):
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return None, web.json_response({"success": False, "error": "Access denied"}, status=403)
+    lead = get_lead_details(lead_id)
+    if not lead:
+        return None, web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    if not _user_can_view_personal_lead(chat_id, lead):
+        return None, web.json_response({"success": False, "error": "Access denied"}, status=403)
+    return lead, None
+
+
+def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
+    contact_ids: list[int] = []
+    phones: list[str] = []
+    for linked in (lead.get("_embedded") or {}).get("contacts") or []:
+        if not isinstance(linked, dict):
+            continue
+        try:
+            cid = int(linked.get("id"))
+        except (TypeError, ValueError):
+            continue
+        contact_ids.append(cid)
+        full = get_contact_details(cid) or linked
+        for phone in _contact_phones(full):
+            if phone not in phones:
+                phones.append(phone)
+    return contact_ids, phones
+
+
+async def handle_api_deal_chat(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contact_ids, _phones = _contact_ids_and_phones(lead)
+    chat, chat_blocked, reply_talk_id = _collect_deal_chat(int(lead.get("id") or lead_id), contact_ids)
+    return web.json_response({
+        "success": True,
+        "chat": chat,
+        "chat_blocked": chat_blocked,
+        "reply_talk_id": reply_talk_id,
+        "can_reply": bool(reply_talk_id) or bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
+    })
+
+
+async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    text = str(data.get("text") or "").strip()
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not text:
+        return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
+    if len(text) > 2000:
+        return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contact_ids, phones = _contact_ids_and_phones(lead)
+    talks = _fetch_talks(int(lead.get("id") or lead_id), contact_ids)
+    last_error = "Bu sövdələşmədə WhatsApp çatı tapılmadı."
+    sent = False
+    for talk_id in _ranked_reply_talk_ids(talks):
+        ok, last_error, _status = _send_kommo_talk_text(talk_id, text)
+        if ok:
+            sent = True
+            break
+    if not sent:
+        for phone in phones:
+            ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
+            if ok:
+                sent = True
+                last_error = ""
+                break
+            if cloud_error:
+                last_error = cloud_error
+    if not sent:
+        return web.json_response({"success": False, "error": last_error}, status=400)
+    chat, chat_blocked, reply_talk_id = _collect_deal_chat(int(lead.get("id") or lead_id), contact_ids)
+    return web.json_response({
+        "success": True,
+        "chat": chat,
+        "chat_blocked": chat_blocked,
+        "reply_talk_id": reply_talk_id,
+    })
 
 
 async def handle_api_deal_public(request: web.Request) -> web.Response:
@@ -8922,6 +9159,10 @@ async def start_webhook_server():
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)
     app_web.router.add_route('OPTIONS', '/api/deal/view', lambda r: web.Response())
     app_web.router.add_get("/api/deal/view", handle_api_deal_view)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/chat", handle_api_deal_chat)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())
