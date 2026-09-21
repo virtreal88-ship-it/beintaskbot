@@ -7597,6 +7597,7 @@ def _talk_has_digits(talk: dict, digits: str) -> bool:
 
 def _talk_channel_key(talk: dict) -> str:
     blob = _talk_blob(talk)
+    origin = str(talk.get("origin") or talk.get("source") or "").strip().lower()
     if "tiktok" in blob or "tik tok" in blob:
         return "tiktok"
     if "instagram" in blob:
@@ -7604,6 +7605,8 @@ def _talk_channel_key(talk: dict) -> str:
     if "facebook" in blob or "fb messenger" in blob:
         return "facebook"
     if any(token in blob for token in ("whatsapp", "waba", "whats app", "whats-app")):
+        return "whatsapp"
+    if origin in {"", "chat", "capi", "wa", "im"}:
         return "whatsapp"
     return "other"
 
@@ -7837,6 +7840,20 @@ def _collect_deal_chat(
     if wanted not in keys:
         wanted = "whatsapp" if "whatsapp" in keys else (channels[0]["key"] if channels else wanted)
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    if not reply_talk_id:
+        ranked = _ranked_reply_talk_ids(talks)
+        reply_talk_id = ranked[0] if ranked else 0
+        if reply_talk_id and wanted not in keys:
+            wanted = _talk_channel_key(next((t for t in talks if _talk_id_of(t) == reply_talk_id), {}) ) or wanted
+            if wanted not in CHAT_CHANNEL_LABELS:
+                wanted = "whatsapp"
+            if not any(row.get("key") == wanted for row in channels):
+                channels = [{
+                    "key": wanted,
+                    "label": CHAT_CHANNEL_LABELS.get(wanted, "WhatsApp"),
+                    "talk_id": reply_talk_id,
+                    "open": True,
+                }] + channels
     origin = wanted
     chat_id = ""
     for talk in talks:
