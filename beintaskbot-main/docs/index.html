@@ -25,6 +25,8 @@
         .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:800; color:#64748b; line-height:1; }
         #sync-indicator .sync-meter .sync-pct { color:#cbd5e1; }
         #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:700; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
+        #preloader { pointer-events:none !important; }
+        #tab-bar { z-index:11060 !important; }
         #toast.error { background:#b91c1c; }
         .screen { display:none; } .screen.active { display:block; }
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
@@ -82,7 +84,7 @@
             #desktop-sidebar {
                 display:flex; flex-direction:column; align-items:stretch; gap:0;
                 position:fixed; top:0; left:0; right:auto; bottom:0; width:var(--crm-side-w); height:100vh;
-                background:#f7f8fa; color:#0f172a; z-index:50; padding:10px 8px 12px; box-sizing:border-box;
+                background:#f7f8fa; color:#0f172a; z-index:11060; padding:10px 8px 12px; box-sizing:border-box;
                 border-right:1px solid #e6e8eb; box-shadow:none; overflow:hidden;
             }
             .sidebar-toggle-row { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:2px 2px 8px; }
@@ -1279,6 +1281,8 @@ function applyHashRoute() {
 }
 
 async function initApp() {
+    hideLoader();
+    document.getElementById('deal-photo-zoom')?.remove();
     if(IS_PUBLIC_DEAL_LINK) {
         const next = new URL('deal.html', PUBLIC_PWA_BASE);
         next.searchParams.set('k', getShareTokenFromLocation());
@@ -1480,12 +1484,15 @@ function resumeEdit() {
     if(currentEditScreen) nav(currentEditScreen);
 }
 
-async function syncNotifications(showError = false) {
+        async function syncNotifications(showError = false) {
     if(HAS_OWN_FUNNEL && !isAdmin) return loadSamilWorkspace(showError);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 18000);
     try {
         const r = await fetch(API_BASE + '/api/notifications?_ts=' + Date.now(), {
             cache: 'no-store',
-            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            headers: {'X-TG-User-ID': CURRENT_USER_ID},
+            signal: controller.signal
         });
         const j = await r.json();
         if(!r.ok || !j.success || !j.tasks) throw new Error(j.error || 'Sync failed');
@@ -1517,6 +1524,8 @@ async function syncNotifications(showError = false) {
         renderNotifications();
         if(showError) toast('Bildirişlər yüklənmədi', true);
         return false;
+    } finally {
+        clearTimeout(timeout);
     }
 }
 
@@ -1767,9 +1776,12 @@ async function openNotifications(forceRefresh = false) {
         showLoader();
     }
     showSyncIndicator();
-    await syncNotifications(!!forceRefresh || !cachedData);
-    hideLoader();
-    hideSyncIndicator();
+    try {
+        await syncNotifications(!!forceRefresh || !cachedData);
+    } finally {
+        hideLoader();
+        hideSyncIndicator();
+    }
     loadBalance();
     loadKpi();
 }
@@ -4718,7 +4730,7 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 async function clearAppCacheOnce() {
-  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_14') === '1') return;
+  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_21b') === '1') return;
   if ('caches' in window) {
     const cacheNames = await caches.keys();
     await Promise.all(cacheNames.map(name => caches.delete(name)));
@@ -4726,13 +4738,13 @@ async function clearAppCacheOnce() {
   Object.keys(localStorage).forEach(key => {
     if (key.startsWith('cached_')) localStorage.removeItem(key);
   });
-  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_14', '1');
+  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_21b', '1');
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=172-desktop-crm');
+    const reg = await navigator.serviceWorker.register('sw.js?v=173-nav-unblock');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

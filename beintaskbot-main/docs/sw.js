@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-08-31-2';
+const CACHE_NAME = 'beintaskbot-v2026-09-21-nav';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -14,9 +14,12 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Task data must always come from the API, never from the PWA cache.
   if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
-
+  const isAppShell = e.request.destination === 'document' || url.pathname.endsWith('.html') || url.pathname.endsWith('/');
+  if (isAppShell) {
+    e.respondWith(fetch(e.request, { cache: 'no-store' }).catch(() => caches.match(e.request)));
+    return;
+  }
   e.respondWith(
     fetch(e.request).then(r => {
       if (r.ok && url.origin === self.location.origin) {
@@ -28,14 +31,13 @@ self.addEventListener('fetch', e => {
   );
 });
 
-// Push notification handler
 self.addEventListener('push', e => {
-  let data = {title: 'Bein Systems', body: 'Yeni bildiriş', icon: '/docs/icon-192.png'};
+  let data = {title: 'Bein Systems', body: 'Yeni bildiriş', icon: 'icon-192.png'};
   try { data = e.data.json(); } catch(err) { data.body = e.data ? e.data.text() : 'Yeni bildiriş'; }
   const opts = {
     body: data.body || '',
-    icon: data.icon || '/docs/icon-192.png',
-    badge: '/docs/icon-192.png',
+    icon: data.icon || 'icon-192.png',
+    badge: 'icon-192.png',
     data: data.url || '/',
     vibrate: data.urgent ? [200, 100, 200, 100, 200] : [200, 100, 200]
   };
@@ -55,7 +57,6 @@ self.addEventListener('push', e => {
   );
 });
 
-// Click on notification -> open app
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const target = String(e.notification.data || '');
@@ -77,7 +78,3 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
-
-// Bump this file's URL in the deployment when publishing a new version.
-//# sourceURL=sw.js
-
