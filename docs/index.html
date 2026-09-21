@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="180">
+    <meta name="pwa-build" content="181">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -2998,7 +2998,7 @@ function dealIconDel() {
 function dealNoteRowHtml(item, readonly) {
     const canEdit = !readonly && item && item.id;
     const actions = canEdit
-        ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconDel()}</button></span>`
+        ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconDel()}</button></span>`
         : '';
     return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
 }
@@ -3118,8 +3118,9 @@ function bindDealSideActions(deal) {
             btn.disabled = true;
             if(row) row.classList.add('saving');
             const entityId = btn.getAttribute('data-entity-id') || row?.getAttribute('data-entity-id') || '';
+            const noteType = btn.getAttribute('data-note-type') || 'common';
             try {
-                await samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType, entity_id: entityId});
+                await samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType, entity_id: entityId, note_type: noteType});
                 if(Array.isArray(deal.notes)) deal.notes = deal.notes.filter(item => String(item.id) !== String(noteId));
                 row?.remove();
                 if(_dealViewState) paintDealChatThread({stickBottom: false});
@@ -4794,7 +4795,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=180');
+    const reg = await navigator.serviceWorker.register('sw.js?v=181');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

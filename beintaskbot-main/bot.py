@@ -1956,18 +1956,22 @@ def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple
     nid = int(note_id)
     ids = [int(i) for i in entity_ids if int(i or 0)]
     for kind in kinds:
-        try:
-            resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/{kind}/notes",
-                headers=HEADERS,
-                params={"filter[id][]": nid, "limit": 1},
-                timeout=8,
-            )
-        except Exception as exc:
-            logger.warning("Lookup note %s/%s failed: %s", kind, nid, exc)
-            resp = None
-        if resp is not None and resp.status_code == 200:
-            notes = ((resp.json() or {}).get("_embedded") or {}).get("notes") or []
+        for url, params in (
+            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", None),
+            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes", {"filter[id][]": nid, "limit": 1}),
+        ):
+            try:
+                resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
+            except Exception as exc:
+                logger.warning("Lookup note %s failed: %s", url, exc)
+                continue
+            if resp.status_code != 200:
+                continue
+            payload = resp.json() if resp.content else {}
+            if isinstance(payload, dict) and payload.get("id"):
+                notes = [payload]
+            else:
+                notes = ((payload or {}).get("_embedded") or {}).get("notes") or []
             if notes and isinstance(notes[0], dict):
                 note = notes[0]
                 try:
@@ -1999,7 +2003,14 @@ def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple
     return (kinds[0] if kinds else "leads"), (ids[0] if ids else 0), "common"
 
 
-def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, extra_ids: list[int] | None = None) -> tuple[bool, str]:
+def _note_delete_error(raw: str) -> str:
+    text = str(raw or "")
+    if not text or text.startswith("{") or "FieldMissing" in text or "Bad Request" in text:
+        return "Qeyd silinmədi."
+    return text[:180]
+
+
+def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, extra_ids: list[int] | None = None, note_type: str = "") -> tuple[bool, str]:
     try:
         nid = int(note_id)
     except (TypeError, ValueError):
@@ -2016,13 +2027,15 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
             extra.append(int(value))
         except (TypeError, ValueError):
             continue
-    found_kind, found_eid, note_type = _lookup_note(nid, kinds, [eid, *extra])
+    found_kind, found_eid, found_type = _lookup_note(nid, kinds, [eid, *extra])
     if found_kind:
         kinds = [found_kind] + [k for k in kinds if k != found_kind]
     if found_eid:
         eid = found_eid
-    if not note_type:
-        note_type = "common"
+    types: list[str] = []
+    for item in (str(note_type or "").strip(), str(found_type or "").strip(), "common"):
+        if item and item not in types:
+            types.append(item)
     last_err = "Qeyd silinmədi."
     for kind in kinds:
         urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
@@ -2039,18 +2052,12 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                 return True, ""
             last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
             logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
-            if resp.status_code not in {400, 404, 405}:
-                continue
     bodies: list[list[dict]] = []
-    base = {"id": nid, "is_deleted": True}
-    if eid:
-        base["entity_id"] = eid
-    bodies.append([{**base, "note_type": note_type}])
-    if note_type != "common":
-        bodies.append([{**base, "note_type": "common"}])
-    bodies.append([base])
-    bodies.append([{"id": nid, "is_deleted": True, "note_type": note_type}])
-    bodies.append([{"id": nid, "is_deleted": True}])
+    for ntype in types:
+        row = {"id": nid, "note_type": ntype, "is_deleted": True}
+        if eid:
+            bodies.append([{**row, "entity_id": eid}])
+        bodies.append([row])
     for kind in kinds:
         urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
         if eid:
@@ -2067,7 +2074,7 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                     return True, ""
                 last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    return False, last_err
+    return False, _note_delete_error(last_err)
 
 def _note_entity_kind(entity_type: str) -> str:
     raw = str(entity_type or "").strip().lower()
@@ -5697,7 +5704,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             extra_ids = [lead_id]
             lead_obj = get_lead_details(lead_id) or {}
             extra_ids.extend(_lead_contact_ids(lead_obj))
-            ok, err = delete_note(note_id, entity_type, entity_id, extra_ids=extra_ids)
+            hint_type = str(data.get("note_type") or "").strip()
+            ok, err = delete_note(note_id, entity_type, entity_id, extra_ids=extra_ids, note_type=hint_type)
             if ok:
                 invalidate_rufat_overview_cache()
             return web.json_response({
