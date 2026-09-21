@@ -6953,12 +6953,27 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
                     "limit": 250,
                     "page": page,
                 },
-                timeout=8,
+                timeout=12,
             )
             # Kommo can respond with 204 when a page beyond the last one is requested.
             if response.status_code == 204:
                 break
+            if response.status_code == 429:
+                await asyncio.sleep(1.5)
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    params={
+                        "filter[pipeline_id]": pipeline_id,
+                        "with": "contacts",
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            if response.status_code == 204:
+                break
             if response.status_code != 200:
+                logger.error("Rüfət leads fetch failed: %s body=%s", response.status_code, (response.text or "")[:200])
                 raise RuntimeError(f"Rüfət leads fetch failed: {response.status_code}")
             batch = response.json().get("_embedded", {}).get("leads", []) or []
             all_leads.extend(batch)
@@ -7263,10 +7278,16 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
         if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
             return _overview_with_partners(cached, owner)
-        overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
-        _personal_overview_cache[pipeline_id] = overview
-        _personal_overview_cache_at[pipeline_id] = now
-        return _overview_with_partners(overview, owner)
+        try:
+            overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
+            _personal_overview_cache[pipeline_id] = overview
+            _personal_overview_cache_at[pipeline_id] = now
+            return _overview_with_partners(overview, owner)
+        except Exception as exc:
+            logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
+            if cached is not None:
+                return _overview_with_partners(cached, owner)
+            raise
 
 
 def _overview_with_partners(overview: dict, owner: dict) -> dict:
@@ -7897,14 +7918,15 @@ def _collect_deal_chat(
                 "open": True,
             }]
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    pages = 3 if before else 1
-    talks_by_id = {_talk_id_of(talk): talk for talk in talks}
+    pages = 1
+    if before:
+        pages = 2
     for row in channels:
         talk_id = int(row.get("talk_id") or 0)
         if not talk_id:
             continue
         channel_key = str(row.get("key") or wanted)
-        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=50)
+        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=20)
         chat_blocked = chat_blocked or blocked
         for message in messages:
             formatted = _format_chat_message(message, channel_key)
@@ -7912,15 +7934,6 @@ def _collect_deal_chat(
                 formatted["channel"] = channel_key
                 formatted["talk_id"] = talk_id
             _add_chat(formatted)
-        talk = talks_by_id.get(talk_id) or {}
-        extra_chat_id = str(talk.get("chat_id") or "").strip()
-        if not messages and extra_chat_id:
-            for message in _fetch_chat_history_by_chat_id(extra_chat_id):
-                formatted = _format_chat_message(message, channel_key)
-                if formatted:
-                    formatted["channel"] = channel_key
-                    formatted["talk_id"] = talk_id
-                _add_chat(formatted)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -7951,10 +7964,10 @@ def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> 
         except Exception as exc:
             logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
             continue
-        if resp.status_code in {401, 402, 403}:
+        if resp.status_code in {401, 402, 403, 429}:
             blocked = True
             logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
-            continue
+            break
         if resp.status_code != 200:
             logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
             continue
@@ -8927,8 +8940,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
             owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID)]
             overviews = await asyncio.gather(*[
                 get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
-            ])
+            ], return_exceptions=True)
             for overview in overviews:
+                if not isinstance(overview, dict):
+                    logger.error("Admin funnel overlay skipped: %s", overview)
+                    continue
                 owner_name = overview.get("user_name") or overview.get("funnel_owner") or ""
                 for item in overview.get("tasks") or []:
                     if not item.get("assigneeName"):
