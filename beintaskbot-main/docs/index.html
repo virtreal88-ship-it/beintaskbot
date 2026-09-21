@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="176">
+    <meta name="pwa-build" content="177">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -288,7 +288,11 @@
         .deal-chat-row.out { background:#dbeafe; margin-left:auto; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
         .chat-quote-in { border-left:3px solid #94a3b8; background:#f1f5f9; padding:4px 6px; margin-bottom:4px; border-radius:4px; font-size:11px; color:#475569; }
-        .deal-chat-row .wa-time { display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:10px; color:#667781; margin-top:2px; }
+        .deal-chat-row .wa-time { display:flex; align-items:center; justify-content:flex-end; gap:5px; font-size:10px; color:#667781; margin-top:4px; flex-wrap:wrap; }
+        .wa-when { white-space:nowrap; }
+        .wa-sign { font-weight:700; color:#54656f; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .wa-ticks { letter-spacing:-1.5px; font-size:12px; line-height:1; color:#8696a0; font-weight:700; }
+        .wa-ticks.read { color:#53bdeb; }
         .chat-reply-btn { border:0; background:transparent; color:#64748b; font-size:13px; font-weight:700; padding:0 2px; cursor:pointer; }
         .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
@@ -2713,12 +2717,39 @@ function dealChatActor(item) {
     if(!isGenericChatLabel(author)) return author;
     return dealEmployeeName(deal);
 }
+function dealChatWhen(item) {
+    const ts = Number(item && item.created_at || 0);
+    const d = ts > 0 ? new Date(ts > 1e12 ? ts : ts * 1000) : null;
+    const clockFmt = new Intl.DateTimeFormat('az-AZ', { timeZone: 'Asia/Baku', hour: '2-digit', minute: '2-digit', hour12: false });
+    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baku', year: 'numeric', month: '2-digit', day: '2-digit' });
+    if(!d || isNaN(d.getTime())) {
+        const raw = String((item && item.created) || '').trim();
+        const clock = raw.split(' ').slice(-1)[0] || raw;
+        return clock ? ('Bugün ' + clock) : '';
+    }
+    const time = clockFmt.format(d);
+    const day = dayFmt.format(d);
+    const now = new Date();
+    const today = dayFmt.format(now);
+    const yest = dayFmt.format(new Date(now.getTime() - 86400000));
+    if(day === today) return 'Bugün ' + time;
+    if(day === yest) return 'Dünən ' + time;
+    const parts = day.split('-');
+    return (parts[2] && parts[1] ? (parts[2] + '.' + parts[1] + ' ') : '') + time;
+}
+function dealChatTicks(item) {
+    if(!item || item.incoming || item.is_comment) return '';
+    const st = String(item.delivery_status || item.status || 'sent').toLowerCase();
+    if(st === 'read' || st === 'seen' || st === '2') return '<span class="wa-ticks read" title="Oxundu">✓✓</span>';
+    if(st === 'delivered' || st === '1') return '<span class="wa-ticks" title="Çatdırıldı">✓✓</span>';
+    return '<span class="wa-ticks" title="Göndərildi">✓</span>';
+}
 function dealChatItemHtml(item, token, readonly) {
     const isComment = !!(item && item.is_comment);
-    const time = escapeHtml((item.created || '').split(' ').slice(-1)[0] || item.created || '');
+    const when = dealChatWhen(item);
     if(isComment) {
         const who = String(item.author || '').trim();
-        return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${time}</div><div>${linkifyText(item.text || '')}</div></div>`;
+        return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${escapeHtml(when)}</div><div>${linkifyText(item.text || '')}</div></div>`;
     }
     const cls = item.incoming ? 'in' : 'out';
     const channel = chatChannelKey(item);
@@ -2726,8 +2757,8 @@ function dealChatItemHtml(item, token, readonly) {
     const who = dealChatActor(item);
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    const head = `${meta.svg}${who ? `<span>${escapeHtml(who)}</span>` : ''}`;
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${head}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
+    const sign = who ? `<span class="wa-sign">${escapeHtml(who)}</span>` : '';
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${sign}${replyBtn}</div></div>`;
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
@@ -4758,7 +4789,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=176');
+    const reg = await navigator.serviceWorker.register('sw.js?v=177');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

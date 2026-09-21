@@ -8210,6 +8210,40 @@ def _fetch_chat_history_by_chat_id(chat_id: str) -> list[dict]:
     return []
 
 
+def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
+    if incoming:
+        return ""
+    raw = (
+        nested.get("status")
+        or nested.get("delivery_status")
+        or message.get("status")
+        or message.get("delivery_status")
+        or message.get("msgid_status")
+    )
+    if isinstance(raw, dict):
+        raw = raw.get("type") or raw.get("name") or raw.get("code") or raw.get("id")
+    text = str(raw or "").strip().lower()
+    mapping = {
+        "0": "sent",
+        "sent": "sent",
+        "sending": "sent",
+        "1": "delivered",
+        "delivered": "delivered",
+        "deliver": "delivered",
+        "2": "read",
+        "read": "read",
+        "seen": "read",
+        "viewed": "read",
+    }
+    if text in mapping:
+        return mapping[text]
+    if "read" in text or "seen" in text:
+        return "read"
+    if "deliver" in text:
+        return "delivered"
+    return "sent"
+
+
 def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
     name = str((author or {}).get("name") or "").strip()
     folded = name.casefold()
@@ -8286,6 +8320,7 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "media_url": media if _is_allowed_kommo_media_url(media) else "",
         "file_uuid": file_uuid,
         "file_name": file_name,
+        "delivery_status": _chat_delivery_status(message, nested, incoming),
     }
 
 
@@ -8340,6 +8375,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "media_url": media if _is_allowed_kommo_media_url(media) else "",
                 "file_uuid": file_uuid,
                 "file_name": "",
+                "delivery_status": "" if incoming else "sent",
             })
     return rows, skipped
 
