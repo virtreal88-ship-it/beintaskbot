@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="177">
+    <meta name="pwa-build" content="178">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -2686,7 +2686,10 @@ function dealClientName(deal) {
 }
 function isGenericChatLabel(name) {
     const folded = String(name || '').trim().toLowerCase();
-    return !folded || folded === 'menecer' || folded === 'manager' || folded === 'müştəri' || folded === 'musteri' || folded === 'client';
+    if(!folded) return true;
+    const generic = ['menecer','manager','müştəri','musteri','client','whatsapp','waba','instagram','facebook','fb','messenger','tiktok','telegram','viber','bot','amojo','kommo','capi','im','wa'];
+    if(generic.includes(folded)) return true;
+    return Object.values(CHAT_CHANNEL_META).some(meta => String(meta.label || '').toLowerCase() === folded);
 }
 function dealEmployeeName(deal) {
     const fromDeal = String((deal && (deal.responsible_name || deal.funnel_owner_name)) || '').trim();
@@ -2708,14 +2711,15 @@ function waMeUrl(phone) {
 function dealChatActor(item) {
     const deal = _dealViewState && _dealViewState.deal;
     const author = String((item && item.author) || '').trim();
-    if(item && item.is_comment) return author || dealEmployeeName(deal);
+    const employee = dealEmployeeName(deal);
+    if(item && item.is_comment) return author || employee;
     if(item && item.incoming) {
         const client = dealClientName(deal);
         if(client) return client;
         return isGenericChatLabel(author) ? '' : author;
     }
     if(!isGenericChatLabel(author)) return author;
-    return dealEmployeeName(deal);
+    return employee;
 }
 function dealChatWhen(item) {
     const ts = Number(item && item.created_at || 0);
@@ -2757,8 +2761,8 @@ function dealChatItemHtml(item, token, readonly) {
     const who = dealChatActor(item);
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    const sign = who ? `<span class="wa-sign">${escapeHtml(who)}</span>` : '';
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${sign}${replyBtn}</div></div>`;
+    const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}${headName}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${replyBtn}</div></div>`;
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
@@ -4789,7 +4793,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=177');
+    const reg = await navigator.serviceWorker.register('sw.js?v=178');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

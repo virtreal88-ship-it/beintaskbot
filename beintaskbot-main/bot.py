@@ -8247,7 +8247,11 @@ def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
 def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
     name = str((author or {}).get("name") or "").strip()
     folded = name.casefold()
-    generic = folded in {"", "menecer", "manager", "müştəri", "musteri", "client"}
+    generic = folded in {
+        "", "menecer", "manager", "müştəri", "musteri", "client",
+        "whatsapp", "waba", "instagram", "facebook", "fb", "messenger",
+        "tiktok", "telegram", "viber", "bot", "amojo", "kommo", "capi", "im", "wa",
+    }
     if incoming:
         return "" if generic else name
     if not generic:
