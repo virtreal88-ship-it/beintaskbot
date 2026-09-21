@@ -8505,6 +8505,34 @@ def _is_generic_chat_author(name: str) -> bool:
     return folded in {"client", "bot", "capi", "im", "wa", "fb"}
 
 
+def _quote_prefix_text(quote: str, text: str) -> str:
+    lines = [line.strip() for line in str(quote or "").strip()[:160].splitlines() if line.strip()]
+    if not lines:
+        return text
+    quoted = "\n".join(f"> {line}" for line in lines)
+    return f"{quoted}\n\n{text}".strip()
+
+
+def _split_quote_prefix(text: str) -> tuple[str, str]:
+    raw = str(text or "")
+    if not raw.lstrip().startswith(">"):
+        return "", raw
+    quote_lines: list[str] = []
+    rest: list[str] = []
+    for line in raw.splitlines():
+        if not rest and line.lstrip().startswith(">"):
+            quote_lines.append(line.lstrip()[1:].strip())
+            continue
+        if not rest and not line.strip():
+            continue
+        rest.append(line)
+    body = "\n".join(rest).strip()
+    quote = "\n".join(item for item in quote_lines if item).strip()
+    if not quote or not body:
+        return "", raw
+    return quote, body
+
+
 def _find_wamid(value, depth: int = 0) -> str:
     if depth > 5 or value is None:
         return ""
@@ -8587,6 +8615,10 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
             reply_author = str(sender.get("name") or "").strip()[:80]
     elif reply_src:
         reply_id = str(reply_src).strip()
+    inline_quote, inline_body = _split_quote_prefix(text)
+    if inline_quote:
+        text = inline_body
+        reply_text = reply_text or inline_quote
     return {
         "id": nested.get("id") or message.get("id"),
         "external_id": _find_wamid(message),
@@ -9095,6 +9127,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if not ok:
         ok, last_error, _status = _send_kommo_talk_message(
             reply_talk_id, text, attachment, reply_to_message_id, keep_plain=not quote_on_whatsapp
+        )
+    if not ok and quote_on_whatsapp and reply_preview:
+        ok, last_error, _status = _send_kommo_talk_message(
+            reply_talk_id, _quote_prefix_text(reply_preview, text), attachment
         )
     if not ok and channel == "whatsapp" and not reply_to_message_id:
         _ids, phones = _contact_ids_and_phones(lead)

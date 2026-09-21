@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="186">
+    <meta name="pwa-build" content="187">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -2839,6 +2839,21 @@ function dealChatQuoteHtml(item) {
     const who = String(item.reply_to_author || '').trim();
     return `<div class="chat-quote-in">${who ? `<div class="chat-quote-who">${escapeHtml(who)}</div>` : ''}<div class="chat-quote-txt">${linkifyText(text)}</div></div>`;
 }
+function splitQuotePrefix(text) {
+    const raw = String(text || '');
+    if(!raw.trimStart().startsWith('>')) return null;
+    const quote = [];
+    const body = [];
+    raw.split('\n').forEach(line => {
+        if(!body.length && line.trimStart().startsWith('>')) { quote.push(line.trimStart().slice(1).trim()); return; }
+        if(!body.length && !line.trim()) return;
+        body.push(line);
+    });
+    const quoteText = quote.filter(Boolean).join('\n').trim();
+    const bodyText = body.join('\n').trim();
+    if(!quoteText || !bodyText) return null;
+    return {quote: quoteText, body: bodyText};
+}
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
     return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat)).map(item => ({
@@ -2903,6 +2918,12 @@ function hydrateDealQuotes(rows) {
         let replyId = item.reply_to_message_id || (stored && stored.id) || '';
         let replyText = item.reply_to_text || (stored && stored.text) || '';
         let replyAuthor = item.reply_to_author || (stored && stored.author) || '';
+        let body = item.text;
+        const split = splitQuotePrefix(item.text);
+        if(split) {
+            body = split.body;
+            replyText = replyText || split.quote;
+        }
         if(!replyText && replyId) {
             const src = byId.get(String(replyId));
             if(src) {
@@ -2910,9 +2931,8 @@ function hydrateDealQuotes(rows) {
                 replyAuthor = replyAuthor || dealChatActor(src) || src.author || '';
             }
         }
-        if(!replyText) return item;
-        if(replyText === item.reply_to_text && replyAuthor === (item.reply_to_author || '') && String(replyId) === String(item.reply_to_message_id || '')) return item;
-        return Object.assign({}, item, { reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor });
+        if(!replyText) return split ? Object.assign({}, item, {text: body}) : item;
+        return Object.assign({}, item, { text: body, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor });
     });
 }
 function chatMessageKey(item) {
@@ -4973,7 +4993,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=186');
+    const reg = await navigator.serviceWorker.register('sw.js?v=187');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
