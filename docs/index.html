@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="179">
+    <meta name="pwa-build" content="180">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -844,7 +844,7 @@ const CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
 const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
-function canShowKommoLink() { return isAdmin || IS_RUFAT; }
+function canShowKommoLink() { return isAdmin; }
 const FUNNEL_OWNER_NAME = {
     '6824377548':'Rüfət Həsənzadə','7962757442':'Rüfət Həsənzadə','1628569350':'Nizami Qasımov',
     '7329891614':'Hüseyn Səfərov','7920785774':'Rasim Əsgərov'
