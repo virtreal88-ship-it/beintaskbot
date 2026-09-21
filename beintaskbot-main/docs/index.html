@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="183">
+    <meta name="pwa-build" content="184">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -253,6 +253,8 @@
         .deal-note-row { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:0 0 8px; position:relative; }
         .deal-task-row { padding:10px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; margin:0 0 8px; position:relative; }
         .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:8px; top:8px; width:10px; height:10px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        #deal-tasks-list.saving { position:relative; min-height:28px; }
+        #deal-tasks-list.saving::after { content:''; position:absolute; right:4px; top:0; width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; width:22px; height:22px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
         .deal-note-del, .deal-task-del { color:#b91c1c; }
         .deal-note-edit svg, .deal-task-edit svg, .deal-note-del svg, .deal-task-del svg { width:14px; height:14px; display:block; }
@@ -1337,7 +1339,10 @@ function openCreateTaskModal() {
     if(modal) modal.classList.add('open');
     document.getElementById('task-client-name')?.focus();
 }
+let _creatingTaskDeal = null;
+let _taskBesideBusy = false;
 function openCreateTaskFromDeal(deal) {
+    _creatingTaskDeal = deal || (_dealViewState && _dealViewState.deal) || null;
     openCreateTaskModal();
     const name = (deal && (deal.contact_name || deal.name)) || '';
     const phone = (deal && ((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone)) || '';
@@ -1350,6 +1355,7 @@ function openCreateTaskFromDeal(deal) {
 function closeCreateTaskModal() {
     document.getElementById('screen-create')?.classList.remove('open');
     saveSessionForms();
+    if(!_taskBesideBusy) _creatingTaskDeal = null;
 }
 function nav(id) {
     if(id !== 'screen-pending') stopPendingActionPolling();
@@ -1661,10 +1667,64 @@ function submitTask() {
         const prioritySelect = document.getElementById('task-priority');
         if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
         currentEditScreen = 'screen-create';
+        if(_creatingTaskDeal && _dealViewState && String(_dealViewState.id) === String(_creatingTaskDeal.id)) {
+            submitTaskBesideDeal(newPayload, _creatingTaskDeal);
+            return;
+        }
         doFetch(newPayload, 'task-submit-btn');
     }
 }
 
+function formatTaskDeadline(raw) {
+    const value = String(raw || '');
+    const stamp = value.startsWith('custom:') ? value.slice(7) : value;
+    if(!stamp) return '';
+    const d = new Date(stamp);
+    if(isNaN(d.getTime())) return '';
+    const p = n => String(n).padStart(2, '0');
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function appendDealTask(deal, item) {
+    if(!deal || !_dealViewState || String(_dealViewState.id) !== String(deal.id)) return;
+    const target = _dealViewState.deal || deal;
+    if(!Array.isArray(target.tasks)) target.tasks = [];
+    target.tasks.unshift(item);
+    _dealViewState.deal = target;
+    applyDealSide(target, !!_dealViewState.readonly);
+    bindDealSideActions(target);
+}
+async function submitTaskBesideDeal(payload, deal) {
+    const box = document.getElementById('deal-tasks-list');
+    const btn = document.getElementById('task-submit-btn');
+    _taskBesideBusy = true;
+    if(box) box.classList.add('saving');
+    if(btn) btn.disabled = true;
+    try {
+        const r = await fetch(API_BASE + '/api/action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify(payload)
+        });
+        const j = await r.json().catch(() => ({}));
+        if(!r.ok || !j.success) throw new Error(j.error || 'Tapşırıq yaradılmadı');
+        closeCreateTaskModal();
+        clearCreateFormState();
+        appendDealTask(deal, {
+            id: j.task_id || ('local-' + Date.now()),
+            text: payload.text,
+            deadline: j.deadline || formatTaskDeadline(payload.deadline),
+            responsible: payload.assigneeName || ''
+        });
+        toast('Tapşırıq yaradıldı');
+    } catch(err) {
+        toast(err.message || 'Tapşırıq yaradılmadı', true);
+    } finally {
+        _taskBesideBusy = false;
+        _creatingTaskDeal = null;
+        if(box) box.classList.remove('saving');
+        if(btn) btn.disabled = false;
+    }
+}
 function submitDeal() {
     if(HAS_OWN_FUNNEL && !gd.stage) gd.stage = SAMIL_UI_STAGES[0] ? SAMIL_UI_STAGES[0][0] : 'sorgular';
     const nameEl = document.getElementById('deal-customer-name');
@@ -3893,6 +3953,28 @@ function showDealModal(deal, mode) {
         }
         saving = true;
         saveBtn.disabled = true;
+        if(mode === 'task') {
+            const box = document.getElementById('deal-tasks-list');
+            if(box) box.classList.add('saving');
+            try {
+                const d = await samilDealAction(payload);
+                modal.remove();
+                appendDealTask(deal, {
+                    id: d.task_id || ('local-' + Date.now()),
+                    text: payload.text,
+                    deadline: payload.deadline_ts ? formatTaskDeadline(new Date(payload.deadline_ts * 1000).toISOString()) : '',
+                    responsible: payload.executor || ''
+                });
+                toast('Tapşırıq yaradıldı');
+            } catch(e) {
+                toast(e.message, true);
+                saving = false;
+                saveBtn.disabled = false;
+            } finally {
+                if(box) box.classList.remove('saving');
+            }
+            return;
+        }
         showLoader();
         try {
             await samilDealAction(payload);
@@ -4823,7 +4905,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=183');
+    const reg = await navigator.serviceWorker.register('sw.js?v=184');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

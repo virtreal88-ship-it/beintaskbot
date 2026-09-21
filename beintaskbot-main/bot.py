@@ -2121,6 +2121,18 @@ def update_note(note_id: int, text: str, entity_type: str = "leads", entity_id: 
                 logger.warning("Update note %s %s: %s", resp.status_code, url, last_err)
     return False, last_err
 
+def _created_task_id(result) -> int:
+    if not isinstance(result, dict):
+        return 0
+    tasks = (result.get("_embedded") or {}).get("tasks") or []
+    if tasks and isinstance(tasks[0], dict):
+        try:
+            return int(tasks[0].get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 def _first_note_id(result) -> int:
     if not isinstance(result, dict):
         return 0
@@ -5801,7 +5813,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     )
                     send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
             invalidate_rufat_overview_cache()
-            return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
+            return web.json_response({
+                "success": bool(result),
+                "task_id": _created_task_id(result),
+                "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı.",
+            })
         elif action == "deal_edit_task":
             lead_id = int(data.get("lead_id") or 0)
             task_id = int(data.get("task_id") or 0)
@@ -6147,13 +6163,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         try:
                             if move_lead_to_icraci(_lead_id_to_move, assignee_name_raw):
                                 logger.info(f"Moved lead {_lead_id_to_move} to funnel of {assignee_name_raw}")
-                        except Exception as _me:
-                            logger.error(f"Failed to move lead to icraçı funnel: {_me}")
-                # Also add task text as a note on the entity
-                try:
-                    note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
-                    nr = _http.post(f"{KOMMO_BASE_URL}/api/v4/{result['entity_type']}/{result['entity_id']}/notes", json=note_payload, timeout=5); logger.info(f"Note add: {nr.status_code} entity={result['entity_type']}/{result['entity_id']}")
-                except Exception as _ne: logger.error(f"Note add failed: {_ne}")
+                except Exception as _me:
+                    logger.error(f"Failed to move lead to icraçı funnel: {_me}")
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
@@ -6171,7 +6182,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             )
                         except: pass
                         send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
-                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
+                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
             stage = data.get("stage", "")
