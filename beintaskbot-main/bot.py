@@ -7658,7 +7658,25 @@ def _send_whatsapp_cloud_text(phone: str, text: str) -> tuple[bool, str]:
     return False, "WhatsApp mesajı göndərilmədi."
 
 
-def _collect_deal_chat(lid: int, contact_ids: list[int]) -> tuple[list[dict], bool, int]:
+def _chat_item_key(item: dict) -> tuple:
+    return (
+        str(item.get("id") or ""),
+        str(item.get("text") or ""),
+        int(item.get("created_at") or 0),
+        str(item.get("file_uuid") or ""),
+    )
+
+
+def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, before: int = 0) -> tuple[list[dict], bool, int, bool]:
+    """Load a short WhatsApp-style page from the primary talk only."""
+    try:
+        limit = max(1, min(int(limit or 20), 50))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        before = int(before or 0)
+    except (TypeError, ValueError):
+        before = 0
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
     chat_blocked = False
@@ -7666,93 +7684,49 @@ def _collect_deal_chat(lid: int, contact_ids: list[int]) -> tuple[list[dict], bo
     def _add_chat(item: dict | None) -> None:
         if not item:
             return
-        key = (str(item.get("id") or ""), str(item.get("text") or ""), int(item.get("created_at") or 0), str(item.get("file_uuid") or ""))
+        key = _chat_item_key(item)
         if key in seen_chat:
             return
         seen_chat.add(key)
         chat.append(item)
 
     talks = _fetch_talks(lid, contact_ids)
-    reply_talk_id = (_ranked_reply_talk_ids(talks) or [0])[0]
+    ranked = _ranked_reply_talk_ids(talks)
+    reply_talk_id = ranked[0] if ranked else 0
+    origin = ""
+    chat_id = ""
     for talk in talks:
-        origin = str(talk.get("origin") or "")
-        talk_id = _talk_id_of(talk)
-        if talk_id:
-            messages, blocked = _fetch_talk_messages(talk_id)
-            chat_blocked = chat_blocked or blocked
-            for message in messages:
-                _add_chat(_format_chat_message(message, origin))
-        chat_id = str(talk.get("chat_id") or "").strip()
-        if chat_id:
-            for message in _fetch_chat_history_by_chat_id(chat_id):
-                _add_chat(_format_chat_message(message, origin))
-    for contact_id in contact_ids:
-        try:
-            chats_resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/contacts/chats",
-                headers=HEADERS,
-                params={"contact_id": int(contact_id)},
-                timeout=8,
-            )
-        except Exception:
-            chats_resp = None
-        if chats_resp is not None and chats_resp.status_code == 200:
-            for row in (chats_resp.json().get("_embedded") or {}).get("chats", []) or []:
-                chat_id = str(row.get("chat_id") or "").strip()
-                if chat_id:
-                    for message in _fetch_chat_history_by_chat_id(chat_id):
-                        _add_chat(_format_chat_message(message, "contact"))
-    event_items, events_without_text = _fetch_chat_events(lid, contact_ids)
-    chat_blocked = chat_blocked or events_without_text
-    for event_item in event_items:
-        _add_chat(event_item)
-    note_rows = _fetch_entity_notes("leads", lid)
-    for contact_id in contact_ids:
-        note_rows.extend(_fetch_entity_notes("contacts", contact_id))
-    for note in note_rows:
-        if not note.get("is_chat"):
-            continue
-        _add_chat({
-            "id": note.get("id"),
-            "direction": "incoming" if str(note.get("type") or "").endswith("_in") else "outgoing",
-            "incoming": str(note.get("type") or "").endswith("_in") or note.get("type") in {"attachment", "file"},
-            "author": "",
-            "text": note.get("text") or "",
-            "message_type": note.get("message_type") or "text",
-            "created_at": note.get("created_at") or 0,
-            "created": note.get("created") or "",
-            "origin": note.get("type") or "",
-            "media_url": note.get("media_url") or "",
-            "file_uuid": note.get("file_uuid") or "",
-            "file_name": note.get("file_name") or "",
-        })
-    for entity_type, entity_id in [("leads", lid)] + [("contacts", cid) for cid in contact_ids]:
-        for file_item in _fetch_entity_files_as_chat(entity_type, entity_id):
-            _add_chat(file_item)
-    if str(lid) in _voice_urls:
-        _add_chat({
-            "id": f"voice-{lid}",
-            "direction": "outgoing",
-            "incoming": False,
-            "author": "",
-            "text": "Səs mesajı",
-            "message_type": "audio",
-            "created_at": 0,
-            "created": "",
-            "origin": "app",
-            "media_url": f"/api/voice/{lid}",
-            "file_uuid": "",
-            "file_name": "voice.ogg",
-        })
+        if _talk_id_of(talk) == reply_talk_id:
+            origin = str(talk.get("origin") or "")
+            chat_id = str(talk.get("chat_id") or "").strip()
+            break
+    pages = 3 if before else 1
+    if reply_talk_id:
+        messages, blocked = _fetch_talk_messages(reply_talk_id, pages=pages, page_limit=50)
+        chat_blocked = chat_blocked or blocked
+        for message in messages:
+            _add_chat(_format_chat_message(message, origin))
+    if len(chat) < limit and chat_id:
+        for message in _fetch_chat_history_by_chat_id(chat_id):
+            _add_chat(_format_chat_message(message, origin))
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
-    if len(chat) > 120:
-        chat = chat[-120:]
-    return chat, bool(chat_blocked and not chat), int(reply_talk_id or 0)
+    if before:
+        older = [item for item in chat if int(item.get("created_at") or 0) < before]
+        has_more = len(older) > limit
+        page = older[-limit:] if older else []
+    else:
+        has_more = len(chat) > limit
+        page = chat[-limit:] if chat else []
+    return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more
 
 
-def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool]:
+def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool]:
     rows: list[dict] = []
     blocked = False
+    try:
+        page_limit = max(1, min(int(page_limit or 50), 250))
+    except (TypeError, ValueError):
+        page_limit = 50
     urls = (
         f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
         f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages",
@@ -7761,7 +7735,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
     working_url = None
     for url in urls:
         try:
-            resp = _http.get(url, headers=HEADERS, params={"limit": 250, "page": 1}, timeout=12)
+            resp = _http.get(url, headers=HEADERS, params={"limit": page_limit, "page": 1, "order[created_at]": "desc"}, timeout=10)
         except Exception as exc:
             logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
             continue
@@ -7782,7 +7756,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
     if working_url and pages > 1:
         for page in range(2, pages + 1):
             try:
-                resp = _http.get(working_url, headers=HEADERS, params={"limit": 250, "page": page}, timeout=12)
+                resp = _http.get(working_url, headers=HEADERS, params={"limit": page_limit, "page": page, "order[created_at]": "desc"}, timeout=10)
             except Exception:
                 break
             if resp.status_code != 200:
@@ -7792,7 +7766,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
             if not messages:
                 break
             rows.extend(messages)
-            if len(messages) < 250:
+            if len(messages) < page_limit:
                 break
     return rows, blocked
 
@@ -8033,7 +8007,6 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         unique_notes.append(note)
     notes = [item for item in unique_notes if not item.get("is_chat")]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
-    chat, chat_blocked, reply_talk_id = _collect_deal_chat(lid, contact_ids)
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
     return {
@@ -8058,10 +8031,10 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "deadline": first_task.get("deadline") or "",
         "deadline_ts": int(first_task.get("complete_till") or 0),
         "tasks": tasks,
-        "chat": chat,
-        "chat_blocked": bool(chat_blocked and not chat),
-        "reply_talk_id": int(reply_talk_id or 0),
-        "can_reply": bool(reply_talk_id) or bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
+        "chat": [],
+        "chat_blocked": False,
+        "reply_talk_id": 0,
+        "can_reply": bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
@@ -8119,6 +8092,18 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
     return lead, None
 
 
+def _lead_contact_ids(lead: dict) -> list[int]:
+    ids: list[int] = []
+    for linked in (lead.get("_embedded") or {}).get("contacts") or []:
+        if not isinstance(linked, dict):
+            continue
+        try:
+            ids.append(int(linked.get("id")))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
     contact_ids: list[int] = []
     phones: list[str] = []
@@ -8150,13 +8135,24 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    contact_ids, _phones = _contact_ids_and_phones(lead)
-    chat, chat_blocked, reply_talk_id = _collect_deal_chat(int(lead.get("id") or lead_id), contact_ids)
+    contact_ids = _lead_contact_ids(lead)
+    try:
+        limit = int(request.rel_url.query.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        before = int(request.rel_url.query.get("before") or 0)
+    except (TypeError, ValueError):
+        before = 0
+    chat, chat_blocked, reply_talk_id, has_more = _collect_deal_chat(
+        int(lead.get("id") or lead_id), contact_ids, limit=limit, before=before
+    )
     return web.json_response({
         "success": True,
         "chat": chat,
         "chat_blocked": chat_blocked,
         "reply_talk_id": reply_talk_id,
+        "has_more": has_more,
         "can_reply": bool(reply_talk_id) or bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
     })
 
@@ -8205,12 +8201,15 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 last_error = cloud_error
     if not sent:
         return web.json_response({"success": False, "error": last_error}, status=400)
-    chat, chat_blocked, reply_talk_id = _collect_deal_chat(int(lead.get("id") or lead_id), contact_ids)
+    chat, chat_blocked, reply_talk_id, _has_more = _collect_deal_chat(
+        int(lead.get("id") or lead_id), contact_ids, limit=20
+    )
     return web.json_response({
         "success": True,
         "chat": chat,
         "chat_blocked": chat_blocked,
         "reply_talk_id": reply_talk_id,
+        "has_more": _has_more,
     })
 
 
