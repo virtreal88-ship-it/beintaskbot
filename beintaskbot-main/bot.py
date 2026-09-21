@@ -1953,6 +1953,31 @@ def delete_note(note_id: int, entity_type: str = "leads") -> bool:
         logger.error("Delete note error: %s", exc)
         return False
 
+def update_note(note_id: int, text: str, entity_type: str = "leads") -> bool:
+    kind = "contacts" if str(entity_type or "").startswith("contact") else "leads"
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return False
+    payload = [{"id": nid, "note_type": "common", "params": {"text": str(text or "")}}]
+    try:
+        resp = _http.patch(f"{KOMMO_BASE_URL}/api/v4/{kind}/notes", headers=HEADERS, json=payload, timeout=10)
+        return resp.status_code in {200, 202}
+    except Exception as exc:
+        logger.error("Update note error: %s", exc)
+        return False
+
+def _first_note_id(result) -> int:
+    if not isinstance(result, dict):
+        return 0
+    notes = (result.get("_embedded") or {}).get("notes") or []
+    if notes and isinstance(notes[0], dict):
+        try:
+            return int(notes[0].get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
     old_pipeline_id = None
@@ -5488,7 +5513,22 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             result = add_note(lead_id, text, "leads")
             invalidate_rufat_overview_cache()
-            return web.json_response({"success": bool(result), "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı."})
+            return web.json_response({
+                "success": bool(result),
+                "note_id": _first_note_id(result),
+                "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı.",
+            })
+        elif action == "deal_edit_note":
+            lead_id = int(data.get("lead_id") or 0)
+            note_id = int(data.get("note_id") or 0)
+            text = str(data.get("text") or "").strip()
+            entity_type = str(data.get("entity_type") or "leads")
+            if not lead_id or not note_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            ok = update_note(note_id, text, entity_type)
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi."})
         elif action == "deal_delete_note":
             lead_id = int(data.get("lead_id") or 0)
             note_id = int(data.get("note_id") or 0)
@@ -5543,6 +5583,57 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
             invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
+        elif action == "deal_edit_task":
+            lead_id = int(data.get("lead_id") or 0)
+            task_id = int(data.get("task_id") or 0)
+            text = str(data.get("text") or "").strip()
+            if not lead_id or not task_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            payload = {"text": text}
+            try:
+                deadline_ts = int(data.get("deadline_ts") or 0)
+            except (TypeError, ValueError):
+                deadline_ts = 0
+            if deadline_ts:
+                payload["complete_till"] = deadline_ts
+            ok = bool(update_task_kommo(task_id, payload))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Tapşırıq yeniləndi." if ok else "Tapşırıq yenilənmədi."})
+        elif action == "deal_delete_task":
+            lead_id = int(data.get("lead_id") or 0)
+            task_id = int(data.get("task_id") or 0)
+            if not lead_id or not task_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            ok = bool(update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Silindi"}}))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Tapşırıq silindi." if ok else "Tapşırıq silinmədi."})
+        elif action == "deal_edit_contact":
+            lead_id = int(data.get("lead_id") or 0)
+            name = str(data.get("name") or data.get("contact_name") or "").strip()
+            phone = str(data.get("phone") or "").strip()
+            if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            lead = get_lead_details(lead_id) or {}
+            contacts = (lead.get("_embedded") or {}).get("contacts") or []
+            try:
+                contact_id = int(data.get("contact_id") or (contacts[0].get("id") if contacts else 0) or 0)
+            except (TypeError, ValueError, AttributeError):
+                contact_id = 0
+            if not contact_id:
+                return web.json_response({"success": False, "error": "Kontakt tapılmadı."}, status=400)
+            payload: dict = {}
+            if name:
+                payload["name"] = name
+            if phone:
+                payload["custom_fields_values"] = [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}]
+            if not payload:
+                return web.json_response({"success": False, "error": "Ad və ya telefon yazın."}, status=400)
+            ok = bool(update_contact_kommo(contact_id, payload))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Kontakt yeniləndi." if ok else "Kontakt yenilənmədi."})
         elif action == "info":
             if is_funnel_chat(chat_id) and not is_admin(chat_id):
                 contacts = search_contact_by_phone(phone)
@@ -8242,7 +8333,10 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
             continue
         seen_notes.add(key)
         unique_notes.append(note)
-    notes = [item for item in unique_notes if not item.get("is_chat")]
+    notes = [
+        item for item in unique_notes
+        if item.get("type") == "common" or not item.get("is_chat")
+    ]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
@@ -8512,6 +8606,71 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "channel": channel,
         "channels": channels,
     })
+
+
+async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    contact_name = ""
+    if contacts and isinstance(contacts[0], dict):
+        contact_name = str(contacts[0].get("name") or "")
+    history_rows = data.get("messages") if isinstance(data.get("messages"), list) else []
+    lines = []
+    for item in history_rows[-15:]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        who = "Müştəri" if item.get("incoming") else "Menecer"
+        lines.append(f"{who}: {text[:400]}")
+    history = "\n".join(lines) or "Yazışma yoxdur."
+    draft = str(data.get("draft") or "").strip()
+    system = (
+        "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp/Instagram cavabı yaz. "
+        "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
+    )
+    user = (
+        f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
+        f"Sövdələşmə: {lead.get('name') or '—'}\n"
+        f"Son yazışma:\n{history}\n"
+    )
+    if draft:
+        user += f"\nMenecerin qeydi: {draft}\n"
+    user += "\nNövbəti cavabı yaz."
+    def _ask() -> str:
+        resp = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.4,
+            max_tokens=400,
+        )
+        return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
+    try:
+        suggestion = await asyncio.to_thread(_ask)
+    except Exception as exc:
+        logger.error("Deal AI suggest failed: %s", exc)
+        return web.json_response({"success": False, "error": "AI cavab alınmadı."}, status=502)
+    if not suggestion:
+        return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
+    return web.json_response({"success": True, "text": suggestion})
 
 
 async def handle_api_deal_public(request: web.Request) -> web.Response:
@@ -9486,6 +9645,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/deal/chat", handle_api_deal_chat)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())

@@ -239,7 +239,10 @@
         .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:700; }
         .deal-note-row { padding:8px 0; border-bottom:1px solid #f1f5f9; }
-        .deal-note-del { border:0; background:transparent; color:#b91c1c; font-size:11px; font-weight:700; padding:0; }
+        .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; font-size:11px; font-weight:700; padding:0 4px; }
+        .deal-note-del, .deal-task-del { color:#b91c1c; }
+        .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
+        .deal-ai-btn { border:0; border-radius:10px; background:#fff; color:#1e293b; font-size:11px; font-weight:800; padding:8px 10px; white-space:nowrap; border:1px solid #e2e8f0; }
         .audio-wait { position:relative; margin-top:6px; }
         .audio-wait audio { width:100%; height:28px; }
         .audio-wait .audio-spin { position:absolute; left:8px; top:50%; width:12px; height:12px; margin-top:-6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; pointer-events:none; }
@@ -2630,14 +2633,20 @@ function chatChannelKey(item) {
     const raw = String((item && (item.channel || item.origin)) || 'whatsapp').toLowerCase();
     return CHAT_CHANNEL_META[raw] ? raw : 'whatsapp';
 }
+function dealChatActor(item) {
+    const deal = _dealViewState && _dealViewState.deal;
+    if(item && item.incoming) return (deal && (deal.contact_name || deal.name)) || 'Müştəri';
+    return (item && item.author) || FUNNEL_OWNER_NAME[CURRENT_USER_ID] || 'Menecer';
+}
 function dealChatItemHtml(item, token, readonly) {
     const cls = item.incoming ? 'in' : 'out';
     const channel = chatChannelKey(item);
     const meta = chatChannelMeta(channel);
+    const who = dealChatActor(item);
     const time = escapeHtml((item.created || '').split(' ').slice(-1)[0] || item.created || '');
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}<span>${escapeHtml(meta.label)}</span></div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}<span>${escapeHtml(meta.label)}</span><span>· ${escapeHtml(who)}</span></div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
 }
 function dealChatRowsHtml(chat, token, blocked, loading) {
     const rows = Array.isArray(chat) ? chat : [];
@@ -2810,16 +2819,71 @@ async function pollDealChat() {
     } catch(_err) {}
 }
 function dealNoteRowHtml(item, readonly) {
-    const del = (!readonly && item && item.id)
-        ? `<button type="button" class="deal-note-del" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">Sil</button>`
+    const canEdit = !readonly && item && item.id;
+    const actions = canEdit
+        ? `<span><button type="button" class="deal-note-edit" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">Dəyiş</button><button type="button" class="deal-note-del" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">Sil</button></span>`
         : '';
-    return `<div class="deal-note-row"><div class="text-[11px] text-gray-400" style="display:flex;justify-content:space-between;gap:8px"><span>${escapeHtml(item.created || '')}</span>${del}</div><div>${linkifyText(item.text || '')}</div></div>`;
+    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}"><div class="text-[11px] text-gray-400" style="display:flex;justify-content:space-between;gap:8px"><span>${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
+}
+function dealTaskRowHtml(item, readonly) {
+    const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
+    const canEdit = !readonly && item && item.id;
+    const actions = canEdit
+        ? `<span><button type="button" class="deal-task-edit" data-task-id="${escapeHtml(String(item.id))}">Dəyiş</button><button type="button" class="deal-task-del" data-task-id="${escapeHtml(String(item.id))}">Sil</button></span>`
+        : '';
+    return `<div class="deal-note-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div>${linkifyText(text)}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>${actions}</div></div>`;
+}
+function dealNotesListHtml(deal, readonly) {
+    const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && (item.text || item.id)) : [];
+    if(notes.length) return notes.map(item => dealNoteRowHtml(item, readonly)).join('');
+    if(deal.last_note) return dealNoteRowHtml({text: deal.last_note}, true);
+    return '<div class="text-gray-400">Qeyd yoxdur</div>';
+}
+function dealTasksListHtml(deal, readonly) {
+    const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+    if(tasks.length) return tasks.map(item => dealTaskRowHtml(item, readonly)).join('');
+    return '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
+}
+function dealStageOptionsHtml(deal) {
+    const stages = Array.isArray(SAMIL_ALL_STAGES) && SAMIL_ALL_STAGES.length ? SAMIL_ALL_STAGES : SAMIL_UI_STAGES;
+    return stages.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key===deal.stage_key?'selected':''}>${escapeHtml(label)}</option>`).join('');
+}
+function applyDealSide(deal, readonly) {
+    const notes = document.getElementById('deal-notes-list');
+    const tasks = document.getElementById('deal-tasks-list');
+    if(notes) notes.innerHTML = dealNotesListHtml(deal, readonly);
+    if(tasks) tasks.innerHTML = dealTasksListHtml(deal, readonly);
+    const nameEl = document.getElementById('deal-contact-name');
+    const phoneEl = document.getElementById('deal-contact-phone');
+    const stageEl = document.getElementById('deal-stage-select');
+    if(nameEl) nameEl.value = deal.contact_name || '';
+    if(phoneEl) phoneEl.value = (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '';
+    if(stageEl) {
+        stageEl.innerHTML = dealStageOptionsHtml(deal);
+        stageEl.value = deal.stage_key || stageEl.value;
+    }
+    const sub = document.querySelector('#deal-view-modal .deal-shell-head .sub');
+    if(sub) sub.textContent = `${deal.stage_name || ''} · ${((deal.phones && deal.phones[0]) || deal.phone || '—')}`;
+    const headName = document.querySelector('#deal-view-modal .deal-shell-head .name');
+    if(headName) headName.textContent = deal.contact_name || deal.name || 'Müştəri';
+    bindDealSideActions(deal);
+}
+async function refreshDealSnapshot(deal) {
+    if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
+    const snap = await loadDealSnapshot(deal);
+    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) {
+        _dealViewState.deal = snap;
+        applyDealSide(snap, !!_dealViewState.readonly);
+    }
+    return snap;
 }
 function bindDealSideActions(deal) {
     const noteOpen = document.getElementById('deal-note-open');
     const noteForm = document.getElementById('deal-note-form');
     const noteBtn = document.getElementById('deal-note-save');
     const taskPlus = document.getElementById('deal-task-plus');
+    const contactBtn = document.getElementById('deal-contact-save');
+    const stageEl = document.getElementById('deal-stage-select');
     if(noteOpen && noteForm) {
         noteOpen.onclick = () => {
             noteForm.hidden = !noteForm.hidden;
@@ -2833,13 +2897,15 @@ function bindDealSideActions(deal) {
         if(!text) { toast('Qeyd yazın', true); return; }
         noteBtn.disabled = true;
         try {
-            await samilDealAction({action:'deal_add_note', lead_id: deal.id, text});
+            const d = await samilDealAction({action:'deal_add_note', lead_id: deal.id, text});
             if(area) area.value = '';
             if(noteForm) noteForm.hidden = true;
             const list = document.getElementById('deal-notes-list');
             if(list) {
                 const now = new Date().toLocaleString('az-AZ');
-                list.insertAdjacentHTML('afterbegin', dealNoteRowHtml({text, created: now}, true));
+                const empty = list.querySelector('.text-gray-400');
+                if(empty && !list.querySelector('.deal-note-row')) list.innerHTML = '';
+                list.insertAdjacentHTML('afterbegin', dealNoteRowHtml({id: d && d.note_id, text, created: now, entity_type:'leads'}, false));
             }
             toast('Qeyd əlavə edildi');
         } catch(err) { toast(err.message || 'Qeyd göndərilmədi', true); }
@@ -2857,6 +2923,76 @@ function bindDealSideActions(deal) {
             } catch(err) { toast(err.message || 'Qeyd silinmədi', true); btn.disabled = false; }
         };
     });
+    document.querySelectorAll('.deal-note-edit').forEach(btn => {
+        btn.onclick = async () => {
+            const row = btn.closest('.deal-note-row');
+            const body = row && row.querySelector('.deal-note-body');
+            const current = (body && body.textContent || '').trim();
+            const next = prompt('Qeydi dəyişin', current);
+            if(next == null) return;
+            const text = String(next).trim();
+            if(!text) { toast('Qeyd yazın', true); return; }
+            try {
+                await samilDealAction({action:'deal_edit_note', lead_id: deal.id, note_id: btn.getAttribute('data-note-id'), entity_type: btn.getAttribute('data-entity-type') || 'leads', text});
+                if(body) body.innerHTML = linkifyText(text);
+                toast('Qeyd yeniləndi');
+            } catch(err) { toast(err.message || 'Qeyd yenilənmədi', true); }
+        };
+    });
+    document.querySelectorAll('.deal-task-del').forEach(btn => {
+        btn.onclick = async () => {
+            btn.disabled = true;
+            try {
+                await samilDealAction({action:'deal_delete_task', lead_id: deal.id, task_id: btn.getAttribute('data-task-id')});
+                btn.closest('.deal-note-row')?.remove();
+                toast('Tapşırıq silindi');
+            } catch(err) { toast(err.message || 'Tapşırıq silinmədi', true); btn.disabled = false; }
+        };
+    });
+    document.querySelectorAll('.deal-task-edit').forEach(btn => {
+        btn.onclick = async () => {
+            const row = btn.closest('.deal-note-row');
+            const current = (row && row.textContent || '').replace('Dəyiş', '').replace('Sil', '').trim();
+            const next = prompt('Tapşırığı dəyişin', current);
+            if(next == null) return;
+            const text = String(next).trim();
+            if(!text) { toast('Tapşırıq yazın', true); return; }
+            try {
+                await samilDealAction({action:'deal_edit_task', lead_id: deal.id, task_id: btn.getAttribute('data-task-id'), text});
+                toast('Tapşırıq yeniləndi');
+                refreshDealSnapshot(deal).catch(() => {});
+            } catch(err) { toast(err.message || 'Tapşırıq yenilənmədi', true); }
+        };
+    });
+    if(contactBtn) contactBtn.onclick = async () => {
+        const name = String(document.getElementById('deal-contact-name')?.value || '').trim();
+        const phone = String(document.getElementById('deal-contact-phone')?.value || '').trim();
+        contactBtn.disabled = true;
+        try {
+            const contactId = (deal.contacts && deal.contacts[0] && deal.contacts[0].id) || '';
+            await samilDealAction({action:'deal_edit_contact', lead_id: deal.id, contact_id: contactId, name, phone});
+            deal.contact_name = name;
+            deal.phone = phone;
+            deal.phones = phone ? [phone] : (deal.phones || []);
+            applyDealSide(deal, false);
+            toast('Kontakt yeniləndi');
+        } catch(err) { toast(err.message || 'Kontakt yenilənmədi', true); }
+        finally { contactBtn.disabled = false; }
+    };
+    if(stageEl) stageEl.onchange = async () => {
+        const stageKey = stageEl.value;
+        if(!stageKey || stageKey === deal.stage_key) return;
+        stageEl.disabled = true;
+        try {
+            await samilDealAction({action:'deal_edit', lead_id: deal.id, stage_key: stageKey});
+            const label = (SAMIL_ALL_STAGES.find(([k]) => k === stageKey) || [])[1] || stageKey;
+            deal.stage_key = stageKey;
+            deal.stage_name = label;
+            applyDealSide(deal, false);
+            toast('Mərhələ dəyişdi');
+        } catch(err) { toast(err.message || 'Mərhələ dəyişmədi', true); stageEl.value = deal.stage_key || ''; }
+        finally { stageEl.disabled = false; }
+    };
 }
 function startDealChatPolling() {
     stopDealChatPolling();
@@ -2992,6 +3128,33 @@ let _dealChatSeq = 0;
 function stopDealChatPolling() {
     if(_dealChatPollTimer) { clearInterval(_dealChatPollTimer); _dealChatPollTimer = null; }
 }
+async function requestDealAiReply() {
+    const btn = document.getElementById('deal-chat-ai');
+    const input = document.getElementById('deal-chat-input');
+    if(!_dealViewState || !CURRENT_USER_ID) return;
+    if(btn) btn.disabled = true;
+    try {
+        const r = await fetch(API_BASE + '/api/deal/chat/suggest', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({
+                lead_id: _dealViewState.id,
+                channel: _dealViewState.channel || '',
+                draft: String(input && input.value || '').trim(),
+                messages: (_dealViewState.messages || []).slice(-15).map(item => ({
+                    incoming: !!item.incoming,
+                    text: item.text || '',
+                    author: item.author || ''
+                }))
+            })
+        });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok || !d.success) throw new Error(d.error || 'AI cavab alınmadı');
+        if(input) { input.value = d.text || ''; input.focus(); }
+        toast('AI cavab hazırdır');
+    } catch(err) { toast(err.message || 'AI cavab alınmadı', true); }
+    finally { if(btn) btn.disabled = false; }
+}
 async function sendDealChatMessage(file) {
     const input = document.getElementById('deal-chat-input');
     const btn = document.getElementById('deal-chat-send');
@@ -3043,14 +3206,8 @@ async function sendDealChatMessage(file) {
 function dealWorkspaceHtml(deal, token, readonly) {
     const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
     const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
-    const notes = Array.isArray(deal.notes) ? deal.notes : [];
-    const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
-    const notesHtml = notes.length
-        ? notes.map(item => dealNoteRowHtml(item, readonly)).join('')
-        : '<div class="text-gray-400">Qeyd yoxdur</div>';
-    const tasksHtml = tasks.length
-        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('')
-        : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
+    const notesHtml = dealNotesListHtml(deal, readonly);
+    const tasksHtml = dealTasksListHtml(deal, readonly);
     const composer = readonly ? '' : `<div class="wa-composer-wrap">
             <div id="deal-chat-quote" class="chat-quote-bar" hidden>
                 <div style="flex:1;min-width:0">
@@ -3063,6 +3220,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <button type="button" class="wa-icon-btn" id="deal-chat-attach" title="Fayl">📎</button>
             <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
             <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
+            <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
             <button type="button" class="wa-send" id="deal-chat-send">➤</button>
             </div>
         </div>`;
@@ -3086,6 +3244,12 @@ function dealWorkspaceHtml(deal, token, readonly) {
                     ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
                     ${(canShowKommoLink() && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#008069;font-weight:700">Kommo-da aç</a></div>` : ''}
                 </div>
+                ${readonly ? '' : `<div class="deal-side-form">
+                    <input id="deal-contact-name" value="${escapeHtml(deal.contact_name || '')}" placeholder="Ad Soyad">
+                    <input id="deal-contact-phone" value="${escapeHtml(phoneList[0] || '')}" placeholder="Telefon">
+                    <select id="deal-stage-select">${dealStageOptionsHtml(deal)}</select>
+                    <button type="button" id="deal-contact-save">Ad / telefon yadda saxla</button>
+                </div>`}
                 <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
                 <div id="deal-notes-list">${notesHtml}</div>
                 ${readonly ? '' : `<div id="deal-note-form" class="deal-side-form" hidden>
@@ -3136,6 +3300,8 @@ function paintDealViewModal(deal, readonly) {
     const attachBtn = document.getElementById('deal-chat-attach');
     const fileInput = document.getElementById('deal-chat-file');
     if(sendBtn) sendBtn.onclick = () => sendDealChatMessage();
+    const aiBtn = document.getElementById('deal-chat-ai');
+    if(aiBtn) aiBtn.onclick = requestDealAiReply;
     if(input) input.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
     });
@@ -3183,6 +3349,7 @@ async function openDealViewModal(deal, opts) {
     if(!deal) return;
     const readonly = !!(opts && opts.readonly);
     paintDealViewModal(deal, readonly);
+    if(!readonly) refreshDealSnapshot(deal).catch(() => {});
 }
 async function renderPublicDealPage() {
     const token = getShareTokenFromLocation();
