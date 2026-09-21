@@ -20,6 +20,10 @@
         .custom-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
         @keyframes spin { to { transform:rotate(360deg); } }
         .sync-spinner { width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite; }
+        .sync-meter { position:relative; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
+        .sync-meter .sync-spinner { position:absolute; inset:0; width:28px; height:28px; margin:0; }
+        .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:800; color:#64748b; line-height:1; }
+        #sync-indicator .sync-meter .sync-pct { color:#cbd5e1; }
         #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:700; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
         #toast.error { background:#b91c1c; }
         .screen { display:none; } .screen.active { display:block; }
@@ -114,10 +118,9 @@
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
             body:not(.sidebar-open) #side-tab-pending { position:relative; }
             #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; }
-            #sidebar-sync { display:none; align-items:center; justify-content:center; gap:8px; font-size:12px; color:#94a3b8; }
-            #sidebar-sync .sync-spinner { width:22px; height:22px; border-width:3px; }
+            #sidebar-sync { display:none; align-items:center; justify-content:center; }
+            #sidebar-sync .sync-meter { width:28px; height:28px; }
             body:not(.sidebar-open) #sidebar-user { padding:8px 0 0; border:0; align-items:center; }
-            body:not(.sidebar-open) #sidebar-sync span:not(.sync-spinner) { display:none; }
             #content-area {
                 margin:0 0 0 var(--crm-side-w); width:auto; max-width:none; height:100vh; max-height:100vh;
                 padding:16px 24px 20px; box-sizing:border-box;
@@ -230,17 +233,22 @@
             padding:16px 16px 32px; box-sizing:border-box;
         }
         .deal-shell { width:min(1100px,96vw); height:min(92vh,900px); background:#fff; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 50px #0004; }
-        .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#008069; color:#fff; }
+        .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#1e293b; color:#fff; }
         .deal-shell-head .meta { min-width:0; flex:1; }
         .deal-shell-head .name, .deal-head-name { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .deal-shell-head .sub { font-size:11px; opacity:.9; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
         .deal-head-name, .deal-head-phone { width:100%; background:transparent; border:0; color:#fff; padding:0; outline:none; font-family:inherit; }
-        .deal-head-phone { font-size:11px; font-weight:600; opacity:.95; width:auto; min-width:110px; flex:1; }
+        .deal-head-phone { font-size:11px; font-weight:600; opacity:.95; width:auto; min-width:90px; flex:1; }
+        .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; background:#ffffff22; flex:none; }
+        .deal-head-wa svg { width:16px; height:16px; display:block; }
+        .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
         .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; min-height:0; }
         .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:700; }
-        .deal-note-row { padding:8px 0; border-bottom:1px solid #f1f5f9; }
+        .deal-note-row { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:0 0 8px; position:relative; }
+        .deal-task-row { padding:10px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; margin:0 0 8px; position:relative; }
+        .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:10px; top:10px; width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; font-size:11px; font-weight:700; padding:0 4px; }
         .deal-note-del, .deal-task-del { color:#b91c1c; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
@@ -248,9 +256,10 @@
         .deal-stage-row select { flex:1; }
         .deal-stage-spin { width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; flex:none; }
         .deal-note-body[contenteditable="true"] { outline:1px solid #93c5fd; border-radius:6px; padding:4px 6px; background:#f8fafc; }
-        .deal-ai-btn { border:0; border-radius:8px; background:#f1f5f9; color:#1e293b; font-size:10px; font-weight:800; padding:0; width:28px; height:28px; position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; }
+        .deal-ai-btn { border:0; border-radius:8px; background:#f1f5f9; color:#1e293b; font-size:10px; font-weight:800; padding:0; width:28px; height:28px; position:absolute; right:40px; top:50%; transform:translateY(-50%); z-index:2; }
         .deal-ai-btn.loading { color:transparent; pointer-events:none; }
         .deal-ai-btn.loading::after { content:''; position:absolute; inset:6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#1e293b; color:#fff; font-size:13px; font-weight:700; padding:0; }
         .audio-wait { position:relative; margin-top:6px; }
         .audio-wait audio { width:100%; height:28px; }
         .audio-wait .audio-spin { position:absolute; left:8px; top:50%; width:12px; height:12px; margin-top:-6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; pointer-events:none; }
@@ -281,7 +290,10 @@
         .chat-quote-bar button { border:0; background:transparent; font-size:18px; line-height:1; color:#64748b; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 42px 10px 12px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
+        .deal-chat-row.comment { background:#f8fafc; margin:8px auto; max-width:92%; border:1px dashed #cbd5e1; box-shadow:none; }
+        .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
+        .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 12px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         @media (max-width:800px) {
@@ -384,7 +396,7 @@
         </button>
     </div>
     <div id="sidebar-user">
-        <div id="sidebar-sync"><span class="sync-spinner"></span><span class="sync-pct">0%</span></div>
+        <div id="sidebar-sync"><span class="sync-meter"><span class="sync-spinner"></span><span class="sync-pct">0%</span></span></div>
     </div>
 </nav>
 
@@ -396,8 +408,8 @@
     </div>
     <div class="text-right flex flex-col items-end">
         <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
-        <div id="sync-indicator" style="display:none;" class="flex items-center gap-1.5 text-[9px] text-gray-400 bg-gray-800/50 px-2 py-0.5 rounded-full border border-gray-700/30 mt-1">
-            <span class="sync-spinner"></span><span class="sync-pct">0%</span>
+        <div id="sync-indicator" style="display:none;" class="flex items-center justify-center mt-1">
+            <span class="sync-meter"><span class="sync-spinner"></span><span class="sync-pct">0%</span></span>
         </div>
     </div>
 </div>
@@ -2642,31 +2654,76 @@ function chatChannelKey(item) {
     const raw = String((item && (item.channel || item.origin)) || 'whatsapp').toLowerCase();
     return CHAT_CHANNEL_META[raw] ? raw : 'whatsapp';
 }
+function dealClientName(deal) {
+    return String((deal && deal.contact_name) || '').trim();
+}
+function dealManagerName() {
+    return FUNNEL_OWNER_NAME || 'Menecer';
+}
+function waMeUrl(phone) {
+    let digits = String(phone || '').replace(/\D/g, '');
+    if(!digits) return '';
+    if(digits.startsWith('0')) digits = '994' + digits.slice(1);
+    else if(digits.length === 9) digits = '994' + digits;
+    else if(digits.length === 10 && digits.startsWith('9')) digits = '994' + digits.slice(1);
+    return 'https://wa.me/' + digits;
+}
 function dealChatActor(item) {
     const deal = _dealViewState && _dealViewState.deal;
-    if(item && item.incoming) return (deal && (deal.contact_name || deal.name)) || 'Müştəri';
-    return (item && item.author) || FUNNEL_OWNER_NAME[CURRENT_USER_ID] || 'Menecer';
+    if(item && item.is_comment) return 'Qeyd · ' + ((item.author) || dealManagerName());
+    if(item && item.incoming) return 'Müştəri · ' + (dealClientName(deal) || 'Müştəri');
+    return 'Menecer · ' + ((item && item.author) || dealManagerName());
 }
 function dealChatItemHtml(item, token, readonly) {
-    const cls = item.incoming ? 'in' : 'out';
-    const channel = chatChannelKey(item);
-    const meta = chatChannelMeta(channel);
+    const isComment = !!(item && item.is_comment);
+    const cls = isComment ? 'comment' : (item.incoming ? 'in' : 'out');
+    const channel = isComment ? 'comment' : chatChannelKey(item);
+    const meta = isComment ? null : chatChannelMeta(channel);
     const who = dealChatActor(item);
     const time = escapeHtml((item.created || '').split(' ').slice(-1)[0] || item.created || '');
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
-    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}<span>${escapeHtml(meta.label)}</span><span>· ${escapeHtml(who)}</span></div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
+    const replyBtn = (readonly || isComment) ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
+    const icon = meta ? meta.svg : '';
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${icon}<span>${escapeHtml(who)}</span></div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
+}
+function commentItemsFromDeal(deal) {
+    const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
+    return notes.filter(item => item && item.text && (item.type === 'common' || !item.is_chat)).map(item => ({
+        id: 'note-' + (item.id || item.created_at || ''),
+        is_comment: true,
+        incoming: false,
+        text: item.text,
+        created_at: Number(item.created_at || 0),
+        created: item.created || '',
+        author: item.author || '',
+        channel: 'comment'
+    })).filter(item => !isDealSystemNoise(item.text));
+}
+function dealTimelineMessages(chat, deal) {
+    const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text));
+    const have = new Set(rows.map(item => String(item.id || '')));
+    commentItemsFromDeal(deal).forEach(item => {
+        if(have.has(String(item.id))) return;
+        have.add(String(item.id));
+        rows.push(item);
+    });
+    rows.sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    return rows;
 }
 function dealChatRowsHtml(chat, token, blocked, loading) {
-    const rows = (Array.isArray(chat) ? chat : []).filter(item => !isDealSystemNoise(item && item.text));
-    if(loading && !rows.length) {
+    const deal = _dealViewState && _dealViewState.deal;
+    const rows = dealTimelineMessages(chat, deal);
+    const older = (_dealViewState && _dealViewState.has_more && !loading)
+        ? `<div class="wa-older">${_dealViewState.loadingOlder ? '<span class="sync-spinner"></span>' : '<button type="button" id="deal-chat-older">Əvvəlki mesajlar</button>'}</div>`
+        : '';
+    if(loading && !(Array.isArray(chat) && chat.length)) {
         return '<div class="wa-preloader"><div class="sync-spinner" style="width:28px;height:28px;border-width:3px"></div><div>Çat yüklənir...</div></div>';
     }
-    if(rows.length) return rows.map(item => dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly)).join('');
+    if(rows.length) return older + rows.map(item => dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly)).join('');
     if(blocked) {
         return '<div style="font-size:12px;color:#b45309;line-height:1.45;padding:12px">Kommo çatın mətnini API-yə vermir. External chat history hüququ lazımdır.</div>';
     }
-    return '<div class="wa-preloader">Çat yoxdur</div>';
+    return older + '<div class="wa-preloader">Çat yoxdur</div>';
 }
 function isDealSystemNoise(text) {
     const folded = String(text || '').toLowerCase();
@@ -2717,6 +2774,8 @@ function paintDealChatThread(opts) {
     const prevTop = thread.scrollTop;
     thread.innerHTML = dealChatRowsHtml(_dealViewState.messages, _dealViewState.token, _dealViewState.blocked, _dealViewState.loading);
     bindDealChatMedia(thread);
+    const olderBtn = document.getElementById('deal-chat-older');
+    if(olderBtn) olderBtn.onclick = () => loadOlderDealChat();
     if(stickBottom) thread.scrollTop = thread.scrollHeight;
     else thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
 }
@@ -2804,6 +2863,7 @@ async function loadOlderDealChat() {
     if(!before) { _dealViewState.has_more = false; return; }
     const seq = _dealViewState.seq;
     _dealViewState.loadingOlder = true;
+    paintDealChatThread({stickBottom: false, force: true});
     try {
         const d = await fetchDealChatPage(before);
         if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
@@ -2811,11 +2871,14 @@ async function loadOlderDealChat() {
         _dealViewState.has_more = !!d.has_more && older.length > 0;
         if(older.length) {
             _dealViewState.messages = mergeDealChat(_dealViewState.messages, older, true);
-            paintDealChatThread({stickBottom: false});
         }
+        paintDealChatThread({stickBottom: false, force: true});
     } catch(_err) {
     } finally {
-        if(_dealViewState && _dealViewState.seq === seq) _dealViewState.loadingOlder = false;
+        if(_dealViewState && _dealViewState.seq === seq) {
+            _dealViewState.loadingOlder = false;
+            paintDealChatThread({stickBottom: false, force: true});
+        }
     }
 }
 async function pollDealChat() {
@@ -2837,7 +2900,7 @@ function dealNoteRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-note-edit" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">Dəyiş</button><button type="button" class="deal-note-del" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">Sil</button></span>`
         : '';
-    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-gray-400" style="display:flex;justify-content:space-between;gap:8px"><span>${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
+    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
 }
 function dealTaskRowHtml(item, readonly) {
     const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
@@ -2845,7 +2908,7 @@ function dealTaskRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-task-edit" data-task-id="${escapeHtml(String(item.id))}">Dəyiş</button><button type="button" class="deal-task-del" data-task-id="${escapeHtml(String(item.id))}">Sil</button></span>`
         : '';
-    return `<div class="deal-note-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div>${linkifyText(text)}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>${actions}</div></div>`;
+    return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><div class="text-[10px] font-extrabold text-blue-700 uppercase tracking-wide">Tapşırıq</div>${linkifyText(text)}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>${actions}</div></div>`;
 }
 function dealNotesListHtml(deal, readonly) {
     const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && (item.text || item.id)) : [];
@@ -2873,13 +2936,20 @@ function applyDealSide(deal, readonly) {
         stageEl.value = deal.stage_key || stageEl.value;
     }
     const headName = document.getElementById('deal-head-name') || document.querySelector('#deal-view-modal .deal-shell-head .name');
+    const clientName = dealClientName(deal);
     if(headName) {
-        if(headName.tagName === 'INPUT') headName.value = deal.contact_name || deal.name || '';
-        else headName.textContent = deal.contact_name || deal.name || 'Müştəri';
+        if(headName.tagName === 'INPUT') headName.value = clientName;
+        else headName.textContent = clientName || 'Müştəri';
     }
     const headPhone = document.getElementById('deal-head-phone');
     const phone = (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '';
     if(headPhone) headPhone.value = phone;
+    const wa = document.getElementById('deal-head-wa');
+    if(wa) {
+        const url = waMeUrl(phone);
+        wa.href = url || '#';
+        wa.hidden = !url;
+    }
     const headStage = document.getElementById('deal-head-stage');
     if(headStage) headStage.textContent = deal.stage_name || '';
     bindDealSideActions(deal);
@@ -2897,6 +2967,7 @@ async function refreshDealSnapshot(deal) {
         const merged = mergeDealSnapshot(_dealViewState.deal || deal, snap);
         _dealViewState.deal = merged;
         applyDealSide(merged, !!_dealViewState.readonly);
+        if(!_dealViewState.loading) paintDealChatThread({stickBottom: false});
         return merged;
     }
     return snap;
@@ -2935,6 +3006,7 @@ function bindDealSideActions(deal) {
                 deal.notes.unshift({id: d && d.note_id, text, created: now, entity_type:'leads', entity_id: deal.id});
             }
             bindDealSideActions(deal);
+            if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd əlavə edildi');
         } catch(err) { toast(err.message || 'Qeyd göndərilmədi', true); }
         finally { noteBtn.disabled = false; }
@@ -2943,12 +3015,14 @@ function bindDealSideActions(deal) {
         btn.onclick = async () => {
             const noteId = btn.getAttribute('data-note-id');
             const entityType = btn.getAttribute('data-entity-type') || 'leads';
+            const row = btn.closest('.deal-note-row');
             btn.disabled = true;
+            if(row) row.classList.add('saving');
             try {
                 await samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType});
-                btn.closest('.deal-note-row')?.remove();
+                row?.remove();
                 toast('Qeyd silindi');
-            } catch(err) { toast(err.message || 'Qeyd silinmədi', true); btn.disabled = false; }
+            } catch(err) { toast(err.message || 'Qeyd silinmədi', true); btn.disabled = false; if(row) row.classList.remove('saving'); }
         };
     });
     document.querySelectorAll('.deal-note-edit').forEach(btn => {
@@ -2956,12 +3030,14 @@ function bindDealSideActions(deal) {
     });
     document.querySelectorAll('.deal-task-del').forEach(btn => {
         btn.onclick = async () => {
+            const row = btn.closest('.deal-task-row');
             btn.disabled = true;
+            if(row) row.classList.add('saving');
             try {
                 await samilDealAction({action:'deal_delete_task', lead_id: deal.id, task_id: btn.getAttribute('data-task-id')});
-                btn.closest('.deal-note-row')?.remove();
+                row?.remove();
                 toast('Tapşırıq silindi');
-            } catch(err) { toast(err.message || 'Tapşırıq silinmədi', true); btn.disabled = false; }
+            } catch(err) { toast(err.message || 'Tapşırıq silinmədi', true); btn.disabled = false; if(row) row.classList.remove('saving'); }
         };
     });
     document.querySelectorAll('.deal-task-edit').forEach(btn => {
@@ -3005,7 +3081,7 @@ async function saveDealContactFromHeader(deal) {
     if(!deal || !_dealViewState || _dealViewState.readonly) return;
     const name = String(document.getElementById('deal-head-name')?.value || '').trim();
     const phone = String(document.getElementById('deal-head-phone')?.value || '').trim();
-    const prevName = String(deal.contact_name || deal.name || '').trim();
+    const prevName = dealClientName(deal);
     const prevPhone = String((deal.phones && deal.phones[0]) || deal.phone || '').trim();
     if(!name) { toast('Ad yazın', true); return; }
     if(name === prevName && phone === prevPhone) return;
@@ -3037,6 +3113,7 @@ function startDealNoteInlineEdit(deal, btn) {
         const text = String(body.textContent || '').trim();
         if(!text) { body.innerHTML = linkifyText(original); toast('Qeyd yazın', true); return; }
         if(text === original) { body.innerHTML = linkifyText(original); return; }
+        row.classList.add('saving');
         try {
             await samilDealAction({
                 action:'deal_edit_note',
@@ -3049,10 +3126,13 @@ function startDealNoteInlineEdit(deal, btn) {
             body.innerHTML = linkifyText(text);
             const note = (deal.notes || []).find(item => String(item.id) === String(btn.getAttribute('data-note-id')));
             if(note) note.text = text;
+            if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd yeniləndi');
         } catch(err) {
             body.innerHTML = linkifyText(original);
             toast(err.message || 'Qeyd yenilənmədi', true);
+        } finally {
+            row.classList.remove('saving');
         }
     };
     body.onblur = finish;
@@ -3082,7 +3162,7 @@ function switchDealChatChannel(channel) {
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
 }
 function setDealChatReply(item) {
-    if(!_dealViewState || _dealViewState.readonly || !item) return;
+    if(!_dealViewState || _dealViewState.readonly || !item || item.is_comment) return;
     _dealViewState.replyTo = {
         id: item.id,
         text: String(item.text || '').slice(0, 180),
@@ -3275,14 +3355,16 @@ function dealWorkspaceHtml(deal, token, readonly) {
     const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
     const notesHtml = dealNotesListHtml(deal, readonly);
     const tasksHtml = dealTasksListHtml(deal, readonly);
-    const nameVal = deal.contact_name || deal.name || 'Müştəri';
+    const nameVal = dealClientName(deal);
     const phoneVal = phoneList[0] || '';
+    const waUrl = waMeUrl(phoneVal);
     const nameHtml = readonly
-        ? `<div class="name">${escapeHtml(nameVal)}</div>`
-        : `<input id="deal-head-name" class="deal-head-name" value="${escapeHtml(nameVal)}" placeholder="Ad Soyad">`;
+        ? `<div class="name">${escapeHtml(nameVal || 'Müştəri')}</div>`
+        : `<input id="deal-head-name" class="deal-head-name" value="${escapeHtml(nameVal)}" placeholder="Müştəri">`;
     const phoneHtml = readonly
-        ? escapeHtml(phoneList.join(', ') || '—')
+        ? escapeHtml(phoneVal || '—')
         : `<input id="deal-head-phone" class="deal-head-phone" value="${escapeHtml(phoneVal)}" placeholder="Telefon">`;
+    const waHtml = `<a id="deal-head-wa" class="deal-head-wa" href="${escapeHtml(waUrl || '#')}" target="_blank" rel="noopener noreferrer" title="WhatsApp" ${waUrl ? '' : 'hidden'}>${CHAT_CHANNEL_META.whatsapp.svg}</a>`;
     const composer = readonly ? '' : `<div class="wa-composer-wrap">
             <div id="deal-chat-quote" class="chat-quote-bar" hidden>
                 <div style="flex:1;min-width:0">
@@ -3297,17 +3379,17 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <div class="wa-composer-field">
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
+                <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
             </div>
-            <button type="button" class="wa-send" id="deal-chat-send">➤</button>
             </div>
         </div>`;
     return `<div class="deal-shell">
         <div class="deal-shell-head">
             <div class="meta">
                 ${nameHtml}
-                <div class="sub"><span id="deal-head-stage">${escapeHtml(deal.stage_name || '')}</span> · ${phoneHtml}</div>
+                <div class="sub"><span id="deal-head-stage">${escapeHtml(deal.stage_name || '')}</span> · ${phoneHtml}${waHtml}</div>
             </div>
-            ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Paylaş</button>'}
+            ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
             <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
         </div>
         <div class="deal-shell-body">
@@ -3973,7 +4055,10 @@ async function saveTaskEditModal() {
     const btn = document.getElementById('modal-task-save');
     const orig = btn ? btn.textContent : '';
     if(btn) { btn.disabled = true; btn.textContent = 'Yadda saxlanır...'; }
-    showLoader();
+    const fromDeal = !!(document.getElementById('deal-view-modal') && _dealViewState);
+    const taskRow = fromDeal ? document.querySelector('#deal-tasks-list [data-task-id="' + String(taskId) + '"]') : null;
+    if(fromDeal) { if(taskRow) taskRow.classList.add('saving'); }
+    else showLoader();
     try {
         const r = await fetch(API_BASE + '/api/action', {
             method:'POST',
@@ -4008,14 +4093,18 @@ async function saveTaskEditModal() {
             applyDealSide(d, !!_dealViewState.readonly);
         }
         closeTaskEditModal();
-        renderNotifications();
-        renderGozleme();
+        if(!fromDeal) {
+            renderNotifications();
+            renderGozleme();
+        }
         toast('Tapşırıq yadda saxlanıldı', false);
-        await syncNotifications();
+        if(fromDeal) syncNotifications().catch(() => {});
+        else await syncNotifications();
     } catch(e) {
         toast(e.message || 'Xəta!', true);
     } finally {
-        hideLoader();
+        if(!fromDeal) hideLoader();
+        if(taskRow) taskRow.classList.remove('saving');
         if(btn) { btn.disabled = false; btn.textContent = orig; }
     }
 }

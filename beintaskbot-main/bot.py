@@ -7621,6 +7621,7 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         "file_name": file_name,
         "message_type": message_type,
         "is_chat": is_chat,
+        "author": KOMMO_USERS.get(note.get("created_by") or note.get("responsible_user_id"), "") or "",
     }
 
 
@@ -8046,15 +8047,14 @@ def _collect_deal_chat(
                 "open": True,
             }]
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    pages = 1
-    if before:
-        pages = 2
+    pages = 6 if before else 3
+    page_limit = 50
     for row in channels:
         talk_id = int(row.get("talk_id") or 0)
         if not talk_id:
             continue
         channel_key = str(row.get("key") or wanted)
-        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=20)
+        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
         chat_blocked = chat_blocked or blocked
         for message in messages:
             formatted = _format_chat_message(message, channel_key)
