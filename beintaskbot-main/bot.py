@@ -1952,6 +1952,13 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
         logger.error(f"Add note error: {e}")
     return None
 
+_NOTE_DELETED_MARK = "⟦silindi⟧"
+
+def _note_is_deleted(item: dict | None) -> bool:
+    text = str((item or {}).get("text") or "").strip()
+    return (not text) or text == _NOTE_DELETED_MARK
+
+
 def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple[str, int, str]:
     nid = int(note_id)
     ids = [int(i) for i in entity_ids if int(i or 0)]
@@ -2038,10 +2045,10 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
             types.append(item)
     last_err = "Qeyd silinmədi."
     for kind in kinds:
-        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
+        note_urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
         if eid:
-            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes/{nid}")
-        for url in urls:
+            note_urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes/{nid}")
+        for url in note_urls:
             try:
                 resp = _http.delete(url, headers=HEADERS, timeout=10)
             except Exception as exc:
@@ -2052,18 +2059,12 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                 return True, ""
             last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
             logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
-    bodies: list[list[dict]] = []
-    for ntype in types:
-        row = {"id": nid, "note_type": ntype, "is_deleted": True}
-        if eid:
-            bodies.append([{**row, "entity_id": eid}])
-        bodies.append([row])
-    for kind in kinds:
-        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
-        if eid:
-            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
-        for url in urls:
-            for payload in bodies:
+        for ntype in types:
+            body = {"id": nid, "note_type": ntype, "is_deleted": True}
+            if eid:
+                body["entity_id"] = eid
+            for url in note_urls + [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]:
+                payload = body if url.endswith(f"/notes/{nid}") else [body]
                 try:
                     resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
                 except Exception as exc:
@@ -2074,7 +2075,10 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                     return True, ""
                 last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    return False, _note_delete_error(last_err)
+    ok, err = update_note(nid, _NOTE_DELETED_MARK, kinds[0], eid)
+    if ok:
+        return True, ""
+    return False, _note_delete_error(err or last_err)
 
 def _note_entity_kind(entity_type: str) -> str:
     raw = str(entity_type or "").strip().lower()
@@ -2655,6 +2659,47 @@ def collect_utm_blob(entity: dict | None) -> str:
     if isinstance(source, dict):
         parts.append(str(source.get("name") or ""))
     return " ".join(part for part in parts if part)
+
+
+_SOURCE_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+_SOURCE_FIELD_HINTS = (
+    "url", "link", "href", "refer", "landing", "ads", "advert", "click",
+    "utm", "facebook", "instagram", "tiktok", "source", "form", "page", "кампан",
+)
+
+
+def collect_source_urls(entity: dict | None) -> list[str]:
+    if not isinstance(entity, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str) -> None:
+        for match in _SOURCE_URL_RE.findall(str(raw or "")):
+            url = match.rstrip(".,;)]")
+            if url and url not in seen:
+                seen.add(url)
+                found.append(url)
+
+    for cf in entity.get("custom_fields_values") or []:
+        code = str(cf.get("field_code") or "").casefold()
+        name = str(cf.get("field_name") or "").casefold()
+        hint = f"{code} {name}"
+        values = [str(val.get("value") or "") for val in (cf.get("values") or [])]
+        if any(token in hint for token in _SOURCE_FIELD_HINTS) or any(_SOURCE_URL_RE.search(v) for v in values):
+            for value in values:
+                add(value)
+    meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+    for key, value in meta.items():
+        add(str(value or ""))
+        if isinstance(value, dict):
+            for nested in value.values():
+                add(str(nested or ""))
+    source = ((entity.get("_embedded") or {}).get("source") or {})
+    if isinstance(source, dict):
+        add(str(source.get("name") or ""))
+        add(str(source.get("link") or source.get("url") or ""))
+    return found
 
 
 _PARTNER_LISTS_FILE = "partner_lists.json"
@@ -8185,14 +8230,16 @@ def _collect_deal_chat(
                 "open": True,
             }]
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    pages = 2 if before else 1
+    pages = 3 if before else 1
     page_limit = 20
+    talk_has_more = False
     for row in channels:
         talk_id = int(row.get("talk_id") or 0)
         if not talk_id:
             continue
         channel_key = str(row.get("key") or wanted)
-        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
+        messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
+        talk_has_more = talk_has_more or maybe_more
         chat_blocked = chat_blocked or blocked
         for message in messages:
             formatted = _format_chat_message(message, channel_key)
@@ -8207,17 +8254,18 @@ def _collect_deal_chat(
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
-        has_more = len(older) > limit
         page = older[-limit:] if older else []
+        has_more = len(older) > limit or (talk_has_more and len(page) >= limit)
     else:
-        has_more = len(chat) > limit
         page = chat[-limit:] if chat else []
+        has_more = talk_has_more or len(chat) > limit
     return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
 
 
-def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool]:
+def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
     rows: list[dict] = []
     blocked = False
+    maybe_more = False
     try:
         page_limit = max(1, min(int(page_limit or 50), 250))
     except (TypeError, ValueError):
@@ -8247,6 +8295,7 @@ def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> 
             rows.extend(messages)
             working_url = url
             blocked = False
+            maybe_more = len(messages) >= page_limit
             break
     if working_url and pages > 1:
         for page in range(2, pages + 1):
@@ -8259,11 +8308,13 @@ def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> 
             payload = resp.json() if resp.content else {}
             messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
             if not messages:
+                maybe_more = False
                 break
             rows.extend(messages)
+            maybe_more = len(messages) >= page_limit
             if len(messages) < page_limit:
                 break
-    return rows, blocked
+    return rows, blocked, maybe_more
 
 
 def _extract_messages_payload(payload) -> list[dict]:
@@ -8545,6 +8596,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     contact_ids: list[int] = []
     source = extract_menbe(lead)
     utm_blob = collect_utm_blob(lead)
+    source_urls = collect_source_urls(lead)
     for linked in lead_contacts:
         if not isinstance(linked, dict):
             continue
@@ -8562,7 +8614,13 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
         source = extract_menbe(full) or source
         utm_blob = " ".join((utm_blob, collect_utm_blob(full)))
+        for url in collect_source_urls(full):
+            if url not in source_urls:
+                source_urls.append(url)
     partner, utm = split_partner_and_utm(source, utm_blob, lid)
+    for url in _SOURCE_URL_RE.findall(utm_blob or ""):
+        if url not in source_urls:
+            source_urls.append(url)
     contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
     note_rows = _fetch_entity_notes("leads", lid)
     for contact_id in contact_ids:
@@ -8578,7 +8636,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         unique_notes.append(note)
     notes = [
         item for item in unique_notes
-        if item.get("type") == "common" or not item.get("is_chat")
+        if (item.get("type") == "common" or not item.get("is_chat")) and not _note_is_deleted(item)
     ]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     first_task = tasks[0] if tasks else {}
@@ -8601,6 +8659,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "utm_tag": utm,
         "source": utm,
         "menbe": utm,
+        "source_urls": source_urls,
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,

@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="181">
+    <meta name="pwa-build" content="182">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -1044,8 +1044,10 @@ function utmBadgeHtml(record) {
 }
 function sourceLineHtml(record) {
     const badges = [partnerBadgeHtml(record), utmBadgeHtml(record)].filter(Boolean).join('');
-    if(!badges) return '';
-    return `<div class="flex items-center gap-2 flex-wrap mt-1">${badges}</div>`;
+    const urls = Array.isArray(record && record.source_urls) ? record.source_urls : (record && record.source_url ? [record.source_url] : []);
+    const links = urls.filter(Boolean).map(url => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="text-[11px] font-semibold text-blue-600 underline break-all">${escapeHtml(url)}</a>`).join('');
+    if(!badges && !links) return '';
+    return `<div class="flex items-center gap-2 flex-wrap mt-1">${badges}${links}</div>`;
 }
 function partnerSelectHtml(selected) {
     const current = String(selected || '');
@@ -2767,7 +2769,7 @@ function dealChatItemHtml(item, token, readonly) {
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
-    return notes.filter(item => item && item.text && (item.type === 'common' || !item.is_chat)).map(item => ({
+    return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat)).map(item => ({
         id: 'note-' + (item.id || item.created_at || ''),
         is_comment: true,
         incoming: false,
@@ -2792,17 +2794,14 @@ function dealTimelineMessages(chat, deal) {
 function dealChatRowsHtml(chat, token, blocked, loading) {
     const deal = _dealViewState && _dealViewState.deal;
     const rows = dealTimelineMessages(chat, deal);
-    const older = (_dealViewState && _dealViewState.has_more && !loading)
-        ? `<div class="wa-older">${_dealViewState.loadingOlder ? '<span class="sync-spinner"></span>' : '<button type="button" id="deal-chat-older">Əvvəlki mesajlar</button>'}</div>`
-        : '';
     if(loading && !(Array.isArray(chat) && chat.length)) {
         return '<div class="wa-preloader"><div class="sync-spinner" style="width:28px;height:28px;border-width:3px"></div><div>Çat yüklənir...</div></div>';
     }
-    if(rows.length) return older + rows.map(item => dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly)).join('');
+    if(rows.length) return rows.map(item => dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly)).join('');
     if(blocked) {
         return '<div style="font-size:12px;color:#b45309;line-height:1.45;padding:12px">Kommo çatın mətnini API-yə vermir. External chat history hüququ lazımdır.</div>';
     }
-    return older + '<div class="wa-preloader">Çat yoxdur</div>';
+    return '<div class="wa-preloader">Çat yoxdur</div>';
 }
 function isDealSystemNoise(text) {
     const folded = String(text || '').toLowerCase();
@@ -2858,6 +2857,21 @@ function openDealPhotoZoom(src) {
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);
 }
+function paintDealOlderBar() {
+    const bar = document.getElementById('deal-chat-older-bar');
+    if(!bar || !_dealViewState) return;
+    if(_dealViewState.loading || !_dealViewState.has_more) {
+        bar.hidden = true;
+        bar.innerHTML = '';
+        return;
+    }
+    bar.hidden = false;
+    bar.innerHTML = _dealViewState.loadingOlder
+        ? '<span class="sync-spinner"></span>'
+        : '<button type="button" id="deal-chat-older">Əvvəlki mesajlar</button>';
+    const olderBtn = document.getElementById('deal-chat-older');
+    if(olderBtn) olderBtn.onclick = () => loadOlderDealChat();
+}
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread || !_dealViewState) return;
@@ -2868,8 +2882,7 @@ function paintDealChatThread(opts) {
     const prevTop = thread.scrollTop;
     thread.innerHTML = dealChatRowsHtml(_dealViewState.messages, _dealViewState.token, _dealViewState.blocked, _dealViewState.loading);
     bindDealChatMedia(thread);
-    const olderBtn = document.getElementById('deal-chat-older');
-    if(olderBtn) olderBtn.onclick = () => loadOlderDealChat();
+    paintDealOlderBar();
     if(stickBottom) thread.scrollTop = thread.scrollHeight;
     else thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
 }
@@ -2940,7 +2953,7 @@ async function loadDealChatLatest() {
         _dealViewState.blocked = !!d.chat_blocked;
         _dealViewState.loading = false;
         _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
-        _dealViewState.has_more = !!d.has_more;
+        _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 20;
         applyDealChannels(d.channels || _dealViewState.channels);
         paintDealChatThread({stickBottom: true, force: true});
     } catch(_err) {
@@ -3520,6 +3533,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             </aside>
             <section class="wa-pane">
                 <div class="wa-channels" id="deal-chat-channels"></div>
+                <div id="deal-chat-older-bar" class="wa-older" hidden></div>
                 <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
                 ${composer}
             </section>
@@ -4795,7 +4809,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=181');
+    const reg = await navigator.serviceWorker.register('sw.js?v=182');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
