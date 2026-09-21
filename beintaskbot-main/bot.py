@@ -7561,15 +7561,90 @@ def _talk_is_open(talk: dict) -> bool:
     return True
 
 
+NIZAMI_WHATSAPP_NUMBER = "994502072240"
+CHAT_CHANNEL_LABELS = {
+    "whatsapp": "WhatsApp",
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "tiktok": "TikTok",
+}
+
+
+def _wa_sender_digits_for_chat(chat_id) -> str:
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return ""
+    if is_admin(cid):
+        return NIZAMI_WHATSAPP_NUMBER
+    return ""
+
+
+def _talk_blob(talk: dict) -> str:
+    try:
+        return json.dumps(talk, ensure_ascii=False).lower()
+    except Exception:
+        return str(talk or "").lower()
+
+
+def _talk_has_digits(talk: dict, digits: str) -> bool:
+    wanted = re.sub(r"\D", "", str(digits or ""))
+    if len(wanted) < 8:
+        return False
+    blob = re.sub(r"\D", "", _talk_blob(talk))
+    return wanted in blob or wanted[-9:] in blob
+
+
+def _talk_channel_key(talk: dict) -> str:
+    blob = _talk_blob(talk)
+    if "tiktok" in blob or "tik tok" in blob:
+        return "tiktok"
+    if "instagram" in blob:
+        return "instagram"
+    if "facebook" in blob or "fb messenger" in blob:
+        return "facebook"
+    if any(token in blob for token in ("whatsapp", "waba", "whats app", "whats-app")):
+        return "whatsapp"
+    return "other"
+
+
 def _talk_reply_rank(talk: dict) -> tuple:
-    origin = str(talk.get("origin") or talk.get("source") or "").lower()
-    wa = 1 if any(token in origin for token in ("whats", "waba", "wa")) else 0
+    channel = _talk_channel_key(talk)
+    wa = 1 if channel == "whatsapp" else 0
     opened = 1 if _talk_is_open(talk) else 0
     try:
         updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
     except (TypeError, ValueError):
         updated = 0
     return (opened, wa, updated)
+
+
+def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for talk in talks or []:
+        key = _talk_channel_key(talk)
+        if key not in CHAT_CHANNEL_LABELS:
+            continue
+        grouped.setdefault(key, []).append(talk)
+    rows = []
+    order = ["whatsapp", "instagram", "facebook", "tiktok"]
+    for key in order:
+        group = grouped.get(key) or []
+        if not group:
+            continue
+        if key == "whatsapp" and sender_digits:
+            matched = [talk for talk in group if _talk_has_digits(talk, sender_digits)]
+            if matched:
+                group = matched
+        group.sort(key=_talk_reply_rank, reverse=True)
+        talk = group[0]
+        rows.append({
+            "key": key,
+            "label": CHAT_CHANNEL_LABELS[key],
+            "talk_id": _talk_id_of(talk),
+            "open": _talk_is_open(talk),
+        })
+    return rows
 
 
 def _talk_id_of(talk: dict) -> int:
@@ -7604,10 +7679,17 @@ def _kommo_error_detail(resp) -> str:
     return (resp.text or "")[:240]
 
 
-def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
+def _send_kommo_talk_message(talk_id: int, text: str, attachment: dict | None = None) -> tuple[bool, str, int]:
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
+    payload: dict = {}
+    if text:
+        payload["text"] = text
+    if attachment:
+        payload["attachment"] = attachment
+    if not payload:
+        return False, "Mesaj boş ola bilməz", 0
     try:
-        resp = _http.post(url, headers=HEADERS, json={"text": text}, timeout=15)
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
     except Exception as exc:
         logger.warning("Talk send failed: %s", exc)
         return False, "Kommo çata göndərmək alınmadı.", 0
@@ -7622,6 +7704,54 @@ def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
     if resp.status_code == 402:
         return False, "Kommo Chat API limiti bitib.", resp.status_code
     return False, detail or "Mesaj göndərilmədi.", resp.status_code
+
+
+def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
+    return _send_kommo_talk_message(talk_id, text)
+
+
+def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) -> tuple[str, str]:
+    file_size = len(content or b"")
+    if file_size <= 0:
+        return "", ""
+    auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+    drive_url = "https://drive-g.kommo.com"
+    sess_resp = requests.post(
+        f"{drive_url}/v1.0/sessions",
+        headers={**auth_h, "Content-Type": "application/json"},
+        json={"file_name": filename, "file_size": file_size, "content_type": content_type or "application/octet-stream"},
+        timeout=12,
+    )
+    if sess_resp.status_code != 200:
+        logger.warning("Drive session failed: %s", sess_resp.status_code)
+        return "", ""
+    sess_data = sess_resp.json()
+    upload_url = sess_data.get("upload_url")
+    max_part = int(sess_data.get("max_part_size") or 524288)
+    offset = 0
+    file_uuid = ""
+    version_uuid = ""
+    while offset < file_size:
+        chunk = content[offset:offset + max_part]
+        up_resp = requests.post(
+            upload_url,
+            headers={**auth_h, "Content-Type": "application/octet-stream"},
+            data=chunk,
+            timeout=20,
+        )
+        if up_resp.status_code != 200:
+            logger.warning("Drive upload failed: %s", up_resp.status_code)
+            return "", ""
+        up_data = up_resp.json() if up_resp.content else {}
+        if up_data.get("next_url"):
+            upload_url = up_data["next_url"]
+        if up_data.get("uuid"):
+            file_uuid = str(up_data.get("uuid") or "")
+            version_href = ((up_data.get("_links") or {}).get("download_version") or {}).get("href") or ""
+            parts = [p for p in str(version_href).split("/") if p]
+            version_uuid = parts[-1] if parts else str(up_data.get("version_uuid") or "")
+        offset += max_part
+    return file_uuid, version_uuid
 
 
 def _normalize_wa_number(phone: str) -> str:
@@ -7667,8 +7797,16 @@ def _chat_item_key(item: dict) -> tuple:
     )
 
 
-def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, before: int = 0) -> tuple[list[dict], bool, int, bool]:
-    """Load a short WhatsApp-style page from the primary talk only."""
+def _collect_deal_chat(
+    lid: int,
+    contact_ids: list[int],
+    *,
+    limit: int = 20,
+    before: int = 0,
+    channel: str = "whatsapp",
+    sender_digits: str = "",
+) -> tuple[list[dict], bool, int, bool, list[dict], str]:
+    """Load a short page from the selected messenger talk."""
     try:
         limit = max(1, min(int(limit or 20), 50))
     except (TypeError, ValueError):
@@ -7677,6 +7815,9 @@ def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, bef
         before = int(before or 0)
     except (TypeError, ValueError):
         before = 0
+    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
+    if wanted not in CHAT_CHANNEL_LABELS:
+        wanted = "whatsapp"
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
     chat_blocked = False
@@ -7691,13 +7832,16 @@ def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, bef
         chat.append(item)
 
     talks = _fetch_talks(lid, contact_ids)
-    ranked = _ranked_reply_talk_ids(talks)
-    reply_talk_id = ranked[0] if ranked else 0
-    origin = ""
+    channels = _channels_from_talks(talks, sender_digits)
+    keys = {row["key"] for row in channels}
+    if wanted not in keys:
+        wanted = "whatsapp" if "whatsapp" in keys else (channels[0]["key"] if channels else wanted)
+    reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    origin = wanted
     chat_id = ""
     for talk in talks:
         if _talk_id_of(talk) == reply_talk_id:
-            origin = str(talk.get("origin") or "")
+            origin = str(talk.get("origin") or wanted)
             chat_id = str(talk.get("chat_id") or "").strip()
             break
     pages = 3 if before else 1
@@ -7705,10 +7849,16 @@ def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, bef
         messages, blocked = _fetch_talk_messages(reply_talk_id, pages=pages, page_limit=50)
         chat_blocked = chat_blocked or blocked
         for message in messages:
-            _add_chat(_format_chat_message(message, origin))
+            formatted = _format_chat_message(message, origin)
+            if formatted:
+                formatted["channel"] = wanted
+            _add_chat(formatted)
     if len(chat) < limit and chat_id:
         for message in _fetch_chat_history_by_chat_id(chat_id):
-            _add_chat(_format_chat_message(message, origin))
+            formatted = _format_chat_message(message, origin)
+            if formatted:
+                formatted["channel"] = wanted
+            _add_chat(formatted)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -7717,7 +7867,7 @@ def _collect_deal_chat(lid: int, contact_ids: list[int], *, limit: int = 20, bef
     else:
         has_more = len(chat) > limit
         page = chat[-limit:] if chat else []
-    return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more
+    return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
 
 
 def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool]:
@@ -8144,8 +8294,15 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         before = int(request.rel_url.query.get("before") or 0)
     except (TypeError, ValueError):
         before = 0
-    chat, chat_blocked, reply_talk_id, has_more = _collect_deal_chat(
-        int(lead.get("id") or lead_id), contact_ids, limit=limit, before=before
+    channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
+    sender_digits = _wa_sender_digits_for_chat(chat_id)
+    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
+        int(lead.get("id") or lead_id),
+        contact_ids,
+        limit=limit,
+        before=before,
+        channel=channel,
+        sender_digits=sender_digits,
     )
     return web.json_response({
         "success": True,
@@ -8153,63 +8310,115 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         "chat_blocked": chat_blocked,
         "reply_talk_id": reply_talk_id,
         "has_more": has_more,
-        "can_reply": bool(reply_talk_id) or bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
+        "channel": channel,
+        "channels": channels,
+        "sender_phone": sender_digits,
+        "can_reply": bool(reply_talk_id),
     })
+
+
+def _attachment_kind(filename: str, content_type: str) -> str:
+    name = f"{filename} {content_type}".lower()
+    if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
+        return "picture"
+    if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
+        return "video"
+    return "file"
 
 
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    try:
-        lead_id = int(data.get("lead_id") or 0)
-    except (TypeError, ValueError):
-        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    text = str(data.get("text") or "").strip()
+    text = ""
+    channel = "whatsapp"
+    lead_id = 0
+    attachment = None
+    ctype = str(request.content_type or "")
+    if ctype.startswith("multipart/"):
+        form = await request.post()
+        try:
+            lead_id = int(form.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        text = str(form.get("text") or "").strip()
+        channel = str(form.get("channel") or "whatsapp").strip().lower()
+        uploaded = form.get("file")
+        if uploaded is not None and getattr(uploaded, "file", None):
+            raw = uploaded.file.read()
+            filename = str(getattr(uploaded, "filename", None) or "file")
+            file_type = str(getattr(uploaded, "content_type", None) or "application/octet-stream")
+            if len(raw) > 15 * 1024 * 1024:
+                return web.json_response({"success": False, "error": "Fayl 15MB-dan böyükdür"}, status=400)
+            file_uuid, version_uuid = _upload_kommo_drive_bytes(filename, raw, file_type)
+            if not file_uuid or not version_uuid:
+                return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
+            attachment = {
+                "type": _attachment_kind(filename, file_type),
+                "drive_uuid": file_uuid,
+                "drive_version_uuid": version_uuid,
+            }
+    else:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        try:
+            lead_id = int(data.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        text = str(data.get("text") or "").strip()
+        channel = str(data.get("channel") or "whatsapp").strip().lower()
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    if not text:
+    if not text and not attachment:
         return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    contact_ids, phones = _contact_ids_and_phones(lead)
-    talks = _fetch_talks(int(lead.get("id") or lead_id), contact_ids)
-    last_error = "Bu sövdələşmədə WhatsApp çatı tapılmadı."
-    sent = False
-    for talk_id in _ranked_reply_talk_ids(talks):
-        ok, last_error, _status = _send_kommo_talk_text(talk_id, text)
-        if ok:
-            sent = True
-            break
-    if not sent:
+    contact_ids = _lead_contact_ids(lead)
+    sender_digits = _wa_sender_digits_for_chat(chat_id)
+    chat_rows, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
+        int(lead.get("id") or lead_id),
+        contact_ids,
+        limit=1,
+        channel=channel,
+        sender_digits=sender_digits,
+    )
+    if not reply_talk_id:
+        return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
+    ok, last_error, _status = _send_kommo_talk_message(reply_talk_id, text, attachment)
+    if not ok and channel == "whatsapp":
+        _ids, phones = _contact_ids_and_phones(lead)
         for phone in phones:
-            ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
-            if ok:
-                sent = True
+            cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
+            if cloud_ok:
+                ok = True
                 last_error = ""
                 break
             if cloud_error:
                 last_error = cloud_error
-    if not sent:
+    if not ok:
         return web.json_response({"success": False, "error": last_error}, status=400)
-    chat, chat_blocked, reply_talk_id, _has_more = _collect_deal_chat(
-        int(lead.get("id") or lead_id), contact_ids, limit=20
+    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
+        int(lead.get("id") or lead_id),
+        contact_ids,
+        limit=20,
+        channel=channel,
+        sender_digits=sender_digits,
     )
     return web.json_response({
         "success": True,
         "chat": chat,
         "chat_blocked": chat_blocked,
         "reply_talk_id": reply_talk_id,
-        "has_more": _has_more,
+        "has_more": has_more,
+        "channel": channel,
+        "channels": channels,
     })
 
 

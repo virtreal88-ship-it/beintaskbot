@@ -229,13 +229,34 @@
             display:block !important; width:100%; max-width:560px; margin:0 auto;
             padding:16px 16px 32px; box-sizing:border-box;
         }
-        .deal-chat-row { border-radius:12px; padding:8px 10px; margin:6px 0; max-width:92%; font-size:12px; }
-        .deal-chat-row.in { background:#f1f5f9; margin-right:auto; }
-        .deal-chat-row.out { background:#dbeafe; margin-left:auto; text-align:right; }
-        .deal-chat-thread { max-height:280px; overflow:auto; padding:4px 2px 8px; }
-        .deal-chat-composer { display:flex; gap:8px; margin-top:8px; align-items:flex-end; }
-        .deal-chat-composer textarea { flex:1; min-height:40px; max-height:90px; resize:none; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
-        .deal-chat-composer button { padding:10px 12px; border:0; border-radius:10px; background:#16a34a; color:#fff; font-weight:700; font-size:12px; white-space:nowrap; }
+        .deal-shell { width:min(1100px,96vw); height:min(92vh,900px); background:#fff; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 50px #0004; }
+        .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#008069; color:#fff; }
+        .deal-shell-head .meta { min-width:0; flex:1; }
+        .deal-shell-head .name { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .deal-shell-head .sub { font-size:11px; opacity:.9; }
+        .deal-shell-body { flex:1; min-height:0; display:grid; grid-template-columns:320px 1fr; }
+        .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; }
+        .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.04em; }
+        .deal-side h3:first-child { margin-top:0; }
+        .wa-pane { min-width:0; display:flex; flex-direction:column; background:#efeae2; }
+        .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#f0f2f5; overflow:auto; }
+        .wa-chip { border:0; background:#fff; color:#54656f; border-radius:999px; padding:6px 10px; font-size:11px; font-weight:700; }
+        .wa-chip.on { background:#008069; color:#fff; }
+        .wa-thread { flex:1; min-height:0; overflow:auto; padding:10px 12px 16px; }
+        .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; height:100%; color:#667781; font-size:12px; }
+        .deal-chat-row { border-radius:8px; padding:6px 8px 4px; margin:4px 0; max-width:78%; font-size:13px; line-height:1.35; box-shadow:0 1px 0 #0001; }
+        .deal-chat-row.in { background:#fff; margin-right:auto; border-top-left-radius:0; }
+        .deal-chat-row.out { background:#d9fdd3; margin-left:auto; border-top-right-radius:0; }
+        .deal-chat-row .wa-time { text-align:right; font-size:10px; color:#667781; margin-top:2px; }
+        .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; background:#f0f2f5; }
+        .wa-composer textarea { flex:1; min-height:42px; max-height:90px; resize:none; padding:10px 12px; border:0; border-radius:22px; font-size:13px; background:#fff; }
+        .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#008069; color:#fff; font-size:16px; font-weight:700; }
+        .wa-icon-btn { background:#fff; color:#54656f; }
+        @media (max-width:800px) {
+            .deal-shell { width:100vw; height:100vh; border-radius:0; }
+            .deal-shell-body { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+            .deal-side { max-height:32vh; border-right:0; border-bottom:1px solid #e5e7eb; }
+        }
     </style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
@@ -2517,17 +2538,19 @@ function dealMediaBlock(item, token) {
 }
 function dealChatItemHtml(item, token) {
     const cls = item.incoming ? 'in' : 'out';
-    const who = escapeHtml(item.author || (item.incoming ? 'Müştəri' : 'Əməkdaş'));
-    return `<div class="deal-chat-row ${cls}"><div class="text-[10px] text-gray-500">${who} · ${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`;
+    const time = escapeHtml((item.created || '').split(' ').slice(-1)[0] || item.created || '');
+    return `<div class="deal-chat-row ${cls}"><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}</div></div>`;
 }
 function dealChatRowsHtml(chat, token, blocked, loading) {
     const rows = Array.isArray(chat) ? chat : [];
-    if(rows.length) return rows.map(item => dealChatItemHtml(item, token)).join('');
-    if(loading) return '<div class="text-gray-400">Yüklənir...</div>';
-    if(blocked) {
-        return '<div style="font-size:12px;color:#b45309;line-height:1.45">Kommo çatın mətnini və səs mesajlarını API-yə vermir. Inteqrasiyada <b>External chat history</b> hüququ lazımdır, sonra KOMMO_TOKEN yenilənməlidir.</div>';
+    if(loading && !rows.length) {
+        return '<div class="wa-preloader"><div class="sync-spinner" style="width:28px;height:28px;border-width:3px"></div><div>Çat yüklənir...</div></div>';
     }
-    return '<div class="text-gray-400">Çat yoxdur</div>';
+    if(rows.length) return rows.map(item => dealChatItemHtml(item, token)).join('');
+    if(blocked) {
+        return '<div style="font-size:12px;color:#b45309;line-height:1.45;padding:12px">Kommo çatın mətnini API-yə vermir. External chat history hüququ lazımdır.</div>';
+    }
+    return '<div class="wa-preloader">Çat yoxdur</div>';
 }
 function chatMessageKey(item) {
     return [item && item.id, item && item.text, item && item.created_at, item && item.file_uuid].join('|');
@@ -2543,6 +2566,9 @@ function mergeDealChat(existing, incoming, atStart) {
     });
     return atStart ? extra.concat(existing || []) : (existing || []).concat(extra);
 }
+function requestMatchesDeal(seq, leadId) {
+    return _dealViewState && _dealViewState.seq === seq && String(_dealViewState.id) === String(leadId);
+}
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread || !_dealViewState) return;
@@ -2555,46 +2581,65 @@ function paintDealChatThread(opts) {
     if(stickBottom) thread.scrollTop = thread.scrollHeight;
     else thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
 }
+function paintDealChannels(channels, active) {
+    const bar = document.getElementById('deal-chat-channels');
+    if(!bar) return;
+    const rows = Array.isArray(channels) && channels.length ? channels : [{key:'whatsapp', label:'WhatsApp'}];
+    bar.innerHTML = rows.map(row => `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}">${escapeHtml(row.label)}</button>`).join('');
+    bar.querySelectorAll('[data-channel]').forEach(btn => {
+        btn.onclick = () => switchDealChatChannel(btn.getAttribute('data-channel'));
+    });
+}
 async function fetchDealChatPage(before) {
-    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return null;
-    const q = new URLSearchParams({lead_id: String(_dealViewState.id), limit: '20', _ts: String(Date.now())});
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
+    const seq = _dealViewState.seq;
+    const leadId = _dealViewState.id;
+    const channel = _dealViewState.channel || 'whatsapp';
+    const q = new URLSearchParams({lead_id: String(leadId), limit: '20', channel, _ts: String(Date.now())});
     if(before) q.set('before', String(before));
     const r = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
         cache: 'no-store',
         headers: {'X-TG-User-ID': CURRENT_USER_ID}
     });
-    return r.json().catch(() => ({}));
+    const d = await r.json().catch(() => ({}));
+    if(!requestMatchesDeal(seq, leadId)) return {stale:true};
+    return d;
 }
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
-    _dealViewState.loading = !(_dealViewState.messages && _dealViewState.messages.length);
+    const seq = _dealViewState.seq;
+    _dealViewState.loading = true;
+    _dealViewState.messages = [];
     paintDealChatThread({stickBottom: true});
     try {
         const d = await fetchDealChatPage(0);
-        if(!_dealViewState || !d || !d.success) return;
+        if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
+        if(!d.success) { _dealViewState.loading = false; paintDealChatThread({stickBottom: true}); return; }
         _dealViewState.blocked = !!d.chat_blocked;
         _dealViewState.loading = false;
-        if(!(_dealViewState.messages && _dealViewState.messages.length)) {
-            _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
-            _dealViewState.has_more = !!d.has_more;
-        } else {
-            _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
-        }
+        _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
+        _dealViewState.has_more = !!d.has_more;
+        _dealViewState.channel = d.channel || _dealViewState.channel;
+        _dealViewState.channels = d.channels || _dealViewState.channels;
+        paintDealChannels(_dealViewState.channels, _dealViewState.channel);
         paintDealChatThread({stickBottom: true});
     } catch(_err) {
-        if(_dealViewState) _dealViewState.loading = false;
-        paintDealChatThread({stickBottom: true});
+        if(requestMatchesDeal(seq, _dealViewState && _dealViewState.id)) {
+            _dealViewState.loading = false;
+            paintDealChatThread({stickBottom: true});
+        }
     }
 }
 async function loadOlderDealChat() {
-    if(!_dealViewState || _dealViewState.loadingOlder || !_dealViewState.has_more) return;
+    if(!_dealViewState || _dealViewState.loadingOlder || !_dealViewState.has_more || _dealViewState.loading) return;
     const first = (_dealViewState.messages || [])[0];
     const before = Number(first && first.created_at) || 0;
     if(!before) { _dealViewState.has_more = false; return; }
+    const seq = _dealViewState.seq;
     _dealViewState.loadingOlder = true;
     try {
         const d = await fetchDealChatPage(before);
-        if(!_dealViewState || !d || !d.success) return;
+        if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
         const older = Array.isArray(d.chat) ? d.chat : [];
         _dealViewState.has_more = !!d.has_more && older.length > 0;
         if(older.length) {
@@ -2603,14 +2648,15 @@ async function loadOlderDealChat() {
         }
     } catch(_err) {
     } finally {
-        if(_dealViewState) _dealViewState.loadingOlder = false;
+        if(_dealViewState && _dealViewState.seq === seq) _dealViewState.loadingOlder = false;
     }
 }
 async function pollDealChat() {
-    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly) return;
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly || _dealViewState.loading) return;
+    const seq = _dealViewState.seq;
     try {
         const d = await fetchDealChatPage(0);
-        if(!_dealViewState || !d || !d.success) return;
+        if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
         _dealViewState.blocked = !!d.chat_blocked;
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
         const thread = document.getElementById('deal-chat-thread');
@@ -2629,6 +2675,14 @@ function bindDealChatThread() {
         if(thread.scrollTop > 32) return;
         loadOlderDealChat();
     });
+}
+function switchDealChatChannel(channel) {
+    if(!_dealViewState || _dealViewState.channel === channel) return;
+    _dealViewState.channel = channel || 'whatsapp';
+    _dealViewState.messages = [];
+    _dealViewState.has_more = true;
+    paintDealChannels(_dealViewState.channels, _dealViewState.channel);
+    loadDealChatLatest();
 }
 function dealDetailSectionsHtml(deal, token, opts) {
     const canReply = !!(opts && opts.canReply);
@@ -2713,69 +2767,143 @@ function closeDealViewModal() {
 }
 let _dealViewState = null;
 let _dealChatPollTimer = null;
+let _dealChatSeq = 0;
 function stopDealChatPolling() {
     if(_dealChatPollTimer) { clearInterval(_dealChatPollTimer); _dealChatPollTimer = null; }
 }
-async function sendDealChatMessage() {
+async function sendDealChatMessage(file) {
     const input = document.getElementById('deal-chat-input');
     const btn = document.getElementById('deal-chat-send');
-    if(!input || !_dealViewState || !CURRENT_USER_ID) return;
-    const text = String(input.value || '').trim();
-    if(!text) { toast('Mesaj yazın', true); return; }
+    if(!_dealViewState || !CURRENT_USER_ID) return;
+    const text = String(input && input.value || '').trim();
+    if(!text && !file) { toast('Mesaj yazın', true); return; }
+    const seq = _dealViewState.seq;
+    const leadId = _dealViewState.id;
     if(btn) btn.disabled = true;
     try {
-        const r = await fetch(API_BASE + '/api/deal/chat/send', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({lead_id: _dealViewState.id, text})
-        });
+        let r;
+        if(file) {
+            const form = new FormData();
+            form.append('lead_id', String(leadId));
+            form.append('channel', _dealViewState.channel || 'whatsapp');
+            form.append('text', text);
+            form.append('file', file, file.name || 'file');
+            r = await fetch(API_BASE + '/api/deal/chat/send', {
+                method: 'POST',
+                headers: {'X-TG-User-ID': CURRENT_USER_ID},
+                body: form
+            });
+        } else {
+            r = await fetch(API_BASE + '/api/deal/chat/send', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+                body: JSON.stringify({lead_id: leadId, text, channel: _dealViewState.channel || 'whatsapp'})
+            });
+        }
         const d = await r.json().catch(() => ({}));
+        if(!requestMatchesDeal(seq, leadId)) return;
         if(!r.ok || !d.success) throw new Error(d.error || 'Göndərilmədi');
-        input.value = '';
+        if(input) input.value = '';
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
         _dealViewState.blocked = !!d.chat_blocked;
         paintDealChatThread({stickBottom: true});
-        toast('Mesaj göndərildi');
     } catch(err) {
-        toast(err.message || 'Göndərilmədi', true);
+        if(requestMatchesDeal(seq, leadId)) toast(err.message || 'Göndərilmədi', true);
     } finally {
         if(btn) btn.disabled = false;
     }
 }
+function dealWorkspaceHtml(deal, token, readonly) {
+    const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    const notes = Array.isArray(deal.notes) ? deal.notes : [];
+    const tasks = Array.isArray(deal.tasks) ? deal.tasks : [];
+    const notesHtml = notes.length
+        ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div></div>`).join('')
+        : `<div class="text-gray-400">${linkifyText(deal.last_note || 'Qeyd yoxdur')}</div>`;
+    const tasksHtml = tasks.length
+        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('')
+        : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
+    const composer = readonly ? '' : `<div class="wa-composer">
+            <button type="button" class="wa-icon-btn" id="deal-chat-attach" title="Fayl">📎</button>
+            <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
+            <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
+            <button type="button" class="wa-send" id="deal-chat-send">➤</button>
+        </div>`;
+    return `<div class="deal-shell">
+        <div class="deal-shell-head">
+            <div class="meta">
+                <div class="name">${escapeHtml(deal.contact_name || deal.name || 'Müştəri')}</div>
+                <div class="sub">${escapeHtml(deal.stage_name || '')} · ${escapeHtml(phoneList.join(', ') || '—')}</div>
+            </div>
+            ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Paylaş</button>'}
+            <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
+        </div>
+        <div class="deal-shell-body">
+            <aside class="deal-side">
+                <h3>Sövdələşmə</h3>
+                <div class="text-[13px] text-gray-700 space-y-1">
+                    <div><b>${escapeHtml(deal.name || '—')}</b></div>
+                    ${sourceLineHtml(deal)}
+                    <div>🕒 ${escapeHtml(created)}</div>
+                    <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
+                    ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
+                    ${(canShowKommoLink() && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#008069;font-weight:700">Kommo-da aç</a></div>` : ''}
+                </div>
+                <h3>Qeyd</h3>
+                <div>${notesHtml}</div>
+                <h3>Tapşırıq</h3>
+                <div>${tasksHtml}</div>
+            </aside>
+            <section class="wa-pane">
+                <div class="wa-channels" id="deal-chat-channels"></div>
+                <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
+                ${composer}
+            </section>
+        </div>
+    </div>`;
+}
 function paintDealViewModal(deal, readonly) {
     closeDealViewModal();
     const token = deal.share_token || '';
+    _dealChatSeq += 1;
     _dealViewState = {
         id: deal.id,
         token,
+        seq: _dealChatSeq,
         readonly: !!readonly,
-        messages: Array.isArray(deal.chat) ? deal.chat.slice() : [],
+        messages: [],
+        channels: [{key:'whatsapp', label:'WhatsApp'}],
+        channel: 'whatsapp',
         has_more: true,
         loading: !readonly,
         loadingOlder: false,
-        blocked: !!deal.chat_blocked
+        blocked: false
     };
     const modal = document.createElement('div');
     modal.id = 'deal-view-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:#0007;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(520px,100%);max-height:90vh;overflow:auto;box-shadow:0 8px 30px #0003">
-        ${dealDetailSectionsHtml(deal, token, {canReply: !readonly})}
-        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Paylaş</button>'}
-            <button type="button" id="deal-view-close" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Bağla</button>
-        </div>
-    </div>`;
+    modal.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:10000;display:flex;align-items:center;justify-content:center;padding:10px';
+    modal.innerHTML = dealWorkspaceHtml(deal, token, readonly);
     modal.addEventListener('click', event => { if(event.target === modal) closeDealViewModal(); });
     document.body.appendChild(modal);
     modal.querySelector('#deal-view-close').onclick = closeDealViewModal;
-    const thread = document.getElementById('deal-chat-thread');
-    if(thread) thread.scrollTop = thread.scrollHeight;
+    paintDealChannels(_dealViewState.channels, _dealViewState.channel);
     const sendBtn = document.getElementById('deal-chat-send');
     const input = document.getElementById('deal-chat-input');
-    if(sendBtn) sendBtn.onclick = sendDealChatMessage;
+    const attachBtn = document.getElementById('deal-chat-attach');
+    const fileInput = document.getElementById('deal-chat-file');
+    if(sendBtn) sendBtn.onclick = () => sendDealChatMessage();
     if(input) input.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
     });
+    if(attachBtn && fileInput) {
+        attachBtn.onclick = () => fileInput.click();
+        fileInput.onchange = () => {
+            const file = fileInput.files && fileInput.files[0];
+            fileInput.value = '';
+            if(file) sendDealChatMessage(file);
+        };
+    }
     bindDealChatThread();
     if(!readonly) {
         loadDealChatLatest();
