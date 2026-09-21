@@ -8072,8 +8072,8 @@ def _collect_deal_chat(
                 "open": True,
             }]
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    pages = 6 if before else 3
-    page_limit = 50
+    pages = 2 if before else 1
+    page_limit = 20
     for row in channels:
         talk_id = int(row.get("talk_id") or 0)
         if not talk_id:
