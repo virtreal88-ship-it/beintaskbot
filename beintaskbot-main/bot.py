@@ -8052,6 +8052,27 @@ def _kommo_error_detail(resp) -> str:
     return (resp.text or "")[:240]
 
 
+def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
+    try:
+        hinted_id = int(hinted or 0)
+    except (TypeError, ValueError):
+        hinted_id = 0
+    if hinted_id:
+        return hinted_id
+    try:
+        lid = int(lead.get("id") or 0)
+    except (TypeError, ValueError):
+        lid = 0
+    talks = _fetch_talks(lid, _lead_contact_ids(lead))
+    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
+    channels = _channels_from_talks(talks, sender_digits)
+    talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    if talk_id:
+        return talk_id
+    ranked = _ranked_reply_talk_ids(talks)
+    return int(ranked[0]) if ranked else 0
+
+
 def _send_kommo_talk_message(
     talk_id: int,
     text: str,
@@ -8059,24 +8080,39 @@ def _send_kommo_talk_message(
     reply_to_message_id: str = "",
 ) -> tuple[bool, str, int]:
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
-    payload: dict = {}
+    base: dict = {}
     if text:
-        payload["text"] = text
+        base["text"] = text
     if attachment:
-        payload["attachment"] = attachment
-    if reply_to_message_id:
-        payload["reply_to_message_id"] = str(reply_to_message_id)
-    if not payload:
+        base["attachment"] = attachment
+    if not base:
         return False, "Mesaj boş ola bilməz", 0
-    try:
-        resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
-    except Exception as exc:
-        logger.warning("Talk send failed: %s", exc)
-        return False, "Kommo çata göndərmək alınmadı.", 0
-    if resp.status_code in {200, 202}:
-        return True, "", resp.status_code
-    if reply_to_message_id and resp.status_code in {400, 422}:
-        return _send_kommo_talk_message(talk_id, text, attachment, "")
+    payloads = [base]
+    reply_id = str(reply_to_message_id or "").strip()
+    if reply_id:
+        payloads = [
+            {**base, "reply_to_message_id": reply_id},
+            {**base, "reply_to": {"message_id": reply_id}},
+            {**base, "reply_to": {"id": reply_id}},
+            {**base, "reply_to": {"message": {"id": reply_id}}},
+            base,
+        ]
+    last_resp = None
+    for payload in payloads:
+        try:
+            resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
+        except Exception as exc:
+            logger.warning("Talk send failed: %s", exc)
+            return False, "Kommo çata göndərmək alınmadı.", 0
+        last_resp = resp
+        if resp.status_code in {200, 202}:
+            return True, "", resp.status_code
+        if resp.status_code not in {400, 422}:
+            break
+        logger.warning("Talk send status %s: %s", resp.status_code, _kommo_error_detail(resp))
+    resp = last_resp
+    if resp is None:
+        return False, "Mesaj göndərilmədi.", 0
     detail = _kommo_error_detail(resp)
     logger.warning("Talk send status %s: %s", resp.status_code, detail)
     if resp.status_code == 403:
@@ -8823,6 +8859,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     lead_id = 0
     attachment = None
     reply_to_message_id = ""
+    hinted_talk = 0
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -8833,6 +8870,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         text = str(form.get("text") or "").strip()
         channel = str(form.get("channel") or "whatsapp").strip().lower()
         reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
+        try:
+            hinted_talk = int(form.get("talk_id") or 0)
+        except (TypeError, ValueError):
+            hinted_talk = 0
         uploaded = form.get("file")
         if uploaded is not None and getattr(uploaded, "file", None):
             raw = uploaded.file.read()
@@ -8862,6 +8903,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         text = str(data.get("text") or "").strip()
         channel = str(data.get("channel") or "whatsapp").strip().lower()
         reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
+        try:
+            hinted_talk = int(data.get("talk_id") or 0)
+        except (TypeError, ValueError):
+            hinted_talk = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
     if not text and not attachment:
@@ -8871,16 +8916,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    contact_ids = _lead_contact_ids(lead)
     sender_digits = _wa_sender_digits_for_chat(chat_id)
-    chat_rows, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
-        int(lead.get("id") or lead_id),
-        contact_ids,
-        limit=1,
-        channel=channel,
-        sender_digits=sender_digits,
-        employee_name=employee_name_for_lead(lead),
-    )
+    reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
     ok, last_error, _status = _send_kommo_talk_message(
@@ -8898,6 +8935,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 last_error = cloud_error
     if not ok:
         return web.json_response({"success": False, "error": last_error}, status=400)
+    contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
         contact_ids,
