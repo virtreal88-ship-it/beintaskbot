@@ -72,11 +72,11 @@
     }
   },
   "6824377548": {
-    "endpoint": "https://fcm.googleapis.com/fcm/send/fsXSgQJ439k:APA91bG_1tl70cwnvVXq2Jv1VThflVnEksrfK3G-ToUX26ZmyAgVaojtrqj-ZeZjtPbTM5MsxbHyj7y2IBIWP5BB0VDrjp0hkgWp-7sdrEnBowy9Em2DIR-OY-X1oUpdebuRJFSn1zMv",
+    "endpoint": "https://fcm.googleapis.com/fcm/send/cFjuipYDXec:APA91bFtw--IoiW4uVW3vxr0NZ3XhRKr9zwvV_4tt-76zKyIc21rYS3JA3IuU0Q6ZKAbZbhUSiN0WgTs0ZSt-MeKcTdffGFr7ZoWbqLd46EA4jnGNXJN14Hy7o3kc2NATdFBWhvhVLev",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BFvRDsaA_I5vac5VipFG6BSqfjSnDSnKx8dRtz6L9u6a_GHBXzOlxM2KczfEM_3aCyFVaou-whZPL2BZNykyiUs",
-      "auth": "iBM_C7VS7Zq5UWtjiegJYg"
+      "p256dh": "BAViLDedPAZfaEYolRhQS0FGVAy3ZXvm47_XLAXez85HWe0nkz5GG8Xi9OL9vlolcBwL2Xo8S2SHIyw_y18Pasw",
+      "auth": "GFkTlJEzoS_fPAKFQF7wQw"
     }
   }
 }
