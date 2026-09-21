@@ -1939,6 +1939,20 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
         logger.error(f"Add note error: {e}")
     return None
 
+def delete_note(note_id: int, entity_type: str = "leads") -> bool:
+    kind = "contacts" if str(entity_type or "").startswith("contact") else "leads"
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return False
+    url = f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"
+    try:
+        resp = _http.delete(url, headers=HEADERS, timeout=10)
+        return resp.status_code in {200, 202, 204}
+    except Exception as exc:
+        logger.error("Delete note error: %s", exc)
+        return False
+
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
     old_pipeline_id = None
@@ -5475,6 +5489,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
             result = add_note(lead_id, text, "leads")
             invalidate_rufat_overview_cache()
             return web.json_response({"success": bool(result), "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı."})
+        elif action == "deal_delete_note":
+            lead_id = int(data.get("lead_id") or 0)
+            note_id = int(data.get("note_id") or 0)
+            entity_type = str(data.get("entity_type") or "leads")
+            if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            ok = delete_note(note_id, entity_type)
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Qeyd silindi." if ok else "Qeyd silinmədi."})
         elif action == "deal_add_task":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
@@ -7394,7 +7418,7 @@ def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = 
     return "message" in ntype or ntype.startswith("sms")
 
 
-def _format_deal_note(note: dict) -> dict | None:
+def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
     if not isinstance(note, dict):
         return None
     ntype = str(note.get("note_type") or "common")
@@ -7437,6 +7461,8 @@ def _format_deal_note(note: dict) -> dict | None:
         message_type = "audio"
     return {
         "id": note.get("id"),
+        "entity_id": note.get("entity_id"),
+        "entity_type": str(note.get("entity_type") or entity_type or "leads"),
         "type": ntype,
         "text": text,
         "created_at": created,
@@ -7471,7 +7497,7 @@ def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 3) -> lis
         if not notes:
             break
         for note in notes:
-            formatted = _format_deal_note(note)
+            formatted = _format_deal_note(note, entity_type)
             if formatted:
                 rows.append(formatted)
         if len(notes) < 250:
@@ -8486,6 +8512,30 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "deal": deal, "readonly": True})
 
 
+def _media_bytes_response(request: web.Request, body: bytes, content_type: str) -> web.Response:
+    data = body or b""
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "private, max-age=600",
+        "Accept-Ranges": "bytes",
+        "Content-Type": content_type or "application/octet-stream",
+    }
+    rng = str(request.headers.get("Range") or "")
+    match = re.match(r"bytes=(\d*)-(\d*)", rng)
+    if match and data:
+        start = int(match.group(1) or 0)
+        end = int(match.group(2) or (len(data) - 1))
+        end = min(end, len(data) - 1)
+        if start > end or start >= len(data):
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{len(data)}"})
+        chunk = data[start:end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+        headers["Content-Length"] = str(len(chunk))
+        return web.Response(body=chunk, status=206, headers=headers)
+    headers["Content-Length"] = str(len(data))
+    return web.Response(body=data, headers=headers)
+
+
 async def handle_api_deal_file(request: web.Request) -> web.Response:
     src = unquote(str(request.rel_url.query.get("src") or "").strip())
     file_uuid = str(request.rel_url.query.get("uuid") or "").strip()
@@ -8516,13 +8566,9 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
         content_type = audio_resp.headers.get("Content-Type") or "application/octet-stream"
-        if file_uuid and content_type == "application/octet-stream":
+        if file_uuid and (content_type == "application/octet-stream" or "ogg" in (src or "").lower()):
             content_type = "audio/ogg"
-        return web.Response(
-            body=audio_resp.content,
-            content_type=content_type,
-            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "private, max-age=600"},
-        )
+        return _media_bytes_response(request, audio_resp.content, content_type)
     except Exception as exc:
         logger.warning("Deal media proxy failed: %s", exc)
         return web.Response(status=502, text="Media fetch failed")
@@ -9394,7 +9440,7 @@ async def handle_voice_proxy(request: web.Request) -> web.Response:
         auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
         audio_resp = requests.get(download_url, headers=auth_h, timeout=15)
         if audio_resp.status_code == 200:
-            return web.Response(body=audio_resp.content, content_type="audio/ogg", headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"})
+            return _media_bytes_response(request, audio_resp.content, "audio/ogg")
     except:
         pass
     # Fallback: redirect to URL
