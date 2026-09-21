@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="175">
+    <meta name="pwa-build" content="176">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -2680,8 +2680,18 @@ function chatChannelKey(item) {
 function dealClientName(deal) {
     return String((deal && deal.contact_name) || '').trim();
 }
+function isGenericChatLabel(name) {
+    const folded = String(name || '').trim().toLowerCase();
+    return !folded || folded === 'menecer' || folded === 'manager' || folded === 'müştəri' || folded === 'musteri' || folded === 'client';
+}
+function dealEmployeeName(deal) {
+    const fromDeal = String((deal && (deal.responsible_name || deal.funnel_owner_name)) || '').trim();
+    if(!isGenericChatLabel(fromDeal)) return fromDeal;
+    const fromViewer = String(FUNNEL_OWNER_NAME || '').trim();
+    return isGenericChatLabel(fromViewer) ? '' : fromViewer;
+}
 function dealManagerName() {
-    return FUNNEL_OWNER_NAME || 'Menecer';
+    return dealEmployeeName(_dealViewState && _dealViewState.deal);
 }
 function waMeUrl(phone) {
     let digits = String(phone || '').replace(/\D/g, '');
@@ -2693,9 +2703,15 @@ function waMeUrl(phone) {
 }
 function dealChatActor(item) {
     const deal = _dealViewState && _dealViewState.deal;
-    if(item && item.is_comment) return 'Qeyd · ' + ((item.author) || dealManagerName());
-    if(item && item.incoming) return dealClientName(deal) || 'Müştəri';
-    return String((item && item.author) || dealManagerName() || '').trim() || 'Menecer';
+    const author = String((item && item.author) || '').trim();
+    if(item && item.is_comment) return author || dealEmployeeName(deal);
+    if(item && item.incoming) {
+        const client = dealClientName(deal);
+        if(client) return client;
+        return isGenericChatLabel(author) ? '' : author;
+    }
+    if(!isGenericChatLabel(author)) return author;
+    return dealEmployeeName(deal);
 }
 function dealChatItemHtml(item, token, readonly) {
     const isComment = !!(item && item.is_comment);
@@ -2710,9 +2726,7 @@ function dealChatItemHtml(item, token, readonly) {
     const who = dealChatActor(item);
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    const head = item.incoming
-        ? `${meta.svg}<span>Müştəri · ${escapeHtml(who)}</span>`
-        : `${meta.svg}<span>${escapeHtml(who)}</span>`;
+    const head = `${meta.svg}${who ? `<span>${escapeHtml(who)}</span>` : ''}`;
     return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${head}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
 }
 function commentItemsFromDeal(deal) {
@@ -3438,7 +3452,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
         <div class="deal-shell-head">
             <div class="meta">
                 ${nameHtml}
-                <div class="sub"><span class="deal-head-phone-row">${phoneHtml}${waHtml}</span></div>
+                <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
             </div>
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
             <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
@@ -4744,7 +4758,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=175');
+    const reg = await navigator.serviceWorker.register('sw.js?v=176');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

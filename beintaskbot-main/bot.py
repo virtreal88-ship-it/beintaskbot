@@ -1951,6 +1951,7 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) ->
     primary = _note_entity_kind(entity_type)
     kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
     last_err = "Qeyd silinmədi."
+    saw_method_block = False
     for kind in kinds:
         urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
         if eid:
@@ -1964,8 +1965,32 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) ->
                 continue
             if resp.status_code in {200, 202, 204}:
                 return True, ""
+            if resp.status_code == 405:
+                saw_method_block = True
             last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
             logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
+    body = {"id": nid, "is_deleted": True}
+    if eid:
+        body["entity_id"] = eid
+    payloads = [[{**body, "note_type": "common"}], [body]]
+    for kind in kinds:
+        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
+        if eid:
+            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
+        for url in urls:
+            for payload in payloads:
+                try:
+                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
+                except Exception as exc:
+                    logger.error("Soft-delete note error: %s", exc)
+                    last_err = str(exc)
+                    continue
+                if resp.status_code in {200, 202, 204}:
+                    return True, ""
+                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+                logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
+    if saw_method_block and last_err.startswith("HTTP 405"):
+        last_err = "Qeyd silinmədi (Kommo 405)."
     return False, last_err
 
 def _note_entity_kind(entity_type: str) -> str:
@@ -8185,6 +8210,19 @@ def _fetch_chat_history_by_chat_id(chat_id: str) -> list[dict]:
     return []
 
 
+def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
+    name = str((author or {}).get("name") or "").strip()
+    folded = name.casefold()
+    generic = folded in {"", "menecer", "manager", "müştəri", "musteri", "client"}
+    if incoming:
+        return "" if generic else name
+    if not generic:
+        return name
+    uid = (author or {}).get("id") or message.get("created_by") or message.get("created_by_id")
+    mapped = KOMMO_USERS.get(uid, "") if uid not in (None, "") else ""
+    return str(mapped or "").strip()
+
+
 def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if not isinstance(message, dict):
         return None
@@ -8236,7 +8274,7 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "id": nested.get("id") or message.get("id"),
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
-        "author": str(author.get("name") or "").strip(),
+        "author": _chat_author_name(author, message, incoming),
         "text": text,
         "message_type": message_type,
         "created_at": created,
@@ -8293,7 +8331,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "id": event.get("id"),
                 "direction": "incoming" if incoming else "outgoing",
                 "incoming": incoming,
-                "author": "",
+                "author": KOMMO_USERS.get(event.get("created_by") or event.get("created_by_id"), "") or "",
                 "text": text,
                 "message_type": "audio" if _looks_audio_name(text) else "text",
                 "created_at": created,
@@ -8405,12 +8443,16 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
+    funnel_owner_name = owner_name_for_pipeline(pipeline_id)
+    responsible_name = funnel_owner_name or KOMMO_USERS.get(lead.get("responsible_user_id"), "") or ""
     return {
         "id": lid,
         "name": lead.get("name") or "",
         "stage_key": status_to_key.get(status_id, ""),
         "stage_name": names.get(status_id, "Naməlum mərhələ"),
         "contact_name": contact_name,
+        "responsible_name": responsible_name,
+        "funnel_owner_name": funnel_owner_name,
         "phone": all_phones[0] if all_phones else "",
         "phones": all_phones,
         "contacts": contact_rows,
