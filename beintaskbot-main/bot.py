@@ -2010,6 +2010,57 @@ def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple
     return (kinds[0] if kinds else "leads"), (ids[0] if ids else 0), "common"
 
 
+def _kommo_ajax_delete_note(note_id: int, entity_id: int, kind: str) -> bool:
+    element_type = "1" if str(kind).startswith("contact") else "2"
+    form_headers = {
+        "Authorization": f"Bearer {KOMMO_TOKEN}",
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    attempts = [
+        (
+            f"{KOMMO_BASE_URL}/ajax/v1/notes/set/",
+            {
+                "request[notes][delete][0][id]": str(note_id),
+                "request[notes][delete][0][element_id]": str(entity_id or ""),
+                "request[notes][delete][0][element_type]": element_type,
+            },
+        ),
+        (
+            f"{KOMMO_BASE_URL}/private/notes/edit2.php",
+            {"ID": str(note_id), "ACTION": "NOTE_DELETE", "ELEMENT_ID": str(entity_id or ""), "ELEMENT_TYPE": element_type},
+        ),
+    ]
+    for url, form in attempts:
+        try:
+            resp = _http.post(url, headers=form_headers, data=form, timeout=10)
+        except Exception as exc:
+            logger.warning("Ajax delete note failed: %s", exc)
+            continue
+        body = (resp.text or "")
+        folded = body.lower()
+        if resp.status_code in {200, 202, 204} and "<html" not in folded and "login" not in folded:
+            if "error" in folded and "success" not in folded and "status\":\"ok" not in folded:
+                logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
+                continue
+            return True
+        logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
+    try:
+        resp = _http.post(
+            f"{KOMMO_BASE_URL}/api/v2/notes",
+            headers=HEADERS,
+            json={"delete": [{"id": int(note_id)}]},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("v2 delete note failed: %s", exc)
+        return False
+    if resp.status_code in {200, 202, 204}:
+        return True
+    logger.warning("v2 delete note %s: %s", resp.status_code, (resp.text or "")[:180])
+    return False
+
+
 def _note_delete_error(raw: str) -> str:
     text = str(raw or "")
     if not text or text.startswith("{") or "FieldMissing" in text or "Bad Request" in text:
@@ -2075,10 +2126,9 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                     return True, ""
                 last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    ok, err = update_note(nid, _NOTE_DELETED_MARK, kinds[0], eid)
-    if ok:
+    if _kommo_ajax_delete_note(nid, eid, kinds[0]):
         return True, ""
-    return False, _note_delete_error(err or last_err)
+    return False, _note_delete_error(last_err)
 
 def _note_entity_kind(entity_type: str) -> str:
     raw = str(entity_type or "").strip().lower()
@@ -8089,6 +8139,7 @@ def _send_kommo_talk_message(
     text: str,
     attachment: dict | None = None,
     reply_to_message_id: str = "",
+    keep_plain: bool = True,
 ) -> tuple[bool, str, int]:
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
     base: dict = {}
@@ -8101,13 +8152,15 @@ def _send_kommo_talk_message(
     payloads = [base]
     reply_id = str(reply_to_message_id or "").strip()
     if reply_id:
+        quote_message = {"id": reply_id, "type": "text"}
         payloads = [
-            {**base, "reply_to_message_id": reply_id},
+            {**base, "reply_to": {"message": quote_message}},
             {**base, "reply_to": {"message_id": reply_id}},
             {**base, "reply_to": {"id": reply_id}},
-            {**base, "reply_to": {"message": {"id": reply_id}}},
-            base,
+            {**base, "reply_to_message_id": reply_id},
         ]
+        if keep_plain:
+            payloads.append(base)
     last_resp = None
     for payload in payloads:
         try:
@@ -8192,7 +8245,7 @@ def _normalize_wa_number(phone: str) -> str:
     return digits
 
 
-def _send_whatsapp_cloud_text(phone: str, text: str) -> tuple[bool, str]:
+def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:
     token = os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or ""
     phone_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID") or ""
     if not token or not phone_id:
@@ -8201,11 +8254,15 @@ def _send_whatsapp_cloud_text(phone: str, text: str) -> tuple[bool, str]:
     if len(to) < 8:
         return False, "WhatsApp nömrəsi tapılmadı."
     url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
+    body = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text, "preview_url": False}}
+    quoted = str(reply_to or "").strip()
+    if quoted:
+        body["context"] = {"message_id": quoted}
     try:
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text, "preview_url": False}},
+            json=body,
             timeout=15,
         )
     except Exception as exc:
@@ -8306,6 +8363,7 @@ def _collect_deal_chat(
     else:
         page = chat[-limit:] if chat else []
         has_more = talk_has_more or len(chat) > limit
+    _apply_saved_replies(page)
     return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
 
 
@@ -8447,6 +8505,25 @@ def _is_generic_chat_author(name: str) -> bool:
     return folded in {"client", "bot", "capi", "im", "wa", "fb"}
 
 
+def _find_wamid(value, depth: int = 0) -> str:
+    if depth > 5 or value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        return text if "wamid" in text.lower() else ""
+    if isinstance(value, dict):
+        for inner in value.values():
+            found = _find_wamid(inner, depth + 1)
+            if found:
+                return found
+    if isinstance(value, list):
+        for inner in value[:12]:
+            found = _find_wamid(inner, depth + 1)
+            if found:
+                return found
+    return ""
+
+
 def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
     name = str((author or {}).get("name") or "").strip()
     generic = _is_generic_chat_author(name)
@@ -8500,14 +8577,19 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
     reply_id = ""
     reply_text = ""
+    reply_author = ""
     if isinstance(reply_src, dict):
         reply_msg = reply_src.get("message") if isinstance(reply_src.get("message"), dict) else reply_src
         reply_id = str(reply_msg.get("id") or reply_src.get("message_id") or reply_src.get("id") or "").strip()
         reply_text = str(reply_msg.get("text") or reply_src.get("text") or "").strip()[:200]
+        sender = reply_msg.get("author") or reply_msg.get("sender") or reply_src.get("author") or reply_src.get("sender") or {}
+        if isinstance(sender, dict):
+            reply_author = str(sender.get("name") or "").strip()[:80]
     elif reply_src:
         reply_id = str(reply_src).strip()
     return {
         "id": nested.get("id") or message.get("id"),
+        "external_id": _find_wamid(message),
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
         "author": _chat_author_name(author, message, incoming),
@@ -8519,6 +8601,7 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "channel": str(origin or "").strip().lower(),
         "reply_to_message_id": reply_id,
         "reply_to_text": reply_text,
+        "reply_to_author": reply_author,
         "media_url": media if _is_allowed_kommo_media_url(media) else "",
         "file_uuid": file_uuid,
         "file_name": file_name,
@@ -8861,6 +8944,61 @@ def _attachment_kind(filename: str, content_type: str) -> str:
     return "file"
 
 
+_CHAT_REPLY_MEMORY: dict[str, dict] = {}
+
+
+def _remember_chat_reply(message_id, reply_id: str, reply_text: str, reply_author: str) -> None:
+    mid = str(message_id or "").strip()
+    preview = str(reply_text or "").strip()[:200]
+    if not mid or not (preview or reply_id):
+        return
+    if len(_CHAT_REPLY_MEMORY) > 2000:
+        _CHAT_REPLY_MEMORY.pop(next(iter(_CHAT_REPLY_MEMORY)), None)
+    _CHAT_REPLY_MEMORY[mid] = {
+        "reply_to_message_id": str(reply_id or "").strip(),
+        "reply_to_text": preview,
+        "reply_to_author": str(reply_author or "").strip()[:80],
+    }
+
+
+def _apply_saved_replies(chat: list[dict]) -> list[dict]:
+    if not _CHAT_REPLY_MEMORY:
+        return chat
+    by_id = {str(item.get("id") or ""): item for item in chat if item.get("id")}
+    for item in chat:
+        saved = _CHAT_REPLY_MEMORY.get(str(item.get("id") or ""))
+        if saved:
+            if not item.get("reply_to_text"):
+                item["reply_to_text"] = saved.get("reply_to_text") or ""
+            if not item.get("reply_to_author"):
+                item["reply_to_author"] = saved.get("reply_to_author") or ""
+            if not item.get("reply_to_message_id"):
+                item["reply_to_message_id"] = saved.get("reply_to_message_id") or ""
+        quoted_id = str(item.get("reply_to_message_id") or "").strip()
+        source = by_id.get(quoted_id) if quoted_id else None
+        if source and not item.get("reply_to_text"):
+            item["reply_to_text"] = str(source.get("text") or "").strip()[:200]
+            item["reply_to_author"] = str(source.get("author") or item.get("reply_to_author") or "").strip()[:80]
+    return chat
+
+
+def _stamp_sent_reply(chat: list[dict], text: str, reply_id: str, reply_text: str, reply_author: str) -> None:
+    preview = str(reply_text or "").strip()[:200]
+    if not preview and not reply_id:
+        return
+    wanted = str(text or "").strip()
+    for item in reversed(chat):
+        if item.get("incoming"):
+            continue
+        if str(item.get("text") or "").strip() != wanted:
+            continue
+        item["reply_to_message_id"] = reply_id or item.get("reply_to_message_id") or ""
+        item["reply_to_text"] = preview or item.get("reply_to_text") or ""
+        item["reply_to_author"] = reply_author or item.get("reply_to_author") or ""
+        _remember_chat_reply(item.get("id"), item["reply_to_message_id"], item["reply_to_text"], item["reply_to_author"])
+        return
+
+
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -8870,6 +9008,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     lead_id = 0
     attachment = None
     reply_to_message_id = ""
+    reply_external = ""
+    reply_preview = ""
+    reply_author = ""
     hinted_talk = 0
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
@@ -8881,6 +9022,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         text = str(form.get("text") or "").strip()
         channel = str(form.get("channel") or "whatsapp").strip().lower()
         reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
+        reply_external = str(form.get("reply_external_id") or "").strip()
+        reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
+        reply_author = str(form.get("reply_to_author") or "").strip()[:80]
         try:
             hinted_talk = int(form.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -8914,6 +9058,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         text = str(data.get("text") or "").strip()
         channel = str(data.get("channel") or "whatsapp").strip().lower()
         reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
+        reply_external = str(data.get("reply_external_id") or "").strip()
+        reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
+        reply_author = str(data.get("reply_to_author") or "").strip()[:80]
         try:
             hinted_talk = int(data.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -8931,10 +9078,25 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
-    ok, last_error, _status = _send_kommo_talk_message(
-        reply_talk_id, text, attachment, reply_to_message_id
-    )
-    if not ok and channel == "whatsapp":
+    quote_on_whatsapp = bool(reply_to_message_id) and channel == "whatsapp" and not attachment
+    wa_quote_id = reply_external if reply_external.lower().startswith("wamid") else ""
+    ok = False
+    last_error = ""
+    if quote_on_whatsapp and wa_quote_id:
+        _ids, phones = _contact_ids_and_phones(lead)
+        for phone in phones:
+            cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text, wa_quote_id)
+            if cloud_ok:
+                ok = True
+                last_error = ""
+                break
+            if cloud_error:
+                last_error = cloud_error
+    if not ok:
+        ok, last_error, _status = _send_kommo_talk_message(
+            reply_talk_id, text, attachment, reply_to_message_id, keep_plain=not quote_on_whatsapp
+        )
+    if not ok and channel == "whatsapp" and not reply_to_message_id:
         _ids, phones = _contact_ids_and_phones(lead)
         for phone in phones:
             cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
@@ -8945,6 +9107,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             if cloud_error:
                 last_error = cloud_error
     if not ok:
+        if quote_on_whatsapp:
+            last_error = "Cavab göndərilmədi."
         return web.json_response({"success": False, "error": last_error}, status=400)
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
@@ -8955,6 +9119,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         sender_digits=sender_digits,
         employee_name=employee_name_for_lead(lead),
     )
+    _apply_saved_replies(chat)
+    if reply_to_message_id:
+        _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
     return web.json_response({
         "success": True,
         "chat": chat,

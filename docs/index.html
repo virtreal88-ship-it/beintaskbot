@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="184">
+    <meta name="pwa-build" content="186">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -291,7 +291,11 @@
         .deal-chat-row.in { background:#fff; margin-right:auto; }
         .deal-chat-row.out { background:#dbeafe; margin-left:auto; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
-        .chat-quote-in { border-left:3px solid #94a3b8; background:#f1f5f9; padding:4px 6px; margin-bottom:4px; border-radius:4px; font-size:11px; color:#475569; }
+        .chat-quote-in { border-left:3px solid #53bdeb; background:rgba(0,0,0,.06); padding:4px 8px; margin:2px 0 4px; border-radius:6px; }
+        .deal-chat-row.in .chat-quote-in { border-left-color:#06cf9c; background:#f0f2f5; }
+        .chat-quote-who { font-size:11px; font-weight:700; color:#1d6fbf; line-height:1.2; }
+        .deal-chat-row.in .chat-quote-who { color:#02735e; }
+        .chat-quote-txt { font-size:12px; color:#3b4a54; max-height:34px; overflow:hidden; }
         .deal-chat-row .wa-time { display:flex; align-items:center; justify-content:flex-end; gap:5px; font-size:10px; color:#667781; margin-top:4px; flex-wrap:wrap; }
         .wa-when { white-space:nowrap; }
         .wa-sign { font-weight:700; color:#54656f; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -2824,10 +2828,16 @@ function dealChatItemHtml(item, token, readonly) {
     const channel = chatChannelKey(item);
     const meta = chatChannelMeta(channel);
     const who = dealChatActor(item);
-    const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
+    const quote = dealChatQuoteHtml(item);
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${meta.svg}${headName}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${replyBtn}</div></div>`;
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${meta.svg}${headName}</div>${quote}<div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${replyBtn}</div></div>`;
+}
+function dealChatQuoteHtml(item) {
+    const text = String(item && item.reply_to_text || '').trim();
+    if(!text) return '';
+    const who = String(item.reply_to_author || '').trim();
+    return `<div class="chat-quote-in">${who ? `<div class="chat-quote-who">${escapeHtml(who)}</div>` : ''}<div class="chat-quote-txt">${linkifyText(text)}</div></div>`;
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
@@ -2851,7 +2861,7 @@ function dealTimelineMessages(chat, deal) {
         rows.push(item);
     });
     rows.sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
-    return rows;
+    return hydrateDealQuotes(rows);
 }
 function dealChatRowsHtml(chat, token, blocked, loading) {
     const deal = _dealViewState && _dealViewState.deal;
@@ -2868,6 +2878,42 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
 function isDealSystemNoise(text) {
     const folded = String(text || '').toLowerCase();
     return folded.includes('агенты ии остановлены') || folded.includes('ai agents have been stopped');
+}
+function chatReplyStore() {
+    try { return JSON.parse(localStorage.getItem('deal-chat-replies') || '{}') || {}; }
+    catch(_err) { return {}; }
+}
+function rememberChatReply(messageId, reply) {
+    const id = String(messageId || '');
+    if(!id || !reply || !reply.text) return;
+    const data = chatReplyStore();
+    data[id] = { id: reply.id || '', text: String(reply.text).slice(0, 180), author: reply.author || '' };
+    const keys = Object.keys(data);
+    while(keys.length > 400) delete data[keys.shift()];
+    try { localStorage.setItem('deal-chat-replies', JSON.stringify(data)); } catch(_err) {}
+}
+function hydrateDealQuotes(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const saved = chatReplyStore();
+    const byId = new Map();
+    list.forEach(item => { if(item && item.id) byId.set(String(item.id), item); });
+    return list.map(item => {
+        if(!item || item.is_comment) return item;
+        const stored = saved[String(item.id || '')] || null;
+        let replyId = item.reply_to_message_id || (stored && stored.id) || '';
+        let replyText = item.reply_to_text || (stored && stored.text) || '';
+        let replyAuthor = item.reply_to_author || (stored && stored.author) || '';
+        if(!replyText && replyId) {
+            const src = byId.get(String(replyId));
+            if(src) {
+                replyText = String(src.text || '').slice(0, 180);
+                replyAuthor = replyAuthor || dealChatActor(src) || src.author || '';
+            }
+        }
+        if(!replyText) return item;
+        if(replyText === item.reply_to_text && replyAuthor === (item.reply_to_author || '') && String(replyId) === String(item.reply_to_message_id || '')) return item;
+        return Object.assign({}, item, { reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor });
+    });
 }
 function chatMessageKey(item) {
     return [item && item.id, item && item.text, item && item.created_at, item && item.file_uuid].join('|');
@@ -3342,6 +3388,8 @@ function setDealChatReply(item) {
     _dealViewState.replyTo = {
         id: item.id,
         text: String(item.text || '').slice(0, 180),
+        author: dealChatActor(item) || item.author || '',
+        externalId: item.external_id || '',
         channel: chatChannelKey(item),
         talkId: item.talk_id || 0
     };
@@ -3493,6 +3541,9 @@ async function sendDealChatMessage(file) {
     const replyTo = _dealViewState.replyTo;
     const channel = (replyTo && replyTo.channel) || _dealViewState.channel || 'whatsapp';
     const replyId = replyTo && replyTo.id ? String(replyTo.id) : '';
+    const replyText = replyTo && replyTo.text ? String(replyTo.text) : '';
+    const replyAuthor = replyTo && replyTo.author ? String(replyTo.author) : '';
+    const replyExternal = replyTo && replyTo.externalId ? String(replyTo.externalId) : '';
     const channelRow = (_dealViewState.channels || []).find(row => row.key === channel);
     const talkId = Number((replyTo && replyTo.talkId) || (channelRow && channelRow.talk_id) || 0);
     _dealChatSending = true;
@@ -3507,6 +3558,9 @@ async function sendDealChatMessage(file) {
             form.append('channel', channel);
             form.append('text', text);
             if(replyId) form.append('reply_to_message_id', replyId);
+            if(replyText) form.append('reply_to_text', replyText);
+            if(replyAuthor) form.append('reply_to_author', replyAuthor);
+            if(replyExternal) form.append('reply_external_id', replyExternal);
             if(talkId) form.append('talk_id', String(talkId));
             form.append('file', file, file.name || 'file');
             r = await fetch(API_BASE + '/api/deal/chat/send', {
@@ -3518,15 +3572,24 @@ async function sendDealChatMessage(file) {
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, talk_id: talkId})
+                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor, reply_external_id: replyExternal, talk_id: talkId})
             });
         }
         const d = await r.json().catch(() => ({}));
         if(!requestMatchesDeal(seq, leadId)) return;
         if(!r.ok || !d.success) throw new Error(d.error || 'Göndərilmədi');
         if(input) input.value = '';
-        clearDealChatReply();
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
+        if(replyId) {
+            const sent = [..._dealViewState.messages].reverse().find(item => item && !item.incoming && !item.is_comment && String(item.text || '').trim() === text);
+            if(sent) {
+                sent.reply_to_message_id = sent.reply_to_message_id || replyId;
+                sent.reply_to_text = sent.reply_to_text || replyText;
+                sent.reply_to_author = sent.reply_to_author || replyAuthor;
+                rememberChatReply(sent.id, {id: replyId, text: replyText, author: replyAuthor});
+            }
+        }
+        clearDealChatReply();
         _dealViewState.blocked = !!d.chat_blocked;
         applyDealChannels(d.channels || _dealViewState.channels);
         paintDealChatThread({stickBottom: true, force: true});
@@ -3646,7 +3709,12 @@ function paintDealViewModal(deal, readonly) {
     const input = document.getElementById('deal-chat-input');
     const attachBtn = document.getElementById('deal-chat-attach');
     const fileInput = document.getElementById('deal-chat-file');
-    if(sendBtn) sendBtn.onclick = () => sendDealChatMessage();
+    if(sendBtn) {
+        sendBtn.addEventListener('pointerdown', event => {
+            event.preventDefault();
+            sendDealChatMessage();
+        });
+    }
     const aiBtn = document.getElementById('deal-chat-ai');
     if(aiBtn) aiBtn.onclick = requestDealAiReply;
     if(input) input.addEventListener('keydown', event => {
@@ -4905,7 +4973,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=184');
+    const reg = await navigator.serviceWorker.register('sw.js?v=186');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
