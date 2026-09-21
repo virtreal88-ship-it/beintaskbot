@@ -1534,6 +1534,19 @@ def owner_name_for_pipeline(pipeline_id: int) -> str:
     }.get(int(pipeline_id), "")
 
 
+def employee_name_for_lead(lead: dict | None) -> str:
+    if not isinstance(lead, dict):
+        return ""
+    try:
+        pipeline_id = int(lead.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        pipeline_id = 0
+    name = owner_name_for_pipeline(pipeline_id)
+    if name:
+        return name
+    return str(KOMMO_USERS.get(lead.get("responsible_user_id"), "") or "").strip()
+
+
 def personal_entry_stage(pipeline_id: int) -> tuple[int, int] | None:
     stages, _names, ui = load_pipeline_stage_maps(pipeline_id)
     skip = {"nerazobrannoye", "ugurlu", "imtina"}
@@ -1939,7 +1952,54 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
         logger.error(f"Add note error: {e}")
     return None
 
-def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) -> tuple[bool, str]:
+def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple[str, int, str]:
+    nid = int(note_id)
+    ids = [int(i) for i in entity_ids if int(i or 0)]
+    for kind in kinds:
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/{kind}/notes",
+                headers=HEADERS,
+                params={"filter[id][]": nid, "limit": 1},
+                timeout=8,
+            )
+        except Exception as exc:
+            logger.warning("Lookup note %s/%s failed: %s", kind, nid, exc)
+            resp = None
+        if resp is not None and resp.status_code == 200:
+            notes = ((resp.json() or {}).get("_embedded") or {}).get("notes") or []
+            if notes and isinstance(notes[0], dict):
+                note = notes[0]
+                try:
+                    eid = int(note.get("entity_id") or 0)
+                except (TypeError, ValueError):
+                    eid = 0
+                return kind, eid, str(note.get("note_type") or "common")
+        for eid in ids:
+            try:
+                resp = _http.get(
+                    f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes",
+                    headers=HEADERS,
+                    params={"limit": 250, "filter[id][]": nid},
+                    timeout=8,
+                )
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            for note in ((resp.json() or {}).get("_embedded") or {}).get("notes") or []:
+                if not isinstance(note, dict):
+                    continue
+                try:
+                    if int(note.get("id") or 0) != nid:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                return kind, eid, str(note.get("note_type") or "common")
+    return (kinds[0] if kinds else "leads"), (ids[0] if ids else 0), "common"
+
+
+def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, extra_ids: list[int] | None = None) -> tuple[bool, str]:
     try:
         nid = int(note_id)
     except (TypeError, ValueError):
@@ -1950,8 +2010,20 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) ->
         eid = 0
     primary = _note_entity_kind(entity_type)
     kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
+    extra = []
+    for value in extra_ids or []:
+        try:
+            extra.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    found_kind, found_eid, note_type = _lookup_note(nid, kinds, [eid, *extra])
+    if found_kind:
+        kinds = [found_kind] + [k for k in kinds if k != found_kind]
+    if found_eid:
+        eid = found_eid
+    if not note_type:
+        note_type = "common"
     last_err = "Qeyd silinmədi."
-    saw_method_block = False
     for kind in kinds:
         urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
         if eid:
@@ -1965,20 +2037,26 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) ->
                 continue
             if resp.status_code in {200, 202, 204}:
                 return True, ""
-            if resp.status_code == 405:
-                saw_method_block = True
             last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
             logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
-    body = {"id": nid, "is_deleted": True}
+            if resp.status_code not in {400, 404, 405}:
+                continue
+    bodies: list[list[dict]] = []
+    base = {"id": nid, "is_deleted": True}
     if eid:
-        body["entity_id"] = eid
-    payloads = [[{**body, "note_type": "common"}], [body]]
+        base["entity_id"] = eid
+    bodies.append([{**base, "note_type": note_type}])
+    if note_type != "common":
+        bodies.append([{**base, "note_type": "common"}])
+    bodies.append([base])
+    bodies.append([{"id": nid, "is_deleted": True, "note_type": note_type}])
+    bodies.append([{"id": nid, "is_deleted": True}])
     for kind in kinds:
         urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
         if eid:
             urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
         for url in urls:
-            for payload in payloads:
+            for payload in bodies:
                 try:
                     resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
                 except Exception as exc:
@@ -1989,8 +2067,6 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) ->
                     return True, ""
                 last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    if saw_method_block and last_err.startswith("HTTP 405"):
-        last_err = "Qeyd silinmədi (Kommo 405)."
     return False, last_err
 
 def _note_entity_kind(entity_type: str) -> str:
@@ -5618,7 +5694,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
             if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok, err = delete_note(note_id, entity_type, entity_id)
+            extra_ids = [lead_id]
+            lead_obj = get_lead_details(lead_id) or {}
+            extra_ids.extend(_lead_contact_ids(lead_obj))
+            ok, err = delete_note(note_id, entity_type, entity_id, extra_ids=extra_ids)
             if ok:
                 invalidate_rufat_overview_cache()
             return web.json_response({
@@ -8055,6 +8134,7 @@ def _collect_deal_chat(
     before: int = 0,
     channel: str = "whatsapp",
     sender_digits: str = "",
+    employee_name: str = "",
 ) -> tuple[list[dict], bool, int, bool, list[dict], str]:
     """Load a merged timeline from all messenger talks; channel is the send target."""
     try:
@@ -8111,6 +8191,10 @@ def _collect_deal_chat(
             if formatted:
                 formatted["channel"] = channel_key
                 formatted["talk_id"] = talk_id
+                if not formatted.get("incoming"):
+                    author = str(formatted.get("author") or "")
+                    if channel_key == "whatsapp" or _is_generic_chat_author(author):
+                        formatted["author"] = employee_name or author
             _add_chat(formatted)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
@@ -8244,14 +8328,22 @@ def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
     return "sent"
 
 
+def _is_generic_chat_author(name: str) -> bool:
+    folded = str(name or "").strip().casefold()
+    if not folded:
+        return True
+    tokens = (
+        "whatsapp", "waba", "instagram", "facebook", "messenger", "tiktok",
+        "telegram", "viber", "amojo", "kommo", "menecer", "manager", "müştəri", "musteri",
+    )
+    if any(token in folded for token in tokens):
+        return True
+    return folded in {"client", "bot", "capi", "im", "wa", "fb"}
+
+
 def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
     name = str((author or {}).get("name") or "").strip()
-    folded = name.casefold()
-    generic = folded in {
-        "", "menecer", "manager", "müştəri", "musteri", "client",
-        "whatsapp", "waba", "instagram", "facebook", "fb", "messenger",
-        "tiktok", "telegram", "viber", "bot", "amojo", "kommo", "capi", "im", "wa",
-    }
+    generic = _is_generic_chat_author(name)
     if incoming:
         return "" if generic else name
     if not generic:
@@ -8631,6 +8723,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         before=before,
         channel=channel,
         sender_digits=sender_digits,
+        employee_name=employee_name_for_lead(lead),
     )
     return web.json_response({
         "success": True,
@@ -8719,6 +8812,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         limit=1,
         channel=channel,
         sender_digits=sender_digits,
+        employee_name=employee_name_for_lead(lead),
     )
     if not reply_talk_id:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
@@ -8743,6 +8837,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         limit=20,
         channel=channel,
         sender_digits=sender_digits,
+        employee_name=employee_name_for_lead(lead),
     )
     return web.json_response({
         "success": True,
