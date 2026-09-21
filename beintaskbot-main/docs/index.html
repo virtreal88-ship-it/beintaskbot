@@ -2949,7 +2949,6 @@ function dealNoteRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconDel()}</button></span>`
         : '';
-        : '';
     return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
 }
 function dealTaskRowHtml(item, readonly) {
@@ -4730,7 +4729,7 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 async function clearAppCacheOnce() {
-  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_21b') === '1') return;
+  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_21c') === '1') return;
   if ('caches' in window) {
     const cacheNames = await caches.keys();
     await Promise.all(cacheNames.map(name => caches.delete(name)));
@@ -4738,13 +4737,13 @@ async function clearAppCacheOnce() {
   Object.keys(localStorage).forEach(key => {
     if (key.startsWith('cached_')) localStorage.removeItem(key);
   });
-  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_21b', '1');
+  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_21c', '1');
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=173-nav-unblock');
+    const reg = await navigator.serviceWorker.register('sw.js?v=174-js-fix');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
