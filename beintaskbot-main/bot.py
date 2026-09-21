@@ -6163,8 +6163,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         try:
                             if move_lead_to_icraci(_lead_id_to_move, assignee_name_raw):
                                 logger.info(f"Moved lead {_lead_id_to_move} to funnel of {assignee_name_raw}")
-                except Exception as _me:
-                    logger.error(f"Failed to move lead to icraçı funnel: {_me}")
+                        except Exception as _me:
+                            logger.error(f"Failed to move lead to icraçı funnel: {_me}")
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
