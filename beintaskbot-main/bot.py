@@ -27,7 +27,7 @@ import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote
 from openai import OpenAI
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, MenuButtonWebApp, WebAppInfo
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -5315,7 +5315,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v142")
+    return web.Response(status=200, text="Bot is running v175")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9501,7 +9501,10 @@ async def serve_webapp(request: web.Request) -> web.Response:
         logger.error("Web app index not found; checked: %s", ", ".join(candidates))
         return web.Response(status=404, text="Web app index not found")
     logger.info("Serving web app from %s", html_path)
-    return web.FileResponse(html_path)
+    resp = web.FileResponse(html_path)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 
 async def serve_deal_page(request: web.Request) -> web.Response:
@@ -10555,7 +10558,18 @@ def main():
             _rehydrate_tecili_tasks()
         except Exception as _re_err:
             logger.warning(f"Təcili rehydrate skipped: {_re_err}")
-        logger.info(f"Bot started. Kommo webhook server on port {WEBHOOK_PORT}; Telegram polling active.")
+        logger.info("Bot started. Kommo webhook server on port %s; Telegram polling active.", WEBHOOK_PORT)
+        try:
+            webapp_url = os.environ.get(
+                "WEBAPP_PUBLIC_URL",
+                "https://worker-production-3e3e.up.railway.app/webapp?v=175",
+            )
+            await application.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="CRM", web_app=WebAppInfo(url=webapp_url))
+            )
+            logger.info("Telegram menu button set to %s", webapp_url)
+        except Exception as exc:
+            logger.warning("Could not set web app menu button: %s", exc)
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app

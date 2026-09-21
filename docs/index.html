@@ -6,6 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
+    <meta name="pwa-build" content="175">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -795,7 +796,7 @@
 <script>
 const tg = window.Telegram?.WebApp || {};
 
-const PUBLIC_PWA_BASE = 'https://virtreal88-ship-it.github.io/beintaskbot/';
+const PUBLIC_PWA_BASE = 'https://worker-production-3e3e.up.railway.app/';
 const RAILWAY_API = 'https://worker-production-3e3e.up.railway.app';
 function getShareTokenFromLocation() {
     const k = new URLSearchParams(window.location.search).get('k') || '';
@@ -4743,7 +4744,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=174-js-fix');
+    const reg = await navigator.serviceWorker.register('sw.js?v=175');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
