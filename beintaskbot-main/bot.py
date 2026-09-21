@@ -1939,19 +1939,34 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
         logger.error(f"Add note error: {e}")
     return None
 
-def delete_note(note_id: int, entity_type: str = "leads") -> bool:
-    kind = "contacts" if str(entity_type or "").startswith("contact") else "leads"
+def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0) -> tuple[bool, str]:
     try:
         nid = int(note_id)
     except (TypeError, ValueError):
-        return False
-    url = f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"
+        return False, "Qeyd tapılmadı."
     try:
-        resp = _http.delete(url, headers=HEADERS, timeout=10)
-        return resp.status_code in {200, 202, 204}
-    except Exception as exc:
-        logger.error("Delete note error: %s", exc)
-        return False
+        eid = int(entity_id or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    primary = _note_entity_kind(entity_type)
+    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
+    last_err = "Qeyd silinmədi."
+    for kind in kinds:
+        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
+        if eid:
+            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes/{nid}")
+        for url in urls:
+            try:
+                resp = _http.delete(url, headers=HEADERS, timeout=10)
+            except Exception as exc:
+                logger.error("Delete note error: %s", exc)
+                last_err = str(exc)
+                continue
+            if resp.status_code in {200, 202, 204}:
+                return True, ""
+            last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+            logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
+    return False, last_err
 
 def _note_entity_kind(entity_type: str) -> str:
     raw = str(entity_type or "").strip().lower()
@@ -5570,12 +5585,22 @@ async def handle_api_action(request: web.Request) -> web.Response:
             lead_id = int(data.get("lead_id") or 0)
             note_id = int(data.get("note_id") or 0)
             entity_type = str(data.get("entity_type") or "leads")
+            try:
+                entity_id = int(data.get("entity_id") or 0)
+            except (TypeError, ValueError):
+                entity_id = 0
+            if not entity_id:
+                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
             if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok = delete_note(note_id, entity_type)
+            ok, err = delete_note(note_id, entity_type, entity_id)
             if ok:
                 invalidate_rufat_overview_cache()
-            return web.json_response({"success": ok, "message": "Qeyd silindi." if ok else "Qeyd silinmədi."})
+            return web.json_response({
+                "success": ok,
+                "message": "Qeyd silindi." if ok else "Qeyd silinmədi.",
+                "error": "" if ok else err,
+            }, status=200 if ok else 400)
         elif action == "deal_add_task":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):

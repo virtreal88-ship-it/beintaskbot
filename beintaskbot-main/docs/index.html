@@ -236,10 +236,11 @@
         .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#1e293b; color:#fff; }
         .deal-shell-head .meta { min-width:0; flex:1; }
         .deal-shell-head .name, .deal-head-name { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .deal-shell-head .sub { font-size:11px; opacity:.9; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+        .deal-shell-head .sub { font-size:11px; opacity:.95; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
         .deal-head-name, .deal-head-phone { width:100%; background:transparent; border:0; color:#fff; padding:0; outline:none; font-family:inherit; }
-        .deal-head-phone { font-size:11px; font-weight:600; opacity:.95; width:auto; min-width:90px; flex:1; }
-        .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; background:#ffffff22; flex:none; }
+        .deal-head-phone { font-size:14px; font-weight:700; opacity:1; width:auto; min-width:0; flex:none; }
+        .deal-head-phone-row { display:inline-flex; align-items:center; gap:4px; }
+        .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:transparent; flex:none; }
         .deal-head-wa svg { width:16px; height:16px; display:block; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
@@ -294,7 +295,12 @@
         .chat-quote-bar button { border:0; background:transparent; font-size:18px; line-height:1; color:#64748b; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
-        .deal-chat-row.comment { background:#f8fafc; margin:8px auto; max-width:92%; border:1px dashed #cbd5e1; box-shadow:none; }
+        .deal-chat-row.comment { display:none; }
+        .deal-chat-note { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:8px auto; max-width:92%; box-shadow:none; font-size:13px; line-height:1.35; }
+        .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:700; margin-bottom:4px; }
+        img.deal-zoom { cursor:zoom-in; }
+        #deal-photo-zoom { position:fixed; inset:0; z-index:12000; background:#000c; display:flex; align-items:center; justify-content:center; padding:16px; }
+        #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
         .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
@@ -2638,7 +2644,7 @@ function dealMediaBlock(item, token) {
     const safe = escapeHtml(src);
     const type = String(kind || '').toLowerCase();
     if(type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName)) {
-        return `<img src="${safe}" alt="" style="max-width:100%;border-radius:8px;margin-top:6px">`;
+        return `<img class="deal-zoom" src="${safe}" alt="" style="max-width:100%;border-radius:8px;margin-top:6px">`;
     }
     if(type === 'voice' || type === 'audio' || type === 'call_in' || type === 'call_out' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
         return audioWaitHtml(src);
@@ -2675,20 +2681,26 @@ function waMeUrl(phone) {
 function dealChatActor(item) {
     const deal = _dealViewState && _dealViewState.deal;
     if(item && item.is_comment) return 'Qeyd · ' + ((item.author) || dealManagerName());
-    if(item && item.incoming) return 'Müştəri · ' + (dealClientName(deal) || 'Müştəri');
-    return 'Menecer · ' + ((item && item.author) || dealManagerName());
+    if(item && item.incoming) return dealClientName(deal) || 'Müştəri';
+    return String((item && item.author) || dealManagerName() || '').trim() || 'Menecer';
 }
 function dealChatItemHtml(item, token, readonly) {
     const isComment = !!(item && item.is_comment);
-    const cls = isComment ? 'comment' : (item.incoming ? 'in' : 'out');
-    const channel = isComment ? 'comment' : chatChannelKey(item);
-    const meta = isComment ? null : chatChannelMeta(channel);
-    const who = dealChatActor(item);
     const time = escapeHtml((item.created || '').split(' ').slice(-1)[0] || item.created || '');
+    if(isComment) {
+        const who = String(item.author || '').trim();
+        return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${time}</div><div>${linkifyText(item.text || '')}</div></div>`;
+    }
+    const cls = item.incoming ? 'in' : 'out';
+    const channel = chatChannelKey(item);
+    const meta = chatChannelMeta(channel);
+    const who = dealChatActor(item);
     const quote = item.reply_to_text ? `<div class="chat-quote-in">${linkifyText(item.reply_to_text)}</div>` : '';
-    const replyBtn = (readonly || isComment) ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
-    const icon = meta ? meta.svg : '';
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${icon}<span>${escapeHtml(who)}</span></div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
+    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
+    const head = item.incoming
+        ? `${meta.svg}<span>Müştəri · ${escapeHtml(who)}</span>`
+        : `${meta.svg}<span>${escapeHtml(who)}</span>`;
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}">${quote}<div class="chat-row-head">${head}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${time}${replyBtn}</div></div>`;
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
@@ -2767,6 +2779,21 @@ function bindDealChatMedia(thread) {
             if(item) setDealChatReply(item);
         };
     });
+    thread.querySelectorAll('img.deal-zoom').forEach(img => {
+        img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
+    });
+}
+function openDealPhotoZoom(src) {
+    if(!src) return;
+    document.getElementById('deal-photo-zoom')?.remove();
+    const box = document.createElement('div');
+    box.id = 'deal-photo-zoom';
+    box.innerHTML = `<img src="${escapeHtml(src)}" alt="">`;
+    const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = event => { if(event.key === 'Escape') close(); };
+    box.onclick = close;
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
 }
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
@@ -2908,7 +2935,7 @@ function dealIconDel() {
 function dealNoteRowHtml(item, readonly) {
     const canEdit = !readonly && item && item.id;
     const actions = canEdit
-        ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">${dealIconDel()}</button></span>`
+        ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconDel()}</button></span>`
         : '';
         : '';
     return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
@@ -2961,8 +2988,6 @@ function applyDealSide(deal, readonly) {
         wa.href = url || '#';
         wa.hidden = !url;
     }
-    const headStage = document.getElementById('deal-head-stage');
-    if(headStage) headStage.textContent = deal.stage_name || '';
     bindDealSideActions(deal);
 }
 function mergeDealSnapshot(prev, snap) {
@@ -3030,9 +3055,12 @@ function bindDealSideActions(deal) {
             const row = btn.closest('.deal-note-row');
             btn.disabled = true;
             if(row) row.classList.add('saving');
+            const entityId = btn.getAttribute('data-entity-id') || row?.getAttribute('data-entity-id') || '';
             try {
-                await samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType});
+                await samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType, entity_id: entityId});
+                if(Array.isArray(deal.notes)) deal.notes = deal.notes.filter(item => String(item.id) !== String(noteId));
                 row?.remove();
+                if(_dealViewState) paintDealChatThread({stickBottom: false});
                 toast('Qeyd silindi');
             } catch(err) { toast(err.message || 'Qeyd silinmədi', true); btn.disabled = false; if(row) row.classList.remove('saving'); }
         };
@@ -3082,8 +3110,6 @@ function bindDealSideActions(deal) {
             const label = (SAMIL_ALL_STAGES.find(([k]) => k === stageKey) || [])[1] || stageKey;
             deal.stage_key = stageKey;
             deal.stage_name = label;
-            const headStage = document.getElementById('deal-head-stage');
-            if(headStage) headStage.textContent = label;
             toast('Mərhələ dəyişdi');
         } catch(err) { toast(err.message || 'Mərhələ dəyişmədi', true); stageEl.value = deal.stage_key || ''; }
         finally { stageEl.disabled = false; if(spin) spin.hidden = true; }
@@ -3279,6 +3305,7 @@ async function copyText(value) {
 function closeDealViewModal() {
     stopDealChatPolling();
     _dealViewState = null;
+    document.getElementById('deal-photo-zoom')?.remove();
     document.getElementById('deal-view-modal')?.remove();
 }
 let _dealViewState = null;
@@ -3399,7 +3426,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
         <div class="deal-shell-head">
             <div class="meta">
                 ${nameHtml}
-                <div class="sub"><span id="deal-head-stage">${escapeHtml(deal.stage_name || '')}</span> · ${phoneHtml}${waHtml}</div>
+                <div class="sub"><span class="deal-head-phone-row">${phoneHtml}${waHtml}</span></div>
             </div>
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
             <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
