@@ -7596,17 +7596,29 @@ def _talk_has_digits(talk: dict, digits: str) -> bool:
 
 
 def _talk_channel_key(talk: dict) -> str:
-    blob = _talk_blob(talk)
-    origin = str(talk.get("origin") or talk.get("source") or "").strip().lower()
+    chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
+    origin = " ".join(
+        str(part or "")
+        for part in (
+            talk.get("origin"),
+            talk.get("source"),
+            chat.get("type"),
+            chat.get("origin"),
+            talk.get("entity_type"),
+        )
+    ).strip().lower()
+    blob = origin + " " + _talk_blob(talk)
     if "tiktok" in blob or "tik tok" in blob:
         return "tiktok"
-    if "instagram" in blob:
+    if "instagram" in origin or "instagram" in blob:
         return "instagram"
-    if "facebook" in blob or "fb messenger" in blob:
+    if "facebook" in origin or "fb messenger" in blob or origin in {"fb", "messenger"}:
         return "facebook"
-    if any(token in blob for token in ("whatsapp", "waba", "whats app", "whats-app")):
+    if any(token in origin for token in ("whatsapp", "waba")) or any(
+        token in blob for token in ("whatsapp", "waba", "whats app", "whats-app")
+    ):
         return "whatsapp"
-    if origin in {"", "chat", "capi", "wa", "im"}:
+    if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip():
         return "whatsapp"
     return "other"
 
@@ -7682,13 +7694,20 @@ def _kommo_error_detail(resp) -> str:
     return (resp.text or "")[:240]
 
 
-def _send_kommo_talk_message(talk_id: int, text: str, attachment: dict | None = None) -> tuple[bool, str, int]:
+def _send_kommo_talk_message(
+    talk_id: int,
+    text: str,
+    attachment: dict | None = None,
+    reply_to_message_id: str = "",
+) -> tuple[bool, str, int]:
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
     payload: dict = {}
     if text:
         payload["text"] = text
     if attachment:
         payload["attachment"] = attachment
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = str(reply_to_message_id)
     if not payload:
         return False, "Mesaj boş ola bilməz", 0
     try:
@@ -7698,6 +7717,8 @@ def _send_kommo_talk_message(talk_id: int, text: str, attachment: dict | None = 
         return False, "Kommo çata göndərmək alınmadı.", 0
     if resp.status_code in {200, 202}:
         return True, "", resp.status_code
+    if reply_to_message_id and resp.status_code in {400, 422}:
+        return _send_kommo_talk_message(talk_id, text, attachment, "")
     detail = _kommo_error_detail(resp)
     logger.warning("Talk send status %s: %s", resp.status_code, detail)
     if resp.status_code == 403:
@@ -7809,7 +7830,7 @@ def _collect_deal_chat(
     channel: str = "whatsapp",
     sender_digits: str = "",
 ) -> tuple[list[dict], bool, int, bool, list[dict], str]:
-    """Load a short page from the selected messenger talk."""
+    """Load a merged timeline from all messenger talks; channel is the send target."""
     try:
         limit = max(1, min(int(limit or 20), 50))
     except (TypeError, ValueError):
@@ -7836,46 +7857,44 @@ def _collect_deal_chat(
 
     talks = _fetch_talks(lid, contact_ids)
     channels = _channels_from_talks(talks, sender_digits)
-    keys = {row["key"] for row in channels}
-    if wanted not in keys:
-        wanted = "whatsapp" if "whatsapp" in keys else (channels[0]["key"] if channels else wanted)
-    reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    if not reply_talk_id:
+    if not channels:
         ranked = _ranked_reply_talk_ids(talks)
-        reply_talk_id = ranked[0] if ranked else 0
-        if reply_talk_id and wanted not in keys:
-            wanted = _talk_channel_key(next((t for t in talks if _talk_id_of(t) == reply_talk_id), {}) ) or wanted
-            if wanted not in CHAT_CHANNEL_LABELS:
-                wanted = "whatsapp"
-            if not any(row.get("key") == wanted for row in channels):
-                channels = [{
-                    "key": wanted,
-                    "label": CHAT_CHANNEL_LABELS.get(wanted, "WhatsApp"),
-                    "talk_id": reply_talk_id,
-                    "open": True,
-                }] + channels
-    origin = wanted
-    chat_id = ""
-    for talk in talks:
-        if _talk_id_of(talk) == reply_talk_id:
-            origin = str(talk.get("origin") or wanted)
-            chat_id = str(talk.get("chat_id") or "").strip()
-            break
+        if ranked:
+            fallback_talk = next((t for t in talks if _talk_id_of(t) == ranked[0]), {})
+            fallback_key = _talk_channel_key(fallback_talk)
+            if fallback_key not in CHAT_CHANNEL_LABELS:
+                fallback_key = "whatsapp"
+            channels = [{
+                "key": fallback_key,
+                "label": CHAT_CHANNEL_LABELS.get(fallback_key, "WhatsApp"),
+                "talk_id": ranked[0],
+                "open": True,
+            }]
+    reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     pages = 3 if before else 1
-    if reply_talk_id:
-        messages, blocked = _fetch_talk_messages(reply_talk_id, pages=pages, page_limit=50)
+    talks_by_id = {_talk_id_of(talk): talk for talk in talks}
+    for row in channels:
+        talk_id = int(row.get("talk_id") or 0)
+        if not talk_id:
+            continue
+        channel_key = str(row.get("key") or wanted)
+        messages, blocked = _fetch_talk_messages(talk_id, pages=pages, page_limit=50)
         chat_blocked = chat_blocked or blocked
         for message in messages:
-            formatted = _format_chat_message(message, origin)
+            formatted = _format_chat_message(message, channel_key)
             if formatted:
-                formatted["channel"] = wanted
+                formatted["channel"] = channel_key
+                formatted["talk_id"] = talk_id
             _add_chat(formatted)
-    if len(chat) < limit and chat_id:
-        for message in _fetch_chat_history_by_chat_id(chat_id):
-            formatted = _format_chat_message(message, origin)
-            if formatted:
-                formatted["channel"] = wanted
-            _add_chat(formatted)
+        talk = talks_by_id.get(talk_id) or {}
+        extra_chat_id = str(talk.get("chat_id") or "").strip()
+        if not messages and extra_chat_id:
+            for message in _fetch_chat_history_by_chat_id(extra_chat_id):
+                formatted = _format_chat_message(message, channel_key)
+                if formatted:
+                    formatted["channel"] = channel_key
+                    formatted["talk_id"] = talk_id
+                _add_chat(formatted)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -8009,6 +8028,15 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         incoming = True
     if not text and not media and not file_uuid:
         return None
+    reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
+    reply_id = ""
+    reply_text = ""
+    if isinstance(reply_src, dict):
+        reply_msg = reply_src.get("message") if isinstance(reply_src.get("message"), dict) else reply_src
+        reply_id = str(reply_msg.get("id") or reply_src.get("message_id") or reply_src.get("id") or "").strip()
+        reply_text = str(reply_msg.get("text") or reply_src.get("text") or "").strip()[:200]
+    elif reply_src:
+        reply_id = str(reply_src).strip()
     return {
         "id": nested.get("id") or message.get("id"),
         "direction": "incoming" if incoming else "outgoing",
@@ -8019,6 +8047,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "created_at": created,
         "created": _deal_fmt_ts(created),
         "origin": origin or str(message.get("origin") or ""),
+        "channel": str(origin or "").strip().lower(),
+        "reply_to_message_id": reply_id,
+        "reply_to_text": reply_text,
         "media_url": media if _is_allowed_kommo_media_url(media) else "",
         "file_uuid": file_uuid,
         "file_name": file_name,
@@ -8351,6 +8382,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     channel = "whatsapp"
     lead_id = 0
     attachment = None
+    reply_to_message_id = ""
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -8360,6 +8392,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             lead_id = 0
         text = str(form.get("text") or "").strip()
         channel = str(form.get("channel") or "whatsapp").strip().lower()
+        reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
         uploaded = form.get("file")
         if uploaded is not None and getattr(uploaded, "file", None):
             raw = uploaded.file.read()
@@ -8388,6 +8421,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             lead_id = 0
         text = str(data.get("text") or "").strip()
         channel = str(data.get("channel") or "whatsapp").strip().lower()
+        reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
     if not text and not attachment:
@@ -8408,7 +8442,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     )
     if not reply_talk_id:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
-    ok, last_error, _status = _send_kommo_talk_message(reply_talk_id, text, attachment)
+    ok, last_error, _status = _send_kommo_talk_message(
+        reply_talk_id, text, attachment, reply_to_message_id
+    )
     if not ok and channel == "whatsapp":
         _ids, phones = _contact_ids_and_phones(lead)
         for phone in phones:
