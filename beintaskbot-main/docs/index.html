@@ -248,9 +248,13 @@
         .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:700; }
         .deal-note-row { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:0 0 8px; position:relative; }
         .deal-task-row { padding:10px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; margin:0 0 8px; position:relative; }
-        .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:10px; top:10px; width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
-        .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; font-size:11px; font-weight:700; padding:0 4px; }
+        .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:8px; top:8px; width:10px; height:10px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; width:22px; height:22px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
         .deal-note-del, .deal-task-del { color:#b91c1c; }
+        .deal-note-edit svg, .deal-task-edit svg, .deal-note-del svg, .deal-task-del svg { width:14px; height:14px; display:block; }
+        .deal-side-form button.busy { position:relative; color:transparent; pointer-events:none; }
+        .deal-side-form button.busy::after { content:''; position:absolute; left:50%; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .wa-attach-in { position:absolute; left:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
@@ -293,7 +297,7 @@
         .deal-chat-row.comment { background:#f8fafc; margin:8px auto; max-width:92%; border:1px dashed #cbd5e1; box-shadow:none; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 12px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         @media (max-width:800px) {
@@ -2895,10 +2899,17 @@ async function pollDealChat() {
         paintDealChatThread({stickBottom: nearBottom});
     } catch(_err) {}
 }
+function dealIconEdit() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
+}
+function dealIconDel() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
+}
 function dealNoteRowHtml(item, readonly) {
     const canEdit = !readonly && item && item.id;
     const actions = canEdit
-        ? `<span><button type="button" class="deal-note-edit" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">Dəyiş</button><button type="button" class="deal-note-del" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">Sil</button></span>`
+        ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}">${dealIconDel()}</button></span>`
+        : '';
         : '';
     return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
 }
@@ -2906,7 +2917,7 @@ function dealTaskRowHtml(item, readonly) {
     const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
     const canEdit = !readonly && item && item.id;
     const actions = canEdit
-        ? `<span><button type="button" class="deal-task-edit" data-task-id="${escapeHtml(String(item.id))}">Dəyiş</button><button type="button" class="deal-task-del" data-task-id="${escapeHtml(String(item.id))}">Sil</button></span>`
+        ? `<span><button type="button" class="deal-task-edit" title="Dəyiş" data-task-id="${escapeHtml(String(item.id))}">${dealIconEdit()}</button><button type="button" class="deal-task-del" title="Sil" data-task-id="${escapeHtml(String(item.id))}">${dealIconDel()}</button></span>`
         : '';
     return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><div class="text-[10px] font-extrabold text-blue-700 uppercase tracking-wide">Tapşırıq</div>${linkifyText(text)}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>${actions}</div></div>`;
 }
@@ -2992,6 +3003,7 @@ function bindDealSideActions(deal) {
         const text = String(area && area.value || '').trim();
         if(!text) { toast('Qeyd yazın', true); return; }
         noteBtn.disabled = true;
+        noteBtn.classList.add('busy');
         try {
             const d = await samilDealAction({action:'deal_add_note', lead_id: deal.id, text});
             if(area) area.value = '';
@@ -3009,7 +3021,7 @@ function bindDealSideActions(deal) {
             if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd əlavə edildi');
         } catch(err) { toast(err.message || 'Qeyd göndərilmədi', true); }
-        finally { noteBtn.disabled = false; }
+        finally { noteBtn.disabled = false; noteBtn.classList.remove('busy'); }
     };
     document.querySelectorAll('.deal-note-del').forEach(btn => {
         btn.onclick = async () => {
@@ -3374,9 +3386,9 @@ function dealWorkspaceHtml(deal, token, readonly) {
                 <button type="button" id="deal-chat-quote-clear" title="Ləğv et">×</button>
             </div>
             <div class="wa-composer">
-            <button type="button" class="wa-icon-btn" id="deal-chat-attach" title="Fayl">📎</button>
-            <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
             <div class="wa-composer-field">
+                <button type="button" class="wa-attach-in" id="deal-chat-attach" title="Fayl">📎</button>
+                <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
                 <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
