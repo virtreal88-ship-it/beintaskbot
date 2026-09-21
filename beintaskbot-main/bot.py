@@ -1953,19 +1953,46 @@ def delete_note(note_id: int, entity_type: str = "leads") -> bool:
         logger.error("Delete note error: %s", exc)
         return False
 
-def update_note(note_id: int, text: str, entity_type: str = "leads") -> bool:
-    kind = "contacts" if str(entity_type or "").startswith("contact") else "leads"
+def _note_entity_kind(entity_type: str) -> str:
+    raw = str(entity_type or "").strip().lower()
+    if raw.startswith("contact") or raw in {"1", "contacts"}:
+        return "contacts"
+    return "leads"
+
+
+def update_note(note_id: int, text: str, entity_type: str = "leads", entity_id: int = 0) -> tuple[bool, str]:
     try:
         nid = int(note_id)
     except (TypeError, ValueError):
-        return False
-    payload = [{"id": nid, "note_type": "common", "params": {"text": str(text or "")}}]
+        return False, "Qeyd tapılmadı."
     try:
-        resp = _http.patch(f"{KOMMO_BASE_URL}/api/v4/{kind}/notes", headers=HEADERS, json=payload, timeout=10)
-        return resp.status_code in {200, 202}
-    except Exception as exc:
-        logger.error("Update note error: %s", exc)
-        return False
+        eid = int(entity_id or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    primary = _note_entity_kind(entity_type)
+    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
+    body = {"id": nid, "params": {"text": str(text or "")}}
+    if eid:
+        body["entity_id"] = eid
+    last_err = "Qeyd yenilənmədi."
+    for kind in kinds:
+        payloads = [[{**body, "note_type": "common"}], [body]]
+        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
+        if eid:
+            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
+        for url in urls:
+            for payload in payloads:
+                try:
+                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
+                except Exception as exc:
+                    logger.error("Update note error: %s", exc)
+                    last_err = str(exc)
+                    continue
+                if resp.status_code in {200, 202, 204}:
+                    return True, ""
+                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+                logger.warning("Update note %s %s: %s", resp.status_code, url, last_err)
+    return False, last_err
 
 def _first_note_id(result) -> int:
     if not isinstance(result, dict):
@@ -5523,12 +5550,22 @@ async def handle_api_action(request: web.Request) -> web.Response:
             note_id = int(data.get("note_id") or 0)
             text = str(data.get("text") or "").strip()
             entity_type = str(data.get("entity_type") or "leads")
+            try:
+                entity_id = int(data.get("entity_id") or 0)
+            except (TypeError, ValueError):
+                entity_id = 0
+            if not entity_id:
+                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
             if not lead_id or not note_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok = update_note(note_id, text, entity_type)
+            ok, err = update_note(note_id, text, entity_type, entity_id)
             if ok:
                 invalidate_rufat_overview_cache()
-            return web.json_response({"success": ok, "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi."})
+            return web.json_response({
+                "success": ok,
+                "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi.",
+                "error": "" if ok else err,
+            }, status=200 if ok else 400)
         elif action == "deal_delete_note":
             lead_id = int(data.get("lead_id") or 0)
             note_id = int(data.get("note_id") or 0)
@@ -7573,8 +7610,8 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         message_type = "audio"
     return {
         "id": note.get("id"),
-        "entity_id": note.get("entity_id"),
-        "entity_type": str(note.get("entity_type") or entity_type or "leads"),
+        "entity_id": note.get("entity_id") or None,
+        "entity_type": "contacts" if str(entity_type or "").startswith("contact") else "leads",
         "type": ntype,
         "text": text,
         "created_at": created,
@@ -8144,6 +8181,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if message_type in {"incoming", "outgoing"}:
         message_type = str(nested.get("type") or "text")
     text = str(nested.get("text") or message.get("text") or "").strip()
+    folded = text.casefold()
+    if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
+        return None
     if not text:
         if message_type in {"voice", "audio"} or _looks_audio_name(file_name):
             text = "Səs mesajı"
