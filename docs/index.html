@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="194">
+    <meta name="pwa-build" content="195">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -341,8 +341,12 @@
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
+        #deal-view-modal { z-index:12000; }
+        body.deal-modal-open #tab-bar,
+        body.deal-modal-open #bottom-action-bar { display:none !important; }
         @media (max-width:800px) {
-            .deal-shell { width:100vw; height:100vh; border-radius:0; }
+            #deal-view-modal { padding:0 !important; align-items:stretch !important; justify-content:stretch !important; }
+            .deal-shell { width:100%; height:100%; max-height:none; border-radius:0; padding-bottom:env(safe-area-inset-bottom, 0px); box-sizing:border-box; }
             .deal-shell-body { grid-template-columns:1fr; grid-template-rows:minmax(0,1fr); min-height:0; }
             .deal-side { max-height:none; border-right:0; border-bottom:0; }
             .wa-pane { min-height:0; }
@@ -3622,6 +3626,7 @@ function closeDealViewModal() {
     cancelDealVoice();
     clearDealPendingFile();
     _dealViewState = null;
+    document.body.classList.remove('deal-modal-open');
     document.getElementById('deal-photo-zoom')?.remove();
     document.getElementById('deal-view-modal')?.remove();
 }
@@ -3984,9 +3989,10 @@ function paintDealViewModal(deal, readonly) {
     };
     const modal = document.createElement('div');
     modal.id = 'deal-view-modal';
-    modal.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:10000;display:flex;align-items:center;justify-content:center;padding:10px';
+    modal.style.cssText = 'position:fixed;inset:0;background:#0008;z-index:12000;display:flex;align-items:center;justify-content:center;padding:10px';
     modal.innerHTML = dealWorkspaceHtml(deal, token, readonly);
     modal.addEventListener('click', event => { if(event.target === modal) closeDealViewModal(); });
+    document.body.classList.add('deal-modal-open');
     document.body.appendChild(modal);
     modal.querySelector('#deal-view-close').onclick = closeDealViewModal;
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
@@ -4213,6 +4219,7 @@ function renderSamilDeals() {
             const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
             const phone = escapeHtml(phoneList.join(', ') || '—');
             const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ');
+            const stageBadge = isStaffCardTitle(deal.stage_name, deal) ? '' : `<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>`;
             const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
             const note = escapeHtml(stripNamePrefix(deal.last_note) || '—');
             const tasksHtml = dealTasksHtml(deal);
@@ -4226,7 +4233,7 @@ function renderSamilDeals() {
                     </div>
                     <div class="flex items-center gap-1.5">
                         <div class="flex flex-col items-end gap-0.5 min-w-0">
-                            <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
+                            ${stageBadge}
                             ${sourceTagHtml(deal)}
                         </div>
                         <button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button>
