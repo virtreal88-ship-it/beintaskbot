@@ -7303,6 +7303,52 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
+    chat_page = 1
+    while chat_page <= 3:
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/leads/notes",
+                params={
+                    "limit": 250,
+                    "page": chat_page,
+                    "order[updated_at]": "desc",
+                    "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
+                },
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Rüfət chat notes page %s unavailable: %s", chat_page, exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Rüfət chat notes page %s failed: %s", chat_page, response.status_code)
+            break
+        notes = (response.json().get("_embedded") or {}).get("notes", []) or []
+        if not notes:
+            break
+        for note in notes:
+            if not isinstance(note, dict):
+                continue
+            try:
+                entity_id = int(note.get("entity_id"))
+            except (TypeError, ValueError):
+                continue
+            if entity_id not in lead_ids:
+                continue
+            created = int(note.get("created_at") or note.get("updated_at") or 0)
+            note_type = str(note.get("note_type") or "")
+            channel = _note_channel_key(note)
+            if not channel:
+                continue
+            incoming = note_type == "incoming_chat_message"
+            bucket = latest_in_channel if incoming else latest_any_channel
+            known = bucket.get(entity_id)
+            if not known or created > known[0]:
+                bucket[entity_id] = (created, channel)
+        if len(notes) < 250:
+            break
+        chat_page += 1
     channel_by_lead = {
         lead: (latest_in_channel[lead][1] if lead in latest_in_channel else value[1])
         for lead, value in {**latest_any_channel, **latest_in_channel}.items()
@@ -8105,6 +8151,7 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
             talks[talk_id] = talk
 
     _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
+    _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "leads", "limit": 50})
     for contact_id in contact_ids:
         _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
     return list(talks.values())
@@ -8173,35 +8220,53 @@ def _talk_has_digits(talk: dict, digits: str) -> bool:
     return wanted in blob or wanted[-9:] in blob
 
 
+def _join_channel_fields(*parts) -> str:
+    return " ".join(str(part or "").strip() for part in parts if str(part or "").strip()).lower()
+
+
 def _origin_channel_key(blob: str) -> str:
-    text = str(blob or "").lower()
+    text = str(blob or "").lower().replace("_", " ").replace("-", " ")
+    if not text.strip():
+        return ""
     if "tiktok" in text or "tik tok" in text:
         return "tiktok"
-    if "instagram" in text:
+    if "instagram" in text or re.search(r"\binsta\b", text):
         return "instagram"
-    if "facebook" in text or "fb messenger" in text:
+    if "facebook" in text or "fb messenger" in text or re.search(r"\bfb\b", text):
         return "facebook"
-    if any(token in text for token in ("whatsapp", "waba", "whats app", "whats-app")):
+    if "whatsapp" in text or "waba" in text or "whats app" in text or re.search(r"\b(wa|capi)\b", text):
         return "whatsapp"
     return ""
 
 
+def _talk_looks_phone(talk: dict) -> bool:
+    chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
+    blob = _join_channel_fields(talk.get("origin"), talk.get("chat_id"), chat.get("id"), chat.get("type"))
+    return bool(re.search(r"\d{8,}", re.sub(r"\D", " ", blob)))
+
+
 def _talk_channel_key(talk: dict) -> str:
     chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
-    origin = " ".join(
-        str(part or "")
-        for part in (
-            talk.get("origin"),
-            talk.get("source"),
-            chat.get("type"),
-            chat.get("origin"),
-            talk.get("entity_type"),
-        )
-    ).strip().lower()
-    blob = origin + " " + _talk_blob(talk)
-    return _origin_channel_key(blob) or (
-        "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
+    blob = _join_channel_fields(
+        talk.get("origin"),
+        talk.get("source"),
+        talk.get("category"),
+        talk.get("chat_id"),
+        chat.get("type"),
+        chat.get("origin"),
+        chat.get("category"),
+        chat.get("id"),
+        chat.get("name"),
     )
+    key = _origin_channel_key(blob)
+    if key:
+        return key
+    origin = str(talk.get("origin") or chat.get("type") or "").strip().lower()
+    if origin in {"", "chat", "capi", "wa", "im"}:
+        return "whatsapp"
+    if _talk_looks_phone(talk):
+        return "whatsapp"
+    return "instagram"
 
 
 def _note_channel_key(note: dict | None) -> str:
@@ -8210,18 +8275,17 @@ def _note_channel_key(note: dict | None) -> str:
     if note_type in {"sms_in", "sms_out", "amomail_message"}:
         return ""
     params = data.get("params") if isinstance(data.get("params"), dict) else {}
-    blob = " ".join(
-        str(part or "")
-        for part in (
-            note_type,
-            params.get("service"),
-            params.get("origin"),
-            params.get("source"),
-            params.get("messenger"),
-            params.get("type"),
-        )
+    blob = _join_channel_fields(
+        note_type,
+        params.get("service"),
+        params.get("origin"),
+        params.get("source"),
+        params.get("messenger"),
+        params.get("type"),
+        params.get("provider"),
+        params.get("waba"),
     )
-    key = _origin_channel_key(blob + " " + _talk_blob(params))
+    key = _origin_channel_key(blob)
     if key:
         return key
     if note_type in {"incoming_chat_message", "outgoing_chat_message"}:
@@ -8538,9 +8602,9 @@ def _collect_deal_chat(
     except (TypeError, ValueError):
         page_count = 1
     page_count = max(1, min(page_count, 5))
-    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
+    wanted = str(channel or "").strip().lower()
     if wanted not in CHAT_CHANNEL_LABELS:
-        wanted = "whatsapp"
+        wanted = ""
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
     chat_blocked = False
@@ -8573,6 +8637,8 @@ def _collect_deal_chat(
     for row in channels:
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
+    if wanted not in {str(row.get("key") or "") for row in channels}:
+        wanted = str((channels[0] or {}).get("key") or "whatsapp") if channels else "whatsapp"
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     pages = page_count
     page_limit = 20
@@ -8704,8 +8770,11 @@ def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
     raw = (
         nested.get("status")
         or nested.get("delivery_status")
+        or nested.get("state")
+        or nested.get("msgid_status")
         or message.get("status")
         or message.get("delivery_status")
+        or message.get("state")
         or message.get("msgid_status")
     )
     if isinstance(raw, dict):
@@ -8718,18 +8787,23 @@ def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
         "1": "delivered",
         "delivered": "delivered",
         "deliver": "delivered",
-        "2": "read",
+        "2": "delivered",
+        "3": "read",
         "read": "read",
         "seen": "read",
         "viewed": "read",
         "-1": "error",
-        "3": "error",
+        "4": "error",
         "error": "error",
         "failed": "error",
         "undelivered": "error",
     }
     if text in mapping:
         return mapping[text]
+    if nested.get("read") or message.get("read") or nested.get("seen") or message.get("seen"):
+        return "read"
+    if nested.get("delivered") or message.get("delivered"):
+        return "delivered"
     if "read" in text or "seen" in text:
         return "read"
     if "undeliver" in text or "error" in text or "fail" in text:

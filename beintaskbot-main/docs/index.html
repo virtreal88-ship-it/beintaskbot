@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="200">
+    <meta name="pwa-build" content="201">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -263,7 +263,7 @@
         .deal-side-form button.busy { position:relative; color:transparent; pointer-events:none; }
         .deal-side-form button.busy::after { content:''; position:absolute; left:50%; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .wa-attach-in { position:absolute; left:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
-        .wa-mic-in { position:absolute; left:36px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
+        .wa-mic-in { position:absolute; right:72px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
         .wa-mic-in.rec { background:#dc2626; color:#fff; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
@@ -329,7 +329,7 @@
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
-        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 76px 6px 70px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 108px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
         .wa-voice-preview[hidden] { display:none !important; }
         .wa-voice-preview audio { flex:1; min-width:0; height:30px; }
         .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
@@ -344,7 +344,7 @@
         #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 70px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 108px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
@@ -1088,12 +1088,22 @@ const SOURCE_COLORS = {
     Partner: '#7c3aed',
 };
 function sourceTagHtml(record) {
-    const key = String((record && (record.chat_channel || record.inbox_channel)) || '').toLowerCase();
     const labels = {whatsapp: 'WhatsApp', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook'};
+    let key = String((record && (record.chat_channel || record.inbox_channel)) || '').toLowerCase();
+    if(!labels[key]) {
+        const utm = String(dealUtmLabel(record) || '').toLowerCase();
+        key = Object.keys(labels).find(item => item === utm || labels[item].toLowerCase() === utm) || '';
+    }
     const label = labels[key] || '';
     if(!label) return '';
     const color = SOURCE_COLORS[label] || '#64748b';
     return `<span class="source-tag" style="color:${color}">${escapeHtml(label)}</span>`;
+}
+function dealKommoUrl(deal) {
+    const link = String((deal && deal.kommo_link) || '').trim();
+    if(link) return link;
+    if(deal && deal.id) return 'https://texnikidestek50.kommo.com/leads/detail/' + deal.id;
+    return '';
 }
 function stripNamePrefix(text) {
     return String(text || '').replace(/^\s*\[[^\]]{1,60}\]\s*/, '');
@@ -2948,8 +2958,8 @@ function dealChatWhen(item) {
 function dealChatTicks(item) {
     if(!item || item.incoming || item.is_comment) return '';
     const st = String(item.delivery_status || item.status || 'sent').toLowerCase();
-    if(st === 'read' || st === 'seen' || st === '2') return '<span class="wa-ticks read" title="Oxundu">✓✓</span><span class="wa-state">Oxundu</span>';
-    if(st === 'delivered' || st === '1') return '<span class="wa-ticks" title="Çatdırıldı">✓✓</span><span class="wa-state">Çatdırıldı</span>';
+    if(st === 'read' || st === 'seen' || st === '3') return '<span class="wa-ticks read" title="Oxundu">✓✓</span><span class="wa-state">Oxundu</span>';
+    if(st === 'delivered' || st === '1' || st === '2') return '<span class="wa-ticks" title="Çatdırıldı">✓✓</span><span class="wa-state">Çatdırıldı</span>';
     if(st === 'error' || st === 'failed' || st === 'undelivered') return '<span class="wa-ticks failed" title="Çatdırılmadı">✕</span><span class="wa-state failed">Çatdırılmadı</span>';
     return '<span class="wa-ticks" title="Göndərildi">✓</span><span class="wa-state">Göndərildi</span>';
 }
@@ -3586,7 +3596,7 @@ async function saveDealContactFromHeader(deal) {
     const phone = String(document.getElementById('deal-head-phone')?.value || '').trim();
     const prevName = dealClientName(deal);
     const prevPhone = String((deal.phones && deal.phones[0]) || deal.phone || '').trim();
-    if(!name) { toast('Ad yazın', true); return; }
+    if(!name) return;
     if(name === prevName && phone === prevPhone) return;
     try {
         const contactId = (deal.contacts && deal.contacts[0] && deal.contacts[0].id) || '';
@@ -3720,7 +3730,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
-                ${(canShowKommoLink() && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700">🔗 Kommo-da aç</a></div>` : ''}
+                ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700">🔗 Kommo-da aç</a></div>` : ''}
             </div>
             <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
             <div>${notesHtml}</div>
@@ -4058,28 +4068,24 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <div class="wa-composer">
             <div class="wa-composer-field">
                 <button type="button" class="wa-attach-in" id="deal-chat-attach" title="Fayl">📎</button>
-                <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
                 <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
                 <div id="deal-voice-preview" class="wa-voice-preview" hidden>
                     <audio controls preload="metadata"></audio>
                     <button type="button" id="deal-voice-drop" title="Səs yazısını sil">🗑</button>
                 </div>
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
+                <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
                 <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
             </div>
             </div>
         </div>`;
-    const kommoBtn = (canShowKommoLink() && deal.kommo_link)
-        ? `<a id="deal-head-kommo" class="deal-share-btn deal-kommo-btn" href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" title="Kommo-da aç">Kommo</a>`
-        : '';
     return `<div class="deal-shell">
         <div class="deal-shell-head">
             <div class="meta">
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
             </div>
-            ${kommoBtn}
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
             <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
         </div>
@@ -4096,7 +4102,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
                     <div>🕒 ${escapeHtml(created)}</div>
                     <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
                     ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
-                    ${(canShowKommoLink() && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#008069;font-weight:700">Kommo-da aç</a></div>` : ''}
+                    ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div style="margin-top:8px"><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:8px 12px;border-radius:10px;background:#008069;color:#fff;font-weight:800;font-size:12px;text-decoration:none">Kommo-da aç</a></div>` : ''}
                 </div>
                 ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
                 <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
@@ -4408,7 +4414,7 @@ function renderSamilDeals() {
                     <div class="truncate">💬 <b>Son mesaj:</b> ${clientMessage}</div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 flex-wrap">${canShowKommoLink() && deal.kommo_link ? `<a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
+                    <div class="flex items-center gap-3 flex-wrap">${canShowKommoLink() && dealKommoUrl(deal) ? `<a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
