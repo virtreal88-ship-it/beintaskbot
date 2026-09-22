@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v194 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v195 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8633,13 +8633,11 @@ def _kommo_error_detail(resp) -> str:
     return (resp.text or "")[:240]
 
 
-def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
+def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> tuple[int, str]:
     try:
         hinted_id = int(hinted or 0)
     except (TypeError, ValueError):
         hinted_id = 0
-    if hinted_id:
-        return hinted_id
     try:
         lid = int(lead.get("id") or 0)
     except (TypeError, ValueError):
@@ -8647,11 +8645,68 @@ def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", 
     talks = _fetch_talks(lid, _lead_contact_ids(lead))
     wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
     channels = _channels_from_talks(talks, sender_digits)
-    talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    if talk_id:
-        return talk_id
+    row = next((item for item in channels if item.get("key") == wanted), None)
+    if hinted_id:
+        hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
+        chat_id = str((hinted_row or row or {}).get("chat_id") or "")
+        return hinted_id, chat_id
+    if row and row.get("talk_id"):
+        return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
     ranked = _ranked_reply_talk_ids(talks)
-    return int(ranked[0]) if ranked else 0
+    talk_id = int(ranked[0]) if ranked else 0
+    fallback = next((item for item in channels if int(item.get("talk_id") or 0) == talk_id), None)
+    return talk_id, str((fallback or {}).get("chat_id") or "")
+
+
+def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
+    talk_id, _chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted)
+    return talk_id
+
+
+def _looks_chat_message_id(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if "wamid" in text.lower():
+        return True
+    return bool(re.fullmatch(r"[0-9a-fA-F-]{16,}", text))
+
+
+def _chat_message_ids(message: dict, nested: dict) -> tuple[str, str, str]:
+    msg_id = str(nested.get("id") or message.get("id") or "").strip()
+    msgid = str(
+        nested.get("msgid")
+        or nested.get("client_id")
+        or message.get("msgid")
+        or message.get("client_id")
+        or ""
+    ).strip()
+    wamid = _find_wamid(message)
+    external = wamid or msgid or (msg_id if _looks_chat_message_id(msg_id) else "")
+    return msg_id, msgid, external
+
+
+def _kommo_quote_bodies(payload: dict, reply_id: str, reply_text: str = "") -> list[dict]:
+    quote_id = str(reply_id or "").strip()
+    preview = str(reply_text or "").strip()[:200]
+    if not quote_id:
+        return [payload]
+    nested = {"id": quote_id}
+    if preview:
+        nested["type"] = "text"
+        nested["text"] = preview
+    return [
+        {**payload, "reply_to": {"message": nested}},
+        {**payload, "reply_to": {"message": {"id": quote_id}}},
+        {**payload, "reply_to": {"message": {"msgid": quote_id}}},
+    ]
+
+
+def _post_kommo_json(url: str, body: dict, extra_headers: dict | None = None):
+    headers = dict(HEADERS)
+    if extra_headers:
+        headers.update(extra_headers)
+    return _http.post(url, headers=headers, json=body, timeout=20)
 
 
 def _send_kommo_talk_message(
@@ -8659,10 +8714,11 @@ def _send_kommo_talk_message(
     text: str,
     attachment: dict | None = None,
     reply_to: str = "",
+    chat_id: str = "",
+    reply_text: str = "",
 ) -> tuple[bool, str, int]:
-    # Kommo send_message accepts only text plus a file/video/picture attachment and
-    # bills every call against the Chats API quota, so each message is one request.
-    url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
+    # Official send_message is text/attachment only. Native quotes use the Chats
+    # API shape (reply_to.message.id) on the talk and amojo endpoints.
     payload: dict = {}
     if text:
         payload["text"] = text
@@ -8671,30 +8727,52 @@ def _send_kommo_talk_message(
     if not payload:
         return False, "Mesaj boş ola bilməz", 0
     reply_id = str(reply_to or "").strip()
-    bodies = [payload]
+    talk_send = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
+    talk_messages = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages"
+    attempts: list[tuple[str, dict, dict]] = []
     if reply_id:
-        bodies = [
-            {**payload, "reply_to": {"msgid": reply_id}},
-            {**payload, "reply_to": {"message_id": reply_id}},
-            {**payload, "reply_to": reply_id},
-            {**payload, "quoted_message_id": reply_id},
-            payload,
-        ]
+        quote_bodies = _kommo_quote_bodies(payload, reply_id, reply_text)
+        if chat_id:
+            amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id}}}
+            if attachment:
+                amojo_body["attachment"] = attachment
+            if reply_text:
+                amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
+            ajax = {"X-Requested-With": "XMLHttpRequest"}
+            attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
+            attempts.append((f"https://amojo.kommo.com/v1/chats/{chat_id}", amojo_body, {}))
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", quote_bodies[0], ajax))
+        for body in quote_bodies:
+            attempts.append((talk_messages, body, {}))
+            attempts.append((talk_send, body, {}))
+    else:
+        attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_status = 0
-    for body in bodies:
+    for url, body, extra in attempts:
         try:
-            resp = _http.post(url, headers=HEADERS, json=body, timeout=20)
+            resp = _post_kommo_json(url, body, extra)
         except Exception as exc:
             logger.warning("Talk send failed: %s", exc)
-            return False, "Kommo çata göndərmək alınmadı.", 0
+            last_detail = "Kommo çata göndərmək alınmadı."
+            last_status = 0
+            continue
         last_status = resp.status_code
         if resp.status_code in {200, 202}:
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
-        logger.warning("Talk send status %s: %s", resp.status_code, last_detail)
-        if resp.status_code not in {400, 422}:
+        logger.warning("Talk send status %s %s: %s", resp.status_code, url, last_detail)
+        if resp.status_code not in {400, 401, 403, 404, 405, 422}:
             break
+    if reply_id:
+        logger.warning("Native Kommo reply rejected for talk %s; not sending a plain stand-in", talk_id)
+        if last_status == 403:
+            return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
+        if last_status == 422:
+            return False, "Çat bağlıdır. Kommo-da söhbəti açın.", last_status
+        if last_status == 402:
+            return False, "Kommo Chat API limiti bitib.", last_status
+        return False, last_detail or "Sitat göndərilmədi. Kommo bu kanalda native reply qəbul etmədi.", last_status
     if last_status == 403:
         return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
     if last_status == 422:
@@ -10412,7 +10490,13 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     reply_author = ""
     if isinstance(reply_src, dict):
         reply_msg = reply_src.get("message") if isinstance(reply_src.get("message"), dict) else reply_src
-        reply_id = str(reply_msg.get("id") or reply_src.get("message_id") or reply_src.get("id") or "").strip()
+        reply_id = str(
+            reply_msg.get("id")
+            or reply_msg.get("msgid")
+            or reply_src.get("message_id")
+            or reply_src.get("id")
+            or ""
+        ).strip()
         reply_text = str(reply_msg.get("text") or reply_src.get("text") or "").strip()[:200]
         sender = reply_msg.get("author") or reply_msg.get("sender") or reply_src.get("author") or reply_src.get("sender") or {}
         if isinstance(sender, dict):
@@ -10423,9 +10507,11 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if inline_quote:
         text = inline_body
         reply_text = reply_text or inline_quote
+    msg_id, msgid, external_id = _chat_message_ids(message, nested)
     return {
-        "id": nested.get("id") or message.get("id"),
-        "external_id": _find_wamid(message),
+        "id": msg_id or msgid,
+        "msgid": msgid,
+        "external_id": external_id,
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
         "author": _chat_author_name(author, message, incoming),
@@ -11038,7 +11124,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         return err
     sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
     use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
-    reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
+    reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id and not use_cloud:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
     wa_quote_id = reply_external if reply_external.lower().startswith("wamid") else ""
@@ -11076,11 +11162,14 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
+        quote_id = reply_to_message_id or reply_external
         kommo_ok, kommo_error, _status = _send_kommo_talk_message(
             reply_talk_id,
             kommo_text,
             attachment,
-            reply_to=reply_to_message_id,
+            reply_to=quote_id,
+            chat_id=reply_chat_id,
+            reply_text=reply_preview,
         )
         if kommo_ok:
             ok = True

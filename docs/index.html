@@ -4014,10 +4014,10 @@ function switchDealChatChannel(channel) {
 function setDealChatReply(item) {
     if(!_dealViewState || _dealViewState.readonly || !item || item.is_comment) return;
     _dealViewState.replyTo = {
-        id: item.id,
+        id: item.id || item.msgid || item.external_id || '',
         text: String(item.text || '').slice(0, 180),
         author: dealChatActor(item) || item.author || '',
-        externalId: item.external_id || '',
+        externalId: item.external_id || item.msgid || item.id || '',
         channel: chatChannelKey(item),
         talkId: item.talk_id || 0
     };
