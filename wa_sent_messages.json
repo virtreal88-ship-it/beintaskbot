@@ -261,6 +261,28 @@
       "file_name": "",
       "delivery_status": "",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0NTAyMDcyMjQwFQIAERgSMTEzNzNEMjFFOUY2MzkzRjJCAA==",
+      "external_id": "wamid.HBgMOTk0NTAyMDcyMjQwFQIAERgSMTEzNzNEMjFFOUY2MzkzRjJCAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "Salam",
+      "message_type": "text",
+      "created_at": 1790098279,
+      "created": "22.09.2026 21:31",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wa-wamid.HBgMOTk0NTAyMDcyMjQwFQIAEhggQTVFMEQ3NjE2MjVFMjRBRENEQzI3NEU3MTg2RTgzOTkA",
+      "reply_to_text": "M",
+      "reply_to_author": "Nizami",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ]
 }
