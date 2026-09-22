@@ -8221,6 +8221,30 @@ def _wa_sender_digits_for_chat(chat_id) -> str:
     return NIZAMI_WHATSAPP_NUMBER
 
 
+def _known_wa_sender_digits() -> set[str]:
+    return {
+        re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER)),
+        re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER)),
+    }
+
+
+def _hinted_wa_sender_digits(chat_id, hinted) -> str:
+    default = _wa_sender_digits_for_chat(chat_id)
+    wanted = re.sub(r"\D", "", str(hinted or ""))
+    if not wanted or wanted not in _known_wa_sender_digits():
+        return default
+    rufat_digits = re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
+    if wanted != rufat_digits:
+        return wanted
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return default
+    if is_admin(cid) or cid in RUFAT_COMPAT_CHAT_IDS:
+        return wanted
+    return default
+
+
 def _wa_display_number(digits: str) -> str:
     clean = re.sub(r"\D", "", str(digits or ""))
     return f"+{clean}" if len(clean) >= 8 else ""
@@ -9743,7 +9767,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         before = 0
     channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
-    sender_digits = _wa_sender_digits_for_chat(chat_id)
+    sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
         contact_ids,
@@ -9908,6 +9932,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_preview = ""
     reply_author = ""
     hinted_talk = 0
+    hinted_sender = ""
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -9921,6 +9946,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_external = str(form.get("reply_external_id") or "").strip()
         reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
         reply_author = str(form.get("reply_to_author") or "").strip()[:80]
+        hinted_sender = str(form.get("sender_phone") or "")
         try:
             hinted_talk = int(form.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -9949,6 +9975,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_external = str(data.get("reply_external_id") or "").strip()
         reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
         reply_author = str(data.get("reply_to_author") or "").strip()[:80]
+        hinted_sender = str(data.get("sender_phone") or "")
         try:
             hinted_talk = int(data.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -9962,7 +9989,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    sender_digits = _wa_sender_digits_for_chat(chat_id)
+    sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
     use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
     reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id and not use_cloud:
@@ -10072,7 +10099,7 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    if not _wa_cloud_ready(_wa_sender_digits_for_chat(chat_id)):
+    if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
         return web.json_response({"success": False, "error": "Reaksiya yalnız rəsmi WhatsApp nömrəsində işləyir."}, status=400)
     _ids, phones = _contact_ids_and_phones(lead)
     if not phones:
@@ -10109,7 +10136,7 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
     _lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    if not _wa_cloud_ready(_wa_sender_digits_for_chat(chat_id)):
+    if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
         return web.json_response({"success": True, "skipped": True})
     ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
     return web.json_response({"success": bool(ok)})
