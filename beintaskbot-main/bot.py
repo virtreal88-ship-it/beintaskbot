@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v200 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v201 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11233,7 +11233,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
-        if reply_preview:
+        if reply_preview and channel in {"tiktok", "telegram", "instagram", "facebook"}:
             kommo_text = _with_visible_quote(kommo_text, reply_preview)
         quote_id = reply_to_message_id or reply_external
         kommo_ok, kommo_error, _status = _send_kommo_talk_message(
