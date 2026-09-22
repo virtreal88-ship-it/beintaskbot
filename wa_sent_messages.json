@@ -169,7 +169,7 @@
     "994519992111": 67336164,
     "994554336609": 72273445,
     "994702729090": 73137215,
-    "994102135104": 75819231,
+    "994102135104": 78018717,
     "994502163191": 75830489,
     "994504498483": 75940883,
     "994707010207": 76708861,
@@ -284,6 +284,30 @@
       "file_uuid": "",
       "file_name": "",
       "delivery_status": "delivered",
+      "via_cloud": true
+    }
+  ],
+  "78018717": [
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTUxMjg2NzQ2MEY1NTA0NkM1QkRBMDYyOUE1OTVCNjAA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTUxMjg2NzQ2MEY1NTA0NkM1QkRBMDYyOUE1OTVCNjAA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Oneline SOFT",
+      "phone": "994102135104",
+      "text": ".",
+      "message_type": "text",
+      "created_at": 1790099256,
+      "created": "22.09.2026 21:47",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
       "via_cloud": true
     }
   ]
