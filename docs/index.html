@@ -4506,7 +4506,7 @@ function paintDealViewModal(deal, readonly, opts) {
         });
     }
     if(!readonly) {
-        loadDealChatLatest();
+        loadDealChatLatest().then(() => refreshDealSnapshot(deal).catch(() => {}));
         startDealChatPolling();
     }
     const shareBtn = root.querySelector('#deal-view-share');
@@ -4536,7 +4536,6 @@ async function openDealViewModal(deal, opts) {
     if(!deal) return;
     const readonly = !!(opts && opts.readonly);
     paintDealViewModal(deal, readonly, opts);
-    if(!readonly) refreshDealSnapshot(deal).catch(() => {});
 }
 async function renderPublicDealPage() {
     const token = getShareTokenFromLocation();
@@ -5024,7 +5023,6 @@ async function openInboxChat(leadId) {
     markChatsSeen(deal.id);
     paintDealViewModal(deal, false, {inbox: true});
     renderChatsList();
-    refreshDealSnapshot(deal).catch(() => {});
 }
 async function openChats() {
     if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }

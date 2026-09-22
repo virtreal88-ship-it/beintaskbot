@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v189 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v190 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8198,7 +8198,7 @@ def _fetch_open_tasks_for_entities(entity_ids: list[int]) -> list[dict]:
     return rows
 
 
-def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
+def _fetch_talks(lead_id: int, contact_ids: list[int] | None = None, *, include_contacts: bool = True) -> list[dict]:
     talks: dict[int, dict] = {}
 
     def _ingest(params: dict) -> None:
@@ -8218,8 +8218,9 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
             talks[talk_id] = talk
 
     _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
-    for contact_id in contact_ids:
-        _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
+    if include_contacts:
+        for contact_id in contact_ids or []:
+            _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
     return list(talks.values())
 
 
@@ -8956,6 +8957,10 @@ def _remember_sent_message(lead_id: int, item: dict) -> None:
         rows.append(item)
         store[key] = rows[-_WA_SENT_PER_LEAD:]
     _schedule_sent_messages_save()
+    try:
+        _invalidate_deal_chat_cache(int(lead_id))
+    except Exception:
+        pass
 
 
 def _sent_messages_for_lead(lead_id: int) -> list[dict]:
@@ -9862,7 +9867,7 @@ def _collect_deal_chat(
         seen_chat.add(key)
         chat.append(item)
 
-    talks = _fetch_talks(lid, contact_ids)
+    talks = _fetch_talks(lid, contact_ids, include_contacts=False)
     channels = _channels_from_talks(talks, sender_digits)
     if not channels:
         ranked = _ranked_reply_talk_ids(talks)
@@ -9885,13 +9890,16 @@ def _collect_deal_chat(
     pages = page_count
     page_limit = 20
     talk_has_more = False
-    for row in channels:
+    target_rows = [row for row in channels if str(row.get("key") or "") == wanted]
+    if not target_rows and channels:
+        target_rows = [channels[0]]
+    for row in target_rows:
         talk_id = int(row.get("talk_id") or 0)
         if not talk_id:
             continue
         channel_key = str(row.get("key") or wanted)
         messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
-        if not messages:
+        if not messages and blocked:
             chat_ref = str(row.get("chat_id") or "")
             if not chat_ref:
                 source_talk = next((item for item in talks if _talk_id_of(item) == talk_id), {})
@@ -9912,15 +9920,14 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
             _add_chat(formatted)
-    # Talks/messages is often 403. Notes/events still hold WhatsApp history,
-    # including inbound that Kommo received while Cloud webhook stayed silent.
-    try:
-        for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
-            _add_chat(item)
-        if chat:
-            chat_blocked = False
-    except Exception as exc:
-        logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
+    if not chat:
+        try:
+            for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
+                _add_chat(item)
+            if chat:
+                chat_blocked = False
+        except Exception as exc:
+            logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
     # Cloud API sends are not returned by Kommo talks, so replay our own log and
     # drop the copies Kommo did mirror back.
     known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
@@ -10511,6 +10518,36 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
     return lead, None
 
 
+_deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
+_deal_chat_cache_lock = threading.Lock()
+_DEAL_CHAT_CACHE_TTL = 25.0
+
+
+def _invalidate_deal_chat_cache(lead_id: int = 0) -> None:
+    with _deal_chat_cache_lock:
+        if not lead_id:
+            _deal_chat_cache.clear()
+            return
+        try:
+            wanted = int(lead_id)
+        except (TypeError, ValueError):
+            return
+        for key in [item for item in _deal_chat_cache if item[0] == wanted]:
+            _deal_chat_cache.pop(key, None)
+
+
+def _lead_phones_fast(lead: dict) -> tuple[list[int], list[str]]:
+    contact_ids = _lead_contact_ids(lead)
+    phones: list[str] = []
+    for linked in (lead.get("_embedded") or {}).get("contacts") or []:
+        if not isinstance(linked, dict):
+            continue
+        for phone in _contact_phones(linked):
+            if phone and phone not in phones:
+                phones.append(phone)
+    return contact_ids, phones
+
+
 def _lead_contact_ids(lead: dict) -> list[int]:
     ids: list[int] = []
     for linked in (lead.get("_embedded") or {}).get("contacts") or []:
@@ -10554,10 +10591,9 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    _ids, phones = _contact_ids_and_phones(lead)
+    contact_ids, phones = _lead_phones_fast(lead)
     for phone in phones:
         _remember_phone_lead(phone, int(lead.get("id") or lead_id))
-    contact_ids = _lead_contact_ids(lead)
     try:
         limit = int(request.rel_url.query.get("limit") or 20)
     except (TypeError, ValueError):
@@ -10568,6 +10604,12 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         before = 0
     channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
     sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
+    cache_key = (int(lead.get("id") or lead_id), channel, int(before or 0), str(sender_digits or ""), int(limit))
+    now = _time_module.monotonic()
+    with _deal_chat_cache_lock:
+        cached = _deal_chat_cache.get(cache_key)
+    if cached and now - cached[0] < _DEAL_CHAT_CACHE_TTL:
+        return web.json_response(cached[1])
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
         contact_ids,
@@ -10578,7 +10620,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         employee_name=employee_name_for_lead(lead),
     )
     cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
-    return web.json_response({
+    payload = {
         "success": True,
         "chat": chat,
         "chat_blocked": chat_blocked,
@@ -10589,7 +10631,10 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         "sender_phone": _wa_display_number(sender_digits),
         "can_reply": bool(reply_talk_id) or cloud_ready,
         "cloud_ready": cloud_ready,
-    })
+    }
+    with _deal_chat_cache_lock:
+        _deal_chat_cache[cache_key] = (now, payload)
+    return web.json_response(payload)
 
 
 VOICE_CAPTION_TEXT = "🎤 Səs mesajı"
