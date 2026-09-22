@@ -5637,7 +5637,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v176")
+    return web.Response(status=200, text="Bot is running v177")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7257,14 +7257,144 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
 
 
 _CLIENT_MESSAGE_NOTE_TYPES = {"incoming_chat_message", "sms_in", "amomail_message"}
+_KOMMO_INBOX_CACHE: dict[int, dict] = {}
+
+
+def _note_inbox_text(note: dict) -> str:
+    params = note.get("params") if isinstance(note.get("params"), dict) else {}
+    text = str(params.get("text") or "").strip()
+    if not text:
+        text = _extract_nested_text(params)
+    if not text:
+        text = _extract_nested_text(note)
+    text = str(text or "").strip()
+    if not text or _note_is_deleted({"text": text}):
+        return ""
+    quote, body = _split_quote_prefix(text)
+    preview = body if quote else text
+    return " ".join(preview.split())[:140]
+
+
+def _ingest_inbox_chat_note(
+    note: dict,
+    lead_ids: set[int],
+    latest_client: dict[int, tuple[int, str]],
+    latest_in_channel: dict[int, tuple[int, str]],
+    latest_any_channel: dict[int, tuple[int, str]],
+) -> None:
+    try:
+        entity_id = int(note.get("entity_id"))
+    except (TypeError, ValueError):
+        return
+    if entity_id not in lead_ids:
+        return
+    created = int(note.get("created_at") or note.get("updated_at") or 0)
+    note_type = str(note.get("note_type") or "")
+    text = _note_inbox_text(note)
+    if note_type in _CLIENT_MESSAGE_NOTE_TYPES and text:
+        known = latest_client.get(entity_id)
+        if not known or created > known[0]:
+            latest_client[entity_id] = (created, text)
+    channel = _note_channel_key(note)
+    if channel:
+        incoming = note_type == "incoming_chat_message"
+        bucket = latest_in_channel if incoming else latest_any_channel
+        known = bucket.get(entity_id)
+        if not known or created > known[0]:
+            bucket[entity_id] = (created, channel)
+
+
+def _merge_kommo_inbox_cache(
+    lead_ids: set[int],
+    latest_client: dict[int, tuple[int, str]],
+    latest_in_channel: dict[int, tuple[int, str]],
+    latest_any_channel: dict[int, tuple[int, str]],
+) -> None:
+    for lid, row in _KOMMO_INBOX_CACHE.items():
+        if lid not in lead_ids or not isinstance(row, dict):
+            continue
+        client = row.get("client") or (0, "")
+        if client[1]:
+            known = latest_client.get(lid)
+            if not known or int(client[0] or 0) > known[0]:
+                latest_client[lid] = (int(client[0] or 0), str(client[1]))
+        in_ch = row.get("in_ch") or (0, "")
+        if in_ch[1]:
+            known = latest_in_channel.get(lid)
+            if not known or int(in_ch[0] or 0) > known[0]:
+                latest_in_channel[lid] = (int(in_ch[0] or 0), str(in_ch[1]))
+        any_ch = row.get("any_ch") or (0, "")
+        if any_ch[1]:
+            known = latest_any_channel.get(lid)
+            if not known or int(any_ch[0] or 0) > known[0]:
+                latest_any_channel[lid] = (int(any_ch[0] or 0), str(any_ch[1]))
+
+
+def _store_kommo_inbox_cache(
+    latest_client: dict[int, tuple[int, str]],
+    latest_in_channel: dict[int, tuple[int, str]],
+    latest_any_channel: dict[int, tuple[int, str]],
+) -> None:
+    for lid in set(latest_client) | set(latest_in_channel) | set(latest_any_channel):
+        prev = _KOMMO_INBOX_CACHE.get(lid) or {}
+        _KOMMO_INBOX_CACHE[lid] = {
+            "client": latest_client.get(lid) or prev.get("client") or (0, ""),
+            "in_ch": latest_in_channel.get(lid) or prev.get("in_ch") or (0, ""),
+            "any_ch": latest_any_channel.get(lid) or prev.get("any_ch") or (0, ""),
+        }
+
+
+async def _fetch_lead_notes_page(params: dict) -> list[dict]:
+    try:
+        response = await _kommo_get_async(
+            f"{KOMMO_BASE_URL}/api/v4/leads/notes",
+            params=params,
+            timeout=12,
+        )
+    except Exception as exc:
+        logger.warning("Kommo inbox notes failed: %s", exc)
+        return []
+    if response.status_code in (204,):
+        return []
+    if response.status_code != 200:
+        logger.warning("Kommo inbox notes status %s", response.status_code)
+        return []
+    return [note for note in ((response.json().get("_embedded") or {}).get("notes") or []) if isinstance(note, dict)]
+
+
+async def _backfill_kommo_inbox_notes(
+    missing: list[int],
+    lead_ids: set[int],
+    latest_client: dict[int, tuple[int, str]],
+    latest_in_channel: dict[int, tuple[int, str]],
+    latest_any_channel: dict[int, tuple[int, str]],
+) -> None:
+    chunks = [missing[index:index + 20] for index in range(0, len(missing), 20)]
+    sem = asyncio.Semaphore(4)
+
+    async def _load_chunk(chunk: list[int]) -> None:
+        async with sem:
+            for page in (1, 2):
+                notes = await _fetch_lead_notes_page({
+                    "limit": 250,
+                    "page": page,
+                    "order[updated_at]": "desc",
+                    "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
+                    "filter[entity_id][]": chunk,
+                })
+                if not notes:
+                    break
+                for note in notes:
+                    _ingest_inbox_chat_note(note, lead_ids, latest_client, latest_in_channel, latest_any_channel)
+                if len(notes) < 250:
+                    break
+
+    if chunks:
+        await asyncio.gather(*(_load_chunk(chunk) for chunk in chunks))
 
 
 async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
-    """Load the newest lead note, client message and inbox channel per deal.
-
-    Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
-    temporary account blocks. A few pages of /leads/notes is enough for cards.
-    """
+    """Load the newest lead note, client message and inbox channel per deal."""
     latest: dict[int, tuple[int, str]] = {}
     latest_client: dict[int, tuple[int, str]] = {}
     latest_in_channel: dict[int, tuple[int, str]] = {}
@@ -7308,67 +7438,35 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
                 known = latest.get(entity_id)
                 if not known or created > known[0]:
                     latest[entity_id] = (created, text)
-            if note_type in _CLIENT_MESSAGE_NOTE_TYPES and text and not _note_is_deleted({"text": text}):
-                known = latest_client.get(entity_id)
-                if not known or created > known[0]:
-                    quote, body = _split_quote_prefix(text)
-                    latest_client[entity_id] = (created, body if quote else text)
-            channel = _note_channel_key(note)
-            if channel:
-                incoming = note_type == "incoming_chat_message"
-                bucket = latest_in_channel if incoming else latest_any_channel
-                known = bucket.get(entity_id)
-                if not known or created > known[0]:
-                    bucket[entity_id] = (created, channel)
+            _ingest_inbox_chat_note(note, lead_ids, latest_client, latest_in_channel, latest_any_channel)
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    chat_page = 1
-    while chat_page <= 3:
-        try:
-            response = await _kommo_get_async(
-                f"{KOMMO_BASE_URL}/api/v4/leads/notes",
-                params={
-                    "limit": 250,
-                    "page": chat_page,
-                    "order[updated_at]": "desc",
-                    "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
-                },
-                timeout=12,
-            )
-        except Exception as exc:
-            logger.warning("Rüfət chat notes page %s unavailable: %s", chat_page, exc)
-            break
-        if response.status_code == 204:
-            break
-        if response.status_code != 200:
-            logger.warning("Rüfət chat notes page %s failed: %s", chat_page, response.status_code)
-            break
-        notes = (response.json().get("_embedded") or {}).get("notes", []) or []
+    for chat_page in range(1, 9):
+        notes = await _fetch_lead_notes_page({
+            "limit": 250,
+            "page": chat_page,
+            "order[updated_at]": "desc",
+            "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
+        })
         if not notes:
             break
         for note in notes:
-            if not isinstance(note, dict):
-                continue
-            try:
-                entity_id = int(note.get("entity_id"))
-            except (TypeError, ValueError):
-                continue
-            if entity_id not in lead_ids:
-                continue
-            created = int(note.get("created_at") or note.get("updated_at") or 0)
-            note_type = str(note.get("note_type") or "")
-            channel = _note_channel_key(note)
-            if not channel:
-                continue
-            incoming = note_type == "incoming_chat_message"
-            bucket = latest_in_channel if incoming else latest_any_channel
-            known = bucket.get(entity_id)
-            if not known or created > known[0]:
-                bucket[entity_id] = (created, channel)
+            _ingest_inbox_chat_note(note, lead_ids, latest_client, latest_in_channel, latest_any_channel)
         if len(notes) < 250:
             break
-        chat_page += 1
+    _merge_kommo_inbox_cache(lead_ids, latest_client, latest_in_channel, latest_any_channel)
+    missing = [
+        lid for lid in lead_ids
+        if lid not in latest_in_channel and lid not in latest_any_channel and lid not in _KOMMO_INBOX_CACHE
+    ]
+    if missing:
+        await _backfill_kommo_inbox_notes(
+            missing, lead_ids, latest_client, latest_in_channel, latest_any_channel
+        )
+        for lid in missing:
+            _KOMMO_INBOX_CACHE.setdefault(lid, {"client": (0, ""), "in_ch": (0, ""), "any_ch": (0, "")})
+    _store_kommo_inbox_cache(latest_client, latest_in_channel, latest_any_channel)
     channel_by_lead = {
         lead: (latest_in_channel[lead][1] if lead in latest_in_channel else value[1])
         for lead, value in {**latest_any_channel, **latest_in_channel}.items()
