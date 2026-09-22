@@ -237,7 +237,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790111257,
+    "at": 1790111318,
     "fields": [
       "messages"
     ]
@@ -442,6 +442,28 @@
       "file_uuid": "411e5d8d-a85e-4b29-9a0d-b21028814e06",
       "file_name": "",
       "delivery_status": "read",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0NTAyMDcyMjQwFQIAEhggQTVDRENBMDhDOTMxNUY0MkIyNzQyRUE0NUJFRDg3NUIA",
+      "external_id": "wamid.HBgMOTk0NTAyMDcyMjQwFQIAEhggQTVDRENBMDhDOTMxNUY0MkIyNzQyRUE0NUJFRDg3NUIA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Beinsystems",
+      "phone": "994502072240",
+      "text": "Ok",
+      "message_type": "text",
+      "created_at": 1790111316,
+      "created": "23.09.2026 01:08",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
       "via_cloud": true
     }
   ],
