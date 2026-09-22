@@ -7708,6 +7708,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "deadline": datetime.fromtimestamp(int(related.get("complete_till", 0) or 0), tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if related.get("complete_till") else "",
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
+    _apply_cloud_inbox_to_deals(deals)
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
@@ -7857,6 +7858,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
         if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
+            _apply_cloud_inbox_to_deals(cached.get("deals") or [])
             return _overview_with_partners(cached, owner)
         try:
             overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
@@ -7866,6 +7868,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         except Exception as exc:
             logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
             if cached is not None:
+                _apply_cloud_inbox_to_deals(cached.get("deals") or [])
                 return _overview_with_partners(cached, owner)
             raise
 
@@ -8563,6 +8566,7 @@ WA_CLOUD_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
 # Only the number that was migrated to the official WhatsApp Business Platform
 # goes through Cloud API; the rest keep using the Kommo chat integration.
 WA_CLOUD_SENDER_DIGITS = re.sub(r"\D", "", os.environ.get("WHATSAPP_CLOUD_SENDER", RUFAT_WHATSAPP_NUMBER))
+WA_VERIFY_TOKEN = str(os.environ.get("WHATSAPP_VERIFY_TOKEN") or "bein-wa-hook").strip()
 
 
 def _wa_cloud_credentials() -> tuple[str, str]:
@@ -8930,13 +8934,15 @@ def _sent_message_item(
     reply_id: str = "",
     reply_text: str = "",
     reply_author: str = "",
+    incoming: bool = False,
+    created_at: int = 0,
 ) -> dict:
-    created = int(_time_module.time())
+    created = int(created_at or _time_module.time())
     return {
         "id": f"wa-{wamid or uuid.uuid4().hex}",
         "external_id": str(wamid or ""),
-        "direction": "outgoing",
-        "incoming": False,
+        "direction": "incoming" if incoming else "outgoing",
+        "incoming": bool(incoming),
         "author": author or "",
         "text": text or "",
         "message_type": message_type,
@@ -8950,9 +8956,272 @@ def _sent_message_item(
         "media_url": "",
         "file_uuid": str(file_uuid or ""),
         "file_name": str(file_name or ""),
-        "delivery_status": "sent",
+        "delivery_status": "" if incoming else "sent",
         "via_cloud": True,
     }
+
+
+_WA_PHONE_LEADS_KEY = "_phone_leads"
+
+
+def _wa_phone_key(phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("994") and len(digits) >= 12:
+        return digits[:12]
+    if digits.startswith("0") and len(digits) == 10:
+        return "994" + digits[1:]
+    if len(digits) == 9:
+        return "994" + digits
+    return digits
+
+
+def _remember_phone_lead(phone: str, lead_id: int) -> None:
+    key = _wa_phone_key(phone)
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not key or not lid:
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if not isinstance(idx, dict):
+            idx = {}
+            store[_WA_PHONE_LEADS_KEY] = idx
+        idx[key] = lid
+    _schedule_sent_messages_save()
+
+
+def _lead_id_for_stored_phone(phone: str) -> int:
+    key = _wa_phone_key(phone)
+    if not key:
+        return 0
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if not isinstance(idx, dict):
+            return 0
+        try:
+            return int(idx.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+
+def _cloud_last_for_lead(lead_id: int) -> tuple[str, int, bool]:
+    rows = _sent_messages_for_lead(lead_id)
+    if not rows:
+        return "", 0, False
+    incoming = [row for row in rows if row.get("incoming")]
+    newest = max(rows, key=lambda row: int(row.get("created_at") or 0))
+    preview_src = max(incoming, key=lambda row: int(row.get("created_at") or 0)) if incoming else newest
+    return str(preview_src.get("text") or "").strip(), int(newest.get("created_at") or 0), True
+
+
+def _apply_cloud_inbox_to_deals(deals: list) -> None:
+    if not isinstance(deals, list):
+        return
+    for deal in deals:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lid = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        preview, ts, has = _cloud_last_for_lead(lid)
+        if not has:
+            continue
+        incoming = [row for row in _sent_messages_for_lead(lid) if row.get("incoming")]
+        if incoming:
+            last_in = max(incoming, key=lambda row: int(row.get("created_at") or 0))
+            text = str(last_in.get("text") or "").strip()
+            if text:
+                deal["last_client_message"] = text[:140]
+        elif preview and not str(deal.get("last_client_message") or "").strip():
+            deal["last_client_message"] = preview[:140]
+        if not str(deal.get("chat_channel") or "").strip():
+            deal["chat_channel"] = "whatsapp"
+        try:
+            current = int(deal.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        if ts > current:
+            deal["updated_at"] = ts
+
+
+def _wa_incoming_preview(message: dict) -> tuple[str, str]:
+    kind = str((message or {}).get("type") or "text").lower()
+    if kind == "text":
+        return str(((message.get("text") or {}) if isinstance(message.get("text"), dict) else {}).get("body") or "").strip(), "text"
+    if kind == "image":
+        cap = str(((message.get("image") or {}) if isinstance(message.get("image"), dict) else {}).get("caption") or "").strip()
+        return cap or "📷 Şəkil", "picture"
+    if kind in {"audio", "voice"}:
+        return VOICE_CAPTION_TEXT, "audio"
+    if kind == "video":
+        cap = str(((message.get("video") or {}) if isinstance(message.get("video"), dict) else {}).get("caption") or "").strip()
+        return cap or "🎬 Video", "video"
+    if kind == "document":
+        name = str(((message.get("document") or {}) if isinstance(message.get("document"), dict) else {}).get("filename") or "").strip()
+        return name or "📎 Fayl", "file"
+    if kind == "sticker":
+        return "Sticker", "sticker"
+    if kind == "location":
+        return "📍 Məkan", "text"
+    if kind in {"contacts", "contact"}:
+        return "👤 Kontakt", "text"
+    if kind == "button":
+        text = str(((message.get("button") or {}) if isinstance(message.get("button"), dict) else {}).get("text") or "").strip()
+        return text or "Düymə", "text"
+    if kind == "interactive":
+        return "Cavab", "text"
+    if kind == "reaction":
+        return "", "reaction"
+    return kind or "Mesaj", kind or "text"
+
+
+def _resolve_cloud_lead(phone: str, contact_name: str) -> int:
+    stored = _lead_id_for_stored_phone(phone)
+    if stored:
+        lead = get_lead_details(stored)
+        if lead:
+            return stored
+    contacts = search_contact_by_phone(phone)
+    name = str(contact_name or "").strip() or phone
+    contact_id = 0
+    if contacts:
+        try:
+            contact_id = int(contacts[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+    if contact_id:
+        full = get_contact_details(contact_id) or {}
+        name = str(full.get("name") or name).strip() or name
+        for linked in (full.get("_embedded") or {}).get("leads") or []:
+            if not isinstance(linked, dict):
+                continue
+            try:
+                lid = int(linked.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not lid:
+                continue
+            details = get_lead_details(lid) or linked
+            if _lead_pipeline_id(details) == int(RUFAT_PIPELINE_ID):
+                _remember_phone_lead(phone, lid)
+                return lid
+    if not contact_id:
+        created = create_contact_kommo(name, "+" + _wa_phone_key(phone) if _wa_phone_key(phone) else phone)
+        try:
+            contact_id = int(((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+    if not contact_id:
+        return 0
+    route = personal_entry_stage(int(RUFAT_PIPELINE_ID))
+    pipeline_id, status_id = route if route else (int(RUFAT_PIPELINE_ID), None)
+    lead_id = create_lead_for_contact(contact_id, name, pipeline_id, status_id)
+    if lead_id:
+        _remember_phone_lead(phone, int(lead_id))
+        try:
+            invalidate_rufat_overview_cache()
+        except Exception:
+            pass
+    return int(lead_id or 0)
+
+
+def _already_have_wamid(lead_id: int, wamid: str) -> bool:
+    wanted = str(wamid or "")
+    if not wanted:
+        return False
+    return any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id))
+
+
+def _update_cloud_status(wamid: str, status: str) -> None:
+    wanted = str(wamid or "")
+    mapped = {"sent": "sent", "delivered": "delivered", "read": "read", "failed": "failed"}.get(str(status or "").lower(), "")
+    if not wanted or not mapped:
+        return
+    store = _load_sent_messages()
+    changed = False
+    with _wa_sent_lock:
+        for key, rows in list(store.items()):
+            if key in {_WA_REACTIONS_KEY, _WA_PHONE_LEADS_KEY} or not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
+                    row["delivery_status"] = mapped
+                    changed = True
+                    break
+            if changed:
+                break
+    if changed:
+        _schedule_sent_messages_save()
+
+
+def _ingest_cloud_incoming(value: dict) -> None:
+    if not isinstance(value, dict):
+        return
+    contacts = {
+        str(row.get("wa_id") or ""): str(((row.get("profile") or {}) if isinstance(row.get("profile"), dict) else {}).get("name") or "")
+        for row in (value.get("contacts") or [])
+        if isinstance(row, dict)
+    }
+    for status in value.get("statuses") or []:
+        if isinstance(status, dict):
+            _update_cloud_status(status.get("id"), status.get("status"))
+    for message in value.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        wamid = str(message.get("id") or "")
+        phone = str(message.get("from") or "")
+        if not phone:
+            continue
+        preview, kind = _wa_incoming_preview(message)
+        if kind == "reaction":
+            continue
+        name = contacts.get(_wa_phone_key(phone)) or contacts.get(phone) or ""
+        try:
+            created = int(message.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        context = message.get("context") if isinstance(message.get("context"), dict) else {}
+        lead_id = _resolve_cloud_lead(phone, name)
+        if not lead_id:
+            logger.warning("WhatsApp incoming has no lead phone=%s", phone)
+            continue
+        if wamid and _already_have_wamid(lead_id, wamid):
+            continue
+        _remember_sent_message(lead_id, _sent_message_item(
+            wamid=wamid,
+            text=preview,
+            author=name,
+            message_type=kind,
+            incoming=True,
+            created_at=created,
+            reply_id=str(context.get("id") or ""),
+        ))
+        try:
+            invalidate_rufat_overview_cache()
+        except Exception:
+            pass
+        logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
+
+
+def _process_whatsapp_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            if str(change.get("field") or "") not in {"messages", ""}:
+                continue
+            value = change.get("value")
+            if isinstance(value, dict):
+                _ingest_cloud_incoming(value)
 
 
 def _chat_item_key(item: dict) -> tuple:
@@ -11204,6 +11473,27 @@ async def handle_api_pipelines(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "pipelines": pipelines})
 
 
+async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
+    if request.method == "GET":
+        mode = str(request.rel_url.query.get("hub.mode") or "")
+        token = str(request.rel_url.query.get("hub.verify_token") or "")
+        challenge = str(request.rel_url.query.get("hub.challenge") or "")
+        if mode == "subscribe" and token and token == WA_VERIFY_TOKEN and challenge:
+            return web.Response(text=challenge, content_type="text/plain")
+        return web.Response(text="forbidden", status=403)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        await asyncio.to_thread(_process_whatsapp_payload, payload)
+    except Exception as exc:
+        logger.warning("WhatsApp webhook failed: %s", exc)
+    return web.Response(text="ok")
+
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
@@ -11213,6 +11503,8 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
+    app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)

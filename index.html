@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="206">
+    <meta name="pwa-build" content="207">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -1570,7 +1570,10 @@ function closeCreateTaskModal() {
 }
 function nav(id) {
     if(id !== 'screen-pending') stopPendingActionPolling();
-    if(id !== 'screen-chats' && typeof _dealInboxMode !== 'undefined' && _dealInboxMode) stopDealChatPolling();
+    if(id !== 'screen-chats') {
+        if(typeof stopChatsPolling === 'function') stopChatsPolling();
+        if(typeof _dealInboxMode !== 'undefined' && _dealInboxMode) stopDealChatPolling();
+    }
     closeBottomBar();
     document.body.classList.toggle('chats-screen', id === 'screen-chats');
     document.getElementById('screen-success').style.display = 'none';
@@ -5001,6 +5004,20 @@ function closeInboxChat() {
     document.getElementById('chats-app')?.classList.remove('chat-open');
     renderChatsList();
 }
+let _chatsPollTimer = null;
+function stopChatsPolling() {
+    if(_chatsPollTimer) { clearInterval(_chatsPollTimer); _chatsPollTimer = null; }
+}
+function startChatsPolling() {
+    stopChatsPolling();
+    _chatsPollTimer = setInterval(() => {
+        if(!document.getElementById('screen-chats')?.classList.contains('active')) {
+            stopChatsPolling();
+            return;
+        }
+        loadSamilWorkspace(false, null, false);
+    }, 5000);
+}
 async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
     if(!deal) return;
@@ -5024,7 +5041,8 @@ async function openChats() {
         renderChatsList();
     }
     if(_dealInboxMode && _dealViewState && !_dealChatPollTimer) startDealChatPolling();
-    loadSamilWorkspace(false, null, Date.now() - samilWorkspaceLoadedAt > 30000);
+    startChatsPolling();
+    loadSamilWorkspace(false, null, true);
 }
 
 function desktopCompleteTask(taskId) {
