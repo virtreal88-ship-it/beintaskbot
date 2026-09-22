@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v201 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v202 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8760,6 +8760,7 @@ def _send_kommo_talk_message(
     reply_to: str = "",
     chat_id: str = "",
     reply_text: str = "",
+    plain_fallback: bool = True,
 ) -> tuple[bool, str, int]:
     # Official send_message is text/attachment only. Native quotes use the Chats
     # API shape (reply_to.message.id) on the talk and amojo endpoints.
@@ -8789,7 +8790,8 @@ def _send_kommo_talk_message(
         for body in quote_bodies:
             attempts.append((talk_messages, body, {}))
             attempts.append((talk_send, body, {}))
-    attempts.append((talk_send, payload, {}))
+    if plain_fallback or not reply_id:
+        attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_status = 0
     for url, body, extra in attempts:
@@ -11233,23 +11235,39 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
-        if reply_preview and channel in {"tiktok", "telegram", "instagram", "facebook"}:
-            kommo_text = _with_visible_quote(kommo_text, reply_preview)
         quote_id = reply_to_message_id or reply_external
-        kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-            reply_talk_id,
-            kommo_text,
-            attachment,
-            reply_to=quote_id,
-            chat_id=reply_chat_id,
-            reply_text=reply_preview,
-        )
-        if kommo_ok:
-            ok = True
-            last_error = ""
-            sent_text = kommo_text
-        elif kommo_error and not last_error:
-            last_error = kommo_error
+        social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
+        if quote_id:
+            kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                reply_talk_id,
+                kommo_text,
+                attachment,
+                reply_to=quote_id,
+                chat_id=reply_chat_id,
+                reply_text=reply_preview,
+                plain_fallback=False,
+            )
+            if kommo_ok:
+                ok = True
+                last_error = ""
+                sent_text = kommo_text
+            elif kommo_error and not last_error:
+                last_error = kommo_error
+        if not ok:
+            fallback_text = kommo_text
+            if social_quote and reply_preview:
+                fallback_text = _with_visible_quote(kommo_text, reply_preview)
+            kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                reply_talk_id,
+                fallback_text,
+                attachment,
+            )
+            if kommo_ok:
+                ok = True
+                last_error = ""
+                sent_text = fallback_text
+            elif kommo_error and not last_error:
+                last_error = kommo_error
     if not ok:
         detail = last_error
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
