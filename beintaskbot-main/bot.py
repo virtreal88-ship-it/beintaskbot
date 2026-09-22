@@ -8021,13 +8021,12 @@ def _wa_sender_digits_for_chat(chat_id) -> str:
     try:
         cid = int(chat_id)
     except (TypeError, ValueError):
-        return ""
+        return NIZAMI_WHATSAPP_NUMBER
     mapped = WA_SENDER_NUMBERS.get(cid)
     if mapped:
         return re.sub(r"\D", "", str(mapped))
-    if is_admin(cid):
-        return NIZAMI_WHATSAPP_NUMBER
-    return ""
+    # Everyone except Rüfət writes through the shared WhatsApp Lite number.
+    return NIZAMI_WHATSAPP_NUMBER
 
 
 def _wa_display_number(digits: str) -> str:
@@ -8199,13 +8198,17 @@ def _send_kommo_talk_message(
         if keep_plain:
             payloads.append(base)
     if attachment and str(attachment.get("type") or "") == "voice":
-        # Kommo documents only file/video/picture attachments; keep voice first
-        # so WhatsApp can render a player, then retry the same upload as a file,
-        # finally with a caption because validation can demand a text field.
-        as_file = {**attachment, "type": "file"}
-        payloads = payloads + [{**payload, "attachment": as_file} for payload in payloads]
+        # Kommo documents only file/video/picture attachments, and its validator
+        # rejects unknown keys, so walk from the richest voice payload down to a
+        # plain file upload with a caption.
+        slim = {key: value for key, value in attachment.items() if key != "media_duration"}
+        variants = [attachment, slim, {**slim, "type": "file"}]
+        extra = []
+        for variant in variants:
+            extra.extend({**payload, "attachment": variant} for payload in payloads)
         if not text:
-            payloads.append({"text": "🎤 Səs mesajı", "attachment": as_file})
+            extra.append({"text": "🎤 Səs mesajı", "attachment": {**slim, "type": "file"}})
+        payloads = extra
     last_resp = None
     for payload in payloads:
         try:
@@ -8250,7 +8253,7 @@ def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) 
         timeout=12,
     )
     if sess_resp.status_code != 200:
-        logger.warning("Drive session failed: %s", sess_resp.status_code)
+        logger.warning("Drive session failed: %s %s", sess_resp.status_code, sess_resp.text[:400])
         return "", ""
     sess_data = sess_resp.json()
     upload_url = sess_data.get("upload_url")
@@ -8267,7 +8270,7 @@ def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) 
             timeout=20,
         )
         if up_resp.status_code != 200:
-            logger.warning("Drive upload failed: %s", up_resp.status_code)
+            logger.warning("Drive upload failed: %s %s", up_resp.status_code, up_resp.text[:400])
             return "", ""
         up_data = up_resp.json() if up_resp.content else {}
         if up_data.get("next_url"):
@@ -9130,6 +9133,12 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 "drive_uuid": file_uuid,
                 "drive_version_uuid": version_uuid,
             }
+            try:
+                duration = int(float(form.get("duration") or 0))
+            except (TypeError, ValueError):
+                duration = 0
+            if duration > 0 and attachment["type"] == "voice":
+                attachment["media_duration"] = duration
     else:
         try:
             data = await request.json()
@@ -9186,7 +9195,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         ok, last_error, _status = _send_kommo_talk_message(
             reply_talk_id, _quote_prefix_text(reply_preview, text), attachment
         )
-    if not ok and channel == "whatsapp" and not reply_to_message_id:
+    if not ok and channel == "whatsapp" and not reply_to_message_id and not attachment:
         _ids, phones = _contact_ids_and_phones(lead)
         for phone in phones:
             cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
@@ -9197,6 +9206,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             if cloud_error:
                 last_error = cloud_error
     if not ok:
+        detail = last_error
         if quote_on_whatsapp:
             last_error = "Cavab göndərilmədi."
         elif attachment:
@@ -9204,7 +9214,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             last_error = "Səs mesajı göndərilmədi." if kind == "voice" else "Fayl göndərilmədi."
         elif not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Mesaj göndərilmədi."
-        return web.json_response({"success": False, "error": last_error}, status=400)
+        return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),

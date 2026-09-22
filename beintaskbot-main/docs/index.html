@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="190">
+    <meta name="pwa-build" content="191">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -167,6 +167,7 @@
         .source-badge[data-source="Facebook"] { background:#2563eb; }
         .source-badge[data-source="SEO"] { background:#0f766e; }
         .source-badge[data-source="WhatsApp"] { background:#15803d; }
+        .source-tag { font-size:9px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
         #task-edit-modal { position:fixed; inset:0; z-index:10050; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
         #task-edit-modal.open { display:flex; }
@@ -323,6 +324,11 @@
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
+        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 76px 6px 70px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+        .wa-voice-preview[hidden] { display:none !important; }
+        .wa-voice-preview audio { flex:1; min-width:0; height:30px; }
+        .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
+        .wa-composer-field.has-voice textarea { display:none; }
         .deal-chat-row.comment { display:none; }
         .deal-chat-note { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:8px auto; max-width:92%; box-shadow:none; font-size:13px; line-height:1.35; }
         .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:700; margin-bottom:4px; }
@@ -1058,6 +1064,21 @@ function dealUtmLabel(record) {
     if(utm) return utm;
     const src = String(record?.source || record?.menbe || '').trim();
     return UTM_TAGS.includes(src) ? src : '';
+}
+const SOURCE_COLORS = {
+    WhatsApp: '#15803d',
+    Instagram: '#db2777',
+    TikTok: '#0f172a',
+    Facebook: '#2563eb',
+    SEO: '#0f766e',
+    Partner: '#7c3aed',
+};
+function sourceTagHtml(record) {
+    const label = dealSourceLabel(record);
+    if(!label) return '';
+    const key = Object.keys(SOURCE_COLORS).find(name => label.toLowerCase().startsWith(name.toLowerCase()));
+    const color = SOURCE_COLORS[key] || '#64748b';
+    return `<span class="source-tag" style="color:${color}">${escapeHtml(label)}</span>`;
 }
 function dealSourceLabel(record) {
     const partner = dealPartnerLabel(record);
@@ -3610,32 +3631,47 @@ async function requestDealAiReply() {
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
 }
 let _dealVoiceRec = null, _dealVoiceChunks = [], _dealVoiceTimer = null, _dealVoiceStart = 0, _dealVoiceCancelled = false;
-let _dealPendingFile = null, _dealPendingUrl = '';
+let _dealPendingFile = null, _dealPendingUrl = '', _dealPendingSeconds = 0;
 function clearDealPendingFile() {
     if(_dealPendingUrl) { try { URL.revokeObjectURL(_dealPendingUrl); } catch(_err) {} }
     _dealPendingUrl = '';
     _dealPendingFile = null;
+    _dealPendingSeconds = 0;
     const bar = document.getElementById('deal-chat-attachment');
     if(bar) {
         bar.hidden = true;
         const body = bar.querySelector('.wa-attachment-body');
         if(body) body.innerHTML = '';
     }
+    const voiceBox = document.getElementById('deal-voice-preview');
+    if(voiceBox) {
+        voiceBox.hidden = true;
+        const player = voiceBox.querySelector('audio');
+        if(player) { try { player.pause(); } catch(_err) {} player.removeAttribute('src'); }
+    }
+    document.querySelector('#deal-view-modal .wa-composer-field')?.classList.remove('has-voice');
 }
-function setDealPendingFile(file) {
+function setDealPendingFile(file, seconds) {
     if(!file) return;
     clearDealPendingFile();
     _dealPendingFile = file;
+    _dealPendingSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+    const isAudio = String(file.type || '').startsWith('audio/') || /\.(ogg|oga|opus|mp3|m4a|wav|webm)$/i.test(file.name || '');
+    if(isAudio) {
+        const voiceBox = document.getElementById('deal-voice-preview');
+        const player = voiceBox && voiceBox.querySelector('audio');
+        if(voiceBox && player) {
+            _dealPendingUrl = URL.createObjectURL(file);
+            player.src = _dealPendingUrl;
+            voiceBox.hidden = false;
+            document.querySelector('#deal-view-modal .wa-composer-field')?.classList.add('has-voice');
+            return;
+        }
+    }
     const bar = document.getElementById('deal-chat-attachment');
     const body = bar && bar.querySelector('.wa-attachment-body');
     if(!bar || !body) return;
-    const isAudio = String(file.type || '').startsWith('audio/') || /\.(ogg|oga|opus|mp3|m4a|wav|webm)$/i.test(file.name || '');
-    if(isAudio) {
-        _dealPendingUrl = URL.createObjectURL(file);
-        body.innerHTML = `<audio controls preload="metadata" src="${escapeHtml(_dealPendingUrl)}"></audio>`;
-    } else {
-        body.innerHTML = `<div class="name">📎 ${escapeHtml(file.name || 'Fayl')}</div>`;
-    }
+    body.innerHTML = `<div class="name">📎 ${escapeHtml(file.name || 'Fayl')}</div>`;
     bar.hidden = false;
     document.getElementById('deal-chat-input')?.focus();
 }
@@ -3724,7 +3760,7 @@ async function toggleDealVoice() {
         if(!chunks.length || seconds < 1) { toast('Səs yazısı çox qısadır', true); return; }
         const blob = new Blob(chunks, {type});
         const name = 'voice_' + Date.now() + '.' + dealVoiceExt(type);
-        setDealPendingFile(new File([blob], name, {type}));
+        setDealPendingFile(new File([blob], name, {type}), seconds);
     };
     _dealVoiceRec.start();
     paintDealVoiceUi(true);
@@ -3765,6 +3801,7 @@ async function sendDealChatMessage(fileArg) {
             if(replyAuthor) form.append('reply_to_author', replyAuthor);
             if(replyExternal) form.append('reply_external_id', replyExternal);
             if(talkId) form.append('talk_id', String(talkId));
+            if(_dealPendingSeconds) form.append('duration', String(_dealPendingSeconds));
             form.append('file', file, file.name || 'file');
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
@@ -3780,7 +3817,10 @@ async function sendDealChatMessage(fileArg) {
         }
         const d = await r.json().catch(() => ({}));
         if(!requestMatchesDeal(seq, leadId)) return;
-        if(!r.ok || !d.success) throw new Error(d.error || 'Göndərilmədi');
+        if(!r.ok || !d.success) {
+            const detail = isAdmin && d.detail ? ` (${String(d.detail).slice(0, 160)})` : '';
+            throw new Error((d.error || 'Göndərilmədi') + detail);
+        }
         if(input) input.value = '';
         clearDealPendingFile();
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
@@ -3838,6 +3878,10 @@ function dealWorkspaceHtml(deal, token, readonly) {
                 <button type="button" class="wa-attach-in" id="deal-chat-attach" title="Fayl">📎</button>
                 <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
                 <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
+                <div id="deal-voice-preview" class="wa-voice-preview" hidden>
+                    <audio controls preload="metadata"></audio>
+                    <button type="button" id="deal-voice-drop" title="Səs yazısını sil">🗑</button>
+                </div>
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
                 <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
@@ -3861,8 +3905,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <aside class="deal-side">
                 <h3>Sövdələşmə</h3>
                 <div class="text-[13px] text-gray-700 space-y-1">
-                    <div><b>${escapeHtml(deal.name || '—')}</b></div>
-                    <div>🎯 <b>Mənbə:</b> ${escapeHtml(dealSourceLabel(deal) || '—')}</div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b>${escapeHtml(deal.name || '—')}</b>${sourceTagHtml(deal)}</div>
                     ${sourceUrlsHtml(deal)}
                     <div>🕒 ${escapeHtml(created)}</div>
                     <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
@@ -3949,6 +3992,8 @@ function paintDealViewModal(deal, readonly) {
     if(micBtn) micBtn.onclick = toggleDealVoice;
     const attachClear = document.getElementById('deal-chat-attachment-clear');
     if(attachClear) attachClear.onclick = clearDealPendingFile;
+    const voiceDrop = document.getElementById('deal-voice-drop');
+    if(voiceDrop) voiceDrop.onclick = clearDealPendingFile;
     const tabs = modal.querySelector('#deal-tabs');
     const shellBody = modal.querySelector('#deal-shell-body');
     if(tabs && shellBody) {
@@ -4152,7 +4197,10 @@ function renderSamilDeals() {
                         <div class="text-sm font-semibold text-slate-900 truncate">${dealTitle}</div>
                     </div>
                     <div class="flex items-center gap-1.5">
-                        <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
+                        <div class="flex flex-col items-end gap-0.5 min-w-0">
+                            <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${stageName}</span>
+                            ${sourceTagHtml(deal)}
+                        </div>
                         <button type="button" aria-label="Əməliyyatlar" class="deal-more-btn shrink-0 w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 font-black text-lg leading-none" data-deal-more="${deal.id}">⋮</button>
                     </div>
                 </div>
@@ -4161,7 +4209,6 @@ function renderSamilDeals() {
                         <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
                     </div>
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
-                    <div class="truncate">🎯 <b>Mənbə:</b> ${escapeHtml(dealSourceLabel(deal) || '—')}</div>
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
                     <div class="grid grid-cols-2 gap-2 text-gray-500"><div>🕒 ${created}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
