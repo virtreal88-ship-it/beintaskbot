@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v202 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v203 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9088,46 +9088,76 @@ def _is_ogg_bytes(raw: bytes) -> bool:
     return bool(raw) and raw[:4] == b"OggS"
 
 
-def _ffmpeg_to_voice_ogg(raw: bytes, filename: str) -> bytes:
-    """Convert a browser recording to mono Ogg/Opus, the only voice note format."""
+def _ffmpeg_run(cmd: list[str], dst_path: str) -> bytes:
+    result = subprocess.run(cmd, capture_output=True, timeout=90)
+    if result.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0:
+        with open(dst_path, "rb") as handle:
+            data = handle.read()
+        if data:
+            return data
+    if result.stderr:
+        logger.warning("ffmpeg voice convert failed: %s", result.stderr[:240])
+    return b""
+
+
+def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str, bool]:
+    """Turn a browser recording into Cloud-ready audio. Prefer Ogg/Opus voice notes."""
     if _is_ogg_bytes(raw):
-        return raw
+        return raw, "audio/ogg", "voice.ogg", True
     suffix = os.path.splitext(str(filename or ""))[1].lower()
     if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
         suffix = ".webm"
     src_path = ""
-    dst_path = ""
+    ogg_path = ""
+    m4a_path = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
             src.write(raw)
             src_path = src.name
-        dst_path = src_path + ".ogg"
-        commands = [
+        ogg_path = src_path + ".ogg"
+        m4a_path = src_path + ".m4a"
+        ogg_cmds = [
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-c:a", "copy", "-f", "ogg", ogg_path,
+            ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", dst_path,
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", ogg_path,
             ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", dst_path,
+                "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", ogg_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "opus", "-b:a", "32k", "-f", "ogg", ogg_path,
             ],
         ]
-        last_err = b""
-        for cmd in commands:
-            result = subprocess.run(cmd, capture_output=True, timeout=90)
-            if result.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0:
-                with open(dst_path, "rb") as handle:
-                    return handle.read()
-            last_err = result.stderr or last_err
-        logger.warning("ffmpeg voice convert failed: %s", last_err[:240])
-        return b""
+        for cmd in ogg_cmds:
+            data = _ffmpeg_run(cmd, ogg_path)
+            if _is_ogg_bytes(data):
+                return data, "audio/ogg", "voice.ogg", True
+        m4a_cmds = [
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "aac", "-b:a", "64k", "-f", "mp4", m4a_path,
+            ],
+        ]
+        for cmd in m4a_cmds:
+            data = _ffmpeg_run(cmd, m4a_path)
+            if data:
+                return data, "audio/mp4", "voice.m4a", False
+        return b"", "", "", False
     except Exception as exc:
         logger.warning("ffmpeg voice convert error: %s", exc)
-        return b""
+        return b"", "", "", False
     finally:
-        for path in (src_path, dst_path):
+        for path in (src_path, ogg_path, m4a_path):
             if path and os.path.exists(path):
                 try:
                     os.unlink(path)
@@ -11094,10 +11124,10 @@ def _deliver_via_cloud(
         kind = _wa_cloud_media_kind(filename, content_type)
         payload, mime, name = raw, content_type or "application/octet-stream", filename or "file"
         if kind == "audio":
-            converted = _ffmpeg_to_voice_ogg(raw, filename)
+            converted, conv_mime, conv_name, voice = _ffmpeg_voice_for_cloud(raw, filename)
             if not converted:
                 return False, "Səs WhatsApp formatına çevrilmədi.", "", "audio"
-            payload, mime, name, voice = converted, "audio/ogg", "voice.ogg", True
+            payload, mime, name = converted, conv_mime, conv_name
         media_id, upload_error = _wa_cloud_upload_media(payload, name, mime)
         if not media_id:
             return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind
