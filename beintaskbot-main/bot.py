@@ -8386,52 +8386,24 @@ def _send_kommo_talk_message(
     talk_id: int,
     text: str,
     attachment: dict | None = None,
-    reply_to_message_id: str = "",
-    keep_plain: bool = True,
-    reply_external_id: str = "",
 ) -> tuple[bool, str, int]:
+    # Kommo send_message accepts only text plus a file/video/picture attachment and
+    # bills every call against the Chats API quota, so each message is one request.
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
-    base: dict = {}
+    payload: dict = {}
     if text:
-        base["text"] = text
+        payload["text"] = text
     if attachment:
-        base["attachment"] = attachment
-    if not base:
+        payload["attachment"] = attachment
+    if not payload:
         return False, "Mesaj boş ola bilməz", 0
-    payloads = [base]
-    reply_ids = [
-        value for value in dict.fromkeys(
-            (str(reply_to_message_id or "").strip(), str(reply_external_id or "").strip())
-        ) if value
-    ]
-    if reply_ids:
-        payloads = []
-        for reply_id in reply_ids:
-            quote_message = {"id": reply_id, "type": "text"}
-            payloads.extend([
-                {**base, "reply_to": {"message": quote_message}},
-                {**base, "reply_to": {"message_id": reply_id}},
-                {**base, "reply_to": {"id": reply_id}},
-                {**base, "reply_to_message_id": reply_id},
-            ])
-        if keep_plain:
-            payloads.append(base)
-    last_resp = None
-    for payload in payloads:
-        try:
-            resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
-        except Exception as exc:
-            logger.warning("Talk send failed: %s", exc)
-            return False, "Kommo çata göndərmək alınmadı.", 0
-        last_resp = resp
-        if resp.status_code in {200, 202}:
-            return True, "", resp.status_code
-        if resp.status_code not in {400, 422}:
-            break
-        logger.warning("Talk send status %s: %s", resp.status_code, _kommo_error_detail(resp))
-    resp = last_resp
-    if resp is None:
-        return False, "Mesaj göndərilmədi.", 0
+    try:
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
+    except Exception as exc:
+        logger.warning("Talk send failed: %s", exc)
+        return False, "Kommo çata göndərmək alınmadı.", 0
+    if resp.status_code in {200, 202}:
+        return True, "", resp.status_code
     detail = _kommo_error_detail(resp)
     logger.warning("Talk send status %s: %s", resp.status_code, detail)
     if resp.status_code == 403:
@@ -9297,23 +9269,11 @@ def _looks_voice_upload(filename: str, content_type: str) -> bool:
     )
 
 
-def _voice_attachment_attempts(file_uuid: str, version_uuid: str, text: str) -> list[tuple[dict, str]]:
-    """WhatsApp plays audio inline only when Kommo accepts a voice/audio attachment."""
-    base = {"drive_uuid": file_uuid, "drive_version_uuid": version_uuid}
-    attempts: list[tuple[dict, str]] = []
-    for kind in ("voice", "audio"):
-        attempts.append(({**base, "type": kind}, text))
-        if not text:
-            # Some Kommo channels reject an empty text even with an attachment.
-            attempts.append(({**base, "type": kind}, VOICE_CAPTION_TEXT))
-    attempts.append(({**base, "type": "file"}, text or VOICE_CAPTION_TEXT))
-    return attempts
-
-
 def _attachment_kind(filename: str, content_type: str) -> str:
+    # send_message allows file/video/picture only, so audio travels as a file.
     name = f"{filename} {content_type}".lower()
     if content_type.startswith("audio/") or re.search(r"\.(ogg|oga|opus|mp3|m4a|wav)$", name):
-        return "voice"
+        return "file"
     if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
         return "picture"
     if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
@@ -9389,7 +9349,6 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_preview = ""
     reply_author = ""
     hinted_talk = 0
-    voice_attempts: list[tuple[dict, str]] = []
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -9422,8 +9381,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 "drive_uuid": file_uuid,
                 "drive_version_uuid": version_uuid,
             }
-            if _looks_voice_upload(filename, file_type):
-                voice_attempts = _voice_attachment_attempts(file_uuid, version_uuid, text)
+            if _looks_voice_upload(filename, file_type) and not text:
+                # Kommo rejects an empty text even when a file is attached.
+                text = VOICE_CAPTION_TEXT
     else:
         try:
             data = await request.json()
@@ -9472,20 +9432,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 break
             if cloud_error:
                 last_error = cloud_error
-    if not ok and voice_attempts:
-        for attempt_attachment, attempt_text in voice_attempts:
-            ok, last_error, _status = _send_kommo_talk_message(
-                reply_talk_id, attempt_text, attempt_attachment, reply_to_message_id,
-                reply_external_id=reply_external,
-            )
-            if ok:
-                text = attempt_text
-                attachment = attempt_attachment
-                break
-    elif not ok:
-        ok, last_error, _status = _send_kommo_talk_message(
-            reply_talk_id, text, attachment, reply_to_message_id, reply_external_id=reply_external
-        )
+    if not ok:
+        ok, last_error, _status = _send_kommo_talk_message(reply_talk_id, text, attachment)
     if not ok and channel == "whatsapp" and not reply_to_message_id and not attachment:
         _ids, phones = _contact_ids_and_phones(lead)
         for phone in phones:
