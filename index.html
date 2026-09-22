@@ -1406,7 +1406,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
         // realistic API window; otherwise the UI reports a false server error
         // even though the request eventually succeeds.
         const timeout = setTimeout(() => controller.abort(), 45000);
-        showSyncIndicator();
+        if(shouldRefresh) showSyncIndicator();
         try {
             const response = await fetch(API_BASE + '/api/samil/overview?stage_key=' + encodeURIComponent(stageParam) + '&uid=' + encodeURIComponent(CURRENT_USER_ID) + (shouldRefresh ? '&refresh=1' : '') + '&_ts=' + Date.now(), {
                 cache: 'no-store',
@@ -1434,7 +1434,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             if(samilWorkspaceRequest === request) samilWorkspaceRequest = null;
             if(samilWorkspaceForceRequest === request) samilWorkspaceForceRequest = null;
             hideLoader();
-            hideSyncIndicator();
+            if(shouldRefresh) hideSyncIndicator();
         }
     })();
     samilWorkspaceRequest = request;
