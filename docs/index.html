@@ -3218,7 +3218,14 @@ function dealChatQuoteHtml(item) {
 }
 function splitQuotePrefix(text) {
     const raw = String(text || '');
-    if(!raw.trimStart().startsWith('>')) return null;
+    const stripped = raw.trimStart();
+    if(stripped.startsWith('«') && stripped.includes('»')) {
+        const end = stripped.indexOf('»');
+        const quoteText = stripped.slice(1, end).trim();
+        const bodyText = stripped.slice(end + 1).replace(/^\s*\n/, '').trim();
+        if(quoteText && bodyText) return {quote: quoteText, body: bodyText};
+    }
+    if(!stripped.startsWith('>')) return null;
     const quote = [];
     const body = [];
     raw.split('\n').forEach(line => {
