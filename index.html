@@ -390,7 +390,7 @@
         .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:700; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
         .chats-search { width:100%; margin-top:8px; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; font-size:12px; background:#f8fafc; outline:none; font-family:inherit; }
         .chats-rows { flex:1; min-height:0; overflow:auto; }
-        .chats-row { display:flex; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
+        .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row.on { background:#e8f5e9; }
         .chats-avatar { width:42px; height:42px; border-radius:50%; background:#dcf8c6; color:#128c7e; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; }
@@ -401,6 +401,8 @@
         .chats-row-bottom { display:flex; align-items:center; gap:8px; margin-top:2px; }
         .chats-row-preview { flex:1; min-width:0; font-size:12px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .chats-unread { min-width:18px; height:18px; border-radius:9px; background:#25d366; color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; flex:none; }
+        .chats-hide { flex:none; width:22px; height:22px; border:0; border-radius:50%; background:transparent; color:#94a3b8; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
+        .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
         .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:700; }
         .chats-pane { min-width:0; min-height:0; background:#ece5dd; display:flex; flex-direction:column; }
         .chats-empty { margin:auto; text-align:center; color:#667781; }
@@ -4895,6 +4897,41 @@ function chatsEmptyHtml() {
     return `<div class="chats-empty"><div class="chats-empty-title">Çat seçilməyib</div><div class="chats-empty-sub">Soldan söhbət seçin</div></div>`;
 }
 function chatsSeenKey() { return 'chats_seen_v1_' + CURRENT_USER_ID; }
+function chatsHiddenKey() { return 'chats_hidden_v1_' + CURRENT_USER_ID; }
+function getChatsHidden() {
+    try { return JSON.parse(localStorage.getItem(chatsHiddenKey()) || '{}'); } catch(_err) { return {}; }
+}
+function saveChatsHidden(data) {
+    try { localStorage.setItem(chatsHiddenKey(), JSON.stringify(data || {})); } catch(_err) {}
+}
+function pruneChatsHidden(deals) {
+    const hidden = getChatsHidden();
+    let changed = false;
+    (deals || []).forEach(deal => {
+        if(!deal || !deal.id) return;
+        const id = String(deal.id);
+        if(!Object.prototype.hasOwnProperty.call(hidden, id)) return;
+        if((dealLastClientMessage(deal) || '') !== String(hidden[id] || '')) {
+            delete hidden[id];
+            changed = true;
+        }
+    });
+    if(changed) saveChatsHidden(hidden);
+    return hidden;
+}
+function hideInboxChat(leadId) {
+    const id = String(leadId || '');
+    if(!id) return;
+    const deal = (samilDeals || []).find(item => String(item.id) === id);
+    const hidden = getChatsHidden();
+    hidden[id] = dealLastClientMessage(deal) || '';
+    saveChatsHidden(hidden);
+    if(_dealInboxMode && _dealViewState && String(_dealViewState.id) === id) {
+        closeInboxChat();
+        return;
+    }
+    renderChatsList();
+}
 function getChatsSeen() {
     try { return JSON.parse(localStorage.getItem(chatsSeenKey()) || '{}'); } catch(_err) { return {}; }
 }
@@ -4942,7 +4979,9 @@ function chatsInitials(name) {
 }
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
+    const hidden = pruneChatsHidden(samilDeals);
     return (samilDeals || []).filter(deal => {
+        if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
         if(!(preview || ['whatsapp','instagram','tiktok','facebook'].includes(channel))) return false;
@@ -4994,17 +5033,26 @@ function renderChatsList() {
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
             const channel = sourceTagHtml(deal);
-            return `<button type="button" class="chats-row${on ? ' on' : ''}" data-lead="${escapeHtml(String(deal.id))}">
+            return `<div class="chats-row${on ? ' on' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 <span class="chats-avatar">${escapeHtml(chatsInitials(name))}</span>
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
                     <span class="chats-row-bottom"><span class="chats-row-preview">${channel}${channel ? ' · ' : ''}${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
                 </span>
-            </button>`;
+                <button type="button" class="chats-hide" data-hide-lead="${escapeHtml(String(deal.id))}" title="Gizlət" aria-label="Gizlət">×</button>
+            </div>`;
         }).join('');
-        box.querySelectorAll('[data-lead]').forEach(btn => {
-            btn.onclick = () => openInboxChat(btn.getAttribute('data-lead'));
-        });
+        box.onclick = (event) => {
+            const hideBtn = event.target.closest('[data-hide-lead]');
+            if(hideBtn) {
+                event.preventDefault();
+                event.stopPropagation();
+                hideInboxChat(hideBtn.getAttribute('data-hide-lead'));
+                return;
+            }
+            const row = event.target.closest('[data-lead]');
+            if(row) openInboxChat(row.getAttribute('data-lead'));
+        };
     }
     if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
 }
