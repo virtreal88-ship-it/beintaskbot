@@ -9680,7 +9680,7 @@ def _ingest_cloud_echoes(value: dict) -> None:
             created_at=created,
         ))
         try:
-            invalidate_rufat_overview_cache()
+            _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
         logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
