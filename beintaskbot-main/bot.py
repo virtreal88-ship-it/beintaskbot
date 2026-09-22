@@ -5637,11 +5637,14 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    hook = ""
     at = int(_WA_LAST_HOOK.get("at") or 0)
-    if at:
-        hook = f" hook={max(0, int(_time_module.time()) - at)}s"
-    return web.Response(status=200, text=f"Bot is running v183{hook}")
+    hook = f"hook={max(0, int(_time_module.time()) - at)}s" if at else "hook=none"
+    incoming = f"in={int(_WA_LAST_HOOK.get('in') or 0)}"
+    lead = int(_WA_LAST_HOOK.get("lead") or 0)
+    lead_part = f" lead={lead}" if lead else ""
+    sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
+    sub_part = f" sub={sub}" if sub else ""
+    return web.Response(status=200, text=f"Bot is running v184 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7260,14 +7263,69 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     return result
 
 
-async def _load_kommo_talks_inbox(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, int]]:
+def _talk_inbox_lead_ids(talk: dict, lead_ids: set[int], contact_to_lead: dict[int, int] | None = None) -> list[int]:
+    lids: list[int] = []
+    try:
+        lids.append(int(talk.get("entity_id") or 0))
+    except (TypeError, ValueError):
+        pass
+    try:
+        contact_id = int(talk.get("contact_id") or 0)
+    except (TypeError, ValueError):
+        contact_id = 0
+    if contact_id and contact_to_lead:
+        mapped = int(contact_to_lead.get(contact_id) or 0)
+        if mapped:
+            lids.append(mapped)
+    for lead in ((talk.get("_embedded") or {}).get("leads") or []):
+        if not isinstance(lead, dict):
+            continue
+        try:
+            lids.append(int(lead.get("id") or 0))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys(lid for lid in lids if lid in lead_ids))
+
+
+def _apply_talk_to_inbox(
+    talk: dict,
+    lead_ids: set[int],
+    client_by_lead: dict[int, str],
+    channel_by_lead: dict[int, str],
+    updated_by_lead: dict[int, int],
+    contact_to_lead: dict[int, int] | None = None,
+) -> None:
+    lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
+    if not lids:
+        return
+    channel = _talk_channel_key(talk)
+    if channel not in {"whatsapp", "instagram", "facebook", "tiktok"}:
+        return
+    try:
+        updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+    preview = "Yeni mesaj" if unread else "Çat"
+    for lid in lids:
+        known = updated_by_lead.get(lid, 0)
+        if updated >= known:
+            updated_by_lead[lid] = updated
+            channel_by_lead[lid] = channel
+            client_by_lead[lid] = preview
+
+
+async def _load_kommo_talks_inbox(
+    lead_ids: set[int],
+    contact_to_lead: dict[int, int] | None = None,
+) -> tuple[dict[int, str], dict[int, str], dict[int, int]]:
     """Existing WhatsApp/Instagram deals still live in Kommo talks; Cloud inbound is extra."""
     client_by_lead: dict[int, str] = {}
     channel_by_lead: dict[int, str] = {}
     updated_by_lead: dict[int, int] = {}
     if not lead_ids:
         return client_by_lead, channel_by_lead, updated_by_lead
-    for page in range(1, 9):
+    for page in range(1, 13):
         try:
             response = await _kommo_get_async(
                 f"{KOMMO_BASE_URL}/api/v4/talks",
@@ -7286,44 +7344,40 @@ async def _load_kommo_talks_inbox(lead_ids: set[int]) -> tuple[dict[int, str], d
         if not talks:
             break
         for talk in talks:
-            if not isinstance(talk, dict):
-                continue
-            lids: list[int] = []
-            try:
-                lids.append(int(talk.get("entity_id") or 0))
-            except (TypeError, ValueError):
-                pass
-            for lead in ((talk.get("_embedded") or {}).get("leads") or []):
-                if not isinstance(lead, dict):
-                    continue
-                try:
-                    lids.append(int(lead.get("id") or 0))
-                except (TypeError, ValueError):
-                    continue
-            lids = [lid for lid in lids if lid in lead_ids]
-            if not lids:
-                continue
-            channel = _talk_channel_key(talk)
-            if channel not in {"whatsapp", "instagram", "facebook", "tiktok"}:
-                continue
-            try:
-                updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
-            except (TypeError, ValueError):
-                updated = 0
-            unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
-            for lid in lids:
-                known = updated_by_lead.get(lid, 0)
-                if updated >= known:
-                    updated_by_lead[lid] = updated
-                    channel_by_lead[lid] = channel
-                    if unread:
-                        client_by_lead[lid] = "Yeni mesaj"
+            if isinstance(talk, dict):
+                _apply_talk_to_inbox(talk, lead_ids, client_by_lead, channel_by_lead, updated_by_lead, contact_to_lead)
         if len(talks) < 250:
             break
+    missing = [lid for lid in lead_ids if lid not in channel_by_lead]
+    chunk_size = 30
+    for start in range(0, len(missing), chunk_size):
+        chunk = missing[start:start + chunk_size]
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/talks",
+                params={
+                    "limit": 250,
+                    "filter[entity_type]": "lead",
+                    "filter[entity_id][]": chunk,
+                },
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Kommo talks by lead failed: %s", exc)
+            break
+        if response.status_code != 200:
+            logger.warning("Kommo talks by lead status %s", response.status_code)
+            break
+        for talk in (response.json().get("_embedded") or {}).get("talks") or []:
+            if isinstance(talk, dict):
+                _apply_talk_to_inbox(talk, lead_ids, client_by_lead, channel_by_lead, updated_by_lead, contact_to_lead)
     return client_by_lead, channel_by_lead, updated_by_lead
 
 
-async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int]]:
+async def _load_rufat_latest_notes(
+    lead_ids: set[int],
+    contact_to_lead: dict[int, int] | None = None,
+) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int]]:
     """Common notes plus Kommo talk channels so existing chats stay in Çatlar."""
     latest: dict[int, tuple[int, str]] = {}
     if not lead_ids:
@@ -7368,7 +7422,7 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    client_by_lead, channel_by_lead, talk_updated = await _load_kommo_talks_inbox(lead_ids)
+    client_by_lead, channel_by_lead, talk_updated = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
     return (
         {lead: value[1] for lead, value in latest.items()},
         client_by_lead,
@@ -7611,7 +7665,10 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
     }
     task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
     contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
-    notes_request = asyncio.create_task(_load_rufat_latest_notes(set(lead_by_id.keys())))
+    notes_request = asyncio.create_task(_load_rufat_latest_notes(
+        set(lead_by_id.keys()),
+        {cid: int(lead.get("id") or 0) for cid, lead in lead_by_contact_id.items() if int(lead.get("id") or 0)},
+    ))
     tasks_request = asyncio.create_task(_load_rufat_open_tasks(task_entity_ids))
     contacts = await contacts_request
     deals = []
@@ -8604,7 +8661,7 @@ def _wa_cloud_ready(sender_digits: str = "") -> bool:
     return wanted == WA_CLOUD_SENDER_DIGITS
 
 
-_WA_LAST_HOOK = {"at": 0, "fields": [], "in": 0, "lead": 0}
+_WA_LAST_HOOK = {"at": 0, "fields": [], "in": 0, "lead": 0, "sub": ""}
 
 
 def _wa_graph_get(path: str, params: dict | None = None):
@@ -8637,6 +8694,7 @@ def _wa_ensure_subscribed() -> None:
             waba = str(account.get("id") or "").strip()
     if not waba:
         logger.warning("WhatsApp WABA id missing; live inbound may stay on Kommo")
+        _WA_LAST_HOOK["sub"] = "nowaba"
         return
     try:
         resp = requests.post(
@@ -8644,8 +8702,13 @@ def _wa_ensure_subscribed() -> None:
             headers={"Authorization": f"Bearer {token}"},
             timeout=12,
         )
-        logger.info("WhatsApp subscribed_apps status=%s", resp.status_code)
+        listed = _wa_graph_get(f"{waba}/subscribed_apps")
+        apps = listed.get("data") if isinstance(listed, dict) else []
+        count = len(apps) if isinstance(apps, list) else 0
+        _WA_LAST_HOOK["sub"] = f"{resp.status_code}/{count}"
+        logger.info("WhatsApp subscribed_apps status=%s apps=%s", resp.status_code, count)
     except Exception as exc:
+        _WA_LAST_HOOK["sub"] = "err"
         logger.warning("WhatsApp subscribe failed: %s", exc)
 
 
@@ -9465,11 +9528,31 @@ def _normalized_channel(key: str) -> str:
     return wanted if wanted in CHAT_CHANNEL_LABELS else "whatsapp"
 
 
+def _note_is_system_noise(text: str) -> bool:
+    folded = str(text or "").casefold()
+    return any(token in folded for token in (
+        "агенты ии остановлены",
+        "ai agents have been stopped",
+        "цепочка",
+        "не запустилась",
+    ))
+
+
 def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
     """Turn a Kommo chat-note into the same shape as a talk message."""
-    if not isinstance(note, dict) or not note.get("is_chat"):
+    if not isinstance(note, dict):
         return None
-    incoming = bool(note.get("incoming"))
+    ntype = str(note.get("type") or "").casefold()
+    chat_types = {
+        "incoming_chat_message", "outgoing_chat_message", "whatsapp", "waba",
+        "facebook_message", "instagram_business", "chat",
+    }
+    if not note.get("is_chat") and ntype not in chat_types:
+        return None
+    text = str(note.get("text") or "").strip()
+    if _note_is_system_noise(text):
+        return None
+    incoming = bool(note.get("incoming")) or ntype.startswith("incoming")
     channel = _normalized_channel(note.get("channel"))
     author = str(note.get("author") or "")
     if incoming:
@@ -9482,7 +9565,7 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
         "author": author,
-        "text": str(note.get("text") or ""),
+        "text": text or "Mesaj",
         "message_type": note.get("message_type") or "text",
         "created_at": int(note.get("created_at") or 0),
         "created": note.get("created") or _deal_fmt_ts(note.get("created_at") or 0),
@@ -9979,10 +10062,14 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             file_uuid = _extract_file_uuid(message) if isinstance(message, dict) else ""
             if not text and not media and not file_uuid:
                 skipped = True
-                continue
+                text = "Mesaj"
             created = int(event.get("created_at") or 0)
+            external = ""
+            if isinstance(message, dict):
+                external = str(message.get("id") or message.get("msgid") or "").strip()
             rows.append({
                 "id": event.get("id"),
+                "external_id": external,
                 "direction": "incoming" if incoming else "outgoing",
                 "incoming": incoming,
                 "author": KOMMO_USERS.get(event.get("created_by") or event.get("created_by_id"), "") or "",
