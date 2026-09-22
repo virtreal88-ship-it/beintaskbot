@@ -8237,6 +8237,38 @@ def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
     return _send_kommo_talk_message(talk_id, text)
 
 
+_DRIVE_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _is_drive_uuid(value: str) -> bool:
+    return bool(_DRIVE_UUID_RE.fullmatch(str(value or "").strip()))
+
+
+def _drive_uuids_from_payload(payload: dict | None) -> tuple[str, str]:
+    data = payload if isinstance(payload, dict) else {}
+    file_uuid = str(data.get("uuid") or "").strip()
+    version_uuid = str(data.get("version_uuid") or data.get("file_version_uuid") or "").strip()
+    links = data.get("_links") or {}
+    self_href = str(((links.get("self") or {}).get("href")) or "")
+    version_href = str(((links.get("download_version") or {}).get("href")) or "")
+    download_href = str(((links.get("download") or {}).get("href")) or "")
+    self_ids = _DRIVE_UUID_RE.findall(self_href)
+    version_ids = _DRIVE_UUID_RE.findall(version_href)
+    download_ids = _DRIVE_UUID_RE.findall(download_href)
+    if not _is_drive_uuid(file_uuid) and self_ids:
+        file_uuid = self_ids[-1]
+    if not _is_drive_uuid(file_uuid) and download_ids:
+        file_uuid = download_ids[-1]
+    if not _is_drive_uuid(version_uuid) and version_ids:
+        version_uuid = version_ids[-1]
+    if not _is_drive_uuid(file_uuid) or not _is_drive_uuid(version_uuid):
+        logger.warning("Drive upload missing UUIDs keys=%s version=%r", list(data.keys()), version_uuid)
+        return "", ""
+    return file_uuid, version_uuid
+
+
 def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) -> tuple[str, str]:
     file_size = len(content or b"")
     if file_size <= 0:
@@ -8272,12 +8304,13 @@ def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) 
         up_data = up_resp.json() if up_resp.content else {}
         if up_data.get("next_url"):
             upload_url = up_data["next_url"]
-        if up_data.get("uuid"):
-            file_uuid = str(up_data.get("uuid") or "")
-            version_href = ((up_data.get("_links") or {}).get("download_version") or {}).get("href") or ""
-            parts = [p for p in str(version_href).split("/") if p]
-            version_uuid = parts[-1] if parts else str(up_data.get("version_uuid") or "")
+        parsed = _drive_uuids_from_payload(up_data)
+        if parsed[0] and parsed[1]:
+            file_uuid, version_uuid = parsed
         offset += max_part
+    if not _is_drive_uuid(file_uuid) or not _is_drive_uuid(version_uuid):
+        logger.warning("Drive upload finished without UUIDs file=%r version=%r", file_uuid, version_uuid)
+        return "", ""
     return file_uuid, version_uuid
 
 
@@ -10161,6 +10194,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         # Step 2: Upload file parts
         offset = 0
         file_uuid = None
+        version_uuid = ""
         download_url = None
         version_href = ""
         while offset < file_size:
@@ -10174,7 +10208,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
             if "next_url" in up_data:
                 upload_url = up_data["next_url"]
             if "uuid" in up_data:
-                file_uuid = up_data["uuid"]
+                file_uuid, version_uuid = _drive_uuids_from_payload(up_data)
                 download_url = up_data.get("_links", {}).get("download", {}).get("href", "")
                 version_href = up_data.get("_links", {}).get("download_version", {}).get("href", "")
             offset += max_part
@@ -10192,10 +10226,9 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         if not attached:
             # Fallback: attach via note with note_type=file
             try:
-                version_uuid = ""
-                if version_href:
-                    _parts = [p for p in version_href.split("/") if p]
-                    version_uuid = _parts[-1] if _parts else ""
+                if not _is_drive_uuid(version_uuid):
+                    version_ids = _DRIVE_UUID_RE.findall(str(version_href or ""))
+                    version_uuid = version_ids[-1] if version_ids else ""
                 file_note_payload = [{"note_type": "file", "params": {"file_uuid": file_uuid, "file_name": filename, "version_uuid": version_uuid}}]
                 fn_resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, json=file_note_payload, timeout=10)
                 logger.info(f"File note attach: {fn_resp.status_code} {fn_resp.text[:200]}")
