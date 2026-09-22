@@ -7130,16 +7130,18 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
 _CLIENT_MESSAGE_NOTE_TYPES = {"incoming_chat_message", "sms_in", "amomail_message"}
 
 
-async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
-    """Load the newest lead note and the newest client message per deal.
+async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
+    """Load the newest lead note, client message and inbox channel per deal.
 
     Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
     temporary account blocks. A few pages of /leads/notes is enough for cards.
     """
     latest: dict[int, tuple[int, str]] = {}
     latest_client: dict[int, tuple[int, str]] = {}
+    latest_in_channel: dict[int, tuple[int, str]] = {}
+    latest_any_channel: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return {}, {}
+        return {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7171,25 +7173,35 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
             if entity_id not in lead_ids:
                 continue
             text = str((note.get("params") or {}).get("text") or "").strip()
-            if not text or _note_is_deleted({"text": text}):
-                continue
             created = int(note.get("created_at") or note.get("updated_at") or 0)
             note_type = str(note.get("note_type") or "")
-            if note_type == "common":
+            if note_type == "common" and text and not _note_is_deleted({"text": text}):
                 known = latest.get(entity_id)
                 if not known or created > known[0]:
                     latest[entity_id] = (created, text)
-            if note_type in _CLIENT_MESSAGE_NOTE_TYPES:
+            if note_type in _CLIENT_MESSAGE_NOTE_TYPES and text and not _note_is_deleted({"text": text}):
                 known = latest_client.get(entity_id)
                 if not known or created > known[0]:
                     quote, body = _split_quote_prefix(text)
                     latest_client[entity_id] = (created, body if quote else text)
+            channel = _note_channel_key(note)
+            if channel:
+                incoming = note_type == "incoming_chat_message"
+                bucket = latest_in_channel if incoming else latest_any_channel
+                known = bucket.get(entity_id)
+                if not known or created > known[0]:
+                    bucket[entity_id] = (created, channel)
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
+    channel_by_lead = {
+        lead: (latest_in_channel[lead][1] if lead in latest_in_channel else value[1])
+        for lead, value in {**latest_any_channel, **latest_in_channel}.items()
+    }
     return (
         {lead: value[1] for lead, value in latest.items()},
         {lead: value[1] for lead, value in latest_client.items()},
+        channel_by_lead,
     )
 
 
@@ -7467,7 +7479,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "contacts": contact_rows,
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
-            "last_note": "", "last_client_message": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "", "last_client_message": "", "chat_channel": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
@@ -7501,7 +7513,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead, client_message_by_lead = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -7509,6 +7521,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deadline_ts = int(task.get("complete_till", 0) or 0)
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
+        deal["chat_channel"] = channel_by_lead.get(lead_id, "")
         deal["task_desc"] = task.get("text", "")
         deal["deadline_ts"] = deadline_ts
         deal["deadline"] = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
@@ -7574,6 +7587,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "utm_tag": (deal or {}).get("utm_tag") or (deal or {}).get("utm") or "",
             "source": (deal or {}).get("utm") or (deal or {}).get("source") or "",
             "menbe": (deal or {}).get("utm") or (deal or {}).get("menbe") or "",
+            "chat_channel": (deal or {}).get("chat_channel") or "",
             "responsible": owner_name, "assigneeName": owner_name, "assignee_name": owner_name,
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
@@ -8049,6 +8063,19 @@ def _talk_has_digits(talk: dict, digits: str) -> bool:
     return wanted in blob or wanted[-9:] in blob
 
 
+def _origin_channel_key(blob: str) -> str:
+    text = str(blob or "").lower()
+    if "tiktok" in text or "tik tok" in text:
+        return "tiktok"
+    if "instagram" in text:
+        return "instagram"
+    if "facebook" in text or "fb messenger" in text:
+        return "facebook"
+    if any(token in text for token in ("whatsapp", "waba", "whats app", "whats-app")):
+        return "whatsapp"
+    return ""
+
+
 def _talk_channel_key(talk: dict) -> str:
     chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
     origin = " ".join(
@@ -8062,19 +8089,34 @@ def _talk_channel_key(talk: dict) -> str:
         )
     ).strip().lower()
     blob = origin + " " + _talk_blob(talk)
-    if "tiktok" in blob or "tik tok" in blob:
-        return "tiktok"
-    if "instagram" in origin or "instagram" in blob:
-        return "instagram"
-    if "facebook" in origin or "fb messenger" in blob or origin in {"fb", "messenger"}:
-        return "facebook"
-    if any(token in origin for token in ("whatsapp", "waba")) or any(
-        token in blob for token in ("whatsapp", "waba", "whats app", "whats-app")
-    ):
+    return _origin_channel_key(blob) or (
+        "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
+    )
+
+
+def _note_channel_key(note: dict | None) -> str:
+    data = note if isinstance(note, dict) else {}
+    note_type = str(data.get("note_type") or data.get("type") or "").lower()
+    if note_type in {"sms_in", "sms_out", "amomail_message"}:
+        return ""
+    params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    blob = " ".join(
+        str(part or "")
+        for part in (
+            note_type,
+            params.get("service"),
+            params.get("origin"),
+            params.get("source"),
+            params.get("messenger"),
+            params.get("type"),
+        )
+    )
+    key = _origin_channel_key(blob + " " + _talk_blob(params))
+    if key:
+        return key
+    if note_type in {"incoming_chat_message", "outgoing_chat_message"}:
         return "whatsapp"
-    if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip():
-        return "whatsapp"
-    return "other"
+    return ""
 
 
 def _talk_reply_rank(talk: dict) -> tuple:
@@ -8892,6 +8934,20 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
+    talks = _fetch_talks(lid, contact_ids)
+    chat_channel = ""
+    best_talk = -1
+    for talk in talks or []:
+        key = _talk_channel_key(talk)
+        if key not in CHAT_CHANNEL_LABELS:
+            continue
+        try:
+            updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        if updated >= best_talk:
+            best_talk = updated
+            chat_channel = key
     funnel_owner_name = owner_name_for_pipeline(pipeline_id)
     responsible_name = funnel_owner_name or KOMMO_USERS.get(lead.get("responsible_user_id"), "") or ""
     return {
@@ -8914,6 +8970,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
+        "chat_channel": chat_channel,
         "notes": notes,
         "task_desc": first_task.get("text") or "",
         "deadline": first_task.get("deadline") or "",

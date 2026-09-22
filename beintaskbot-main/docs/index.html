@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="198">
+    <meta name="pwa-build" content="199">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -1082,10 +1082,11 @@ const SOURCE_COLORS = {
     Partner: '#7c3aed',
 };
 function sourceTagHtml(record) {
-    const label = dealSourceLabel(record);
+    const key = String((record && (record.chat_channel || record.inbox_channel)) || '').toLowerCase();
+    const labels = {whatsapp: 'WhatsApp', instagram: 'Instagram', tiktok: 'TikTok', facebook: 'Facebook'};
+    const label = labels[key] || '';
     if(!label) return '';
-    const key = Object.keys(SOURCE_COLORS).find(name => label.toLowerCase().startsWith(name.toLowerCase()));
-    const color = SOURCE_COLORS[key] || '#64748b';
+    const color = SOURCE_COLORS[label] || '#64748b';
     return `<span class="source-tag" style="color:${color}">${escapeHtml(label)}</span>`;
 }
 function stripNamePrefix(text) {
