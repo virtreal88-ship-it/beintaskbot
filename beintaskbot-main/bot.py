@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v185 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v186 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9063,6 +9063,7 @@ def _sent_message_item(
     reply_author: str = "",
     incoming: bool = False,
     created_at: int = 0,
+    phone: str = "",
 ) -> dict:
     created = int(created_at or _time_module.time())
     return {
@@ -9071,6 +9072,7 @@ def _sent_message_item(
         "direction": "incoming" if incoming else "outgoing",
         "incoming": bool(incoming),
         "author": author or "",
+        "phone": _wa_phone_key(phone) if phone else "",
         "text": text or "",
         "message_type": message_type,
         "created_at": created,
@@ -9189,28 +9191,24 @@ def _lead_ids_from_contact(contact: dict) -> list[int]:
     return rows
 
 
+def _lead_open_in_rufat_chats(lead: dict | None) -> bool:
+    """Cloud inbound for Rüfət's number must land on an open personal-funnel deal."""
+    if not isinstance(lead, dict) or not lead:
+        return False
+    try:
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    if status_id in {142, 143}:
+        return False
+    return _lead_pipeline_id(lead) == int(RUFAT_PIPELINE_ID)
+
+
 def _pick_existing_lead(lead_ids: list[int]) -> int:
-    personal = employee_personal_pipeline_ids() | {int(RUFAT_PIPELINE_ID)}
-    rufat = []
-    other_personal = []
-    other = []
     for lid in lead_ids:
         details = get_lead_details(lid) or {}
-        if not details:
-            continue
-        try:
-            pipeline_id = int(_lead_pipeline_id(details) or 0)
-        except (TypeError, ValueError):
-            pipeline_id = 0
-        if pipeline_id == int(RUFAT_PIPELINE_ID):
-            rufat.append(lid)
-        elif pipeline_id in personal:
-            other_personal.append(lid)
-        else:
-            other.append(lid)
-    for bucket in (rufat, other_personal, other):
-        if bucket:
-            return int(bucket[0])
+        if _lead_open_in_rufat_chats(details):
+            return int(lid)
     return 0
 
 
@@ -9250,10 +9248,213 @@ def _search_lead_ids_by_phone(phone: str) -> list[int]:
     return found
 
 
+def _move_cloud_lead_messages(src_id: int, dst_id: int) -> None:
+    src, dst = str(int(src_id or 0)), str(int(dst_id or 0))
+    if src == "0" or dst == "0" or src == dst:
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        src_rows = store.get(src)
+        if not isinstance(src_rows, list) or not src_rows:
+            return
+        dst_rows = store.get(dst)
+        if not isinstance(dst_rows, list):
+            dst_rows = []
+        seen = {
+            str(row.get("external_id") or "")
+            for row in dst_rows
+            if isinstance(row, dict) and row.get("external_id")
+        }
+        for row in src_rows:
+            if not isinstance(row, dict):
+                continue
+            external = str(row.get("external_id") or "")
+            if external and external in seen:
+                continue
+            dst_rows.append(row)
+            if external:
+                seen.add(external)
+        store[dst] = dst_rows[-_WA_SENT_PER_LEAD:]
+        store[src] = []
+        bucket = store.get(_WA_REACTIONS_KEY)
+        if isinstance(bucket, dict):
+            extra = bucket.pop(src, None)
+            if isinstance(extra, dict):
+                current = bucket.get(dst)
+                if not isinstance(current, dict):
+                    current = {}
+                current.update(extra)
+                bucket[dst] = current
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if isinstance(idx, dict):
+            for phone, mapped in list(idx.items()):
+                try:
+                    if int(mapped) == int(src_id):
+                        idx[phone] = int(dst_id)
+                except (TypeError, ValueError):
+                    continue
+    _schedule_sent_messages_save()
+
+
+def _phones_for_cloud_lead(lead_id: int, lead: dict | None = None) -> list[str]:
+    phones: list[str] = []
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if isinstance(idx, dict):
+            for phone, mapped in idx.items():
+                try:
+                    if int(mapped) == int(lead_id) and phone:
+                        phones.append(str(phone))
+                except (TypeError, ValueError):
+                    continue
+        for row in store.get(str(int(lead_id or 0))) or []:
+            if not isinstance(row, dict):
+                continue
+            phone = str(row.get("phone") or "").strip()
+            if phone:
+                phones.append(phone)
+    if lead:
+        try:
+            _ids, lead_phones = _contact_ids_and_phones(lead)
+        except Exception:
+            lead_phones = []
+        phones.extend(str(phone) for phone in lead_phones if phone)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for phone in phones:
+        key = _wa_phone_key(phone)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(key)
+    return ordered
+
+
+_last_cloud_rehome_at = 0.0
+
+
+def _rehome_orphaned_cloud_inbox() -> None:
+    """Move Cloud threads off closed/foreign deals onto Rüfət's open funnel."""
+    global _last_cloud_rehome_at
+    now = _time_module.monotonic()
+    if now - _last_cloud_rehome_at < 15:
+        return
+    _last_cloud_rehome_at = now
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        keys = [key for key in store.keys() if str(key).isdigit()]
+    for key in keys:
+        try:
+            src_id = int(key)
+        except (TypeError, ValueError):
+            continue
+        rows = _sent_messages_for_lead(src_id)
+        if not any(row.get("incoming") for row in rows):
+            continue
+        lead = get_lead_details(src_id)
+        if _lead_open_in_rufat_chats(lead):
+            continue
+        target = 0
+        name = str((lead or {}).get("name") or "").strip()
+        for phone in _phones_for_cloud_lead(src_id, lead):
+            target = _resolve_cloud_lead(phone, name, use_stored=False)
+            if target and target != src_id:
+                break
+        if target and target != src_id:
+            _move_cloud_lead_messages(src_id, target)
+            if int(_WA_LAST_HOOK.get("lead") or 0) == src_id:
+                _WA_LAST_HOOK["lead"] = int(target)
+            logger.info("WhatsApp inbox rehomed lead=%s -> %s", src_id, target)
+
+
+def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
+    owner = get_funnel_owner(RUFAT_CHAT_ID) or {}
+    stages = owner.get("stages") or {}
+    names = owner.get("stage_names") or {}
+    status_to_key = {int(status_id): key for key, status_id in stages.items()}
+    try:
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    try:
+        lid = int(lead.get("id") or 0)
+    except (TypeError, ValueError):
+        lid = 0
+    _ids, phones = _contact_ids_and_phones(lead)
+    contact_name = ""
+    if _ids:
+        full = get_contact_details(_ids[0]) or {}
+        contact_name = str(full.get("name") or "").strip()
+    contact_name = contact_name or str(lead.get("name") or "").strip() or (phones[0] if phones else "Müştəri")
+    try:
+        created = int(lead.get("created_at") or 0)
+    except (TypeError, ValueError):
+        created = 0
+    try:
+        updated = int(lead.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    return {
+        "id": lid,
+        "pipeline_id": int(RUFAT_PIPELINE_ID),
+        "stage_key": status_to_key.get(status_id, ""),
+        "stage_name": names.get(status_id, ""),
+        "contact_name": contact_name,
+        "phone": phones[0] if phones else "",
+        "phones": phones,
+        "contacts": [{"id": _ids[0], "name": contact_name, "phones": phones}] if _ids else [],
+        "source": "",
+        "menbe": "",
+        "created_at": created,
+        "updated_at": max(updated, int(ts or 0)),
+        "last_note": "",
+        "last_client_message": str(preview or "")[:140],
+        "chat_channel": "whatsapp",
+        "task_desc": "",
+        "deadline": "",
+        "deadline_ts": 0,
+        "voice_url": f"/api/voice/{lid}" if lid and str(lid) in _voice_urls else "",
+        "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
+        "tasks": [],
+    }
+
+
+def _paint_cloud_inbox_deal(deal: dict) -> None:
+    try:
+        lid = int(deal.get("id") or 0)
+    except (TypeError, ValueError):
+        return
+    preview, ts, has = _cloud_last_for_lead(lid)
+    if not has:
+        return
+    incoming = [row for row in _sent_messages_for_lead(lid) if row.get("incoming")]
+    if incoming:
+        last_in = max(incoming, key=lambda row: int(row.get("created_at") or 0))
+        text = str(last_in.get("text") or "").strip()
+        if text:
+            deal["last_client_message"] = text[:140]
+    elif preview and not str(deal.get("last_client_message") or "").strip():
+        deal["last_client_message"] = preview[:140]
+    if not str(deal.get("chat_channel") or "").strip():
+        deal["chat_channel"] = "whatsapp"
+    try:
+        current = int(deal.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        current = 0
+    if ts > current:
+        deal["updated_at"] = ts
+
+
 def _apply_cloud_inbox_to_deals(deals: list) -> None:
     if not isinstance(deals, list):
         return
+    try:
+        _rehome_orphaned_cloud_inbox()
+    except Exception as exc:
+        logger.warning("Cloud inbox rehome failed: %s", exc)
     _index_deal_phones(deals)
+    seen: set[int] = set()
     for deal in deals:
         if not isinstance(deal, dict):
             continue
@@ -9261,25 +9462,31 @@ def _apply_cloud_inbox_to_deals(deals: list) -> None:
             lid = int(deal.get("id") or 0)
         except (TypeError, ValueError):
             continue
-        preview, ts, has = _cloud_last_for_lead(lid)
-        if not has:
-            continue
-        incoming = [row for row in _sent_messages_for_lead(lid) if row.get("incoming")]
-        if incoming:
-            last_in = max(incoming, key=lambda row: int(row.get("created_at") or 0))
-            text = str(last_in.get("text") or "").strip()
-            if text:
-                deal["last_client_message"] = text[:140]
-        elif preview and not str(deal.get("last_client_message") or "").strip():
-            deal["last_client_message"] = preview[:140]
-        if not str(deal.get("chat_channel") or "").strip():
-            deal["chat_channel"] = "whatsapp"
+        if lid:
+            seen.add(lid)
+        _paint_cloud_inbox_deal(deal)
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        cloud_ids = [key for key in store.keys() if str(key).isdigit()]
+    for key in cloud_ids:
         try:
-            current = int(deal.get("updated_at") or 0)
+            lid = int(key)
         except (TypeError, ValueError):
-            current = 0
-        if ts > current:
-            deal["updated_at"] = ts
+            continue
+        if lid in seen:
+            continue
+        rows = _sent_messages_for_lead(lid)
+        if not any(row.get("incoming") or row.get("via_cloud") for row in rows):
+            continue
+        lead = get_lead_details(lid)
+        if not _lead_open_in_rufat_chats(lead):
+            continue
+        preview, ts, _has = _cloud_last_for_lead(lid)
+        row = _overview_deal_from_cloud_lead(lead, preview, ts)
+        if row.get("id"):
+            _paint_cloud_inbox_deal(row)
+            deals.append(row)
+            seen.add(lid)
 
 
 def _wa_incoming_preview(message: dict) -> tuple[str, str]:
@@ -9313,12 +9520,13 @@ def _wa_incoming_preview(message: dict) -> tuple[str, str]:
     return kind or "Mesaj", kind or "text"
 
 
-def _resolve_cloud_lead(phone: str, contact_name: str) -> int:
-    stored = _lead_id_for_stored_phone(phone)
-    if stored:
-        lead = get_lead_details(stored)
-        if lead:
-            return stored
+def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True) -> int:
+    if use_stored:
+        stored = _lead_id_for_stored_phone(phone)
+        if stored:
+            lead = get_lead_details(stored)
+            if _lead_open_in_rufat_chats(lead):
+                return stored
     lead_ids: list[int] = []
     contacts = search_contact_by_phone(phone)
     name = str(contact_name or "").strip() or phone
@@ -9427,6 +9635,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             incoming=True,
             created_at=created,
             reply_id=str(context.get("id") or ""),
+            phone=phone,
         ))
         try:
             invalidate_rufat_overview_cache()
@@ -9512,6 +9721,10 @@ def _process_whatsapp_payload(payload: dict) -> None:
                 continue
             if field in {"messages", "history", ""} or value.get("messages") or value.get("statuses"):
                 _ingest_cloud_incoming(value)
+                try:
+                    _rehome_orphaned_cloud_inbox()
+                except Exception as exc:
+                    logger.warning("Cloud inbox rehome after ingest failed: %s", exc)
 
 
 def _chat_item_key(item: dict) -> tuple:
