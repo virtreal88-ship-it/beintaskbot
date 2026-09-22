@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v184 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v185 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9552,6 +9552,8 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
     text = str(note.get("text") or "").strip()
     if _note_is_system_noise(text):
         return None
+    if not text and not str(note.get("media_url") or "").strip() and not str(note.get("file_uuid") or "").strip():
+        return None
     incoming = bool(note.get("incoming")) or ntype.startswith("incoming")
     channel = _normalized_channel(note.get("channel"))
     author = str(note.get("author") or "")
@@ -9565,7 +9567,7 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
         "author": author,
-        "text": text or "Mesaj",
+        "text": text,
         "message_type": note.get("message_type") or "text",
         "created_at": int(note.get("created_at") or 0),
         "created": note.get("created") or _deal_fmt_ts(note.get("created_at") or 0),
@@ -10062,7 +10064,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             file_uuid = _extract_file_uuid(message) if isinstance(message, dict) else ""
             if not text and not media and not file_uuid:
                 skipped = True
-                text = "Mesaj"
+                continue
             created = int(event.get("created_at") or 0)
             external = ""
             if isinstance(message, dict):
