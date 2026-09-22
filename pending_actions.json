@@ -1,5 +1,41 @@
 [
   {
+    "id": "b84be067",
+    "type": "change_stage",
+    "created_at": "2026-09-22T21:22:44.480802+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Market Biləcəri",
+      "phone": "+994554807020",
+      "lead_id": 77952145,
+      "task_id": 94405881,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "task_text": "Avadanlıqların videosunu göndər. Kassa PC və ya monoblok olacaq. Qiyməti 1450 , tərəzisi tam paket",
+      "task_price": "",
+      "note": "login marketucuz",
+      "stage_name": "uğurlu sifariş",
+      "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77952145",
+      "callback_key": "a651ea5c"
+    },
+    "options": [
+      "Təsdiq et",
+      "Nerazobrannoye",
+      "danışıqlar",
+      "Qiymət təklifi",
+      "Təqdimat",
+      "Təqdimat olundu",
+      "yeni sifariş",
+      "görüş",
+      "daxili müzakirə",
+      "quraşdırma",
+      "Düşünür",
+      "uğurlu sifariş",
+      "imtina olundu"
+    ]
+  },
+  {
     "id": "8afee866",
     "type": "confirm_stage",
     "created_at": "2026-09-22T21:22:38.986226+04:00",
