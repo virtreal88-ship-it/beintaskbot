@@ -5163,10 +5163,17 @@ function chatsSourceChip(deal) {
     const meta = chatChannelMeta(key);
     return `<span class="chats-source chats-source-${key}">${meta.svg}<span>${escapeHtml(meta.label)}</span></span>`;
 }
+function chatsIsClosedDeal(deal) {
+    const key = String((deal && deal.stage_key) || '').toLowerCase();
+    if(key === 'ugurlu' || key === 'imtina') return true;
+    const status = Number(deal && deal.status_id);
+    return status === 142 || status === 143;
+}
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
     return (samilDeals || []).filter(deal => {
+        if(chatsIsClosedDeal(deal)) return false;
         if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
