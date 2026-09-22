@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="188">
+    <meta name="pwa-build" content="189">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -261,6 +261,8 @@
         .deal-side-form button.busy { position:relative; color:transparent; pointer-events:none; }
         .deal-side-form button.busy::after { content:''; position:absolute; left:50%; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .wa-attach-in { position:absolute; left:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
+        .wa-mic-in { position:absolute; left:36px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
+        .wa-mic-in.rec { background:#dc2626; color:#fff; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
@@ -318,7 +320,7 @@
         #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 76px 10px 70px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         @media (max-width:800px) {
@@ -3036,7 +3038,9 @@ function paintDealChannels(channels, active) {
     }
     bar.innerHTML = rows.map(row => {
         const meta = chatChannelMeta(row.key);
-        return `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}">${meta.svg}<span>${escapeHtml(row.label || meta.label)}</span></button>`;
+        const phone = String(row.sender_phone || '').trim();
+        const phoneHtml = phone ? `<span style="opacity:.75">${escapeHtml(phone)}</span>` : '';
+        return `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}">${meta.svg}<span>${escapeHtml(row.label || meta.label)}</span>${phoneHtml}</button>`;
     }).join('');
     bar.querySelectorAll('[data-channel]').forEach(btn => {
         btn.onclick = () => switchDealChatChannel(btn.getAttribute('data-channel'));
@@ -3522,6 +3526,7 @@ async function copyText(value) {
 }
 function closeDealViewModal() {
     stopDealChatPolling();
+    cancelDealVoice();
     _dealViewState = null;
     document.getElementById('deal-photo-zoom')?.remove();
     document.getElementById('deal-view-modal')?.remove();
@@ -3559,6 +3564,99 @@ async function requestDealAiReply() {
         toast('AI cavab hazırdır');
     } catch(err) { toast(err.message || 'AI cavab alınmadı', true); }
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
+}
+let _dealVoiceRec = null, _dealVoiceChunks = [], _dealVoiceTimer = null, _dealVoiceStart = 0, _dealVoiceCancelled = false;
+function dealVoiceMime() {
+    const wanted = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    if(typeof MediaRecorder === 'undefined') return '';
+    return wanted.find(type => MediaRecorder.isTypeSupported(type)) || '';
+}
+function dealVoiceExt(mime) {
+    if(mime.includes('ogg')) return 'ogg';
+    if(mime.includes('mp4')) return 'm4a';
+    return 'webm';
+}
+function paintDealVoiceUi(recording) {
+    const mic = document.getElementById('deal-chat-mic');
+    const attach = document.getElementById('deal-chat-attach');
+    const input = document.getElementById('deal-chat-input');
+    if(mic) {
+        mic.classList.toggle('rec', !!recording);
+        mic.textContent = recording ? '⏹' : '🎙';
+        mic.title = recording ? 'Göndər' : 'Səs mesajı';
+    }
+    if(attach) {
+        attach.textContent = recording ? '✕' : '📎';
+        attach.title = recording ? 'Ləğv et' : 'Fayl';
+    }
+    if(input) {
+        input.readOnly = !!recording;
+        if(!recording) input.placeholder = 'Mesaj yazın';
+    }
+}
+function paintDealVoiceTime() {
+    const input = document.getElementById('deal-chat-input');
+    if(!input || !_dealVoiceStart) return;
+    const total = Math.max(0, Math.floor((Date.now() - _dealVoiceStart) / 1000));
+    const mm = Math.floor(total / 60);
+    const ss = String(total % 60).padStart(2, '0');
+    input.placeholder = `Səs yazılır… ${mm}:${ss}`;
+}
+function stopDealVoiceTracks() {
+    const stream = _dealVoiceRec && _dealVoiceRec.stream;
+    if(stream) stream.getTracks().forEach(track => { try { track.stop(); } catch(_err) {} });
+}
+function resetDealVoice() {
+    if(_dealVoiceTimer) { clearInterval(_dealVoiceTimer); _dealVoiceTimer = null; }
+    _dealVoiceRec = null;
+    _dealVoiceChunks = [];
+    _dealVoiceStart = 0;
+    paintDealVoiceUi(false);
+}
+function cancelDealVoice() {
+    if(!_dealVoiceRec) return;
+    _dealVoiceCancelled = true;
+    try { _dealVoiceRec.stop(); } catch(_err) { resetDealVoice(); }
+}
+async function toggleDealVoice() {
+    if(_dealVoiceRec) {
+        _dealVoiceCancelled = false;
+        try { _dealVoiceRec.stop(); } catch(_err) { resetDealVoice(); }
+        return;
+    }
+    if(_dealChatSending || !_dealViewState || _dealViewState.readonly) return;
+    if(!navigator.mediaDevices || typeof MediaRecorder === 'undefined') { toast('Səs yazısı dəstəklənmir', true); return; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
+    catch(_err) { toast('Mikrofona icazə verilmədi', true); return; }
+    const mime = dealVoiceMime();
+    try { _dealVoiceRec = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined); }
+    catch(_err) {
+        stream.getTracks().forEach(track => { try { track.stop(); } catch(_e) {} });
+        toast('Səs yazısı başlamadı', true);
+        return;
+    }
+    _dealVoiceChunks = [];
+    _dealVoiceCancelled = false;
+    _dealVoiceStart = Date.now();
+    _dealVoiceRec.ondataavailable = event => { if(event.data && event.data.size) _dealVoiceChunks.push(event.data); };
+    _dealVoiceRec.onstop = () => {
+        const type = (_dealVoiceRec && _dealVoiceRec.mimeType) || mime || 'audio/webm';
+        const chunks = _dealVoiceChunks.slice();
+        const cancelled = _dealVoiceCancelled;
+        const seconds = Math.floor((Date.now() - _dealVoiceStart) / 1000);
+        stopDealVoiceTracks();
+        resetDealVoice();
+        if(cancelled) return;
+        if(!chunks.length || seconds < 1) { toast('Səs yazısı çox qısadır', true); return; }
+        const blob = new Blob(chunks, {type});
+        const name = 'voice_' + Date.now() + '.' + dealVoiceExt(type);
+        sendDealChatMessage(new File([blob], name, {type}));
+    };
+    _dealVoiceRec.start();
+    paintDealVoiceUi(true);
+    paintDealVoiceTime();
+    _dealVoiceTimer = setInterval(paintDealVoiceTime, 1000);
 }
 async function sendDealChatMessage(file) {
     const input = document.getElementById('deal-chat-input');
@@ -3659,6 +3757,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <div class="wa-composer">
             <div class="wa-composer-field">
                 <button type="button" class="wa-attach-in" id="deal-chat-attach" title="Fayl">📎</button>
+                <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
                 <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab">AI</button>
@@ -3752,13 +3851,18 @@ function paintDealViewModal(deal, readonly) {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
     });
     if(attachBtn && fileInput) {
-        attachBtn.onclick = () => fileInput.click();
+        attachBtn.onclick = () => {
+            if(_dealVoiceRec) { cancelDealVoice(); return; }
+            fileInput.click();
+        };
         fileInput.onchange = () => {
             const file = fileInput.files && fileInput.files[0];
             fileInput.value = '';
             if(file) sendDealChatMessage(file);
         };
     }
+    const micBtn = document.getElementById('deal-chat-mic');
+    if(micBtn) micBtn.onclick = toggleDealVoice;
     const quoteClear = document.getElementById('deal-chat-quote-clear');
     if(quoteClear) quoteClear.onclick = clearDealChatReply;
     bindDealChatThread();
@@ -5004,7 +5108,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=188');
+    const reg = await navigator.serviceWorker.register('sw.js?v=189');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

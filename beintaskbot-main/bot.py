@@ -8000,14 +8000,31 @@ CHAT_CHANNEL_LABELS = {
 }
 
 
+RUFAT_WHATSAPP_NUMBER = os.environ.get("RUFAT_WHATSAPP_NUMBER", "994102135105")
+# Kommo keeps both WhatsApp Lite numbers behind one channel and never tells the
+# API which number owns a talk, so the sender number follows the Telegram user.
+WA_SENDER_NUMBERS = {
+    RUFAT_CHAT_ID: RUFAT_WHATSAPP_NUMBER,
+    **{cid: RUFAT_WHATSAPP_NUMBER for cid in RUFAT_COMPAT_CHAT_IDS},
+}
+
+
 def _wa_sender_digits_for_chat(chat_id) -> str:
     try:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return ""
+    mapped = WA_SENDER_NUMBERS.get(cid)
+    if mapped:
+        return re.sub(r"\D", "", str(mapped))
     if is_admin(cid):
         return NIZAMI_WHATSAPP_NUMBER
     return ""
+
+
+def _wa_display_number(digits: str) -> str:
+    clean = re.sub(r"\D", "", str(digits or ""))
+    return f"+{clean}" if len(clean) >= 8 else ""
 
 
 def _talk_blob(talk: dict) -> str:
@@ -8088,6 +8105,7 @@ def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dic
             "label": CHAT_CHANNEL_LABELS[key],
             "talk_id": _talk_id_of(talk),
             "open": _talk_is_open(talk),
+            "sender_phone": _wa_display_number(sender_digits) if key == "whatsapp" else "",
         })
     return rows
 
@@ -8172,6 +8190,11 @@ def _send_kommo_talk_message(
         ]
         if keep_plain:
             payloads.append(base)
+    if attachment and str(attachment.get("type") or "") == "voice":
+        # Kommo documents only file/video/picture attachments; keep voice first
+        # so WhatsApp can render a player, then retry the same upload as a file.
+        as_file = {**attachment, "type": "file"}
+        payloads = payloads + [{**payload, "attachment": as_file} for payload in payloads]
     last_resp = None
     for payload in payloads:
         try:
@@ -8980,6 +9003,8 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
 
 def _attachment_kind(filename: str, content_type: str) -> str:
     name = f"{filename} {content_type}".lower()
+    if content_type.startswith("audio/") or re.search(r"\.(ogg|oga|opus|mp3|m4a|wav)$", name):
+        return "voice"
     if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
         return "picture"
     if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
