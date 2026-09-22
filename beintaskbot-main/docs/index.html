@@ -81,7 +81,7 @@
             body.sidebar-open { --crm-side-w: 232px; }
             body { background:#f4f6f8; color:#0f172a; }
             button:active { transform:none; opacity:1; }
-            #mobile-header, #tab-bar { display:none !important; }
+            #mobile-header, #tab-bar, #tab-more-sheet { display:none !important; }
             #desktop-sidebar {
                 display:flex; flex-direction:column; align-items:stretch; gap:0;
                 position:fixed; top:0; left:0; right:auto; bottom:0; width:var(--crm-side-w); height:100vh;
@@ -444,6 +444,20 @@
             position:absolute; top:2px; right:12px; background:#ef4444; color:#fff; font-size:9px; font-weight:700;
             min-width:16px; height:16px; border-radius:8px; display:none; align-items:center; justify-content:center; padding:0 4px;
         }
+        #tab-more.on { color:#2481cc; }
+        #tab-more-sheet { position:fixed; inset:0; z-index:11070; }
+        #tab-more-sheet[hidden] { display:none !important; }
+        #tab-more-sheet .tab-more-dim { position:absolute; inset:0; background:rgba(15,23,42,.35); }
+        #tab-more-sheet .tab-more-panel {
+            position:absolute; left:0; right:0; bottom:64px; background:#fff; border-radius:16px 16px 0 0;
+            padding:10px 10px 14px; box-shadow:0 -8px 24px rgba(15,23,42,.16);
+        }
+        #tab-more-list { display:flex; flex-direction:column; gap:4px; }
+        #tab-more-list button {
+            width:100%; text-align:left; border:0; background:#f8fafc; color:#0f172a; border-radius:12px;
+            padding:12px 14px; font-size:13px; font-weight:800; font-family:inherit;
+        }
+        #tab-more-list button.on { background:#dbeafe; color:#1d4ed8; }
         .chats-hide { flex:none; width:22px; height:22px; border:0; border-radius:50%; background:transparent; color:#94a3b8; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
         .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
         .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:700; }
@@ -461,7 +475,8 @@
             .chats-app:not(.chat-open) .chats-pane { display:none; }
             .chats-app.chat-open .chats-list { display:none; }
             .chats-back { display:inline-flex; align-items:center; justify-content:center; }
-            body.chats-screen:has(.chats-app.chat-open) #tab-bar { display:none !important; }
+            body.chats-screen:has(.chats-app.chat-open) #tab-bar,
+            body.chats-screen:has(.chats-app.chat-open) #tab-more-sheet { display:none !important; }
             body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0; }
         }
     </style>
@@ -959,6 +974,14 @@
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
     </button>
+    <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        <span class="mt-0.5">Daha</span>
+    </button>
+</div>
+<div id="tab-more-sheet" hidden>
+    <div class="tab-more-dim" onclick="closeMobileMoreMenu()"></div>
+    <div class="tab-more-panel"><div id="tab-more-list"></div></div>
 </div>
 
 <script>
@@ -1091,6 +1114,7 @@ function applySamilUi() {
     if(sideChats) sideChats.style.display = HAS_CHATS ? 'flex' : 'none';
     const mobileChats = document.getElementById('tab-chats');
     if(mobileChats) mobileChats.style.display = HAS_CHATS ? 'flex' : 'none';
+    paintMobileTabBar();
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
@@ -1536,6 +1560,63 @@ function setPendingTabVisible() {
     if(hesabatTab) hesabatTab.style.display = isAdmin ? 'none' : 'flex';
     const sideHesabat = document.getElementById('side-tab-hesabat');
     if(sideHesabat) sideHesabat.style.display = isAdmin ? 'none' : 'flex';
+    paintMobileTabBar();
+}
+const MOBILE_TAB_ORDER = ['tab-chats','tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending'];
+function mobileTabWanted(id) {
+    if(id === 'tab-chats') return HAS_CHATS;
+    if(id === 'tab-samil-deals') return !isAdmin;
+    if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
+    if(id === 'tab-hesabat') return !isAdmin;
+    if(id === 'tab-pending') return isAdmin;
+    if(id === 'tab-create') return false;
+    return false;
+}
+function mobileTabLabel(id) {
+    const el = document.getElementById(id);
+    const text = el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : '';
+    return text || id;
+}
+function closeMobileMoreMenu() {
+    const sheet = document.getElementById('tab-more-sheet');
+    if(sheet) sheet.hidden = true;
+}
+function toggleMobileMoreMenu() {
+    if(isAdmin) return;
+    const sheet = document.getElementById('tab-more-sheet');
+    if(!sheet) return;
+    sheet.hidden = !sheet.hidden;
+}
+function paintMobileTabBar(activeId) {
+    const moreBtn = document.getElementById('tab-more');
+    const sheet = document.getElementById('tab-more-sheet');
+    const list = document.getElementById('tab-more-list');
+    if(isAdmin) {
+        if(moreBtn) moreBtn.style.display = 'none';
+        if(sheet) sheet.hidden = true;
+        return;
+    }
+    const wanted = MOBILE_TAB_ORDER.filter(id => mobileTabWanted(id) && document.getElementById(id));
+    const primary = wanted.slice(0, 3);
+    const extra = wanted.slice(3);
+    wanted.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) el.style.display = primary.includes(id) ? 'flex' : 'none';
+    });
+    if(moreBtn) {
+        moreBtn.style.display = extra.length ? 'flex' : 'none';
+        moreBtn.classList.toggle('on', extra.includes(activeId));
+        moreBtn.style.color = extra.includes(activeId) ? '#2481cc' : '';
+    }
+    if(list) {
+        list.innerHTML = extra.map(id => `<button type="button" class="${id === activeId ? 'on' : ''}" data-more-tab="${id}">${escapeHtml(mobileTabLabel(id))}</button>`).join('');
+        list.onclick = event => {
+            const btn = event.target.closest('[data-more-tab]');
+            if(!btn) return;
+            closeMobileMoreMenu();
+            switchTab(btn.getAttribute('data-more-tab'));
+        };
+    }
 }
 function setSidebarActive(tabId) {
     ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending'].forEach(id => {
@@ -5768,6 +5849,8 @@ function switchTab(tabId, updateHash = true) {
             history.replaceState(null, '', window.location.pathname + window.location.search + nextHash);
         }
     }
+    closeMobileMoreMenu();
+    paintMobileTabBar(tabId);
 }
 
 // KPI System (salary employees)
