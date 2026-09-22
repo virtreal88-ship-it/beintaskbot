@@ -7127,15 +7127,19 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     return result
 
 
-async def _load_rufat_latest_notes(lead_ids: set[int]) -> dict[int, str]:
-    """Load the newest lead note per deal from the collection endpoint.
+_CLIENT_MESSAGE_NOTE_TYPES = {"incoming_chat_message", "sms_in", "amomail_message"}
+
+
+async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str]]:
+    """Load the newest lead note and the newest client message per deal.
 
     Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
     temporary account blocks. A few pages of /leads/notes is enough for cards.
     """
     latest: dict[int, str] = {}
+    latest_client: dict[int, str] = {}
     if not lead_ids:
-        return latest
+        return latest, latest_client
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7164,15 +7168,21 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> dict[int, str]:
                 entity_id = int(note.get("entity_id"))
             except (TypeError, ValueError):
                 continue
-            if entity_id not in lead_ids or entity_id in latest:
+            if entity_id not in lead_ids:
                 continue
             text = str((note.get("params") or {}).get("text") or "").strip()
-            if text:
+            if not text:
+                continue
+            if entity_id not in latest:
                 latest[entity_id] = text
+            note_type = str(note.get("note_type") or "")
+            if note_type in _CLIENT_MESSAGE_NOTE_TYPES and entity_id not in latest_client:
+                quote, body = _split_quote_prefix(text)
+                latest_client[entity_id] = body if quote else text
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    return latest
+    return latest, latest_client
 
 
 async def _load_rufat_open_tasks(entity_ids: list[int]) -> list[dict]:
@@ -7449,7 +7459,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "contacts": contact_rows,
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
-            "last_note": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "", "last_client_message": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
@@ -7483,13 +7493,14 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead = await notes_request
+    note_by_lead, client_message_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
         task = related_tasks[0] if related_tasks else {}
         deadline_ts = int(task.get("complete_till", 0) or 0)
         deal["last_note"] = note_by_lead.get(lead_id, "")
+        deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
         deal["task_desc"] = task.get("text", "")
         deal["deadline_ts"] = deadline_ts
         deal["deadline"] = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""

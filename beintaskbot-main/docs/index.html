@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="187">
+    <meta name="pwa-build" content="188">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -2545,7 +2545,6 @@ function createCrmTaskCard(t, mode) {
                 <div class="text-sm font-semibold text-slate-900 leading-snug truncate">${escapeHtml(title)}</div>
                 ${sourceLineHtml(t)}
             </div>
-            ${assigneeName ? `<span class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">${escapeHtml(assigneeName)}</span>` : ''}
         </div>
         <div class="crm-task-desc mb-2">${escapeHtml(displayDesc)}</div>
         <div class="text-[12px] text-slate-600 truncate">📞 ${escapeHtml(phone || '—')}</div>
@@ -2710,6 +2709,18 @@ function dealAudioHtml(deal) {
     const join = src.includes('?') ? '&' : '?';
     const withUser = CURRENT_USER_ID ? src + join + 'uid=' + encodeURIComponent(CURRENT_USER_ID) : src;
     return audioWaitHtml(withUser);
+}
+function dealLastClientMessage(deal) {
+    const direct = String((deal && deal.last_client_message) || '').trim();
+    if(direct) return direct.replace(/\s+/g, ' ').slice(0, 140);
+    const chat = Array.isArray(deal && deal.chat) ? deal.chat : [];
+    for(let i = chat.length - 1; i >= 0; i -= 1) {
+        const item = chat[i];
+        if(!item || !item.incoming || item.is_comment) continue;
+        const text = String(item.text || '').trim();
+        if(text) return text.replace(/\s+/g, ' ').slice(0, 140);
+    }
+    return '';
 }
 function dealTasksHtml(deal) {
     const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
@@ -3926,7 +3937,7 @@ function renderSamilDeals() {
             const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
             const note = escapeHtml(deal.last_note || '—');
             const tasksHtml = dealTasksHtml(deal);
-            const audio = dealAudioHtml(deal);
+            const clientMessage = escapeHtml(dealLastClientMessage(deal) || '—');
             return `<article class="samil-deal-card bg-white p-3 rounded-xl" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || '')}">
                 <div class="flex items-start gap-2 mb-2">
                     <span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
@@ -3949,7 +3960,7 @@ function renderSamilDeals() {
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
                     <div class="grid grid-cols-2 gap-2 text-gray-500"><div>🕒 ${created}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
-                    <div>🎧 <b>Audio:</b><div class="mt-1">${audio}</div></div>
+                    <div class="truncate">💬 <b>Son mesaj:</b> ${clientMessage}</div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
                     <div class="flex items-center gap-3 flex-wrap">${canShowKommoLink() && deal.kommo_link ? `<a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
@@ -4993,7 +5004,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=187');
+    const reg = await navigator.serviceWorker.register('sw.js?v=188');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
