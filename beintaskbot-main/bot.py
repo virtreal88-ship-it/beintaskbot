@@ -7770,7 +7770,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
 _rufat_overview_lock = asyncio.Lock()
 _personal_overview_cache: dict[int, dict] = {}
 _personal_overview_cache_at: dict[int, float] = {}
-_RUFAT_OVERVIEW_CACHE_TTL = 90.0
+_RUFAT_OVERVIEW_CACHE_TTL = 30.0
 
 
 def invalidate_rufat_overview_cache() -> None:
@@ -8388,6 +8388,7 @@ def _send_kommo_talk_message(
     attachment: dict | None = None,
     reply_to_message_id: str = "",
     keep_plain: bool = True,
+    reply_external_id: str = "",
 ) -> tuple[bool, str, int]:
     url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
     base: dict = {}
@@ -8398,15 +8399,21 @@ def _send_kommo_talk_message(
     if not base:
         return False, "Mesaj boş ola bilməz", 0
     payloads = [base]
-    reply_id = str(reply_to_message_id or "").strip()
-    if reply_id:
-        quote_message = {"id": reply_id, "type": "text"}
-        payloads = [
-            {**base, "reply_to": {"message": quote_message}},
-            {**base, "reply_to": {"message_id": reply_id}},
-            {**base, "reply_to": {"id": reply_id}},
-            {**base, "reply_to_message_id": reply_id},
-        ]
+    reply_ids = [
+        value for value in dict.fromkeys(
+            (str(reply_to_message_id or "").strip(), str(reply_external_id or "").strip())
+        ) if value
+    ]
+    if reply_ids:
+        payloads = []
+        for reply_id in reply_ids:
+            quote_message = {"id": reply_id, "type": "text"}
+            payloads.extend([
+                {**base, "reply_to": {"message": quote_message}},
+                {**base, "reply_to": {"message_id": reply_id}},
+                {**base, "reply_to": {"id": reply_id}},
+                {**base, "reply_to_message_id": reply_id},
+            ])
         if keep_plain:
             payloads.append(base)
     last_resp = None
@@ -8809,14 +8816,6 @@ def _is_generic_chat_author(name: str) -> bool:
     if any(token in folded for token in tokens):
         return True
     return folded in {"client", "bot", "capi", "im", "wa", "fb"}
-
-
-def _quote_prefix_text(quote: str, text: str) -> str:
-    lines = [line.strip() for line in str(quote or "").strip()[:160].splitlines() if line.strip()]
-    if not lines:
-        return text
-    quoted = "\n".join(f"> {line}" for line in lines)
-    return f"{quoted}\n\n{text}".strip()
 
 
 def _split_quote_prefix(text: str) -> tuple[str, str]:
@@ -9289,11 +9288,32 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     })
 
 
+VOICE_CAPTION_TEXT = "🎤 Səs mesajı"
+
+
+def _looks_voice_upload(filename: str, content_type: str) -> bool:
+    return str(content_type or "").startswith("audio/") or bool(
+        re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", str(filename or "").lower())
+    )
+
+
+def _voice_attachment_attempts(file_uuid: str, version_uuid: str, text: str) -> list[tuple[dict, str]]:
+    """WhatsApp plays audio inline only when Kommo accepts a voice/audio attachment."""
+    base = {"drive_uuid": file_uuid, "drive_version_uuid": version_uuid}
+    attempts: list[tuple[dict, str]] = []
+    for kind in ("voice", "audio"):
+        attempts.append(({**base, "type": kind}, text))
+        if not text:
+            # Some Kommo channels reject an empty text even with an attachment.
+            attempts.append(({**base, "type": kind}, VOICE_CAPTION_TEXT))
+    attempts.append(({**base, "type": "file"}, text or VOICE_CAPTION_TEXT))
+    return attempts
+
+
 def _attachment_kind(filename: str, content_type: str) -> str:
-    # Kommo only accepts file/video/picture here, so audio travels as a file.
     name = f"{filename} {content_type}".lower()
     if content_type.startswith("audio/") or re.search(r"\.(ogg|oga|opus|mp3|m4a|wav)$", name):
-        return "file"
+        return "voice"
     if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
         return "picture"
     if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
@@ -9369,6 +9389,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_preview = ""
     reply_author = ""
     hinted_talk = 0
+    voice_attempts: list[tuple[dict, str]] = []
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -9401,10 +9422,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 "drive_uuid": file_uuid,
                 "drive_version_uuid": version_uuid,
             }
-            is_voice = file_type.startswith("audio/") or bool(re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", filename.lower()))
-            if is_voice and not text:
-                # Kommo rejects an empty text even when a file is attached.
-                text = "🎤 Səs mesajı"
+            if _looks_voice_upload(filename, file_type):
+                voice_attempts = _voice_attachment_attempts(file_uuid, version_uuid, text)
     else:
         try:
             data = await request.json()
@@ -9453,13 +9472,19 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 break
             if cloud_error:
                 last_error = cloud_error
-    if not ok:
+    if not ok and voice_attempts:
+        for attempt_attachment, attempt_text in voice_attempts:
+            ok, last_error, _status = _send_kommo_talk_message(
+                reply_talk_id, attempt_text, attempt_attachment, reply_to_message_id,
+                reply_external_id=reply_external,
+            )
+            if ok:
+                text = attempt_text
+                attachment = attempt_attachment
+                break
+    elif not ok:
         ok, last_error, _status = _send_kommo_talk_message(
-            reply_talk_id, text, attachment, reply_to_message_id, keep_plain=not quote_on_whatsapp
-        )
-    if not ok and quote_on_whatsapp and reply_preview:
-        ok, last_error, _status = _send_kommo_talk_message(
-            reply_talk_id, _quote_prefix_text(reply_preview, text), attachment
+            reply_talk_id, text, attachment, reply_to_message_id, reply_external_id=reply_external
         )
     if not ok and channel == "whatsapp" and not reply_to_message_id and not attachment:
         _ids, phones = _contact_ids_and_phones(lead)

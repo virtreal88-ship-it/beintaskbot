@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="202">
+    <meta name="pwa-build" content="203">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -935,6 +935,7 @@ let samilDealsByStage = {};
 let samilStageCounts = {};
 let samilStageFilter = localStorage.getItem('samil_stage_filter') || 'sorgular';
 let samilWorkspaceRequest = null;
+let samilWorkspaceForceRequest = null;
 let samilWorkspaceLoadedAt = 0;
 const samilPendingStageMoves = new Map();
 const samilPendingTaskMoves = new Map();
@@ -1271,8 +1272,13 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
     const shouldRefresh = Boolean(showFeedback || forceRefresh);
-    if(samilWorkspaceRequest) return samilWorkspaceRequest;
-    samilWorkspaceRequest = (async () => {
+    // Sinxronizasiya köhnə sorğuya qoşulmamalıdır: yalnız refresh=1 Kommo-dan təzə məlumat gətirir.
+    if(shouldRefresh) {
+        if(samilWorkspaceForceRequest) return samilWorkspaceForceRequest;
+    } else if(samilWorkspaceRequest) {
+        return samilWorkspaceRequest;
+    }
+    const request = (async () => {
         const controller = new AbortController();
         // Kommo overview includes leads, contacts and tasks and can take more
         // than 12 seconds on a cold Railway instance.  Abort only after a
@@ -1295,7 +1301,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             samilWorkspaceLoadedAt = Date.now();
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
-            if(document.getElementById('screen-samil-deals')?.classList.contains('active')) renderSamilDeals();
+            if(document.getElementById('screen-samil-deals')) renderSamilDeals();
             if(showFeedback) toast('Məlumatlar yeniləndi', false);
             return true;
         } catch(error) {
@@ -1303,12 +1309,15 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             return false;
         } finally {
             clearTimeout(timeout);
-            samilWorkspaceRequest = null;
+            if(samilWorkspaceRequest === request) samilWorkspaceRequest = null;
+            if(samilWorkspaceForceRequest === request) samilWorkspaceForceRequest = null;
             hideLoader();
             hideSyncIndicator();
         }
     })();
-    return samilWorkspaceRequest;
+    samilWorkspaceRequest = request;
+    if(shouldRefresh) samilWorkspaceForceRequest = request;
+    return request;
 }
 
 function restoreSamilWorkspaceFromCache() {
@@ -3568,6 +3577,10 @@ function bindDealSideActions(deal) {
             deal.stage_key = stageKey;
             deal.stage_name = label;
             if(nextPipeline) deal.pipeline_id = nextPipeline;
+            // Kartı dərhal yeni mərhələyə keçir ki, sinxronizasiya gözlənilməsin.
+            updateLocalSamilDealStage(deal.id, stageKey);
+            renderSamilDeals();
+            persistLocalSamilWorkspace();
             toast('Mərhələ dəyişdi');
         } catch(err) {
             toast(err.message || 'Mərhələ dəyişmədi', true);
@@ -4103,7 +4116,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
                     <div>🕒 ${escapeHtml(created)}</div>
                     <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
                     ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
-                    ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div style="margin-top:8px"><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:8px 12px;border-radius:10px;background:#008069;color:#fff;font-weight:800;font-size:12px;text-decoration:none">Kommo-da aç</a></div>` : ''}
+                    ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline">Kommo-da aç</a></div>` : ''}
                 </div>
                 ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
                 <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
@@ -4415,7 +4428,7 @@ function renderSamilDeals() {
                     <div class="truncate">💬 <b>Son mesaj:</b> ${clientMessage}</div>
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 flex-wrap">${canShowKommoLink() && dealKommoUrl(deal) ? `<a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-blue-600 underline" onclick="event.stopPropagation()">Kommo</a>` : ''}<button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
+                    <div class="flex items-center gap-3 flex-wrap"><button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
@@ -4464,10 +4477,8 @@ function showDealModal(deal, mode) {
     let body = '';
     if(mode === 'edit') {
         const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
-        const pipelineBlock = isAdmin ? `<label class="text-xs font-bold text-gray-400 block mb-1">Huni</label>
-        <select id="deal-modal-pipeline" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px;margin-bottom:8px">${pipelineOptionsHtml(pid)}</select>
-        <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>` : '';
-        body = `${pipelineBlock}<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${isAdmin && KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal.stage_key) : SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
+        body = `<label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
+        <select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${isAdmin && KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal.stage_key) : SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
         <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Partner</label>
         <div class="mt-1">${partnerFieldHtml('deal-modal-partner', dealPartnerLabel(deal))}</div>`;
     } else {
@@ -4482,8 +4493,10 @@ function showDealModal(deal, mode) {
     document.body.appendChild(modal);
     if(mode === 'edit' && isAdmin) {
         ensureAdminPipelines().then(() => {
-            if(!document.getElementById('deal-modal')) return;
-            fillAdminPipelinePickers('deal-modal-pipeline', 'deal-modal-stage', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+            const stageEl = document.getElementById('deal-modal-stage');
+            if(!document.getElementById('deal-modal') || !stageEl) return;
+            // Redaktədə yalnız sövdələşmənin öz hunisinin mərhələləri göstərilir.
+            stageEl.innerHTML = stageOptionsForPipelineHtml(deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
         });
     }
     modal.querySelector('#deal-modal-cancel').onclick = () => modal.remove();
@@ -4494,9 +4507,8 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
-            const pipelineId = Number(modal.querySelector('#deal-modal-pipeline')?.value || 0);
             payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
-            if(pipelineId) payload.pipeline_id = pipelineId;
+            if(deal.pipeline_id) payload.pipeline_id = Number(deal.pipeline_id);
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
@@ -4583,7 +4595,7 @@ async function openSamilDeals() {
         renderSamilDeals();
     }
     // Ekran dərhal lokal məlumatdan açılır; yenilənmə arxa planda bütün mərhələləri yeniləyir.
-    loadSamilWorkspace(false);
+    loadSamilWorkspace(false, null, Date.now() - samilWorkspaceLoadedAt > 30000);
 }
 
 function desktopCompleteTask(taskId) {
