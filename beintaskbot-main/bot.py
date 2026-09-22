@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v187 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v188 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7325,12 +7325,12 @@ async def _load_kommo_talks_inbox(
     updated_by_lead: dict[int, int] = {}
     if not lead_ids:
         return client_by_lead, channel_by_lead, updated_by_lead
-    for page in range(1, 13):
+    for page in range(1, 7):
         try:
             response = await _kommo_get_async(
                 f"{KOMMO_BASE_URL}/api/v4/talks",
                 params={"limit": 250, "page": page},
-                timeout=12,
+                timeout=8,
             )
         except Exception as exc:
             logger.warning("Kommo talks page %s unavailable: %s", page, exc)
@@ -7348,29 +7348,6 @@ async def _load_kommo_talks_inbox(
                 _apply_talk_to_inbox(talk, lead_ids, client_by_lead, channel_by_lead, updated_by_lead, contact_to_lead)
         if len(talks) < 250:
             break
-    missing = [lid for lid in lead_ids if lid not in channel_by_lead]
-    chunk_size = 30
-    for start in range(0, len(missing), chunk_size):
-        chunk = missing[start:start + chunk_size]
-        try:
-            response = await _kommo_get_async(
-                f"{KOMMO_BASE_URL}/api/v4/talks",
-                params={
-                    "limit": 250,
-                    "filter[entity_type]": "lead",
-                    "filter[entity_id][]": chunk,
-                },
-                timeout=12,
-            )
-        except Exception as exc:
-            logger.warning("Kommo talks by lead failed: %s", exc)
-            break
-        if response.status_code != 200:
-            logger.warning("Kommo talks by lead status %s", response.status_code)
-            break
-        for talk in (response.json().get("_embedded") or {}).get("talks") or []:
-            if isinstance(talk, dict):
-                _apply_talk_to_inbox(talk, lead_ids, client_by_lead, channel_by_lead, updated_by_lead, contact_to_lead)
     return client_by_lead, channel_by_lead, updated_by_lead
 
 
