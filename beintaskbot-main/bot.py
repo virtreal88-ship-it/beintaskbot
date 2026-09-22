@@ -19,15 +19,17 @@ import hashlib
 import logging
 import requests
 import subprocess
+import tempfile
 import glob
 import traceback
 import asyncio
 import uuid
+import threading
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote
 from openai import OpenAI
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, MenuButtonWebApp, WebAppInfo
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -44,7 +46,8 @@ from gh_storage import read_json, write_json
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-KOMMO_TOKEN = os.environ.get("KOMMO_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA")
+_KOMMO_TOKEN_FALLBACK = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA"
+KOMMO_TOKEN = (os.environ.get("KOMMO_TOKEN") or "").strip() or _KOMMO_TOKEN_FALLBACK
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
@@ -234,8 +237,9 @@ TASK_TYPE_NAMES = {
     3263999: "Quraşdırma",
     3267595: "Zəng et",
     4229224: "Cavab gözlənilir",
-    4232112: "Texniki tapşırıq",
+    4232112: "aktiv",
     4232108: "Import",
+    4239844: "passiv",
 }
 
 # Logging
@@ -772,15 +776,11 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         # Route Rüfət to his personal pipeline/sorğular; keep existing routing for others.
         _lead_id_exec = action_data.get("lead_id")
         if _lead_id_exec:
-            _route = route_deal_for_employee(new_name, NAME_TO_CHAT.get(new_name))
-            _exec_pipeline = _route[0] if _route else None
-            _exec_status = _route[1] if _route else None
-            if _exec_status:
-                try:
-                    _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{_lead_id_exec}",
-                        headers=HEADERS, json={"pipeline_id": _exec_pipeline, "status_id": _exec_status}, timeout=8)
-                except Exception as exc:
-                    logger.warning("Failed to route assigned deal: %s", exc)
+            try:
+                if not move_lead_to_icraci(_lead_id_exec, new_name):
+                    logger.warning("Failed to route assigned deal %s to %s", _lead_id_exec, new_name)
+            except Exception as exc:
+                logger.warning("Failed to route assigned deal: %s", exc)
         # Notify cavabdeh (creator) about executor assignment
         _sender_name_uc = action_data.get("sender_name", "")
         _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
@@ -915,43 +915,35 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             # Route the deal after assignment. Rüfət must always receive it in
             # his own pipeline at the exact `sorgular` stage.
             if _target_chat_ae:
-                _ae_route = route_deal_for_employee(_ae_name, _target_chat_ae)
-                _ae_pipeline = _ae_route[0] if _ae_route else None
-                _ae_status = _ae_route[1] if _ae_route else None
-                if _ae_status:
-                    route_result = update_lead_kommo(
-                        int(lead_id),
-                        {"pipeline_id": _ae_pipeline, "status_id": _ae_status},
+                if not move_lead_to_icraci(int(lead_id), _ae_name):
+                    logger.error(
+                        "Failed to route assigned deal: lead=%s assignee=%s",
+                        lead_id, _ae_name,
                     )
-                    if not route_result:
-                        logger.error(
-                            "Failed to route assigned deal: lead=%s pipeline=%s status=%s",
-                            lead_id, _ae_pipeline, _ae_status,
+                    return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
+                if _ae_name == "Rüfət Həsənzadə":
+                    # Explicit notification is intentional: the stage-change
+                    # webhook may be delayed or suppressed as bot-initiated.
+                    _rufat_msg = (
+                        "📥 Rüfət Həsənzadə bölməsinə yeni sövdələşmə daxil oldu!\n\n"
+                        f"👤 {_client_ae or 'Adsız'}\n"
+                        f"📝 {task_text}\n"
+                        f"📞 {action_data.get('phone', '')}\n"
+                        f"📌 Mərhələ: sorğular\n"
+                        f"🔗 {_link_ae}"
+                    )
+                    try:
+                        asyncio.ensure_future(_bot_app.bot.send_message(
+                            int(_target_chat_ae), _rufat_msg,
+                            disable_web_page_preview=True,
+                        ))
+                        send_push_notification(
+                            str(_target_chat_ae),
+                            "📥 Yeni sövdələşmə: sorğular",
+                            f"{_client_ae or 'Adsız'} — {task_text}",
                         )
-                        return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
-                    if _ae_name == "Rüfət Həsənzadə":
-                        # Explicit notification is intentional: the stage-change
-                        # webhook may be delayed or suppressed as bot-initiated.
-                        _rufat_msg = (
-                            "📥 Rüfət Həsənzadə bölməsinə yeni sövdələşmə daxil oldu!\n\n"
-                            f"👤 {_client_ae or 'Adsız'}\n"
-                            f"📝 {task_text}\n"
-                            f"📞 {action_data.get('phone', '')}\n"
-                            f"📌 Mərhələ: sorğular\n"
-                            f"🔗 {_link_ae}"
-                        )
-                        try:
-                            asyncio.ensure_future(_bot_app.bot.send_message(
-                                int(_target_chat_ae), _rufat_msg,
-                                disable_web_page_preview=True,
-                            ))
-                            send_push_notification(
-                                str(_target_chat_ae),
-                                "📥 Yeni sövdələşmə: sorğular",
-                                f"{_client_ae or 'Adsız'} — {task_text}",
-                            )
-                        except Exception as exc:
-                            logger.warning("Rüfət notification failed: %s", exc)
+                    except Exception as exc:
+                        logger.warning("Rüfət notification failed: %s", exc)
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
@@ -1213,6 +1205,7 @@ def get_lead_from_reply(chat_id: int, message_id: int) -> dict | None:
 # ─── Bot-created tasks (suppress webhook echo) ──────────────────────────────
 _bot_created_tasks: set = set()
 _bot_created_tasks_ts: dict = {}  # {task_id: timestamp} for time-based expiry
+_pending_bot_task_leads: dict = {}  # {lead_id: timestamp} - suppress webhook before created id is known
 _notified_task_webhooks: dict = {}  # {task_id: timestamp} - prevent duplicate webhook notifications
 # Completion notification override for the synchronous AI completion flow.
 _last_completed_task_creator_chat_id: int | None = None
@@ -1266,6 +1259,23 @@ def resolve_time_from_text(text: str) -> str | None:
     return None
 
 # ─── Kommo API Helpers ───────────────────────────────────────────────────────
+# An empty env var is not the only failure mode: a stale or truncated
+# KOMMO_TOKEN on Railway returns 401 and the whole CRM (deals, tasks, chats)
+# looks empty even though the built-in token still works.
+try:
+    _kommo_probe = requests.get(
+        f"{KOMMO_BASE_URL}/api/v4/account",
+        headers={"Authorization": f"Bearer {KOMMO_TOKEN}"},
+        timeout=10,
+    )
+    _kommo_probe_status = _kommo_probe.status_code
+except Exception as _kommo_probe_exc:
+    logger.warning("Kommo token probe failed: %s", _kommo_probe_exc)
+    _kommo_probe_status = 0
+if _kommo_probe_status != 200 and KOMMO_TOKEN != _KOMMO_TOKEN_FALLBACK:
+    logger.error("Env KOMMO_TOKEN rejected with HTTP %s; using built-in token", _kommo_probe_status)
+    KOMMO_TOKEN = _KOMMO_TOKEN_FALLBACK
+
 HEADERS = {
     "Authorization": f"Bearer {KOMMO_TOKEN}",
     "Content-Type": "application/json",
@@ -1384,21 +1394,50 @@ def _stage_key_from_kommo(name: str, status_id: int) -> str:
 
 
 _pipeline_stage_cache: dict[int, tuple[dict, dict, list]] = {}
+_all_pipelines_cache: list[dict] | None = None
+_all_pipelines_cache_at = 0.0
 
 
-def load_pipeline_stage_maps(pipeline_id: int) -> tuple[dict, dict, list]:
-    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
-    pid = int(pipeline_id)
-    cached = _pipeline_stage_cache.get(pid)
-    if cached:
-        return cached
-    packs = {
+def _personal_pipeline_packs() -> dict[int, tuple[dict, dict]]:
+    return {
         int(RUFAT_PIPELINE_ID): (RUFAT_STAGES, RUFAT_STAGE_NAMES),
         int(HUSEYN_PIPELINE_ID): (HUSEYN_STAGES, HUSEYN_STAGE_NAMES),
         int(RASIM_PIPELINE_ID): (RASIM_STAGES, RASIM_STAGE_NAMES),
         int(NIZAMI_PIPELINE_ID): (NIZAMI_STAGES, NIZAMI_STAGE_NAMES),
     }
-    pack = packs.get(pid)
+
+
+def _stage_maps_from_statuses(statuses: list) -> tuple[dict, dict, list]:
+    stages: dict[str, int] = {}
+    names: dict[int, str] = {}
+    ui: list[tuple[str, str]] = []
+    used: set[str] = set()
+    rows = sorted(statuses or [], key=lambda row: int((row or {}).get("sort") or 0))
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            sid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        label = str(row.get("name") or sid)
+        key = _stage_key_from_kommo(label, sid)
+        if key in used:
+            key = f"{key}_{sid}"
+        used.add(key)
+        stages[key] = sid
+        names[sid] = label
+        ui.append((key, label))
+    return stages, names, ui
+
+
+def load_pipeline_stage_maps(pipeline_id: int, *, fallback: bool = True) -> tuple[dict, dict, list]:
+    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
+    pid = int(pipeline_id)
+    cached = _pipeline_stage_cache.get(pid)
+    if cached:
+        return cached
+    pack = _personal_pipeline_packs().get(pid)
     if pack:
         stages_map, names_map = pack
         ui = [(key, names_map.get(sid, key)) for key, sid in stages_map.items()]
@@ -1411,29 +1450,87 @@ def load_pipeline_stage_maps(pipeline_id: int) -> tuple[dict, dict, list]:
         resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines/{pid}", headers=HEADERS, timeout=12)
         if resp.status_code == 200:
             statuses = (resp.json().get("_embedded") or {}).get("statuses") or []
-            statuses = sorted(statuses, key=lambda row: int(row.get("sort") or 0))
-            used = set()
-            for row in statuses:
-                try:
-                    sid = int(row.get("id"))
-                except (TypeError, ValueError):
-                    continue
-                label = str(row.get("name") or sid)
-                key = _stage_key_from_kommo(label, sid)
-                if key in used:
-                    key = f"{key}_{sid}"
-                used.add(key)
-                stages[key] = sid
-                names[sid] = label
-                ui.append((key, label))
+            stages, names, ui = _stage_maps_from_statuses(statuses)
     except Exception as exc:
         logger.warning("Pipeline %s stage load failed: %s", pid, exc)
-    if not stages:
+    if not stages and fallback:
         stages, names, ui = dict(RUFAT_STAGES), dict(RUFAT_STAGE_NAMES), [
             (key, RUFAT_STAGE_NAMES.get(sid, key)) for key, sid in RUFAT_STAGES.items()
         ]
-    _pipeline_stage_cache[pid] = (stages, names, ui)
-    return _pipeline_stage_cache[pid]
+    if stages:
+        _pipeline_stage_cache[pid] = (stages, names, ui)
+    return stages, names, ui
+
+
+def _ordered_ui_for_pipeline(pipeline_id: int, statuses: list) -> list[dict]:
+    stages_map, names, ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+    key_by_sid = {int(sid): key for key, sid in stages_map.items()}
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for row in sorted(statuses or [], key=lambda item: int((item or {}).get("sort") or 0)):
+        if not isinstance(row, dict):
+            continue
+        try:
+            sid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        key = key_by_sid.get(sid)
+        if not key:
+            continue
+        ordered.append({"key": key, "name": names.get(sid) or str(row.get("name") or key)})
+        seen.add(key)
+    for key, label in ui:
+        if key in seen:
+            continue
+        ordered.append({"key": key, "name": label})
+        seen.add(key)
+    return ordered
+
+
+def load_all_kommo_pipelines(*, force: bool = False) -> list[dict]:
+    """All active Kommo funnels with statuses in CRM sort order."""
+    global _all_pipelines_cache, _all_pipelines_cache_at
+    now = _time_module.time()
+    if not force and _all_pipelines_cache and (now - _all_pipelines_cache_at) < 300:
+        return _all_pipelines_cache
+    rows: list[dict] = []
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines", headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            rows = (resp.json().get("_embedded") or {}).get("pipelines") or []
+    except Exception as exc:
+        logger.warning("Kommo pipelines list failed: %s", exc)
+        if _all_pipelines_cache:
+            return _all_pipelines_cache
+        return []
+    result: list[dict] = []
+    packs = _personal_pipeline_packs()
+    for pipeline in sorted(rows, key=lambda item: int((item or {}).get("sort") or 0)):
+        if not isinstance(pipeline, dict) or pipeline.get("is_archive"):
+            continue
+        try:
+            pid = int(pipeline.get("id"))
+        except (TypeError, ValueError):
+            continue
+        statuses = (pipeline.get("_embedded") or {}).get("statuses") or []
+        if pid not in packs and pid not in _pipeline_stage_cache:
+            stages, names, ui = _stage_maps_from_statuses(statuses)
+            if stages:
+                _pipeline_stage_cache[pid] = (stages, names, ui)
+        ordered = _ordered_ui_for_pipeline(pid, statuses)
+        if not ordered:
+            continue
+        result.append({
+            "id": pid,
+            "name": str(pipeline.get("name") or pid),
+            "sort": int(pipeline.get("sort") or 0),
+            "is_main": bool(pipeline.get("is_main")),
+            "stages": ordered,
+        })
+    if result:
+        _all_pipelines_cache = result
+        _all_pipelines_cache_at = now
+    return result or (_all_pipelines_cache or [])
 
 
 def get_funnel_owner(chat_id) -> dict | None:
@@ -1471,6 +1568,70 @@ def all_personal_pipeline_ids() -> set[int]:
     return {int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
 
 
+def employee_personal_pipeline_ids() -> set[int]:
+    """Funnels owned by Rüfət / Hüseyn / Rasim — not admin Gözləmə."""
+    return {int(RUFAT_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
+
+
+def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
+    if int(pipeline_id) in employee_personal_pipeline_ids():
+        return 15532668
+    return None
+
+
+def reassign_open_tasks_for_lead(lead_id: int, responsible_user_id: int) -> int:
+    """Point every open task on the lead (and its contacts) at the funnel owner."""
+    try:
+        lid = int(lead_id)
+        uid = int(responsible_user_id)
+    except (TypeError, ValueError):
+        return 0
+    entities = [("leads", lid)]
+    lead = get_lead_details(lid) or {}
+    for contact in (lead.get("_embedded") or {}).get("contacts") or []:
+        try:
+            entities.append(("contacts", int(contact["id"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    seen: set[int] = set()
+    updated = 0
+    for entity_type, entity_id in entities:
+        for task in get_entity_tasks(entity_id, entity_type):
+            try:
+                task_id = int(task.get("id"))
+            except (TypeError, ValueError):
+                continue
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            try:
+                current = int(task.get("responsible_user_id") or 0)
+            except (TypeError, ValueError):
+                current = 0
+            if current == uid:
+                continue
+            if update_task_kommo(task_id, {"responsible_user_id": uid}):
+                updated += 1
+    if updated:
+        logger.info("Reassigned %s open task(s) on lead %s to Kommo user %s", updated, lid, uid)
+        try:
+            invalidate_rufat_overview_cache()
+        except NameError:
+            pass
+    return updated
+
+
+def maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id) -> int:
+    uid = kommo_user_id_for_employee_funnel(int(pipeline_id or 0))
+    if not uid or not lead_id:
+        return 0
+    try:
+        return reassign_open_tasks_for_lead(int(lead_id), uid)
+    except Exception as exc:
+        logger.warning("Failed to reassign tasks for lead %s: %s", lead_id, exc)
+        return 0
+
+
 def owner_name_for_pipeline(pipeline_id: int) -> str:
     return {
         int(RUFAT_PIPELINE_ID): "Rüfət Həsənzadə",
@@ -1478,6 +1639,19 @@ def owner_name_for_pipeline(pipeline_id: int) -> str:
         int(HUSEYN_PIPELINE_ID): "Hüseyn Səfərov",
         int(RASIM_PIPELINE_ID): "Rasim Əsgərov",
     }.get(int(pipeline_id), "")
+
+
+def employee_name_for_lead(lead: dict | None) -> str:
+    if not isinstance(lead, dict):
+        return ""
+    try:
+        pipeline_id = int(lead.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        pipeline_id = 0
+    name = owner_name_for_pipeline(pipeline_id)
+    if name:
+        return name
+    return str(KOMMO_USERS.get(lead.get("responsible_user_id"), "") or "").strip()
 
 
 def personal_entry_stage(pipeline_id: int) -> tuple[int, int] | None:
@@ -1655,10 +1829,13 @@ def _contact_phones(contact: dict | None) -> list[str]:
 
 def _contact_cache_entry(contact: dict | None) -> dict:
     phones = _contact_phones(contact)
+    source = extract_menbe(contact)
     return {
         "name": (contact or {}).get("name", ""),
         "phone": phones[0] if phones else "",
         "phones": phones,
+        "source": source,
+        "menbe": source,
     }
 
 
@@ -1748,6 +1925,81 @@ def get_all_incomplete_tasks() -> list:
         pass
     return []
 
+_BOT_CREATED_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_bot_created_cache.json")
+
+
+def _save_bot_created_cache():
+    try:
+        cutoff = _time_module.time() - 180
+        payload = {
+            "tasks": {str(k): v for k, v in _bot_created_tasks_ts.items() if v >= cutoff},
+            "leads": {str(k): v for k, v in _pending_bot_task_leads.items() if v >= cutoff},
+        }
+        with open(_BOT_CREATED_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+    except Exception:
+        pass
+
+
+def _load_bot_created_cache():
+    try:
+        with open(_BOT_CREATED_CACHE_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+        cutoff = _time_module.time() - 180
+        for k, v in (payload.get("tasks") or {}).items():
+            ts = float(v or 0)
+            if ts >= cutoff:
+                _bot_created_tasks.add(int(k))
+                _bot_created_tasks_ts[int(k)] = ts
+        for k, v in (payload.get("leads") or {}).items():
+            ts = float(v or 0)
+            if ts >= cutoff:
+                _pending_bot_task_leads[int(k)] = ts
+    except Exception:
+        pass
+
+
+def _mark_pending_bot_task_lead(entity_id: int):
+    try:
+        lid = int(entity_id)
+    except (TypeError, ValueError):
+        return
+    _pending_bot_task_leads[lid] = _time_module.time()
+    if len(_pending_bot_task_leads) > 200:
+        cutoff = _time_module.time() - 120
+        for key, ts in list(_pending_bot_task_leads.items()):
+            if ts < cutoff:
+                _pending_bot_task_leads.pop(key, None)
+    _save_bot_created_cache()
+
+
+def _is_bot_created_task_webhook(task_id, entity_id) -> bool:
+    _load_bot_created_cache()
+    now = _time_module.time()
+    if task_id:
+        try:
+            tid = int(task_id)
+        except (TypeError, ValueError):
+            tid = None
+        if tid is not None:
+            if tid in _bot_created_tasks:
+                ts = _bot_created_tasks_ts.get(tid, 0)
+                if now - ts < 180:
+                    return True
+                _bot_created_tasks.discard(tid)
+                _bot_created_tasks_ts.pop(tid, None)
+    if entity_id:
+        try:
+            lid = int(entity_id)
+        except (TypeError, ValueError):
+            lid = None
+        if lid is not None:
+            ts = _pending_bot_task_leads.get(lid, 0)
+            if ts and now - ts < 180:
+                return True
+    return False
+
+
 def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1, creator_name: str = "") -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks"
     task_payload = {
@@ -1761,6 +2013,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
         task_payload["task_type_id"] = task_type_id
     payload = [task_payload]
     logger.info(f"create_task: entity_id={entity_id}, text={text[:50]}, resp_user={responsible_user_id}, type_id={task_type_id}")
+    _mark_pending_bot_task_lead(entity_id)
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
         if resp.status_code not in (200, 201):
@@ -1773,6 +2026,7 @@ def create_task(entity_id: int, text: str, complete_till: int, responsible_user_
                     import time as _time
                     _bot_created_tasks.add(int(created_id))
                     _bot_created_tasks_ts[int(created_id)] = _time.time()
+                    _save_bot_created_cache()
                     if len(_bot_created_tasks) > 500:
                         oldest = next(iter(_bot_created_tasks))
                         _bot_created_tasks.discard(oldest)
@@ -1805,8 +2059,260 @@ def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict |
         logger.error(f"Add note error: {e}")
     return None
 
+_NOTE_DELETED_MARK = "⟦silindi⟧"
+
+def _note_is_deleted(item: dict | None) -> bool:
+    text = str((item or {}).get("text") or "").strip()
+    return (not text) or text == _NOTE_DELETED_MARK
+
+
+def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple[str, int, str]:
+    nid = int(note_id)
+    ids = [int(i) for i in entity_ids if int(i or 0)]
+    for kind in kinds:
+        for url, params in (
+            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", None),
+            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes", {"filter[id][]": nid, "limit": 1}),
+        ):
+            try:
+                resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
+            except Exception as exc:
+                logger.warning("Lookup note %s failed: %s", url, exc)
+                continue
+            if resp.status_code != 200:
+                continue
+            payload = resp.json() if resp.content else {}
+            if isinstance(payload, dict) and payload.get("id"):
+                notes = [payload]
+            else:
+                notes = ((payload or {}).get("_embedded") or {}).get("notes") or []
+            if notes and isinstance(notes[0], dict):
+                note = notes[0]
+                try:
+                    eid = int(note.get("entity_id") or 0)
+                except (TypeError, ValueError):
+                    eid = 0
+                return kind, eid, str(note.get("note_type") or "common")
+        for eid in ids:
+            try:
+                resp = _http.get(
+                    f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes",
+                    headers=HEADERS,
+                    params={"limit": 250, "filter[id][]": nid},
+                    timeout=8,
+                )
+            except Exception:
+                continue
+            if resp.status_code != 200:
+                continue
+            for note in ((resp.json() or {}).get("_embedded") or {}).get("notes") or []:
+                if not isinstance(note, dict):
+                    continue
+                try:
+                    if int(note.get("id") or 0) != nid:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                return kind, eid, str(note.get("note_type") or "common")
+    return (kinds[0] if kinds else "leads"), (ids[0] if ids else 0), "common"
+
+
+def _kommo_ajax_delete_note(note_id: int, entity_id: int, kind: str) -> bool:
+    element_type = "1" if str(kind).startswith("contact") else "2"
+    form_headers = {
+        "Authorization": f"Bearer {KOMMO_TOKEN}",
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    attempts = [
+        (
+            f"{KOMMO_BASE_URL}/ajax/v1/notes/set/",
+            {
+                "request[notes][delete][0][id]": str(note_id),
+                "request[notes][delete][0][element_id]": str(entity_id or ""),
+                "request[notes][delete][0][element_type]": element_type,
+            },
+        ),
+        (
+            f"{KOMMO_BASE_URL}/private/notes/edit2.php",
+            {"ID": str(note_id), "ACTION": "NOTE_DELETE", "ELEMENT_ID": str(entity_id or ""), "ELEMENT_TYPE": element_type},
+        ),
+    ]
+    for url, form in attempts:
+        try:
+            resp = _http.post(url, headers=form_headers, data=form, timeout=10)
+        except Exception as exc:
+            logger.warning("Ajax delete note failed: %s", exc)
+            continue
+        body = (resp.text or "")
+        folded = body.lower()
+        if resp.status_code in {200, 202, 204} and "<html" not in folded and "login" not in folded:
+            if "error" in folded and "success" not in folded and "status\":\"ok" not in folded:
+                logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
+                continue
+            return True
+        logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
+    try:
+        resp = _http.post(
+            f"{KOMMO_BASE_URL}/api/v2/notes",
+            headers=HEADERS,
+            json={"delete": [{"id": int(note_id)}]},
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("v2 delete note failed: %s", exc)
+        return False
+    if resp.status_code in {200, 202, 204}:
+        return True
+    logger.warning("v2 delete note %s: %s", resp.status_code, (resp.text or "")[:180])
+    return False
+
+
+def _note_delete_error(raw: str) -> str:
+    text = str(raw or "")
+    if not text or text.startswith("{") or "FieldMissing" in text or "Bad Request" in text:
+        return "Qeyd silinmədi."
+    return text[:180]
+
+
+def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, extra_ids: list[int] | None = None, note_type: str = "") -> tuple[bool, str]:
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return False, "Qeyd tapılmadı."
+    try:
+        eid = int(entity_id or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    primary = _note_entity_kind(entity_type)
+    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
+    extra = []
+    for value in extra_ids or []:
+        try:
+            extra.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    found_kind, found_eid, found_type = _lookup_note(nid, kinds, [eid, *extra])
+    if found_kind:
+        kinds = [found_kind] + [k for k in kinds if k != found_kind]
+    if found_eid:
+        eid = found_eid
+    types: list[str] = []
+    for item in (str(note_type or "").strip(), str(found_type or "").strip(), "common"):
+        if item and item not in types:
+            types.append(item)
+    last_err = "Qeyd silinmədi."
+    for kind in kinds:
+        note_urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
+        if eid:
+            note_urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes/{nid}")
+        for url in note_urls:
+            try:
+                resp = _http.delete(url, headers=HEADERS, timeout=10)
+            except Exception as exc:
+                logger.error("Delete note error: %s", exc)
+                last_err = str(exc)
+                continue
+            if resp.status_code in {200, 202, 204}:
+                return True, ""
+            last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+            logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
+        for ntype in types:
+            body = {"id": nid, "note_type": ntype, "is_deleted": True}
+            if eid:
+                body["entity_id"] = eid
+            for url in note_urls + [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]:
+                payload = body if url.endswith(f"/notes/{nid}") else [body]
+                try:
+                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
+                except Exception as exc:
+                    logger.error("Soft-delete note error: %s", exc)
+                    last_err = str(exc)
+                    continue
+                if resp.status_code in {200, 202, 204}:
+                    return True, ""
+                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+                logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
+    if _kommo_ajax_delete_note(nid, eid, kinds[0]):
+        return True, ""
+    return False, _note_delete_error(last_err)
+
+def _note_entity_kind(entity_type: str) -> str:
+    raw = str(entity_type or "").strip().lower()
+    if raw.startswith("contact") or raw in {"1", "contacts"}:
+        return "contacts"
+    return "leads"
+
+
+def update_note(note_id: int, text: str, entity_type: str = "leads", entity_id: int = 0) -> tuple[bool, str]:
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return False, "Qeyd tapılmadı."
+    try:
+        eid = int(entity_id or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    primary = _note_entity_kind(entity_type)
+    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
+    body = {"id": nid, "params": {"text": str(text or "")}}
+    if eid:
+        body["entity_id"] = eid
+    last_err = "Qeyd yenilənmədi."
+    for kind in kinds:
+        payloads = [[{**body, "note_type": "common"}], [body]]
+        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
+        if eid:
+            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
+        for url in urls:
+            for payload in payloads:
+                try:
+                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
+                except Exception as exc:
+                    logger.error("Update note error: %s", exc)
+                    last_err = str(exc)
+                    continue
+                if resp.status_code in {200, 202, 204}:
+                    return True, ""
+                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
+                logger.warning("Update note %s %s: %s", resp.status_code, url, last_err)
+    return False, last_err
+
+def _created_task_id(result) -> int:
+    if not isinstance(result, dict):
+        return 0
+    tasks = (result.get("_embedded") or {}).get("tasks") or []
+    if tasks and isinstance(tasks[0], dict):
+        try:
+            return int(tasks[0].get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _first_note_id(result) -> int:
+    if not isinstance(result, dict):
+        return 0
+    notes = (result.get("_embedded") or {}).get("notes") or []
+    if notes and isinstance(notes[0], dict):
+        try:
+            return int(notes[0].get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
 def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
+    old_pipeline_id = None
+    new_pipeline_id = 0
+    try:
+        new_pipeline_id = int((data or {}).get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        new_pipeline_id = 0
+    if new_pipeline_id and kommo_user_id_for_employee_funnel(new_pipeline_id):
+        details = get_lead_details(int(lead_id))
+        if details:
+            old_pipeline_id = _lead_pipeline_id(details)
     try:
         resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
         if resp.status_code == 200:
@@ -1819,6 +2325,12 @@ def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
                 for k in list(_bot_changed_leads.keys()):
                     if _bot_changed_leads[k] < cutoff:
                         del _bot_changed_leads[k]
+            if (
+                new_pipeline_id
+                and old_pipeline_id is not None
+                and new_pipeline_id != old_pipeline_id
+            ):
+                maybe_reassign_open_tasks_for_employee_funnel(lead_id, new_pipeline_id)
             return resp.json()
     except Exception as e:
         logger.error(f"Update lead error: {e}")
@@ -1878,10 +2390,52 @@ def _normalize_kommo_entity_type(entity_type) -> str:
 
 
 def _lead_pipeline_id(lead) -> int:
+    raw = (lead or {}).get("pipeline_id", 0) if isinstance(lead, dict) else 0
+    if isinstance(raw, dict):
+        raw = raw.get("id") or raw.get("pipeline_id") or 0
     try:
-        return int((lead or {}).get("pipeline_id", 0) or 0)
+        return int(raw or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _cached_funnel_has_lead(chat_id, lead_id) -> bool:
+    owner = get_funnel_owner(chat_id)
+    if not owner or not lead_id:
+        return False
+    try:
+        lid = int(lead_id)
+        pid = int(owner["pipeline_id"])
+    except (TypeError, ValueError):
+        return False
+    cached = _personal_overview_cache.get(pid) or {}
+    for deal in cached.get("deals") or []:
+        try:
+            if int(deal.get("id")) == lid:
+                return True
+        except (TypeError, ValueError):
+            continue
+    for rows in (cached.get("deals_by_stage") or {}).values():
+        for deal in rows or []:
+            try:
+                if int(deal.get("id")) == lid:
+                    return True
+            except (TypeError, ValueError):
+                continue
+    return False
+
+
+def _task_entity_pipeline_ids(entity_type, entity_id, leads_pipeline_cache: dict, contact_pipeline_ids: dict) -> set[int]:
+    """Resolve pipeline ids from already-fetched lead/contact caches only."""
+    etype = _normalize_kommo_entity_type(entity_type)
+    try:
+        eid = int(entity_id)
+    except (TypeError, ValueError):
+        return set()
+    if etype == "leads":
+        pid = leads_pipeline_cache.get(eid)
+        return {pid} if pid else set()
+    return set(contact_pipeline_ids.get(eid) or [])
 
 
 def _rufat_permitted_pipeline_ids(chat_id=None) -> set[int]:
@@ -1900,7 +2454,10 @@ def _rufat_may_use_lead(lead_id=None, lead=None, chat_id=None) -> bool:
         resolved_id = lead.get("id")
     if not resolved_id:
         return False
-    return _lead_pipeline_id(get_lead_details(int(resolved_id))) in permitted
+    details = get_lead_details(int(resolved_id))
+    if details:
+        return _lead_pipeline_id(details) in permitted
+    return _cached_funnel_has_lead(chat_id, resolved_id)
 
 
 def _leads_linked_to_contact(contact_id: int) -> list:
@@ -1941,7 +2498,15 @@ def _preferred_lead_for_rufat(leads: list) -> dict | None:
 
 def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
     lead = get_lead_details(int(lead_id))
-    return bool(lead and int(lead.get("pipeline_id", 0) or 0) == int(pipeline_id))
+    if lead:
+        return _lead_pipeline_id(lead) == int(pipeline_id)
+    owner = None
+    for chat_id in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID):
+        candidate = get_funnel_owner(chat_id)
+        if candidate and int(candidate["pipeline_id"]) == int(pipeline_id):
+            owner = candidate
+            break
+    return bool(owner and _cached_funnel_has_lead(owner["chat_id"], lead_id))
 
 
 def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
@@ -1950,47 +2515,82 @@ def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
     return lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
 
 
+def get_kommo_task(task_id) -> dict | None:
+    try:
+        tid = int(task_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{tid}", headers=HEADERS, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json() or {}
+            if isinstance(data, dict) and data.get("id"):
+                return data
+            embedded = (data.get("_embedded") or {}).get("tasks") or []
+            if embedded:
+                return embedded[0]
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/tasks",
+            headers=HEADERS,
+            params={"filter[id][]": tid, "limit": 1},
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            tasks = (resp.json() or {}).get("_embedded", {}).get("tasks") or []
+            if tasks:
+                return tasks[0]
+        logger.warning("get_kommo_task %s HTTP %s", tid, getattr(resp, "status_code", "?"))
+    except Exception as exc:
+        logger.error("get_kommo_task error: %s", exc)
+    return None
+
+
+def task_payload_allowed_for_chat(task: dict, chat_id: int) -> bool:
+    if is_admin(chat_id) or not is_funnel_chat(chat_id):
+        return True
+    entity_id = (task or {}).get("entity_id")
+    if not entity_id:
+        return False
+    entity_type = _normalize_kommo_entity_type((task or {}).get("entity_type", "leads"))
+    if entity_type == "leads":
+        allowed = _rufat_may_use_lead(lead_id=int(entity_id), chat_id=chat_id)
+        if not allowed:
+            allowed = _cached_funnel_has_lead(chat_id, entity_id)
+        if not allowed:
+            logger.warning(
+                "task_allowed_for_chat: lead %s is outside this funnel",
+                entity_id,
+            )
+        return allowed
+    if entity_type == "contacts":
+        allowed = any(
+            _rufat_may_use_lead(
+                lead=lead,
+                lead_id=lead.get("id") if isinstance(lead, dict) else lead,
+                chat_id=chat_id,
+            )
+            for lead in _leads_linked_to_contact(int(entity_id))
+        )
+        if not allowed:
+            allowed = _cached_funnel_has_lead(chat_id, entity_id)
+        if not allowed:
+            logger.warning(
+                "task_allowed_for_chat: contact %s has no funnel lead",
+                entity_id,
+            )
+        return allowed
+    logger.warning("task_allowed_for_chat: unsupported entity_type %s", entity_type)
+    return False
+
+
 def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
     if is_admin(chat_id) or not is_funnel_chat(chat_id):
         return True
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{int(task_id)}", headers=HEADERS, timeout=8)
-        if resp.status_code != 200:
-            logger.warning("task_allowed_for_chat: task %s HTTP %s", task_id, resp.status_code)
-            return False
-        task = resp.json()
-        entity_id = task.get("entity_id")
-        if not entity_id:
-            return False
-        entity_type = _normalize_kommo_entity_type(task.get("entity_type", "leads"))
-        if entity_type == "leads":
-            allowed = _rufat_may_use_lead(lead_id=int(entity_id), chat_id=chat_id)
-            if not allowed:
-                logger.warning(
-                    "task_allowed_for_chat: lead %s is outside Rüfət/Əməliyyatlar",
-                    entity_id,
-                )
-            return allowed
-        if entity_type == "contacts":
-            allowed = any(
-                _rufat_may_use_lead(
-                    lead=lead,
-                    lead_id=lead.get("id") if isinstance(lead, dict) else lead,
-                    chat_id=chat_id,
-                )
-                for lead in _leads_linked_to_contact(int(entity_id))
-            )
-            if not allowed:
-                logger.warning(
-                    "task_allowed_for_chat: contact %s has no Rüfət/Əməliyyatlar lead",
-                    entity_id,
-                )
-            return allowed
-        logger.warning("task_allowed_for_chat: unsupported entity_type %s for task %s", entity_type, task_id)
+    task = get_kommo_task(task_id)
+    if not task:
+        logger.warning("task_allowed_for_chat: task %s not found", task_id)
         return False
-    except Exception:
-        logger.exception("task_allowed_for_chat failed for task %s", task_id)
-        return False
+    return task_payload_allowed_for_chat(task, chat_id)
 
 
 def get_leads_by_status(status_id: int, chat_id: int = None) -> list:
@@ -2107,6 +2707,12 @@ def format_contact_info(contact: dict, notes: list = None, tasks: list = None) -
     return msg
 
 # ─── Partner helpers ─────────────────────────────────────────────────────────
+MENBE_FIELD_ID = 2989615
+MENBE_LABELS = ("Partner", "Instagram", "TikTok", "Facebook", "SEO", "WhatsApp")
+_menbe_enums_cache: list | None = None
+_menbe_enums_entity = ""
+
+
 def fetch_partner_enums() -> list:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/custom_fields"
     try:
@@ -2114,11 +2720,313 @@ def fetch_partner_enums() -> list:
         if resp.status_code == 200:
             fields = resp.json().get("_embedded", {}).get("custom_fields", [])
             for f in fields:
-                if f.get("id") == 2989615:  # Partnyor field
+                if f.get("id") == MENBE_FIELD_ID:
                     return f.get("enums", [])
     except:
         pass
     return []
+
+
+def fetch_menbe_enums() -> list:
+    """Load select options for contact/lead field mənbə (id 2989615)."""
+    global _menbe_enums_cache, _menbe_enums_entity
+    if _menbe_enums_cache:
+        return _menbe_enums_cache
+    for path, entity in (("contacts/custom_fields", "contacts"), ("leads/custom_fields", "leads")):
+        try:
+            resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{path}", headers=HEADERS, timeout=8)
+            if resp.status_code != 200:
+                continue
+            fields = (resp.json().get("_embedded") or {}).get("custom_fields", []) or []
+            for field in fields:
+                if int(field.get("id") or 0) != MENBE_FIELD_ID:
+                    continue
+                enums = field.get("enums") or []
+                if enums:
+                    _menbe_enums_cache = enums
+                    _menbe_enums_entity = entity
+                    return enums
+        except Exception as exc:
+            logger.warning("mənbə enums %s failed: %s", path, exc)
+    return fetch_partner_enums()
+
+
+def normalize_menbe_label(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    aliases = {
+        "partner": "Partner", "partnyor": "Partner", "referral": "Partner",
+        "instagram": "Instagram", "ig": "Instagram",
+        "tiktok": "TikTok", "tt": "TikTok",
+        "facebook": "Facebook", "fb": "Facebook", "meta": "Facebook",
+        "seo": "SEO", "google": "SEO", "organic": "SEO", "yandex": "SEO",
+        "whatsapp": "WhatsApp", "wa": "WhatsApp", "whats-app": "WhatsApp",
+        "mənbə": "", "menbe": "",
+    }
+    folded = raw.casefold()
+    if folded in aliases:
+        return aliases[folded]
+    for label in MENBE_LABELS:
+        if label.casefold() == folded:
+            return label
+    return ""
+
+
+def menbe_from_utm(*parts: str) -> str:
+    blob = " ".join(str(part or "") for part in parts).casefold()
+    if not blob.strip():
+        return ""
+    checks = (
+        (("tiktok", "tt."), "TikTok"),
+        (("instagram", "ig."), "Instagram"),
+        (("facebook", "fb.", " fb "), "Facebook"),
+        (("whatsapp", "whats-app", " wa.", " wa "), "WhatsApp"),
+        (("seo", "google", "organic", "yandex"), "SEO"),
+        (("partner", "partnyor", "referral"), "Partner"),
+    )
+    for needles, label in checks:
+        if any(needle in blob for needle in needles):
+            return label
+    return normalize_menbe_label(blob)
+
+
+def extract_menbe(entity: dict | None) -> str:
+    if not isinstance(entity, dict):
+        return ""
+    for cf in entity.get("custom_fields_values") or []:
+        try:
+            field_id = int(cf.get("field_id") or 0)
+        except (TypeError, ValueError):
+            field_id = 0
+        if field_id != MENBE_FIELD_ID:
+            continue
+        vals = cf.get("values") or []
+        if not vals:
+            continue
+        return normalize_menbe_label(vals[0].get("value") or "") or str(vals[0].get("value") or "")
+    return ""
+
+
+def collect_utm_blob(entity: dict | None) -> str:
+    if not isinstance(entity, dict):
+        return ""
+    parts: list[str] = []
+    for cf in entity.get("custom_fields_values") or []:
+        code = str(cf.get("field_code") or "").casefold()
+        name = str(cf.get("field_name") or "").casefold()
+        values = [str(val.get("value") or "") for val in (cf.get("values") or [])]
+        joined_values = " ".join(values)
+        if any(token in f"{code} {name}" for token in ("utm", "source", "источник", "mənbə", "menbe", "referr")):
+            parts.extend(values)
+        elif re.search(r"utm[_-]?(source|medium|campaign|content|term)=", joined_values, re.I):
+            parts.append(joined_values)
+    meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+    for key in ("utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "referrer", "referer"):
+        parts.append(str(meta.get(key) or ""))
+    source = ((entity.get("_embedded") or {}).get("source") or {})
+    if isinstance(source, dict):
+        parts.append(str(source.get("name") or ""))
+    return " ".join(part for part in parts if part)
+
+
+_SOURCE_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+_SOURCE_FIELD_HINTS = (
+    "url", "link", "href", "refer", "landing", "ads", "advert", "click",
+    "utm", "facebook", "instagram", "tiktok", "source", "form", "page", "кампан",
+)
+
+
+def collect_source_urls(entity: dict | None) -> list[str]:
+    if not isinstance(entity, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw: str) -> None:
+        for match in _SOURCE_URL_RE.findall(str(raw or "")):
+            url = match.rstrip(".,;)]")
+            if url and url not in seen:
+                seen.add(url)
+                found.append(url)
+
+    for cf in entity.get("custom_fields_values") or []:
+        code = str(cf.get("field_code") or "").casefold()
+        name = str(cf.get("field_name") or "").casefold()
+        hint = f"{code} {name}"
+        values = [str(val.get("value") or "") for val in (cf.get("values") or [])]
+        if any(token in hint for token in _SOURCE_FIELD_HINTS) or any(_SOURCE_URL_RE.search(v) for v in values):
+            for value in values:
+                add(value)
+    meta = entity.get("metadata") if isinstance(entity.get("metadata"), dict) else {}
+    for key, value in meta.items():
+        add(str(value or ""))
+        if isinstance(value, dict):
+            for nested in value.values():
+                add(str(nested or ""))
+    source = ((entity.get("_embedded") or {}).get("source") or {})
+    if isinstance(source, dict):
+        add(str(source.get("name") or ""))
+        add(str(source.get("link") or source.get("url") or ""))
+    return found
+
+
+_PARTNER_LISTS_FILE = "partner_lists.json"
+_DEAL_PARTNERS_FILE = "deal_partners.json"
+
+
+def _load_json_dict(name: str) -> dict:
+    data = read_json(name) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_partner_list_for_chat(chat_id) -> list[str]:
+    items = _load_json_dict(_PARTNER_LISTS_FILE).get(str(chat_id)) or []
+    names: list[str] = []
+    for raw in items:
+        name = str(raw or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def add_partner_for_chat(chat_id, name: str) -> list[str]:
+    name = str(name or "").strip()
+    items = get_partner_list_for_chat(chat_id)
+    if name and name not in items:
+        items.append(name)
+        data = _load_json_dict(_PARTNER_LISTS_FILE)
+        data[str(chat_id)] = items
+        write_json(_PARTNER_LISTS_FILE, data)
+    return items
+
+
+def get_deal_partner(lead_id) -> str:
+    if not lead_id:
+        return ""
+    row = _load_json_dict(_DEAL_PARTNERS_FILE).get(str(int(lead_id)))
+    if isinstance(row, dict):
+        return str(row.get("name") or "").strip()
+    return str(row or "").strip()
+
+
+def set_deal_partner(lead_id, name: str, owner_chat_id=None) -> str:
+    name = str(name or "").strip()
+    data = _load_json_dict(_DEAL_PARTNERS_FILE)
+    key = str(int(lead_id))
+    if not name:
+        data.pop(key, None)
+    else:
+        data[key] = {"name": name, "owner": owner_chat_id}
+    write_json(_DEAL_PARTNERS_FILE, data)
+    return name
+
+
+def split_partner_and_utm(cf_value: str, utm_blob: str, lead_id: int | None = None) -> tuple[str, str]:
+    cf_value = str(cf_value or "").strip()
+    utm = menbe_from_utm(utm_blob)
+    if not utm and cf_value in MENBE_LABELS:
+        utm = cf_value
+    partner = get_deal_partner(lead_id) if lead_id else ""
+    if cf_value and cf_value not in MENBE_LABELS:
+        partner = partner or cf_value
+    return partner, utm
+
+
+def attach_utm_and_partner(deals: list[dict], lead_by_id: dict, contacts: dict) -> None:
+    """Fill Partner (personal) and UTM tag on overview deals without mixing them."""
+    stored = _load_json_dict(_DEAL_PARTNERS_FILE)
+    for deal in deals:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lead_id = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        lead = lead_by_id.get(lead_id) or {}
+        contact_id = None
+        rows = deal.get("contacts") or []
+        if rows and isinstance(rows[0], dict) and rows[0].get("id"):
+            try:
+                contact_id = int(rows[0]["id"])
+            except (TypeError, ValueError):
+                contact_id = None
+        contact = contacts.get(contact_id or 0, {})
+        cf_value = extract_menbe(contact) or extract_menbe(lead)
+        blob = " ".join((collect_utm_blob(lead), collect_utm_blob(contact)))
+        row = stored.get(str(lead_id))
+        stored_name = str((row.get("name") if isinstance(row, dict) else row) or "").strip()
+        partner, utm = split_partner_and_utm(cf_value, blob, None)
+        partner = stored_name or partner
+        deal["partner"] = partner
+        deal["utm"] = utm
+        deal["utm_tag"] = utm
+        deal["source"] = utm
+        deal["menbe"] = utm
+
+
+def menbe_field_payload(label: str) -> dict | None:
+    normalized = normalize_menbe_label(label)
+    if not normalized:
+        return None
+    values = [{"value": normalized}]
+    for enum in fetch_menbe_enums():
+        if str(enum.get("value") or "").casefold() == normalized.casefold():
+            if enum.get("id"):
+                values[0]["enum_id"] = enum.get("id")
+            break
+    return {"field_id": MENBE_FIELD_ID, "values": values}
+
+
+def set_contact_menbe(contact_id: int, label: str, *, overwrite: bool = True) -> bool:
+    payload = menbe_field_payload(label)
+    if not payload or not contact_id:
+        return False
+    if not overwrite:
+        details = get_contact_details(int(contact_id)) or {}
+        if extract_menbe(details):
+            return True
+    return bool(update_contact_kommo(int(contact_id), {"custom_fields_values": [payload]}))
+
+
+def set_lead_menbe(lead_id: int, label: str) -> bool:
+    payload = menbe_field_payload(label)
+    if not payload or not lead_id:
+        return False
+    return bool(update_lead_kommo(int(lead_id), {"custom_fields_values": [payload]}))
+
+
+def apply_menbe(contact_id: int | None, lead_id: int | None, source_label: str = "", utm_blob: str = "", *, overwrite: bool = False) -> str:
+    global _menbe_enums_entity
+    label = normalize_menbe_label(source_label) or menbe_from_utm(utm_blob)
+    if not label:
+        return ""
+    if contact_id:
+        set_contact_menbe(int(contact_id), label, overwrite=overwrite or bool(normalize_menbe_label(source_label)))
+    if lead_id:
+        fetch_menbe_enums()
+        if _menbe_enums_entity == "leads":
+            set_lead_menbe(int(lead_id), label)
+    return label
+
+
+def maybe_fill_menbe_from_lead(lead_id: int) -> str:
+    lead = get_lead_details(int(lead_id)) or {}
+    contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    contact_id = 0
+    contact = {}
+    if contacts:
+        try:
+            contact_id = int(contacts[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+        if contact_id:
+            contact = get_contact_details(contact_id) or contacts[0]
+    existing = extract_menbe(contact) or extract_menbe(lead)
+    if existing:
+        return existing
+    blob = " ".join((collect_utm_blob(lead), collect_utm_blob(contact)))
+    return apply_menbe(contact_id or None, lead_id, utm_blob=blob, overwrite=False)
 
 # ─── OpenAI Function Calling Tools ──────────────────────────────────────────
 AI_TOOLS = [
@@ -4398,14 +5306,14 @@ async def _handle_kommo_task_webhook(data: dict):
     entity_id_raw = _get("element_id")
     entity_type_raw = _get("element_type")
     deadline_raw = _get("complete_till")
-    created_by_raw = _get("created_by")
+    created_by_raw = _get("created_by") or _get("created_user_id") or _get("created_by_id")
     task_type_id_raw = _get("task_type_id") or _get("task_type")
     # Task type names mapping
     _TASK_TYPE_NAMES = {
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat",
         4187880: "Yeni", 3263999: "Quraşdırma", 3265439: "Tapşırıq",
         3267595: "Zəng et", 4229224: "Cavab gözlənilir",
-        4232112: "Texniki tapşırıq", 4232108: "Import"
+        4232112: "aktiv", 4232108: "Import", 4239844: "passiv"
     }
     task_type_name = ""
     if task_type_id_raw:
@@ -4444,15 +5352,9 @@ async def _handle_kommo_task_webhook(data: dict):
                 return
             else:
                 del _bot_updated_tasks[tid]
-        # Suppress if bot created this task
-        if tid in _bot_created_tasks:
-            ts = _bot_created_tasks_ts.get(tid, 0)
-            if _time.time() - ts < 120:
-                logger.info(f"Webhook suppressed: bot-created task {tid}")
-                return
-            else:
-                _bot_created_tasks.discard(tid)
-                _bot_created_tasks_ts.pop(tid, None)
+    if _is_bot_created_task_webhook(task_id_raw, entity_id):
+        logger.info(f"Webhook suppressed: bot-created task {task_id_raw} lead={entity_id}")
+        return
     # Suppress duplicate webhook for same task_id (Kommo sends multiple add webhooks)
     if is_add and task_id_raw:
         tid = int(task_id_raw)
@@ -4565,6 +5467,13 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         if is_task_event:
             await _handle_kommo_task_webhook(data)
             return web.Response(status=200, text="OK")
+        add_lead_id = data.get("leads[add][0][id]")
+        if add_lead_id:
+            try:
+                maybe_fill_menbe_from_lead(int(add_lead_id))
+                invalidate_rufat_overview_cache()
+            except Exception as exc:
+                logger.warning("mənbə from new lead %s failed: %s", add_lead_id, exc)
         # Lead status change
         lead_keys = [k for k in data.keys() if k.startswith("leads[status][0]")]
         if not lead_keys:
@@ -4579,20 +5488,27 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         old_status_id = int(old_status_id) if old_status_id else 0
         new_status_id = int(new_status_id)
         pipeline_id = int(pipeline_id) if pipeline_id else 0
-        if pipeline_id not in (PIPELINE_ID, RUFAT_PIPELINE_ID):
+        try:
+            old_pipeline_id = int(data.get("leads[status][0][old_pipeline_id]") or 0)
+        except (TypeError, ValueError):
+            old_pipeline_id = 0
+        if pipeline_id in employee_personal_pipeline_ids():
+            if old_pipeline_id and pipeline_id != old_pipeline_id:
+                maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id)
+            if pipeline_id == RUFAT_PIPELINE_ID:
+                rufat_chat = NAME_TO_CHAT.get("Rüfət Həsənzadə")
+                if rufat_chat and _bot_app:
+                    rufat_stage = RUFAT_STAGE_NAMES.get(new_status_id, "Naməlum")
+                    rufat_lead = get_lead_details(lead_id) or {}
+                    rufat_msg = (f"🔄 Sizin vоронкаda mərhələ dəyişdi:\n\n"
+                                  f"👤 {rufat_lead.get('name', lead_id)}\n📋 {rufat_lead.get('name', '')}\n📌 {rufat_stage}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}")
+                    try:
+                        await _bot_app.bot.send_message(rufat_chat, rufat_msg, disable_web_page_preview=True)
+                        send_push_notification(str(rufat_chat), "🔄 Mərhələ dəyişdi", f"{rufat_lead.get('name', lead_id)} — {rufat_stage}")
+                    except Exception:
+                        pass
             return web.Response(status=200, text="OK")
-        if pipeline_id == RUFAT_PIPELINE_ID:
-            rufat_chat = NAME_TO_CHAT.get("Rüfət Həsənzadə")
-            if rufat_chat and _bot_app:
-                rufat_stage = RUFAT_STAGE_NAMES.get(new_status_id, "Naməlum")
-                rufat_lead = get_lead_details(lead_id) or {}
-                rufat_msg = (f"🔄 Sizin vоронкаda mərhələ dəyişdi:\n\n"
-                              f"👤 {rufat_lead.get('name', lead_id)}\n📋 {rufat_lead.get('name', '')}\n📌 {rufat_stage}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}")
-                try:
-                    await _bot_app.bot.send_message(rufat_chat, rufat_msg, disable_web_page_preview=True)
-                    send_push_notification(str(rufat_chat), "🔄 Mərhələ dəyişdi", f"{rufat_lead.get('name', lead_id)} — {rufat_stage}")
-                except Exception:
-                    pass
+        if pipeline_id not in (PIPELINE_ID, RUFAT_PIPELINE_ID):
             return web.Response(status=200, text="OK")
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
@@ -4721,7 +5637,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v142")
+    return web.Response(status=200, text="Bot is running v176")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -4908,6 +5824,11 @@ async def handle_api_action(request: web.Request) -> web.Response:
             chat_id = int(cid)
             break
     if not chat_id:
+        try:
+            chat_id = int(tg_user_id)
+        except (TypeError, ValueError):
+            chat_id = None
+    if not chat_id:
         return web.json_response({"success": False, "error": "İstifadəçi tapılmadı. Botda /start yazın."}, status=403)
     action = data.get("action", "")
     phone = data.get("phone", "")
@@ -4919,26 +5840,114 @@ async def handle_api_action(request: web.Request) -> web.Response:
             stage_key = str(data.get("stage_key") or "")
             lead = get_lead_details(lead_id) or {}
             pipeline_id = _lead_pipeline_id(lead) or get_pipeline_id_for_chat(chat_id)
-            stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
+            if is_admin(chat_id):
+                try:
+                    requested_pipeline = int(data.get("pipeline_id") or 0)
+                except (TypeError, ValueError):
+                    requested_pipeline = 0
+                if requested_pipeline:
+                    pipeline_id = requested_pipeline
+                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+            else:
+                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
             if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
+            source_label = str(data.get("source") or data.get("menbe") or "").strip()
+            partner_name = str(data.get("partner") or "").strip()
             if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
+            if "partner" in data:
+                set_deal_partner(lead_id, partner_name, chat_id)
+                if partner_name:
+                    add_partner_for_chat(chat_id, partner_name)
+                invalidate_rufat_overview_cache()
+            elif source_label:
+                contacts = (lead.get("_embedded") or {}).get("contacts") or []
+                contact_id = int(contacts[0]["id"]) if contacts and contacts[0].get("id") else None
+                apply_menbe(contact_id, lead_id, source_label, overwrite=True)
+                invalidate_rufat_overview_cache()
             patch_rufat_overview_deal_stage(lead_id, stage_key)
-            return web.json_response({"success": True, "message": "Sövdələşmə yeniləndi.", "stage_key": stage_key})
+            return web.json_response({
+                "success": True,
+                "message": "Sövdələşmə yeniləndi.",
+                "stage_key": stage_key,
+                "partner": get_deal_partner(lead_id),
+                "partners": get_partner_list_for_chat(chat_id),
+            })
+        elif action == "add_partner":
+            name = str(data.get("name") or data.get("partner") or "").strip()
+            if not name:
+                return web.json_response({"success": False, "error": "Partner adını daxil edin."})
+            partners = add_partner_for_chat(chat_id, name)
+            return web.json_response({"success": True, "partners": partners, "partner": name})
         elif action == "deal_add_note":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             result = add_note(lead_id, text, "leads")
             invalidate_rufat_overview_cache()
-            return web.json_response({"success": bool(result), "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı."})
+            return web.json_response({
+                "success": bool(result),
+                "note_id": _first_note_id(result),
+                "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı.",
+            })
+        elif action == "deal_edit_note":
+            lead_id = int(data.get("lead_id") or 0)
+            note_id = int(data.get("note_id") or 0)
+            text = str(data.get("text") or "").strip()
+            entity_type = str(data.get("entity_type") or "leads")
+            try:
+                entity_id = int(data.get("entity_id") or 0)
+            except (TypeError, ValueError):
+                entity_id = 0
+            if not entity_id:
+                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
+            if not lead_id or not note_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            ok, err = update_note(note_id, text, entity_type, entity_id)
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({
+                "success": ok,
+                "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi.",
+                "error": "" if ok else err,
+            }, status=200 if ok else 400)
+        elif action == "deal_delete_note":
+            lead_id = int(data.get("lead_id") or 0)
+            note_id = int(data.get("note_id") or 0)
+            entity_type = str(data.get("entity_type") or "leads")
+            try:
+                entity_id = int(data.get("entity_id") or 0)
+            except (TypeError, ValueError):
+                entity_id = 0
+            if not entity_id:
+                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
+            if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            extra_ids = [lead_id]
+            lead_obj = get_lead_details(lead_id) or {}
+            extra_ids.extend(_lead_contact_ids(lead_obj))
+            hint_type = str(data.get("note_type") or "").strip()
+            ok, err = delete_note(note_id, entity_type, entity_id, extra_ids=extra_ids, note_type=hint_type)
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({
+                "success": ok,
+                "message": "Qeyd silindi." if ok else "Qeyd silinmədi.",
+                "error": "" if ok else err,
+            }, status=200 if ok else 400)
         elif action == "deal_add_task":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             try: deadline_ts = int(data.get("deadline_ts") or (datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
             except (TypeError, ValueError): deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
+            try:
+                task_type_id = int(data.get("task_type_id") or data.get("task_type") or 4232112)
+            except (TypeError, ValueError):
+                task_type_id = 4232112
+            if task_type_id not in {4232112, XATIRLAT_TASK_TYPE_ID}:
+                task_type_id = 4232112
             executor = str(data.get("executor") or "Rüfət Həsənzadə").strip()
             executor_ids = {
                 "Nizami Qasımov": 10932455,
@@ -4955,9 +5964,77 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
             owner = get_funnel_owner(chat_id)
             creator = (owner or {}).get("name") or get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
-            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", creator_name=creator)
+            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", task_type_id=task_type_id, creator_name=creator)
+            if result:
+                executor_chat = get_chat_id_by_name(executor)
+                try:
+                    creator_chat = int(chat_id)
+                except (TypeError, ValueError):
+                    creator_chat = None
+                if executor_chat and creator_chat and int(executor_chat) != creator_chat:
+                    dl = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                    _send_telegram_text(
+                        executor_chat,
+                        f"📋 Yeni tapşırıq ({creator}):\n\n📝 {text}\n👤 {executor}\n⏰ {dl}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                    )
+                    send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
             invalidate_rufat_overview_cache()
-            return web.json_response({"success": bool(result), "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı."})
+            return web.json_response({
+                "success": bool(result),
+                "task_id": _created_task_id(result),
+                "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı.",
+            })
+        elif action == "deal_edit_task":
+            lead_id = int(data.get("lead_id") or 0)
+            task_id = int(data.get("task_id") or 0)
+            text = str(data.get("text") or "").strip()
+            if not lead_id or not task_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            payload = {"text": text}
+            try:
+                deadline_ts = int(data.get("deadline_ts") or 0)
+            except (TypeError, ValueError):
+                deadline_ts = 0
+            if deadline_ts:
+                payload["complete_till"] = deadline_ts
+            ok = bool(update_task_kommo(task_id, payload))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Tapşırıq yeniləndi." if ok else "Tapşırıq yenilənmədi."})
+        elif action == "deal_delete_task":
+            lead_id = int(data.get("lead_id") or 0)
+            task_id = int(data.get("task_id") or 0)
+            if not lead_id or not task_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            ok = bool(update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Silindi"}}))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Tapşırıq silindi." if ok else "Tapşırıq silinmədi."})
+        elif action == "deal_edit_contact":
+            lead_id = int(data.get("lead_id") or 0)
+            name = str(data.get("name") or data.get("contact_name") or "").strip()
+            phone = str(data.get("phone") or "").strip()
+            if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
+                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
+            lead = get_lead_details(lead_id) or {}
+            contacts = (lead.get("_embedded") or {}).get("contacts") or []
+            try:
+                contact_id = int(data.get("contact_id") or (contacts[0].get("id") if contacts else 0) or 0)
+            except (TypeError, ValueError, AttributeError):
+                contact_id = 0
+            if not contact_id:
+                return web.json_response({"success": False, "error": "Kontakt tapılmadı."}, status=400)
+            payload: dict = {}
+            if name:
+                payload["name"] = name
+            if phone:
+                payload["custom_fields_values"] = [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}]
+            if not payload:
+                return web.json_response({"success": False, "error": "Ad və ya telefon yazın."}, status=400)
+            ok = bool(update_contact_kommo(contact_id, payload))
+            if ok:
+                invalidate_rufat_overview_cache()
+            return web.json_response({"success": ok, "message": "Kontakt yeniləndi." if ok else "Kontakt yenilənmədi."})
         elif action == "info":
             if is_funnel_chat(chat_id) and not is_admin(chat_id):
                 contacts = search_contact_by_phone(phone)
@@ -5254,11 +6331,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                 logger.info(f"Moved lead {_lead_id_to_move} to funnel of {assignee_name_raw}")
                         except Exception as _me:
                             logger.error(f"Failed to move lead to icraçı funnel: {_me}")
-                # Also add task text as a note on the entity
-                try:
-                    note_payload = [{"note_type": "common", "params": {"text": f"📝 Tapşırıq: {text}"}}]
-                    nr = _http.post(f"{KOMMO_BASE_URL}/api/v4/{result['entity_type']}/{result['entity_id']}/notes", json=note_payload, timeout=5); logger.info(f"Note add: {nr.status_code} entity={result['entity_type']}/{result['entity_id']}")
-                except Exception as _ne: logger.error(f"Note add failed: {_ne}")
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:
@@ -5276,7 +6348,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             )
                         except: pass
                         send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
-                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
+                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
             stage = data.get("stage", "")
@@ -5358,36 +6430,69 @@ async def handle_api_action(request: web.Request) -> web.Response:
             owner = get_funnel_owner(chat_id)
             if not owner:
                 return web.json_response({"success": False, "error": "Huni tapılmadı."}, status=403)
+            pipeline_id = int(owner["pipeline_id"])
             stages = owner["stages"]
-            working_keys = {
-                str(key)
-                for key, _label in (owner.get("ui_stages") or [])
-                if key not in ("ugurlu", "imtina", "nerazobrannoye")
-            }
-            if stage_key not in stages or (working_keys and stage_key not in working_keys):
-                return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+            names = owner["stage_names"]
+            if is_admin(chat_id):
+                try:
+                    requested_pipeline = int(data.get("pipeline_id") or 0)
+                except (TypeError, ValueError):
+                    requested_pipeline = 0
+                if requested_pipeline:
+                    pipeline_id = requested_pipeline
+                    stages, names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+                if stage_key not in stages:
+                    return web.json_response({"success": False, "error": "Mərhələni hunidən seçin."})
+            else:
+                working_keys = {
+                    str(key)
+                    for key, _label in (owner.get("ui_stages") or [])
+                    if key not in ("ugurlu", "imtina", "nerazobrannoye")
+                }
+                if stage_key not in stages or (working_keys and stage_key not in working_keys):
+                    return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+            partner_name = str(data.get("partner") or "").strip()
+            utm_blob = " ".join((
+                str(data.get("utm_source") or ""),
+                str(data.get("utm_medium") or ""),
+                str(data.get("utm_campaign") or ""),
+                note_text,
+            ))
+            utm_label = menbe_from_utm(utm_blob)
+            menbe_cf = menbe_field_payload(utm_label) if utm_label else None
+            extra_fields = [menbe_cf] if menbe_cf else None
             contacts = search_contact_by_phone(phone_raw)
             contact_id = None
             if contacts:
                 contact_id = int(contacts[0]["id"])
-                update_contact_kommo(contact_id, {"name": customer_name})
+                update_payload = {"name": customer_name}
+                if extra_fields:
+                    update_payload["custom_fields_values"] = extra_fields
+                update_contact_kommo(contact_id, update_payload)
             else:
-                created = create_contact_kommo(customer_name, phone_raw)
+                created = create_contact_kommo(customer_name, phone_raw, extra_fields)
                 contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
             if not contact_id:
                 return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
-            lead_id = create_lead_for_contact(int(contact_id), customer_name, owner["pipeline_id"], stages[stage_key])
+            lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key])
             if not lead_id:
                 return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
+            applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
+            if partner_name:
+                set_deal_partner(int(lead_id), partner_name, chat_id)
+                add_partner_for_chat(chat_id, partner_name)
             if note_text:
                 add_note(int(lead_id), note_text, "leads")
             invalidate_rufat_overview_cache()
-            stage_label = owner["stage_names"].get(int(stages[stage_key]), stage_key)
+            stage_label = names.get(int(stages[stage_key]), stage_key)
             return web.json_response({
                 "success": True,
                 "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
                 "lead_id": int(lead_id),
                 "stage_key": stage_key,
+                "partner": partner_name,
+                "utm": applied_utm,
+                "partners": get_partner_list_for_chat(chat_id),
                 "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
             })
         elif action == "update_task":
@@ -5514,6 +6619,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!", "entity_id": _eid, "entity_type": _etype})
             result = update_task_kommo(task_id, update_data)
             if result:
+                invalidate_rufat_overview_cache()
                 link = ""
                 try:
                     headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
@@ -5552,6 +6658,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             else:
                 new_dl = now + timedelta(hours=2)
             result = update_task_kommo(task_id, {"complete_till": int(new_dl.timestamp())})
+            if result:
+                invalidate_rufat_overview_cache()
             # If reason is employee's fault, record KPI=0
             if reason == "Çatdıra bilmirəm" and get_employee_type(chat_id) == "salary":
                 # Auto-create session and finish with KPI=0 (missed deadline)
@@ -5571,19 +6679,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
             started = has_active_session(chat_id, int(task_id))
             return web.json_response({"success": True, "started": started})
         elif action == "complete_task":
-            task_id = data.get("task_id")
+            try:
+                task_id = int(data.get("task_id"))
+            except (TypeError, ValueError):
+                task_id = 0
             if not task_id:
                 return web.json_response({"success": False, "error": "task_id yoxdur."})
-            if not task_allowed_for_chat(task_id, chat_id):
+            task_data = get_kommo_task(task_id)
+            if not task_data:
+                return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
+            if not task_payload_allowed_for_chat(task_data, chat_id):
                 return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-            try:
-                task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                if task_resp.status_code != 200:
-                    return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
-                task_data = task_resp.json()
-            except Exception as exc:
-                logger.error(f"complete_task task lookup error: {exc}")
-                return web.json_response({"success": False, "error": "Tapşırıq məlumatı alınmadı."})
 
             task_context = get_task_deal_context(task_data)
             lead_id = task_context["lead_id"]
@@ -6150,15 +7256,21 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     return result
 
 
-async def _load_rufat_latest_notes(lead_ids: set[int]) -> dict[int, str]:
-    """Load the newest lead note per deal from the collection endpoint.
+_CLIENT_MESSAGE_NOTE_TYPES = {"incoming_chat_message", "sms_in", "amomail_message"}
+
+
+async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
+    """Load the newest lead note, client message and inbox channel per deal.
 
     Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
     temporary account blocks. A few pages of /leads/notes is enough for cards.
     """
-    latest: dict[int, str] = {}
+    latest: dict[int, tuple[int, str]] = {}
+    latest_client: dict[int, tuple[int, str]] = {}
+    latest_in_channel: dict[int, tuple[int, str]] = {}
+    latest_any_channel: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return latest
+        return {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -6187,15 +7299,85 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> dict[int, str]:
                 entity_id = int(note.get("entity_id"))
             except (TypeError, ValueError):
                 continue
-            if entity_id not in lead_ids or entity_id in latest:
+            if entity_id not in lead_ids:
                 continue
             text = str((note.get("params") or {}).get("text") or "").strip()
-            if text:
-                latest[entity_id] = text
+            created = int(note.get("created_at") or note.get("updated_at") or 0)
+            note_type = str(note.get("note_type") or "")
+            if note_type == "common" and text and not _note_is_deleted({"text": text}):
+                known = latest.get(entity_id)
+                if not known or created > known[0]:
+                    latest[entity_id] = (created, text)
+            if note_type in _CLIENT_MESSAGE_NOTE_TYPES and text and not _note_is_deleted({"text": text}):
+                known = latest_client.get(entity_id)
+                if not known or created > known[0]:
+                    quote, body = _split_quote_prefix(text)
+                    latest_client[entity_id] = (created, body if quote else text)
+            channel = _note_channel_key(note)
+            if channel:
+                incoming = note_type == "incoming_chat_message"
+                bucket = latest_in_channel if incoming else latest_any_channel
+                known = bucket.get(entity_id)
+                if not known or created > known[0]:
+                    bucket[entity_id] = (created, channel)
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    return latest
+    chat_page = 1
+    while chat_page <= 3:
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/leads/notes",
+                params={
+                    "limit": 250,
+                    "page": chat_page,
+                    "order[updated_at]": "desc",
+                    "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
+                },
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Rüfət chat notes page %s unavailable: %s", chat_page, exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Rüfət chat notes page %s failed: %s", chat_page, response.status_code)
+            break
+        notes = (response.json().get("_embedded") or {}).get("notes", []) or []
+        if not notes:
+            break
+        for note in notes:
+            if not isinstance(note, dict):
+                continue
+            try:
+                entity_id = int(note.get("entity_id"))
+            except (TypeError, ValueError):
+                continue
+            if entity_id not in lead_ids:
+                continue
+            created = int(note.get("created_at") or note.get("updated_at") or 0)
+            note_type = str(note.get("note_type") or "")
+            channel = _note_channel_key(note)
+            if not channel:
+                continue
+            incoming = note_type == "incoming_chat_message"
+            bucket = latest_in_channel if incoming else latest_any_channel
+            known = bucket.get(entity_id)
+            if not known or created > known[0]:
+                bucket[entity_id] = (created, channel)
+        if len(notes) < 250:
+            break
+        chat_page += 1
+    channel_by_lead = {
+        lead: (latest_in_channel[lead][1] if lead in latest_in_channel else value[1])
+        for lead, value in {**latest_any_channel, **latest_in_channel}.items()
+    }
+    return (
+        {lead: value[1] for lead, value in latest.items()},
+        {lead: value[1] for lead, value in latest_client.items()},
+        channel_by_lead,
+    )
 
 
 async def _load_rufat_open_tasks(entity_ids: list[int]) -> list[dict]:
@@ -6270,6 +7452,60 @@ def _rufat_marker_name(task_text: str) -> str:
     }.get(match.group(1), match.group(1))
 
 
+async def _load_personal_funnel_contact_ids() -> set[int]:
+    """Contact IDs that already have a deal in Rüfət / Hüseyn / Rasim funnels."""
+    ids: set[int] = set()
+    for pid in employee_personal_pipeline_ids():
+        cached = _personal_overview_cache.get(int(pid))
+        deals = cached.get("deals") if isinstance(cached, dict) else None
+        if isinstance(deals, list) and deals:
+            for deal in deals:
+                if not isinstance(deal, dict):
+                    continue
+                for row in deal.get("contacts") or []:
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        ids.add(int(row.get("id")))
+                    except (TypeError, ValueError):
+                        continue
+            continue
+        page = 1
+        while True:
+            try:
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    params={
+                        "filter[pipeline_id]": int(pid),
+                        "with": "contacts",
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            except Exception as exc:
+                logger.warning("Personal funnel %s page %s unavailable: %s", pid, page, exc)
+                break
+            if response.status_code == 204:
+                break
+            if response.status_code != 200:
+                logger.warning("Personal funnel %s page %s failed: %s", pid, page, response.status_code)
+                break
+            batch = response.json().get("_embedded", {}).get("leads", []) or []
+            for lead in batch:
+                if not isinstance(lead, dict):
+                    continue
+                for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
+                    try:
+                        ids.add(int(contact.get("id")))
+                    except (TypeError, ValueError):
+                        continue
+            if len(batch) < 250:
+                break
+            page += 1
+    return ids
+
+
 async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: int | None = None) -> dict:
     """Load one personal Kommo funnel for local stage switching and task lists."""
     owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
@@ -6293,12 +7529,27 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
                     "limit": 250,
                     "page": page,
                 },
-                timeout=8,
+                timeout=12,
             )
             # Kommo can respond with 204 when a page beyond the last one is requested.
             if response.status_code == 204:
                 break
+            if response.status_code == 429:
+                await asyncio.sleep(1.5)
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    params={
+                        "filter[pipeline_id]": pipeline_id,
+                        "with": "contacts",
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            if response.status_code == 204:
+                break
             if response.status_code != 200:
+                logger.error("Rüfət leads fetch failed: %s body=%s", response.status_code, (response.text or "")[:200])
                 raise RuntimeError(f"Rüfət leads fetch failed: {response.status_code}")
             batch = response.json().get("_embedded", {}).get("leads", []) or []
             all_leads.extend(batch)
@@ -6308,6 +7559,23 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         return all_leads
 
     leads = await _load_all_rufat_leads()
+    if pipeline_id == int(NIZAMI_PIPELINE_ID):
+        hide_contacts = await _load_personal_funnel_contact_ids()
+        employee_pipelines = employee_personal_pipeline_ids()
+        filtered_leads = []
+        for lead in leads:
+            if _lead_pipeline_id(lead) in employee_pipelines:
+                continue
+            linked_ids = set()
+            for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
+                try:
+                    linked_ids.add(int(contact.get("id")))
+                except (TypeError, ValueError):
+                    continue
+            if hide_contacts and linked_ids & hide_contacts:
+                continue
+            filtered_leads.append(lead)
+        leads = filtered_leads
 
     status_to_key = {status_id: key for key, status_id in funnel_stages.items()}
     stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in funnel_stages}
@@ -6377,17 +7645,21 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             status_id = int(lead.get("status_id", 0) or 0)
         except (TypeError, ValueError):
             status_id = 0
+        source = extract_menbe(contact) or extract_menbe(lead)
         deals.append({
             "id": lead_id,
+            "pipeline_id": pipeline_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
             "contacts": contact_rows,
+            "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
-            "last_note": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "", "last_client_message": "", "chat_channel": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
+    attach_utm_and_partner(deals, lead_by_id, contacts)
     deals.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
     deals_by_stage = {key: [] for key in funnel_stages}
     for deal in deals:
@@ -6417,13 +7689,15 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
         task = related_tasks[0] if related_tasks else {}
         deadline_ts = int(task.get("complete_till", 0) or 0)
         deal["last_note"] = note_by_lead.get(lead_id, "")
+        deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
+        deal["chat_channel"] = channel_by_lead.get(lead_id, "")
         deal["task_desc"] = task.get("text", "")
         deal["deadline_ts"] = deadline_ts
         deal["deadline"] = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
@@ -6434,14 +7708,15 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "deadline": datetime.fromtimestamp(int(related.get("complete_till", 0) or 0), tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if related.get("complete_till") else "",
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
+    _apply_cloud_inbox_to_deals(deals)
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
     reminder_tasks: list[dict] = []
     task_type_names = {
         1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
-        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt.",
+        3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv",
+        4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv",
     }
     for task in _rufat_tasks:
         try:
@@ -6484,6 +7759,12 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "is_overdue": is_overdue, "entity_id": entity_id, "entity_type": entity_type,
             "lead_id": lead_id, "lead_name": lead.get("name", ""),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": phones,
+            "partner": (deal or {}).get("partner") or "",
+            "utm": (deal or {}).get("utm") or (deal or {}).get("utm_tag") or "",
+            "utm_tag": (deal or {}).get("utm_tag") or (deal or {}).get("utm") or "",
+            "source": (deal or {}).get("utm") or (deal or {}).get("source") or "",
+            "menbe": (deal or {}).get("utm") or (deal or {}).get("menbe") or "",
+            "chat_channel": (deal or {}).get("chat_channel") or "",
             "responsible": owner_name, "assigneeName": owner_name, "assignee_name": owner_name,
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}", "complete_till": deadline_ts,
             "task_type_name": task_type_names.get(task_type_id, ""), "task_type_id": task_type_id,
@@ -6503,13 +7784,14 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         "ui_stages": owner.get("ui_stages") or [(key, funnel_names.get(sid, key)) for key, sid in funnel_stages.items()],
         "pipeline_id": pipeline_id,
         "funnel_owner": owner_name,
+        "partners": get_partner_list_for_chat(owner.get("chat_id")),
     }
 
 
 _rufat_overview_lock = asyncio.Lock()
 _personal_overview_cache: dict[int, dict] = {}
 _personal_overview_cache_at: dict[int, float] = {}
-_RUFAT_OVERVIEW_CACHE_TTL = 90.0
+_RUFAT_OVERVIEW_CACHE_TTL = 30.0
 
 
 def invalidate_rufat_overview_cache() -> None:
@@ -6576,11 +7858,25 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
         if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
-            return cached
-        overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
-        _personal_overview_cache[pipeline_id] = overview
-        _personal_overview_cache_at[pipeline_id] = now
-        return overview
+            _apply_cloud_inbox_to_deals(cached.get("deals") or [])
+            return _overview_with_partners(cached, owner)
+        try:
+            overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
+            _personal_overview_cache[pipeline_id] = overview
+            _personal_overview_cache_at[pipeline_id] = now
+            return _overview_with_partners(overview, owner)
+        except Exception as exc:
+            logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
+            if cached is not None:
+                _apply_cloud_inbox_to_deals(cached.get("deals") or [])
+                return _overview_with_partners(cached, owner)
+            raise
+
+
+def _overview_with_partners(overview: dict, owner: dict) -> dict:
+    payload = dict(overview or {})
+    payload["partners"] = get_partner_list_for_chat((owner or {}).get("chat_id"))
+    return payload
 
 
 _DEAL_SHARE_TTL_SEC = 30 * 24 * 3600
@@ -6598,7 +7894,8 @@ def make_deal_share_token(lead_id: int) -> str:
 
 
 def parse_deal_share_token(token: str) -> int | None:
-    parts = str(token or "").strip().split(".")
+    raw = unquote(str(token or "")).strip().strip("\"'").rstrip("/").rstrip(".,)")
+    parts = raw.split(".")
     if len(parts) != 3:
         return None
     lead_s, exp_s, digest = parts
@@ -6617,14 +7914,14 @@ def parse_deal_share_token(token: str) -> int | None:
 
 
 def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
+    if is_admin(chat_id):
+        return True
     try:
         pipeline_id = int(lead.get("pipeline_id") or 0)
     except (TypeError, ValueError):
         return False
     if pipeline_id not in all_personal_pipeline_ids():
         return False
-    if is_admin(chat_id):
-        return True
     owner = get_funnel_owner(chat_id)
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
 
@@ -6725,7 +8022,7 @@ def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = 
     return "message" in ntype or ntype.startswith("sms")
 
 
-def _format_deal_note(note: dict) -> dict | None:
+def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
     if not isinstance(note, dict):
         return None
     ntype = str(note.get("note_type") or "common")
@@ -6768,6 +8065,8 @@ def _format_deal_note(note: dict) -> dict | None:
         message_type = "audio"
     return {
         "id": note.get("id"),
+        "entity_id": note.get("entity_id") or None,
+        "entity_type": "contacts" if str(entity_type or "").startswith("contact") else "leads",
         "type": ntype,
         "text": text,
         "created_at": created,
@@ -6777,6 +8076,9 @@ def _format_deal_note(note: dict) -> dict | None:
         "file_name": file_name,
         "message_type": message_type,
         "is_chat": is_chat,
+        "incoming": _note_is_incoming(ntype),
+        "channel": _note_channel_key(note) or "",
+        "author": KOMMO_USERS.get(note.get("created_by") or note.get("responsible_user_id"), "") or "",
     }
 
 
@@ -6802,7 +8104,7 @@ def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 3) -> lis
         if not notes:
             break
         for note in notes:
-            formatted = _format_deal_note(note)
+            formatted = _format_deal_note(note, entity_type)
             if formatted:
                 rows.append(formatted)
         if len(notes) < 250:
@@ -6879,9 +8181,1280 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
     return list(talks.values())
 
 
-def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool]:
+def _talk_is_open(talk: dict) -> bool:
+    if not isinstance(talk, dict):
+        return False
+    if talk.get("is_closed") in {True, 1, "1", "true", "True"}:
+        return False
+    if talk.get("closed_at"):
+        return False
+    status = str(talk.get("status") or "").lower()
+    if status in {"2", "closed"}:
+        return False
+    return True
+
+
+NIZAMI_WHATSAPP_NUMBER = "994502072240"
+CHAT_CHANNEL_LABELS = {
+    "whatsapp": "WhatsApp",
+    "instagram": "Instagram",
+    "facebook": "Facebook",
+    "tiktok": "TikTok",
+}
+
+
+RUFAT_WHATSAPP_NUMBER = os.environ.get("RUFAT_WHATSAPP_NUMBER", "994102135105")
+# Kommo keeps both WhatsApp Lite numbers behind one channel and never tells the
+# API which number owns a talk, so the sender number follows the Telegram user.
+WA_SENDER_NUMBERS = {
+    RUFAT_CHAT_ID: RUFAT_WHATSAPP_NUMBER,
+    **{cid: RUFAT_WHATSAPP_NUMBER for cid in RUFAT_COMPAT_CHAT_IDS},
+}
+
+
+def _wa_sender_digits_for_chat(chat_id) -> str:
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return NIZAMI_WHATSAPP_NUMBER
+    mapped = WA_SENDER_NUMBERS.get(cid)
+    if mapped:
+        return re.sub(r"\D", "", str(mapped))
+    # Everyone except Rüfət writes through the shared WhatsApp Lite number.
+    return NIZAMI_WHATSAPP_NUMBER
+
+
+def _known_wa_sender_digits() -> set[str]:
+    return {
+        re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER)),
+        re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER)),
+    }
+
+
+def _hinted_wa_sender_digits(chat_id, hinted) -> str:
+    default = _wa_sender_digits_for_chat(chat_id)
+    wanted = re.sub(r"\D", "", str(hinted or ""))
+    if not wanted or wanted not in _known_wa_sender_digits():
+        return default
+    rufat_digits = re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
+    if wanted != rufat_digits:
+        return wanted
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return default
+    if is_admin(cid) or cid in RUFAT_COMPAT_CHAT_IDS:
+        return wanted
+    return default
+
+
+def _wa_display_number(digits: str) -> str:
+    clean = re.sub(r"\D", "", str(digits or ""))
+    return f"+{clean}" if len(clean) >= 8 else ""
+
+
+def _talk_blob(talk: dict) -> str:
+    try:
+        return json.dumps(talk, ensure_ascii=False).lower()
+    except Exception:
+        return str(talk or "").lower()
+
+
+def _talk_has_digits(talk: dict, digits: str) -> bool:
+    wanted = re.sub(r"\D", "", str(digits or ""))
+    if len(wanted) < 8:
+        return False
+    blob = re.sub(r"\D", "", _talk_blob(talk))
+    return wanted in blob or wanted[-9:] in blob
+
+
+def _join_channel_fields(*parts) -> str:
+    return " ".join(str(part or "").strip() for part in parts if str(part or "").strip()).lower()
+
+
+def _origin_channel_key(blob: str) -> str:
+    text = str(blob or "").lower()
+    if not text.strip():
+        return ""
+    if "tiktok" in text or "tik tok" in text:
+        return "tiktok"
+    if "instagram" in text:
+        return "instagram"
+    if "facebook" in text or "fb messenger" in text:
+        return "facebook"
+    if any(token in text for token in ("whatsapp", "waba", "whats app", "whats-app")):
+        return "whatsapp"
+    return ""
+
+
+def _talk_channel_key(talk: dict) -> str:
+    chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
+    origin = " ".join(
+        str(part or "")
+        for part in (
+            talk.get("origin"),
+            talk.get("source"),
+            chat.get("type"),
+            chat.get("origin"),
+            talk.get("entity_type"),
+        )
+    ).strip().lower()
+    key = _origin_channel_key(origin)
+    if key:
+        return key
+    return "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
+
+
+def _note_is_incoming(note_type: str) -> bool:
+    text = str(note_type or "").lower()
+    if "outgoing" in text or text in {"sms_out", "call_out"}:
+        return False
+    return "incoming" in text or text in {"sms_in", "call_in"}
+
+
+def _note_channel_key(note: dict | None) -> str:
+    data = note if isinstance(note, dict) else {}
+    note_type = str(data.get("note_type") or data.get("type") or "").lower()
+    if note_type in {"sms_in", "sms_out", "amomail_message"}:
+        return ""
+    params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    blob = _join_channel_fields(
+        note_type,
+        params.get("service"),
+        params.get("origin"),
+        params.get("source"),
+        params.get("messenger"),
+        params.get("type"),
+        params.get("provider"),
+        params.get("waba"),
+    )
+    key = _origin_channel_key(blob)
+    if key:
+        return key
+    if note_type in {"incoming_chat_message", "outgoing_chat_message"}:
+        return "whatsapp"
+    return ""
+
+
+def _talk_reply_rank(talk: dict) -> tuple:
+    channel = _talk_channel_key(talk)
+    wa = 1 if channel == "whatsapp" else 0
+    opened = 1 if _talk_is_open(talk) else 0
+    try:
+        updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    return (opened, wa, updated)
+
+
+def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for talk in talks or []:
+        key = _talk_channel_key(talk)
+        if key not in CHAT_CHANNEL_LABELS:
+            continue
+        grouped.setdefault(key, []).append(talk)
+    rows = []
+    order = ["whatsapp", "instagram", "facebook", "tiktok"]
+    for key in order:
+        group = grouped.get(key) or []
+        if not group:
+            continue
+        if key == "whatsapp" and sender_digits:
+            matched = [talk for talk in group if _talk_has_digits(talk, sender_digits)]
+            if matched:
+                group = matched
+        group.sort(key=_talk_reply_rank, reverse=True)
+        talk = group[0]
+        rows.append({
+            "key": key,
+            "label": CHAT_CHANNEL_LABELS[key],
+            "talk_id": _talk_id_of(talk),
+            "chat_id": str(talk.get("chat_id") or ""),
+            "open": _talk_is_open(talk),
+            "sender_phone": _wa_display_number(sender_digits) if key == "whatsapp" else "",
+        })
+    return rows
+
+
+def _talk_id_of(talk: dict) -> int:
+    try:
+        return int(talk.get("talk_id") or talk.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ranked_reply_talk_ids(talks: list[dict]) -> list[int]:
+    ranked = []
+    seen: set[int] = set()
+    for talk in talks or []:
+        talk_id = _talk_id_of(talk)
+        if not talk_id or talk_id in seen:
+            continue
+        seen.add(talk_id)
+        ranked.append((_talk_reply_rank(talk), talk_id))
+    ranked.sort(reverse=True)
+    return [item[1] for item in ranked]
+
+
+def _kommo_error_detail(resp) -> str:
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {}
+    if isinstance(payload, dict):
+        # "Request validation failed" alone says nothing; keep the field paths.
+        fields = []
+        for group in payload.get("validation-errors") or []:
+            for err in (group or {}).get("errors") or []:
+                path = str((err or {}).get("path") or "").strip()
+                text = str((err or {}).get("detail") or (err or {}).get("code") or "").strip()
+                fields.append(f"{path}: {text}".strip(": "))
+        detail = str(payload.get("detail") or payload.get("title") or payload.get("error") or "").strip()
+        if fields:
+            return f"{detail} — {'; '.join(fields)}".strip(" —")[:240]
+        if detail:
+            return detail
+    return (resp.text or "")[:240]
+
+
+def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
+    try:
+        hinted_id = int(hinted or 0)
+    except (TypeError, ValueError):
+        hinted_id = 0
+    if hinted_id:
+        return hinted_id
+    try:
+        lid = int(lead.get("id") or 0)
+    except (TypeError, ValueError):
+        lid = 0
+    talks = _fetch_talks(lid, _lead_contact_ids(lead))
+    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
+    channels = _channels_from_talks(talks, sender_digits)
+    talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    if talk_id:
+        return talk_id
+    ranked = _ranked_reply_talk_ids(talks)
+    return int(ranked[0]) if ranked else 0
+
+
+def _send_kommo_talk_message(
+    talk_id: int,
+    text: str,
+    attachment: dict | None = None,
+) -> tuple[bool, str, int]:
+    # Kommo send_message accepts only text plus a file/video/picture attachment and
+    # bills every call against the Chats API quota, so each message is one request.
+    url = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
+    payload: dict = {}
+    if text:
+        payload["text"] = text
+    if attachment:
+        payload["attachment"] = attachment
+    if not payload:
+        return False, "Mesaj boş ola bilməz", 0
+    try:
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
+    except Exception as exc:
+        logger.warning("Talk send failed: %s", exc)
+        return False, "Kommo çata göndərmək alınmadı.", 0
+    if resp.status_code in {200, 202}:
+        return True, "", resp.status_code
+    detail = _kommo_error_detail(resp)
+    logger.warning("Talk send status %s: %s", resp.status_code, detail)
+    if resp.status_code == 403:
+        return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", resp.status_code
+    if resp.status_code == 422:
+        return False, "Çat bağlıdır. Kommo-da söhbəti açın.", resp.status_code
+    if resp.status_code == 402:
+        return False, "Kommo Chat API limiti bitib.", resp.status_code
+    return False, detail or "Mesaj göndərilmədi.", resp.status_code
+
+
+def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
+    return _send_kommo_talk_message(talk_id, text)
+
+
+_DRIVE_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _is_drive_uuid(value: str) -> bool:
+    return bool(_DRIVE_UUID_RE.fullmatch(str(value or "").strip()))
+
+
+def _drive_uuids_from_payload(payload: dict | None) -> tuple[str, str]:
+    data = payload if isinstance(payload, dict) else {}
+    file_uuid = str(data.get("uuid") or "").strip()
+    version_uuid = str(data.get("version_uuid") or data.get("file_version_uuid") or "").strip()
+    links = data.get("_links") or {}
+    self_href = str(((links.get("self") or {}).get("href")) or "")
+    version_href = str(((links.get("download_version") or {}).get("href")) or "")
+    download_href = str(((links.get("download") or {}).get("href")) or "")
+    self_ids = _DRIVE_UUID_RE.findall(self_href)
+    version_ids = _DRIVE_UUID_RE.findall(version_href)
+    download_ids = _DRIVE_UUID_RE.findall(download_href)
+    if not _is_drive_uuid(file_uuid) and self_ids:
+        file_uuid = self_ids[-1]
+    if not _is_drive_uuid(file_uuid) and download_ids:
+        file_uuid = download_ids[-1]
+    if not _is_drive_uuid(version_uuid) and version_ids:
+        version_uuid = version_ids[-1]
+    if not _is_drive_uuid(file_uuid) or not _is_drive_uuid(version_uuid):
+        logger.warning("Drive upload missing UUIDs keys=%s version=%r", list(data.keys()), version_uuid)
+        return "", ""
+    return file_uuid, version_uuid
+
+
+def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) -> tuple[str, str]:
+    file_size = len(content or b"")
+    if file_size <= 0:
+        return "", ""
+    auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+    drive_url = "https://drive-g.kommo.com"
+    sess_resp = requests.post(
+        f"{drive_url}/v1.0/sessions",
+        headers={**auth_h, "Content-Type": "application/json"},
+        json={"file_name": filename, "file_size": file_size, "content_type": content_type or "application/octet-stream"},
+        timeout=12,
+    )
+    if sess_resp.status_code != 200:
+        logger.warning("Drive session failed: %s %s", sess_resp.status_code, sess_resp.text[:400])
+        return "", ""
+    sess_data = sess_resp.json()
+    upload_url = sess_data.get("upload_url")
+    max_part = int(sess_data.get("max_part_size") or 524288)
+    offset = 0
+    file_uuid = ""
+    version_uuid = ""
+    while offset < file_size:
+        chunk = content[offset:offset + max_part]
+        up_resp = requests.post(
+            upload_url,
+            headers={**auth_h, "Content-Type": "application/octet-stream"},
+            data=chunk,
+            timeout=20,
+        )
+        if up_resp.status_code != 200:
+            logger.warning("Drive upload failed: %s %s", up_resp.status_code, up_resp.text[:400])
+            return "", ""
+        up_data = up_resp.json() if up_resp.content else {}
+        if up_data.get("next_url"):
+            upload_url = up_data["next_url"]
+        parsed = _drive_uuids_from_payload(up_data)
+        if parsed[0] and parsed[1]:
+            file_uuid, version_uuid = parsed
+        offset += max_part
+    if not _is_drive_uuid(file_uuid) or not _is_drive_uuid(version_uuid):
+        logger.warning("Drive upload finished without UUIDs file=%r version=%r", file_uuid, version_uuid)
+        return "", ""
+    return file_uuid, version_uuid
+
+
+def _normalize_wa_number(phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith("0"):
+        digits = "994" + digits[1:]
+    return digits
+
+
+WA_CLOUD_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
+# Only the number that was migrated to the official WhatsApp Business Platform
+# goes through Cloud API; the rest keep using the Kommo chat integration.
+WA_CLOUD_SENDER_DIGITS = re.sub(r"\D", "", os.environ.get("WHATSAPP_CLOUD_SENDER", RUFAT_WHATSAPP_NUMBER))
+WA_VERIFY_TOKEN = str(
+    os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
+    or os.environ.get("WHATSAPP_VERIFY_TOKEN")
+    or "beintaskbot_webhook_verify_2026"
+).strip()
+WA_VERIFY_TOKENS = {
+    token for token in (
+        WA_VERIFY_TOKEN,
+        "beintaskbot_webhook_verify_2026",
+        "bein-wa-hook",
+    ) if token
+}
+
+
+def _wa_cloud_credentials() -> tuple[str, str]:
+    token = os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or ""
+    phone_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID") or ""
+    return str(token).strip(), str(phone_id).strip()
+
+
+def _wa_cloud_ready(sender_digits: str = "") -> bool:
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return False
+    wanted = re.sub(r"\D", "", str(sender_digits or ""))
+    if not wanted or not WA_CLOUD_SENDER_DIGITS:
+        return True
+    return wanted == WA_CLOUD_SENDER_DIGITS
+
+
+_WA_CLOUD_ERRORS = {
+    131047: "24 saatlıq pəncərə bağlıdır. Müştəri yazana qədər yalnız şablon göndərilə bilər.",
+    131026: "Nömrə WhatsApp mesajını qəbul etmir.",
+    131051: "Bu mesaj tipi WhatsApp-da dəstəklənmir.",
+    131052: "Fayl WhatsApp tərəfindən qəbul edilmədi.",
+    133010: "WhatsApp nömrəsi qeydiyyatdan keçməyib.",
+    190: "WhatsApp tokeni etibarsızdır. Yenilə.",
+    368: "WhatsApp nömrəsi müvəqqəti bloklanıb.",
+    80007: "WhatsApp limiti aşıldı, bir az sonra yenidən yoxla.",
+}
+
+
+def _wa_cloud_error_text(resp) -> str:
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return str(getattr(resp, "text", ""))[:240]
+    error = payload.get("error") if isinstance(payload, dict) else {}
+    if isinstance(error, dict):
+        try:
+            code = int(error.get("code") or 0)
+        except (TypeError, ValueError):
+            code = 0
+        friendly = _WA_CLOUD_ERRORS.get(code)
+        if friendly:
+            return friendly
+        detail = str(error.get("error_user_msg") or error.get("message") or "").strip()
+        if detail:
+            return detail[:240]
+    return str(getattr(resp, "text", ""))[:240]
+
+
+def _wa_cloud_post(body: dict) -> tuple[bool, str, str]:
+    """POST to the Cloud API messages endpoint; returns ok, error and wamid."""
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return False, "WhatsApp Cloud API konfiqurasiya olunmayıb.", ""
+    url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/messages"
+    try:
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"messaging_product": "whatsapp", **body},
+            timeout=20,
+        )
+    except Exception as exc:
+        logger.warning("WhatsApp Cloud send failed: %s", exc)
+        return False, "WhatsApp API xətası.", ""
+    if resp.status_code in {200, 201}:
+        try:
+            payload = resp.json() or {}
+        except Exception:
+            payload = {}
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        wamid = ""
+        if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+            wamid = str(messages[0].get("id") or "")
+        return True, "", wamid
+    detail = _wa_cloud_error_text(resp)
+    logger.warning("WhatsApp Cloud status %s: %s", resp.status_code, detail)
+    return False, detail or "WhatsApp mesajı göndərilmədi.", ""
+
+
+def _wa_cloud_upload_media(content: bytes, filename: str, mime: str) -> tuple[str, str]:
+    """Upload media to Cloud API and return its media id."""
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return "", "WhatsApp Cloud API konfiqurasiya olunmayıb."
+    url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/media"
+    try:
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            data={"messaging_product": "whatsapp", "type": mime},
+            files={"file": (filename or "file", content, mime or "application/octet-stream")},
+            timeout=60,
+        )
+    except Exception as exc:
+        logger.warning("WhatsApp Cloud media upload failed: %s", exc)
+        return "", "Fayl WhatsApp-a yüklənmədi."
+    if resp.status_code in {200, 201}:
+        try:
+            media_id = str(((resp.json() or {}).get("id")) or "")
+        except Exception:
+            media_id = ""
+        if media_id:
+            return media_id, ""
+    detail = _wa_cloud_error_text(resp)
+    logger.warning("WhatsApp Cloud media status %s: %s", resp.status_code, detail)
+    return "", detail or "Fayl WhatsApp-a yüklənmədi."
+
+
+def _ffmpeg_to_voice_ogg(raw: bytes, filename: str) -> bytes:
+    """Convert a browser recording to mono Ogg/Opus, the only voice note format."""
+    suffix = os.path.splitext(str(filename or ""))[1] or ".webm"
+    src_path = ""
+    dst_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        dst_path = src_path + ".ogg"
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", dst_path,
+            ],
+            capture_output=True,
+            timeout=90,
+        )
+        if result.returncode != 0:
+            logger.warning("ffmpeg voice convert failed: %s", (result.stderr or b"")[:240])
+            return b""
+        with open(dst_path, "rb") as handle:
+            return handle.read()
+    except Exception as exc:
+        logger.warning("ffmpeg voice convert error: %s", exc)
+        return b""
+    finally:
+        for path in (src_path, dst_path):
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+
+def _wa_cloud_media_kind(filename: str, content_type: str) -> str:
+    name = f"{filename} {content_type}".lower()
+    if str(content_type or "").startswith("image/") or re.search(r"\.(png|jpe?g|webp)$", name):
+        return "image"
+    if str(content_type or "").startswith("video/") or re.search(r"\.(mp4|mov|3gp)$", name):
+        return "video"
+    if _looks_voice_upload(filename, content_type):
+        return "audio"
+    return "document"
+
+
+def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı.", ""
+    body: dict = {"recipient_type": "individual", "to": to, "type": "text",
+                  "text": {"body": text, "preview_url": True}}
+    quoted = str(reply_to or "").strip()
+    if quoted:
+        body["context"] = {"message_id": quoted}
+    return _wa_cloud_post(body)
+
+
+def _wa_cloud_send_media(
+    phone: str,
+    kind: str,
+    media_id: str,
+    *,
+    caption: str = "",
+    filename: str = "",
+    reply_to: str = "",
+    voice: bool = False,
+) -> tuple[bool, str, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı.", ""
+    media: dict = {"id": media_id}
+    if kind == "audio" and voice:
+        media["voice"] = True
+    if kind in {"image", "video", "document"} and caption:
+        media["caption"] = caption
+    if kind == "document" and filename:
+        media["filename"] = filename
+    body: dict = {"recipient_type": "individual", "to": to, "type": kind, kind: media}
+    quoted = str(reply_to or "").strip()
+    if quoted:
+        body["context"] = {"message_id": quoted}
+    return _wa_cloud_post(body)
+
+
+def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str) -> tuple[bool, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı."
+    ok, error, _wamid = _wa_cloud_post({
+        "recipient_type": "individual",
+        "to": to,
+        "type": "reaction",
+        # An empty emoji removes the reaction.
+        "reaction": {"message_id": str(wamid or ""), "emoji": str(emoji or "")},
+    })
+    return ok, error
+
+
+def _wa_cloud_mark_read(wamid: str, typing: bool = False) -> bool:
+    body: dict = {"status": "read", "message_id": str(wamid or "")}
+    if typing:
+        body["typing_indicator"] = {"type": "text"}
+    ok, _error, _wamid = _wa_cloud_post(body)
+    return ok
+
+
+def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return False, ""
+    ok, error, _wamid = _wa_cloud_send_text(phone, text, reply_to)
+    return ok, error
+
+
+_WA_SENT_FILE = "wa_sent_messages.json"
+_wa_sent_messages: dict | None = None
+_WA_SENT_PER_LEAD = 300
+_wa_sent_lock = threading.Lock()
+_wa_sent_save_timer: threading.Timer | None = None
+
+
+def _load_sent_messages() -> dict:
+    """Load the Cloud API send log lazily so GitHub I/O cannot block startup."""
+    global _wa_sent_messages
+    if _wa_sent_messages is None:
+        try:
+            data = read_json(_WA_SENT_FILE) or {}
+        except Exception as exc:
+            logger.warning("Sent message store load failed: %s", exc)
+            data = {}
+        with _wa_sent_lock:
+            if _wa_sent_messages is None:
+                _wa_sent_messages = data if isinstance(data, dict) else {}
+    return _wa_sent_messages
+
+
+def _flush_sent_messages() -> None:
+    global _wa_sent_save_timer
+    with _wa_sent_lock:
+        _wa_sent_save_timer = None
+        snapshot = json.loads(json.dumps(_load_sent_messages(), ensure_ascii=False))
+    try:
+        write_json(_WA_SENT_FILE, snapshot)
+    except Exception as exc:
+        logger.warning("Sent message store failed: %s", exc)
+
+
+def _schedule_sent_messages_save() -> None:
+    """Persist in the background; every write_json is a commit on the data branch."""
+    global _wa_sent_save_timer
+    with _wa_sent_lock:
+        if _wa_sent_save_timer is not None:
+            return
+        timer = threading.Timer(5.0, _flush_sent_messages)
+        timer.daemon = True
+        _wa_sent_save_timer = timer
+    timer.start()
+
+
+def _remember_sent_message(lead_id: int, item: dict) -> None:
+    """Keep messages we sent through Cloud API; Kommo does not mirror them back."""
+    key = str(int(lead_id or 0))
+    if key == "0" or not isinstance(item, dict):
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        rows = store.get(key)
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(item)
+        store[key] = rows[-_WA_SENT_PER_LEAD:]
+    _schedule_sent_messages_save()
+
+
+def _sent_messages_for_lead(lead_id: int) -> list[dict]:
+    try:
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            rows = store.get(str(int(lead_id or 0)))
+            if not isinstance(rows, list):
+                return []
+            return [dict(row) for row in rows if isinstance(row, dict)]
+    except Exception as exc:
+        logger.warning("Sent message read failed: %s", exc)
+        return []
+
+
+_WA_REACTIONS_KEY = "reactions"
+
+
+def _remember_reaction(lead_id: int, wamid: str, emoji: str) -> None:
+    """Reactions we send are not echoed back, so keep them for the chat view."""
+    key = str(int(lead_id or 0))
+    target = str(wamid or "")
+    if key == "0" or not target:
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        bucket = store.get(_WA_REACTIONS_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            store[_WA_REACTIONS_KEY] = bucket
+        rows = bucket.get(key)
+        if not isinstance(rows, dict):
+            rows = {}
+            bucket[key] = rows
+        if emoji:
+            rows[target] = str(emoji)
+        else:
+            rows.pop(target, None)
+    _schedule_sent_messages_save()
+
+
+def _reactions_for_lead(lead_id: int) -> dict:
+    try:
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            bucket = store.get(_WA_REACTIONS_KEY)
+            if not isinstance(bucket, dict):
+                return {}
+            rows = bucket.get(str(int(lead_id or 0)))
+            return dict(rows) if isinstance(rows, dict) else {}
+    except Exception as exc:
+        logger.warning("Reaction store read failed: %s", exc)
+        return {}
+
+
+def _update_sent_message(lead_id: int, wamid: str, **fields) -> None:
+    wanted = str(wamid or "")
+    changed = False
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        rows = store.get(str(int(lead_id or 0)))
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
+                    row.update(fields)
+                    changed = True
+                    break
+    if changed:
+        _schedule_sent_messages_save()
+
+
+def _sent_message_item(
+    *,
+    wamid: str,
+    text: str,
+    author: str,
+    channel: str = "whatsapp",
+    message_type: str = "text",
+    file_uuid: str = "",
+    file_name: str = "",
+    reply_id: str = "",
+    reply_text: str = "",
+    reply_author: str = "",
+    incoming: bool = False,
+    created_at: int = 0,
+) -> dict:
+    created = int(created_at or _time_module.time())
+    return {
+        "id": f"wa-{wamid or uuid.uuid4().hex}",
+        "external_id": str(wamid or ""),
+        "direction": "incoming" if incoming else "outgoing",
+        "incoming": bool(incoming),
+        "author": author or "",
+        "text": text or "",
+        "message_type": message_type,
+        "created_at": created,
+        "created": _deal_fmt_ts(created),
+        "origin": channel,
+        "channel": channel,
+        "reply_to_message_id": str(reply_id or ""),
+        "reply_to_text": str(reply_text or "")[:200],
+        "reply_to_author": str(reply_author or "")[:80],
+        "media_url": "",
+        "file_uuid": str(file_uuid or ""),
+        "file_name": str(file_name or ""),
+        "delivery_status": "" if incoming else "sent",
+        "via_cloud": True,
+    }
+
+
+_WA_PHONE_LEADS_KEY = "_phone_leads"
+
+
+def _wa_phone_key(phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("994") and len(digits) >= 12:
+        return digits[:12]
+    if digits.startswith("0") and len(digits) == 10:
+        return "994" + digits[1:]
+    if len(digits) == 9:
+        return "994" + digits
+    return digits
+
+
+def _remember_phone_lead(phone: str, lead_id: int) -> None:
+    key = _wa_phone_key(phone)
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not key or not lid:
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if not isinstance(idx, dict):
+            idx = {}
+            store[_WA_PHONE_LEADS_KEY] = idx
+        idx[key] = lid
+    _schedule_sent_messages_save()
+
+
+def _lead_id_for_stored_phone(phone: str) -> int:
+    key = _wa_phone_key(phone)
+    if not key:
+        return 0
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if not isinstance(idx, dict):
+            return 0
+        try:
+            return int(idx.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+
+def _cloud_last_for_lead(lead_id: int) -> tuple[str, int, bool]:
+    rows = _sent_messages_for_lead(lead_id)
+    if not rows:
+        return "", 0, False
+    incoming = [row for row in rows if row.get("incoming")]
+    newest = max(rows, key=lambda row: int(row.get("created_at") or 0))
+    preview_src = max(incoming, key=lambda row: int(row.get("created_at") or 0)) if incoming else newest
+    return str(preview_src.get("text") or "").strip(), int(newest.get("created_at") or 0), True
+
+
+def _apply_cloud_inbox_to_deals(deals: list) -> None:
+    if not isinstance(deals, list):
+        return
+    for deal in deals:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lid = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        preview, ts, has = _cloud_last_for_lead(lid)
+        if not has:
+            continue
+        incoming = [row for row in _sent_messages_for_lead(lid) if row.get("incoming")]
+        if incoming:
+            last_in = max(incoming, key=lambda row: int(row.get("created_at") or 0))
+            text = str(last_in.get("text") or "").strip()
+            if text:
+                deal["last_client_message"] = text[:140]
+        elif preview and not str(deal.get("last_client_message") or "").strip():
+            deal["last_client_message"] = preview[:140]
+        if not str(deal.get("chat_channel") or "").strip():
+            deal["chat_channel"] = "whatsapp"
+        try:
+            current = int(deal.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        if ts > current:
+            deal["updated_at"] = ts
+
+
+def _wa_incoming_preview(message: dict) -> tuple[str, str]:
+    kind = str((message or {}).get("type") or "text").lower()
+    if kind == "text":
+        return str(((message.get("text") or {}) if isinstance(message.get("text"), dict) else {}).get("body") or "").strip(), "text"
+    if kind == "image":
+        cap = str(((message.get("image") or {}) if isinstance(message.get("image"), dict) else {}).get("caption") or "").strip()
+        return cap or "📷 Şəkil", "picture"
+    if kind in {"audio", "voice"}:
+        return VOICE_CAPTION_TEXT, "audio"
+    if kind == "video":
+        cap = str(((message.get("video") or {}) if isinstance(message.get("video"), dict) else {}).get("caption") or "").strip()
+        return cap or "🎬 Video", "video"
+    if kind == "document":
+        name = str(((message.get("document") or {}) if isinstance(message.get("document"), dict) else {}).get("filename") or "").strip()
+        return name or "📎 Fayl", "file"
+    if kind == "sticker":
+        return "Sticker", "sticker"
+    if kind == "location":
+        return "📍 Məkan", "text"
+    if kind in {"contacts", "contact"}:
+        return "👤 Kontakt", "text"
+    if kind == "button":
+        text = str(((message.get("button") or {}) if isinstance(message.get("button"), dict) else {}).get("text") or "").strip()
+        return text or "Düymə", "text"
+    if kind == "interactive":
+        return "Cavab", "text"
+    if kind == "reaction":
+        return "", "reaction"
+    return kind or "Mesaj", kind or "text"
+
+
+def _resolve_cloud_lead(phone: str, contact_name: str) -> int:
+    stored = _lead_id_for_stored_phone(phone)
+    if stored:
+        lead = get_lead_details(stored)
+        if lead:
+            return stored
+    contacts = search_contact_by_phone(phone)
+    name = str(contact_name or "").strip() or phone
+    contact_id = 0
+    if contacts:
+        try:
+            contact_id = int(contacts[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+    if contact_id:
+        full = get_contact_details(contact_id) or {}
+        name = str(full.get("name") or name).strip() or name
+        for linked in (full.get("_embedded") or {}).get("leads") or []:
+            if not isinstance(linked, dict):
+                continue
+            try:
+                lid = int(linked.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not lid:
+                continue
+            details = get_lead_details(lid) or linked
+            if _lead_pipeline_id(details) == int(RUFAT_PIPELINE_ID):
+                _remember_phone_lead(phone, lid)
+                return lid
+    if not contact_id:
+        created = create_contact_kommo(name, "+" + _wa_phone_key(phone) if _wa_phone_key(phone) else phone)
+        try:
+            contact_id = int(((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id") or 0)
+        except (TypeError, ValueError):
+            contact_id = 0
+    if not contact_id:
+        return 0
+    route = personal_entry_stage(int(RUFAT_PIPELINE_ID))
+    pipeline_id, status_id = route if route else (int(RUFAT_PIPELINE_ID), None)
+    lead_id = create_lead_for_contact(contact_id, name, pipeline_id, status_id)
+    if lead_id:
+        _remember_phone_lead(phone, int(lead_id))
+        try:
+            invalidate_rufat_overview_cache()
+        except Exception:
+            pass
+    return int(lead_id or 0)
+
+
+def _already_have_wamid(lead_id: int, wamid: str) -> bool:
+    wanted = str(wamid or "")
+    if not wanted:
+        return False
+    return any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id))
+
+
+def _update_cloud_status(wamid: str, status: str) -> None:
+    wanted = str(wamid or "")
+    mapped = {"sent": "sent", "delivered": "delivered", "read": "read", "failed": "failed"}.get(str(status or "").lower(), "")
+    if not wanted or not mapped:
+        return
+    store = _load_sent_messages()
+    changed = False
+    with _wa_sent_lock:
+        for key, rows in list(store.items()):
+            if key in {_WA_REACTIONS_KEY, _WA_PHONE_LEADS_KEY} or not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
+                    row["delivery_status"] = mapped
+                    changed = True
+                    break
+            if changed:
+                break
+    if changed:
+        _schedule_sent_messages_save()
+
+
+def _ingest_cloud_incoming(value: dict) -> None:
+    if not isinstance(value, dict):
+        return
+    contacts = {
+        str(row.get("wa_id") or ""): str(((row.get("profile") or {}) if isinstance(row.get("profile"), dict) else {}).get("name") or "")
+        for row in (value.get("contacts") or [])
+        if isinstance(row, dict)
+    }
+    for status in value.get("statuses") or []:
+        if isinstance(status, dict):
+            _update_cloud_status(status.get("id"), status.get("status"))
+    for message in value.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        wamid = str(message.get("id") or "")
+        phone = str(message.get("from") or "")
+        if not phone:
+            continue
+        preview, kind = _wa_incoming_preview(message)
+        if kind == "reaction":
+            continue
+        name = contacts.get(_wa_phone_key(phone)) or contacts.get(phone) or ""
+        try:
+            created = int(message.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        context = message.get("context") if isinstance(message.get("context"), dict) else {}
+        lead_id = _resolve_cloud_lead(phone, name)
+        if not lead_id:
+            logger.warning("WhatsApp incoming has no lead phone=%s", phone)
+            continue
+        if wamid and _already_have_wamid(lead_id, wamid):
+            continue
+        _remember_sent_message(lead_id, _sent_message_item(
+            wamid=wamid,
+            text=preview,
+            author=name,
+            message_type=kind,
+            incoming=True,
+            created_at=created,
+            reply_id=str(context.get("id") or ""),
+        ))
+        try:
+            invalidate_rufat_overview_cache()
+        except Exception:
+            pass
+        logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
+
+
+def _process_whatsapp_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        return
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            if str(change.get("field") or "") not in {"messages", ""}:
+                continue
+            value = change.get("value")
+            if isinstance(value, dict):
+                _ingest_cloud_incoming(value)
+
+
+def _chat_item_key(item: dict) -> tuple:
+    return (
+        str(item.get("id") or ""),
+        str(item.get("text") or ""),
+        int(item.get("created_at") or 0),
+        str(item.get("file_uuid") or ""),
+    )
+
+
+def _normalized_channel(key: str) -> str:
+    wanted = str(key or "").strip().lower()
+    return wanted if wanted in CHAT_CHANNEL_LABELS else "whatsapp"
+
+
+def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
+    """Turn a Kommo chat-note into the same shape as a talk message."""
+    if not isinstance(note, dict) or not note.get("is_chat"):
+        return None
+    incoming = bool(note.get("incoming"))
+    channel = _normalized_channel(note.get("channel"))
+    author = str(note.get("author") or "")
+    if incoming:
+        author = "" if _is_generic_chat_author(author) else author
+    elif channel == "whatsapp" or _is_generic_chat_author(author):
+        author = employee_name or author
+    return {
+        "id": note.get("id"),
+        "external_id": "",
+        "direction": "incoming" if incoming else "outgoing",
+        "incoming": incoming,
+        "author": author,
+        "text": str(note.get("text") or ""),
+        "message_type": note.get("message_type") or "text",
+        "created_at": int(note.get("created_at") or 0),
+        "created": note.get("created") or _deal_fmt_ts(note.get("created_at") or 0),
+        "origin": channel,
+        "channel": channel,
+        "reply_to_message_id": "",
+        "reply_to_text": "",
+        "reply_to_author": "",
+        "media_url": note.get("media_url") or "",
+        "file_uuid": note.get("file_uuid") or "",
+        "file_name": note.get("file_name") or "",
+        "delivery_status": "" if incoming else "sent",
+    }
+
+
+def _load_kommo_chat_fallback(lid: int, contact_ids: list[int], employee_name: str = "") -> list[dict]:
+    """When talks/messages is forbidden, Kommo still keeps the same history in notes and events."""
+    rows: list[dict] = []
+    for note in _fetch_entity_notes("leads", lid):
+        item = _chat_item_from_note(note, employee_name)
+        if item:
+            rows.append(item)
+    for contact_id in contact_ids:
+        for note in _fetch_entity_notes("contacts", int(contact_id)):
+            item = _chat_item_from_note(note, employee_name)
+            if item:
+                rows.append(item)
+    events, _skipped = _fetch_chat_events(lid, contact_ids)
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        item["channel"] = _normalized_channel(item.get("channel") or _origin_channel_key(str(item.get("origin") or "")))
+        if not item.get("incoming"):
+            author = str(item.get("author") or "")
+            if item["channel"] == "whatsapp" or _is_generic_chat_author(author):
+                item["author"] = employee_name or author
+        rows.append(item)
+    return rows
+
+
+def _collect_deal_chat(
+    lid: int,
+    contact_ids: list[int],
+    *,
+    limit: int = 20,
+    before: int = 0,
+    channel: str = "whatsapp",
+    sender_digits: str = "",
+    employee_name: str = "",
+    pages: int | None = None,
+) -> tuple[list[dict], bool, int, bool, list[dict], str]:
+    """Load a merged timeline from all messenger talks; channel is the send target."""
+    try:
+        limit = max(1, min(int(limit or 20), 50))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        before = int(before or 0)
+    except (TypeError, ValueError):
+        before = 0
+    try:
+        page_count = int(pages) if pages is not None else (3 if before else 1)
+    except (TypeError, ValueError):
+        page_count = 1
+    page_count = max(1, min(page_count, 5))
+    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
+    if wanted not in CHAT_CHANNEL_LABELS:
+        wanted = "whatsapp"
+    chat: list[dict] = []
+    seen_chat: set[tuple] = set()
+    chat_blocked = False
+
+    def _add_chat(item: dict | None) -> None:
+        if not item:
+            return
+        key = _chat_item_key(item)
+        if key in seen_chat:
+            return
+        seen_chat.add(key)
+        chat.append(item)
+
+    talks = _fetch_talks(lid, contact_ids)
+    channels = _channels_from_talks(talks, sender_digits)
+    if not channels:
+        ranked = _ranked_reply_talk_ids(talks)
+        if ranked:
+            fallback_talk = next((t for t in talks if _talk_id_of(t) == ranked[0]), {})
+            fallback_key = _talk_channel_key(fallback_talk)
+            if fallback_key not in CHAT_CHANNEL_LABELS:
+                fallback_key = "whatsapp"
+            channels = [{
+                "key": fallback_key,
+                "label": CHAT_CHANNEL_LABELS.get(fallback_key, "WhatsApp"),
+                "talk_id": ranked[0],
+                "open": True,
+                "sender_phone": _wa_display_number(sender_digits) if fallback_key == "whatsapp" else "",
+            }]
+    for row in channels:
+        if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
+            row["sender_phone"] = _wa_display_number(sender_digits)
+    reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    pages = page_count
+    page_limit = 20
+    talk_has_more = False
+    for row in channels:
+        talk_id = int(row.get("talk_id") or 0)
+        if not talk_id:
+            continue
+        channel_key = str(row.get("key") or wanted)
+        messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
+        if not messages:
+            chat_ref = str(row.get("chat_id") or "")
+            if not chat_ref:
+                source_talk = next((item for item in talks if _talk_id_of(item) == talk_id), {})
+                chat_ref = str((source_talk or {}).get("chat_id") or "")
+            if chat_ref:
+                messages = _fetch_chat_history_by_chat_id(chat_ref)
+                if messages:
+                    blocked = False
+        talk_has_more = talk_has_more or maybe_more
+        chat_blocked = chat_blocked or blocked
+        for message in messages:
+            formatted = _format_chat_message(message, channel_key)
+            if formatted:
+                formatted["channel"] = channel_key
+                formatted["talk_id"] = talk_id
+                if not formatted.get("incoming"):
+                    author = str(formatted.get("author") or "")
+                    if channel_key == "whatsapp" or _is_generic_chat_author(author):
+                        formatted["author"] = employee_name or author
+            _add_chat(formatted)
+    if not chat:
+        # v4/talks/{id}/messages needs the Chats API scope. Notes/events still
+        # hold WhatsApp, Instagram, TikTok and Facebook history from Kommo.
+        try:
+            for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
+                _add_chat(item)
+            if chat:
+                chat_blocked = False
+        except Exception as exc:
+            logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
+    # Cloud API sends are not returned by Kommo talks, so replay our own log and
+    # drop the copies Kommo did mirror back.
+    known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
+    outgoing_seen = [
+        (str(item.get("text") or ""), int(item.get("created_at") or 0))
+        for item in chat
+        if not item.get("incoming")
+    ]
+    for item in _sent_messages_for_lead(lid):
+        external = str(item.get("external_id") or "")
+        if external and external in known_external:
+            continue
+        text = str(item.get("text") or "")
+        created = int(item.get("created_at") or 0)
+        if text and any(
+            text == other_text and abs(created - other_created) <= 180
+            for other_text, other_created in outgoing_seen
+        ):
+            continue
+        item.setdefault("author", employee_name or "")
+        _add_chat(item)
+    chat.sort(key=lambda item: int(item.get("created_at") or 0))
+    if before:
+        older = [item for item in chat if int(item.get("created_at") or 0) < before]
+        page = older[-limit:] if older else []
+        has_more = len(older) > limit or (talk_has_more and len(page) >= limit)
+    else:
+        page = chat[-limit:] if chat else []
+        has_more = talk_has_more or len(chat) > limit
+    _apply_saved_replies(page)
+    reactions = _reactions_for_lead(lid)
+    if reactions:
+        for item in page:
+            emoji = reactions.get(str(item.get("external_id") or "")) or reactions.get(str(item.get("id") or ""))
+            if emoji:
+                item["my_reaction"] = emoji
+    return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
+
+
+def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
     rows: list[dict] = []
     blocked = False
+    maybe_more = False
+    try:
+        page_limit = max(1, min(int(page_limit or 50), 250))
+    except (TypeError, ValueError):
+        page_limit = 50
     urls = (
         f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
         f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages",
@@ -6890,14 +9463,14 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
     working_url = None
     for url in urls:
         try:
-            resp = _http.get(url, headers=HEADERS, params={"limit": 250, "page": 1}, timeout=12)
+            resp = _http.get(url, headers=HEADERS, params={"limit": page_limit, "page": 1, "order[created_at]": "desc"}, timeout=10)
         except Exception as exc:
             logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
             continue
-        if resp.status_code in {401, 402, 403}:
+        if resp.status_code in {401, 402, 403, 429}:
             blocked = True
             logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
-            continue
+            break
         if resp.status_code != 200:
             logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
             continue
@@ -6907,11 +9480,12 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
             rows.extend(messages)
             working_url = url
             blocked = False
+            maybe_more = len(messages) >= page_limit
             break
     if working_url and pages > 1:
         for page in range(2, pages + 1):
             try:
-                resp = _http.get(working_url, headers=HEADERS, params={"limit": 250, "page": page}, timeout=12)
+                resp = _http.get(working_url, headers=HEADERS, params={"limit": page_limit, "page": page, "order[created_at]": "desc"}, timeout=10)
             except Exception:
                 break
             if resp.status_code != 200:
@@ -6919,11 +9493,13 @@ def _fetch_talk_messages(talk_id: int, pages: int = 2) -> tuple[list[dict], bool
             payload = resp.json() if resp.content else {}
             messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
             if not messages:
+                maybe_more = False
                 break
             rows.extend(messages)
-            if len(messages) < 250:
+            maybe_more = len(messages) >= page_limit
+            if len(messages) < page_limit:
                 break
-    return rows, blocked
+    return rows, blocked, maybe_more
 
 
 def _extract_messages_payload(payload) -> list[dict]:
@@ -6962,6 +9538,119 @@ def _fetch_chat_history_by_chat_id(chat_id: str) -> list[dict]:
     return []
 
 
+def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
+    if incoming:
+        return ""
+    raw = (
+        nested.get("status")
+        or nested.get("delivery_status")
+        or nested.get("state")
+        or nested.get("msgid_status")
+        or message.get("status")
+        or message.get("delivery_status")
+        or message.get("state")
+        or message.get("msgid_status")
+    )
+    if isinstance(raw, dict):
+        raw = raw.get("type") or raw.get("name") or raw.get("code") or raw.get("id")
+    text = str(raw or "").strip().lower()
+    mapping = {
+        "0": "sent",
+        "sent": "sent",
+        "sending": "sent",
+        "1": "delivered",
+        "delivered": "delivered",
+        "deliver": "delivered",
+        "2": "delivered",
+        "3": "read",
+        "read": "read",
+        "seen": "read",
+        "viewed": "read",
+        "-1": "error",
+        "4": "error",
+        "error": "error",
+        "failed": "error",
+        "undelivered": "error",
+    }
+    if text in mapping:
+        return mapping[text]
+    if nested.get("read") or message.get("read") or nested.get("seen") or message.get("seen"):
+        return "read"
+    if nested.get("delivered") or message.get("delivered"):
+        return "delivered"
+    if "read" in text or "seen" in text:
+        return "read"
+    if "undeliver" in text or "error" in text or "fail" in text:
+        return "error"
+    if "deliver" in text:
+        return "delivered"
+    return "sent"
+
+
+def _is_generic_chat_author(name: str) -> bool:
+    folded = str(name or "").strip().casefold()
+    if not folded:
+        return True
+    tokens = (
+        "whatsapp", "waba", "instagram", "facebook", "messenger", "tiktok",
+        "telegram", "viber", "amojo", "kommo", "menecer", "manager", "müştəri", "musteri",
+    )
+    if any(token in folded for token in tokens):
+        return True
+    return folded in {"client", "bot", "capi", "im", "wa", "fb"}
+
+
+def _split_quote_prefix(text: str) -> tuple[str, str]:
+    raw = str(text or "")
+    if not raw.lstrip().startswith(">"):
+        return "", raw
+    quote_lines: list[str] = []
+    rest: list[str] = []
+    for line in raw.splitlines():
+        if not rest and line.lstrip().startswith(">"):
+            quote_lines.append(line.lstrip()[1:].strip())
+            continue
+        if not rest and not line.strip():
+            continue
+        rest.append(line)
+    body = "\n".join(rest).strip()
+    quote = "\n".join(item for item in quote_lines if item).strip()
+    if not quote or not body:
+        return "", raw
+    return quote, body
+
+
+def _find_wamid(value, depth: int = 0) -> str:
+    if depth > 5 or value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        return text if "wamid" in text.lower() else ""
+    if isinstance(value, dict):
+        for inner in value.values():
+            found = _find_wamid(inner, depth + 1)
+            if found:
+                return found
+    if isinstance(value, list):
+        for inner in value[:12]:
+            found = _find_wamid(inner, depth + 1)
+            if found:
+                return found
+    return ""
+
+
+def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
+    name = str((author or {}).get("name") or "").strip()
+    generic = _is_generic_chat_author(name)
+    if incoming:
+        return "" if generic else name
+    if not generic:
+        return name
+    uid = (author or {}).get("id") or message.get("created_by") or message.get("created_by_id")
+    mapped = KOMMO_USERS.get(uid, "") if uid not in (None, "") else ""
+    return str(mapped or "").strip()
+
+
 def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if not isinstance(message, dict):
         return None
@@ -6983,6 +9672,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     if message_type in {"incoming", "outgoing"}:
         message_type = str(nested.get("type") or "text")
     text = str(nested.get("text") or message.get("text") or "").strip()
+    folded = text.casefold()
+    if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
+        return None
     if not text:
         if message_type in {"voice", "audio"} or _looks_audio_name(file_name):
             text = "Səs mesajı"
@@ -6997,19 +9689,42 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         incoming = True
     if not text and not media and not file_uuid:
         return None
+    reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
+    reply_id = ""
+    reply_text = ""
+    reply_author = ""
+    if isinstance(reply_src, dict):
+        reply_msg = reply_src.get("message") if isinstance(reply_src.get("message"), dict) else reply_src
+        reply_id = str(reply_msg.get("id") or reply_src.get("message_id") or reply_src.get("id") or "").strip()
+        reply_text = str(reply_msg.get("text") or reply_src.get("text") or "").strip()[:200]
+        sender = reply_msg.get("author") or reply_msg.get("sender") or reply_src.get("author") or reply_src.get("sender") or {}
+        if isinstance(sender, dict):
+            reply_author = str(sender.get("name") or "").strip()[:80]
+    elif reply_src:
+        reply_id = str(reply_src).strip()
+    inline_quote, inline_body = _split_quote_prefix(text)
+    if inline_quote:
+        text = inline_body
+        reply_text = reply_text or inline_quote
     return {
         "id": nested.get("id") or message.get("id"),
+        "external_id": _find_wamid(message),
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
-        "author": str(author.get("name") or "").strip(),
+        "author": _chat_author_name(author, message, incoming),
         "text": text,
         "message_type": message_type,
         "created_at": created,
         "created": _deal_fmt_ts(created),
         "origin": origin or str(message.get("origin") or ""),
+        "channel": str(origin or "").strip().lower(),
+        "reply_to_message_id": reply_id,
+        "reply_to_text": reply_text,
+        "reply_to_author": reply_author,
         "media_url": media if _is_allowed_kommo_media_url(media) else "",
         "file_uuid": file_uuid,
         "file_name": file_name,
+        "delivery_status": _chat_delivery_status(message, nested, incoming),
     }
 
 
@@ -7055,7 +9770,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "id": event.get("id"),
                 "direction": "incoming" if incoming else "outgoing",
                 "incoming": incoming,
-                "author": "",
+                "author": KOMMO_USERS.get(event.get("created_by") or event.get("created_by_id"), "") or "",
                 "text": text,
                 "message_type": "audio" if _looks_audio_name(text) else "text",
                 "created_at": created,
@@ -7064,6 +9779,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "media_url": media if _is_allowed_kommo_media_url(media) else "",
                 "file_uuid": file_uuid,
                 "file_name": "",
+                "delivery_status": "" if incoming else "sent",
             })
     return rows, skipped
 
@@ -7108,8 +9824,8 @@ def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
     return rows
 
 
-def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | None:
-    """Read-only snapshot of a personal-funnel deal for in-app and shared view."""
+def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_personal: bool = True) -> dict | None:
+    """Read-only snapshot of a deal for in-app and shared view."""
     lead = lead if isinstance(lead, dict) else get_lead_details(int(lead_id))
     if not lead:
         return None
@@ -7119,7 +9835,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
         status_id = int(lead.get("status_id") or 0)
     except (TypeError, ValueError):
         return None
-    if pipeline_id not in all_personal_pipeline_ids():
+    if require_personal and pipeline_id not in all_personal_pipeline_ids():
         return None
     stages, names, _ui = load_pipeline_stage_maps(pipeline_id)
     status_to_key = {int(sid): key for key, sid in stages.items()}
@@ -7127,6 +9843,9 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
     contact_rows = []
     all_phones: list[str] = []
     contact_ids: list[int] = []
+    source = extract_menbe(lead)
+    utm_blob = collect_utm_blob(lead)
+    source_urls = collect_source_urls(lead)
     for linked in lead_contacts:
         if not isinstance(linked, dict):
             continue
@@ -7142,6 +9861,15 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
             if phone not in all_phones:
                 all_phones.append(phone)
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
+        source = extract_menbe(full) or source
+        utm_blob = " ".join((utm_blob, collect_utm_blob(full)))
+        for url in collect_source_urls(full):
+            if url not in source_urls:
+                source_urls.append(url)
+    partner, utm = split_partner_and_utm(source, utm_blob, lid)
+    for url in _SOURCE_URL_RE.findall(utm_blob or ""):
+        if url not in source_urls:
+            source_urls.append(url)
     contact_name = next((row.get("name") for row in contact_rows if row.get("name")), "")
     note_rows = _fetch_entity_notes("leads", lid)
     for contact_id in contact_ids:
@@ -7155,115 +9883,60 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None) -> dict | No
             continue
         seen_notes.add(key)
         unique_notes.append(note)
-    notes = [item for item in unique_notes if not item.get("is_chat")]
-    chat_from_notes = [item for item in unique_notes if item.get("is_chat")]
+    notes = [
+        item for item in unique_notes
+        if (item.get("type") == "common" or not item.get("is_chat")) and not _note_is_deleted(item)
+    ]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
-    chat: list[dict] = []
-    seen_chat: set[tuple] = set()
-    chat_blocked = False
-
-    def _add_chat(item: dict | None) -> None:
-        if not item:
-            return
-        key = (str(item.get("id") or ""), str(item.get("text") or ""), int(item.get("created_at") or 0), str(item.get("file_uuid") or ""))
-        if key in seen_chat:
-            return
-        seen_chat.add(key)
-        chat.append(item)
-
-    for talk in _fetch_talks(lid, contact_ids):
-        origin = str(talk.get("origin") or "")
-        raw_talk_id = talk.get("talk_id") or talk.get("id")
-        try:
-            talk_id = int(raw_talk_id)
-        except (TypeError, ValueError):
-            talk_id = 0
-        if talk_id:
-            messages, blocked = _fetch_talk_messages(talk_id)
-            chat_blocked = chat_blocked or blocked
-            for message in messages:
-                _add_chat(_format_chat_message(message, origin))
-        chat_id = str(talk.get("chat_id") or "").strip()
-        if chat_id:
-            for message in _fetch_chat_history_by_chat_id(chat_id):
-                _add_chat(_format_chat_message(message, origin))
-    for contact_id in contact_ids:
-        try:
-            chats_resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/contacts/chats",
-                headers=HEADERS,
-                params={"contact_id": int(contact_id)},
-                timeout=8,
-            )
-        except Exception:
-            chats_resp = None
-        if chats_resp is not None and chats_resp.status_code == 200:
-            for row in (chats_resp.json().get("_embedded") or {}).get("chats", []) or []:
-                chat_id = str(row.get("chat_id") or "").strip()
-                if chat_id:
-                    for message in _fetch_chat_history_by_chat_id(chat_id):
-                        _add_chat(_format_chat_message(message, "contact"))
-    event_items, events_without_text = _fetch_chat_events(lid, contact_ids)
-    chat_blocked = chat_blocked or events_without_text
-    for event_item in event_items:
-        _add_chat(event_item)
-    for note in reversed(chat_from_notes):
-        _add_chat({
-            "id": note.get("id"),
-            "direction": "incoming" if str(note.get("type") or "").endswith("_in") else "outgoing",
-            "incoming": str(note.get("type") or "").endswith("_in") or note.get("type") in {"attachment", "file"},
-            "author": "",
-            "text": note.get("text") or "",
-            "message_type": note.get("message_type") or "text",
-            "created_at": note.get("created_at") or 0,
-            "created": note.get("created") or "",
-            "origin": note.get("type") or "",
-            "media_url": note.get("media_url") or "",
-            "file_uuid": note.get("file_uuid") or "",
-            "file_name": note.get("file_name") or "",
-        })
-    for entity_type, entity_id in [("leads", lid)] + [("contacts", cid) for cid in contact_ids]:
-        for file_item in _fetch_entity_files_as_chat(entity_type, entity_id):
-            _add_chat(file_item)
-    if str(lid) in _voice_urls:
-        _add_chat({
-            "id": f"voice-{lid}",
-            "direction": "outgoing",
-            "incoming": False,
-            "author": "",
-            "text": "Səs mesajı",
-            "message_type": "audio",
-            "created_at": 0,
-            "created": "",
-            "origin": "app",
-            "media_url": f"/api/voice/{lid}",
-            "file_uuid": "",
-            "file_name": "voice.ogg",
-        })
-    chat.sort(key=lambda item: int(item.get("created_at") or 0))
-    if len(chat) > 120:
-        chat = chat[-120:]
     first_task = tasks[0] if tasks else {}
     last_note = next((item.get("text") for item in notes if item.get("text")), "")
+    talks = _fetch_talks(lid, contact_ids)
+    chat_channel = ""
+    best_talk = -1
+    for talk in talks or []:
+        key = _talk_channel_key(talk)
+        if key not in CHAT_CHANNEL_LABELS:
+            continue
+        try:
+            updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        if updated >= best_talk:
+            best_talk = updated
+            chat_channel = key
+    funnel_owner_name = owner_name_for_pipeline(pipeline_id)
+    responsible_name = funnel_owner_name or KOMMO_USERS.get(lead.get("responsible_user_id"), "") or ""
     return {
         "id": lid,
         "name": lead.get("name") or "",
+        "pipeline_id": pipeline_id,
         "stage_key": status_to_key.get(status_id, ""),
         "stage_name": names.get(status_id, "Naməlum mərhələ"),
         "contact_name": contact_name,
+        "responsible_name": responsible_name,
+        "funnel_owner_name": funnel_owner_name,
         "phone": all_phones[0] if all_phones else "",
         "phones": all_phones,
         "contacts": contact_rows,
+        "partner": partner,
+        "utm": utm,
+        "utm_tag": utm,
+        "source": utm,
+        "menbe": utm,
+        "source_urls": source_urls,
         "created_at": lead.get("created_at", 0),
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
+        "chat_channel": chat_channel,
         "notes": notes,
         "task_desc": first_task.get("text") or "",
         "deadline": first_task.get("deadline") or "",
         "deadline_ts": int(first_task.get("complete_till") or 0),
         "tasks": tasks,
-        "chat": chat,
-        "chat_blocked": bool(chat_blocked and not chat),
+        "chat": [],
+        "chat_blocked": False,
+        "reply_talk_id": 0,
+        "can_reply": bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
@@ -7292,21 +9965,573 @@ async def handle_api_deal_view(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     if not _user_can_view_personal_lead(chat_id, lead):
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    deal = build_deal_view_payload(lead_id, lead)
+    deal = build_deal_view_payload(lead_id, lead, require_personal=not is_admin(chat_id))
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     return web.json_response({"success": True, "deal": deal, "share_token": make_deal_share_token(lead_id)})
+
+
+def _deal_request_user(request: web.Request):
+    raw_chat_id = (
+        request.headers.get("X-TG-User-ID")
+        or request.rel_url.query.get("uid")
+        or ""
+    )
+    try:
+        return int(raw_chat_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _authorized_deal_lead(chat_id: int, lead_id: int):
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return None, web.json_response({"success": False, "error": "Access denied"}, status=403)
+    lead = get_lead_details(lead_id)
+    if not lead:
+        return None, web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    if not _user_can_view_personal_lead(chat_id, lead):
+        return None, web.json_response({"success": False, "error": "Access denied"}, status=403)
+    return lead, None
+
+
+def _lead_contact_ids(lead: dict) -> list[int]:
+    ids: list[int] = []
+    for linked in (lead.get("_embedded") or {}).get("contacts") or []:
+        if not isinstance(linked, dict):
+            continue
+        try:
+            ids.append(int(linked.get("id")))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
+    contact_ids: list[int] = []
+    phones: list[str] = []
+    for linked in (lead.get("_embedded") or {}).get("contacts") or []:
+        if not isinstance(linked, dict):
+            continue
+        try:
+            cid = int(linked.get("id"))
+        except (TypeError, ValueError):
+            continue
+        contact_ids.append(cid)
+        full = get_contact_details(cid) or linked
+        for phone in _contact_phones(full):
+            if phone not in phones:
+                phones.append(phone)
+    return contact_ids, phones
+
+
+async def handle_api_deal_chat(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contact_ids = _lead_contact_ids(lead)
+    try:
+        limit = int(request.rel_url.query.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        before = int(request.rel_url.query.get("before") or 0)
+    except (TypeError, ValueError):
+        before = 0
+    channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
+    sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
+    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
+        int(lead.get("id") or lead_id),
+        contact_ids,
+        limit=limit,
+        before=before,
+        channel=channel,
+        sender_digits=sender_digits,
+        employee_name=employee_name_for_lead(lead),
+    )
+    cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+    return web.json_response({
+        "success": True,
+        "chat": chat,
+        "chat_blocked": chat_blocked,
+        "reply_talk_id": reply_talk_id,
+        "has_more": has_more,
+        "channel": channel,
+        "channels": channels,
+        "sender_phone": _wa_display_number(sender_digits),
+        "can_reply": bool(reply_talk_id) or cloud_ready,
+        "cloud_ready": cloud_ready,
+    })
+
+
+VOICE_CAPTION_TEXT = "🎤 Səs mesajı"
+
+
+def _looks_voice_upload(filename: str, content_type: str) -> bool:
+    return str(content_type or "").startswith("audio/") or bool(
+        re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", str(filename or "").lower())
+    )
+
+
+def _attachment_kind(filename: str, content_type: str) -> str:
+    # send_message allows file/video/picture only, so audio travels as a file.
+    name = f"{filename} {content_type}".lower()
+    if content_type.startswith("audio/") or re.search(r"\.(ogg|oga|opus|mp3|m4a|wav)$", name):
+        return "file"
+    if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
+        return "picture"
+    if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
+        return "video"
+    return "file"
+
+
+_CHAT_REPLY_MEMORY: dict[str, dict] = {}
+
+
+def _remember_chat_reply(message_id, reply_id: str, reply_text: str, reply_author: str) -> None:
+    mid = str(message_id or "").strip()
+    preview = str(reply_text or "").strip()[:200]
+    if not mid or not (preview or reply_id):
+        return
+    if len(_CHAT_REPLY_MEMORY) > 2000:
+        _CHAT_REPLY_MEMORY.pop(next(iter(_CHAT_REPLY_MEMORY)), None)
+    _CHAT_REPLY_MEMORY[mid] = {
+        "reply_to_message_id": str(reply_id or "").strip(),
+        "reply_to_text": preview,
+        "reply_to_author": str(reply_author or "").strip()[:80],
+    }
+
+
+def _apply_saved_replies(chat: list[dict]) -> list[dict]:
+    if not _CHAT_REPLY_MEMORY:
+        return chat
+    by_id = {str(item.get("id") or ""): item for item in chat if item.get("id")}
+    for item in chat:
+        saved = _CHAT_REPLY_MEMORY.get(str(item.get("id") or ""))
+        if saved:
+            if not item.get("reply_to_text"):
+                item["reply_to_text"] = saved.get("reply_to_text") or ""
+            if not item.get("reply_to_author"):
+                item["reply_to_author"] = saved.get("reply_to_author") or ""
+            if not item.get("reply_to_message_id"):
+                item["reply_to_message_id"] = saved.get("reply_to_message_id") or ""
+        quoted_id = str(item.get("reply_to_message_id") or "").strip()
+        source = by_id.get(quoted_id) if quoted_id else None
+        if source and not item.get("reply_to_text"):
+            item["reply_to_text"] = str(source.get("text") or "").strip()[:200]
+            item["reply_to_author"] = str(source.get("author") or item.get("reply_to_author") or "").strip()[:80]
+    return chat
+
+
+def _stamp_sent_reply(chat: list[dict], text: str, reply_id: str, reply_text: str, reply_author: str) -> None:
+    preview = str(reply_text or "").strip()[:200]
+    if not preview and not reply_id:
+        return
+    wanted = str(text or "").strip()
+    for item in reversed(chat):
+        if item.get("incoming"):
+            continue
+        if str(item.get("text") or "").strip() != wanted:
+            continue
+        item["reply_to_message_id"] = reply_id or item.get("reply_to_message_id") or ""
+        item["reply_to_text"] = preview or item.get("reply_to_text") or ""
+        item["reply_to_author"] = reply_author or item.get("reply_to_author") or ""
+        _remember_chat_reply(item.get("id"), item["reply_to_message_id"], item["reply_to_text"], item["reply_to_author"])
+        return
+
+
+def _deliver_via_cloud(
+    lead: dict,
+    text: str,
+    raw: bytes,
+    filename: str,
+    content_type: str,
+    quote_id: str,
+) -> tuple[bool, str, str, str]:
+    """Send one message through WhatsApp Cloud API; returns ok, error, wamid, type."""
+    _ids, phones = _contact_ids_and_phones(lead)
+    if not phones:
+        return False, "Müştəri nömrəsi tapılmadı.", "", "text"
+    kind = "text"
+    media_id = ""
+    voice = False
+    if raw:
+        kind = _wa_cloud_media_kind(filename, content_type)
+        payload, mime, name = raw, content_type or "application/octet-stream", filename or "file"
+        if kind == "audio":
+            converted = _ffmpeg_to_voice_ogg(raw, filename)
+            if converted:
+                payload, mime, name, voice = converted, "audio/ogg", "voice.ogg", True
+            elif "ogg" in str(content_type or "").lower():
+                mime, voice = "audio/ogg", True
+        media_id, upload_error = _wa_cloud_upload_media(payload, name, mime)
+        if not media_id:
+            return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind
+    last_error = ""
+    for phone in phones:
+        if kind == "text":
+            ok, error, wamid = _wa_cloud_send_text(phone, text, quote_id)
+        else:
+            ok, error, wamid = _wa_cloud_send_media(
+                phone,
+                kind,
+                media_id,
+                caption=text,
+                filename=filename,
+                reply_to=quote_id,
+                voice=voice,
+            )
+        if ok:
+            return True, "", wamid, kind
+        if error:
+            last_error = error
+    return False, last_error or "WhatsApp mesajı göndərilmədi.", "", kind
+
+
+async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    text = ""
+    channel = "whatsapp"
+    lead_id = 0
+    attachment = None
+    upload_raw = b""
+    upload_name = ""
+    upload_type = ""
+    reply_to_message_id = ""
+    reply_external = ""
+    reply_preview = ""
+    reply_author = ""
+    hinted_talk = 0
+    hinted_sender = ""
+    ctype = str(request.content_type or "")
+    if ctype.startswith("multipart/"):
+        form = await request.post()
+        try:
+            lead_id = int(form.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        text = str(form.get("text") or "").strip()
+        channel = str(form.get("channel") or "whatsapp").strip().lower()
+        reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
+        reply_external = str(form.get("reply_external_id") or "").strip()
+        reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
+        reply_author = str(form.get("reply_to_author") or "").strip()[:80]
+        hinted_sender = str(form.get("sender_phone") or "")
+        try:
+            hinted_talk = int(form.get("talk_id") or 0)
+        except (TypeError, ValueError):
+            hinted_talk = 0
+        uploaded = form.get("file")
+        if uploaded is not None and getattr(uploaded, "file", None):
+            upload_raw = uploaded.file.read()
+            upload_name = str(getattr(uploaded, "filename", None) or "file")
+            upload_type = str(getattr(uploaded, "content_type", None) or "application/octet-stream")
+            if len(upload_raw) > 15 * 1024 * 1024:
+                return web.json_response({"success": False, "error": "Fayl 15MB-dan böyükdür"}, status=400)
+    else:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        try:
+            lead_id = int(data.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        text = str(data.get("text") or "").strip()
+        channel = str(data.get("channel") or "whatsapp").strip().lower()
+        reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
+        reply_external = str(data.get("reply_external_id") or "").strip()
+        reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
+        reply_author = str(data.get("reply_to_author") or "").strip()[:80]
+        hinted_sender = str(data.get("sender_phone") or "")
+        try:
+            hinted_talk = int(data.get("talk_id") or 0)
+        except (TypeError, ValueError):
+            hinted_talk = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not text and not upload_raw:
+        return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
+    if len(text) > 2000:
+        return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
+    use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+    reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
+    if not reply_talk_id and not use_cloud:
+        return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
+    wa_quote_id = reply_external if reply_external.lower().startswith("wamid") else ""
+    drive_uuid = ""
+    drive_version = ""
+    if upload_raw:
+        # Drive keeps a durable copy so the file stays playable inside the app.
+        drive_uuid, drive_version = _upload_kommo_drive_bytes(upload_name, upload_raw, upload_type)
+        if not drive_uuid or not drive_version:
+            return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
+        attachment = {
+            "type": _attachment_kind(upload_name, upload_type),
+            "drive_uuid": drive_uuid,
+            "drive_version_uuid": drive_version,
+        }
+    ok = False
+    last_error = ""
+    sent_wamid = ""
+    sent_via_cloud = False
+    sent_text = text
+    sent_type = "text"
+    if use_cloud:
+        ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
+            _deliver_via_cloud,
+            lead,
+            text,
+            upload_raw,
+            upload_name,
+            upload_type,
+            wa_quote_id,
+        )
+        sent_via_cloud = ok
+    if not ok and reply_talk_id:
+        kommo_text = text
+        if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
+            # Kommo rejects an empty text even when a file is attached.
+            kommo_text = VOICE_CAPTION_TEXT
+        kommo_ok, kommo_error, _status = _send_kommo_talk_message(reply_talk_id, kommo_text, attachment)
+        if kommo_ok:
+            ok = True
+            last_error = ""
+            sent_text = kommo_text
+        elif kommo_error and not last_error:
+            last_error = kommo_error
+    if not ok:
+        detail = last_error
+        if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
+            last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
+        return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
+    if sent_via_cloud:
+        # The app renders Kommo message types, so translate the Cloud API kind.
+        local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
+        _remember_sent_message(int(lead.get("id") or lead_id), _sent_message_item(
+            wamid=sent_wamid,
+            text=sent_text or (VOICE_CAPTION_TEXT if local_type == "audio" else upload_name),
+            author=employee_name_for_lead(lead),
+            message_type=local_type,
+            file_uuid=drive_uuid,
+            file_name="" if local_type == "audio" else upload_name,
+            reply_id=reply_to_message_id or wa_quote_id,
+            reply_text=reply_preview,
+            reply_author=reply_author,
+        ))
+    contact_ids = _lead_contact_ids(lead)
+    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
+        int(lead.get("id") or lead_id),
+        contact_ids,
+        limit=20,
+        channel=channel,
+        sender_digits=sender_digits,
+        employee_name=employee_name_for_lead(lead),
+    )
+    _apply_saved_replies(chat)
+    if reply_to_message_id:
+        _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
+    return web.json_response({
+        "success": True,
+        "chat": chat,
+        "chat_blocked": chat_blocked,
+        "reply_talk_id": reply_talk_id,
+        "has_more": has_more,
+        "channel": channel,
+        "channels": channels,
+    })
+
+
+async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    emoji = str(data.get("emoji") or "").strip()[:8]
+    if not lead_id or not wamid:
+        return web.json_response({"success": False, "error": "lead_id və mesaj id lazımdır"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
+        return web.json_response({"success": False, "error": "Reaksiya yalnız rəsmi WhatsApp nömrəsində işləyir."}, status=400)
+    _ids, phones = _contact_ids_and_phones(lead)
+    if not phones:
+        return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+    last_error = ""
+    for phone in phones:
+        ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, wamid, emoji)
+        if ok:
+            _remember_reaction(int(lead.get("id") or lead_id), wamid, emoji)
+            return web.json_response({"success": True, "emoji": emoji})
+        if error:
+            last_error = error
+    return web.json_response({"success": False, "error": last_error or "Reaksiya göndərilmədi."}, status=400)
+
+
+async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    typing = bool(data.get("typing"))
+    if not lead_id or not wamid:
+        return web.json_response({"success": True, "skipped": True})
+    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
+        return web.json_response({"success": True, "skipped": True})
+    ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
+    return web.json_response({"success": bool(ok)})
+
+
+async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    contact_name = ""
+    if contacts and isinstance(contacts[0], dict):
+        contact_name = str(contacts[0].get("name") or "")
+    history_rows = data.get("messages") if isinstance(data.get("messages"), list) else []
+    lines = []
+    for item in history_rows[-15:]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        who = "Müştəri" if item.get("incoming") else "Menecer"
+        lines.append(f"{who}: {text[:400]}")
+    history = "\n".join(lines) or "Yazışma yoxdur."
+    draft = str(data.get("draft") or "").strip()
+    system = (
+        "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp/Instagram cavabı yaz. "
+        "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
+    )
+    user = (
+        f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
+        f"Sövdələşmə: {lead.get('name') or '—'}\n"
+        f"Son yazışma:\n{history}\n"
+    )
+    if draft:
+        user += f"\nMenecerin qeydi: {draft}\n"
+    user += "\nNövbəti cavabı yaz."
+    def _ask() -> str:
+        resp = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.4,
+            max_tokens=400,
+        )
+        return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
+    try:
+        suggestion = await asyncio.to_thread(_ask)
+    except Exception as exc:
+        logger.error("Deal AI suggest failed: %s", exc)
+        return web.json_response({"success": False, "error": "AI cavab alınmadı."}, status=502)
+    if not suggestion:
+        return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
+    return web.json_response({"success": True, "text": suggestion})
 
 
 async def handle_api_deal_public(request: web.Request) -> web.Response:
     lead_id = parse_deal_share_token(request.rel_url.query.get("k") or "")
     if not lead_id:
         return web.json_response({"success": False, "error": "Link etibarsızdır və ya müddəti bitib"}, status=403)
-    deal = build_deal_view_payload(lead_id)
+    lead = get_lead_details(int(lead_id))
+    deal = build_deal_view_payload(lead_id, lead, require_personal=False)
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    contact_ids = _lead_contact_ids(lead or {})
+    chat, chat_blocked, _reply_talk_id, _has_more, _channels, _channel = _collect_deal_chat(
+        int(lead_id),
+        contact_ids,
+        limit=50,
+        pages=3,
+        employee_name=employee_name_for_lead(lead),
+    )
+    deal["chat"] = chat
+    deal["chat_blocked"] = chat_blocked
     deal.pop("kommo_link", None)
+    deal.pop("can_reply", None)
     return web.json_response({"success": True, "deal": deal, "readonly": True})
+
+
+def _media_bytes_response(request: web.Request, body: bytes, content_type: str) -> web.Response:
+    data = body or b""
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "private, max-age=600",
+        "Accept-Ranges": "bytes",
+        "Content-Type": content_type or "application/octet-stream",
+    }
+    rng = str(request.headers.get("Range") or "")
+    match = re.match(r"bytes=(\d*)-(\d*)", rng)
+    if match and data:
+        start = int(match.group(1) or 0)
+        end = int(match.group(2) or (len(data) - 1))
+        end = min(end, len(data) - 1)
+        if start > end or start >= len(data):
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{len(data)}"})
+        chunk = data[start:end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{len(data)}"
+        headers["Content-Length"] = str(len(chunk))
+        return web.Response(body=chunk, status=206, headers=headers)
+    headers["Content-Length"] = str(len(data))
+    return web.Response(body=data, headers=headers)
 
 
 async def handle_api_deal_file(request: web.Request) -> web.Response:
@@ -7339,13 +10564,9 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
         content_type = audio_resp.headers.get("Content-Type") or "application/octet-stream"
-        if file_uuid and content_type == "application/octet-stream":
+        if file_uuid and (content_type == "application/octet-stream" or "ogg" in (src or "").lower()):
             content_type = "audio/ogg"
-        return web.Response(
-            body=audio_resp.content,
-            content_type=content_type,
-            headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "private, max-age=600"},
-        )
+        return _media_bytes_response(request, audio_resp.content, content_type)
     except Exception as exc:
         logger.warning("Deal media proxy failed: %s", exc)
         return web.Response(status=502, text="Media fetch failed")
@@ -7372,10 +10593,18 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
         owner = get_funnel_owner(chat_id)
         if owner:
             overview["user_name"] = owner["name"]
+        if is_admin(chat_id):
+            try:
+                overview["pipelines"] = load_all_kommo_pipelines()
+            except Exception as exc:
+                logger.warning("Admin pipelines attach failed: %s", exc)
         return web.json_response({"success": True, **overview, "is_admin": is_admin(chat_id)})
     except Exception as exc:
         logger.error("Rüfət overview error: %s", exc)
-        return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
+        payload = {"success": False, "error": "Kommo sorğusu uğursuz oldu."}
+        if is_admin(chat_id):
+            payload["detail"] = str(exc)[:240]
+        return web.json_response(payload, status=502)
 
 
 async def handle_api_notifications(request: web.Request) -> web.Response:
@@ -7386,17 +10615,13 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         if not chat_id:
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
         if is_funnel_chat(chat_id) and not is_admin(chat_id):
-            overview = await get_rufat_overview(owner_chat_id=chat_id)
+            try:
+                overview = await get_rufat_overview(owner_chat_id=chat_id)
+            except Exception as exc:
+                logger.error("Funnel notifications overview failed: %s", exc)
+                return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
             return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
                                       "user_name": overview["user_name"], "ui_stages": overview.get("ui_stages")})
-        funnel_overlay = []
-        if is_admin(chat_id):
-            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID)]
-            overviews = await asyncio.gather(*[
-                get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
-            ])
-            for overview in overviews:
-                funnel_overlay.extend(overview.get("tasks") or [])
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
@@ -7413,6 +10638,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         # Kommo may serialize numeric IDs as strings in some responses.
         allowed_responsible_ids = {str(value) for value in allowed_responsible_ids}
         raw_tasks = []
+        leads_contact_cache = {}
         task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
         if not isinstance(task_priorities, dict):
             task_priorities = {}
@@ -7462,6 +10688,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except: pass
                 # Fetch leads linked to contacts (to get stage)
                 contact_lead_stage = {}  # {contact_id: stage_name}
+                leads_pipeline_cache = {}  # {lead_id: pipeline_id}
+                contact_pipeline_ids = {}  # {contact_id: set[pipeline_id]}
+                _employee_funnels = employee_personal_pipeline_ids()
                 if contact_ids:
                     try:
                         # Batch: get leads with contacts filter
@@ -7473,9 +10702,21 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         if lr.status_code == 200:
                             for ld in lr.json().get("_embedded", {}).get("leads", []):
                                 st_name = get_pipeline_stages_for_chat(chat_id)[1].get(ld.get("status_id", 0), "")
+                                try:
+                                    _ld_id = int(ld["id"])
+                                    _ld_pipe = _lead_pipeline_id(ld)
+                                    leads_pipeline_cache[_ld_id] = _ld_pipe
+                                except (KeyError, TypeError, ValueError):
+                                    _ld_pipe = 0
                                 for lc in ld.get("_embedded", {}).get("contacts", []):
-                                    if lc["id"] in contact_ids and lc["id"] not in contact_lead_stage:
-                                        contact_lead_stage[lc["id"]] = st_name
+                                    try:
+                                        _cid = int(lc["id"])
+                                    except (KeyError, TypeError, ValueError):
+                                        continue
+                                    if _cid in contact_ids and _cid not in contact_lead_stage:
+                                        contact_lead_stage[_cid] = st_name
+                                    if _ld_pipe:
+                                        contact_pipeline_ids.setdefault(_cid, set()).add(_ld_pipe)
                     except: pass
                 # Batch fetch leads (get first contact from each)
                 leads_contact_cache = {}
@@ -7492,6 +10733,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                 except (KeyError, TypeError, ValueError):
                                     continue
                                 leads_stage_cache[lid] = lead.get("status_id", 0)
+                                _ld_pipe = _lead_pipeline_id(lead)
+                                if _ld_pipe:
+                                    leads_pipeline_cache[lid] = _ld_pipe
                                 emb_contacts = lead.get("_embedded", {}).get("contacts", [])
                                 if emb_contacts:
                                     try:
@@ -7500,6 +10744,8 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                                         continue
                                     leads_contact_cache[lid] = cid
                                     contact_ids.add(cid)
+                                    if _ld_pipe:
+                                        contact_pipeline_ids.setdefault(cid, set()).add(_ld_pipe)
                     except: pass
                     # Fetch any new contact_ids from leads
                     new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
@@ -7542,6 +10788,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     except (TypeError, ValueError):
                         entity_id = t.get("entity_id")
                     entity_type = t.get("entity_type", "contacts")
+                    _task_pipes = _task_entity_pipeline_ids(
+                        entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
+                    )
+                    if _task_pipes & _employee_funnels and not is_admin(chat_id):
+                        continue
                     contact_row = {}
                     if entity_type == "contacts":
                         contact_row = contacts_cache.get(entity_id) or {}
@@ -7558,19 +10809,21 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Texniki Dəstək|Texniki tapşırıq|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::\d+)?\]\s*', task_text)
+                    _marker_match = re.match(r'^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Texniki tapşırıq|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Sərmayə|Asya|Nuranə|Texniki)(?::\d+)?\]\s*', task_text)
                     assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
-                    _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Texniki': TECHNICAL_SUPPORT_NAME}
+                    _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Sərmayə':'Sərmayə Əhmədsoy','Asya':'Asya Agayeva','Nuranə':'Nuranə Şirinova','Texniki': TECHNICAL_SUPPORT_NAME}
                     if assignee_name_from_marker in _SHORT_TO_FULL:
                         assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
-                    # Fallback: determine assignee from Əməliyyatlar pipeline stage
-                    if not assignee_name_from_marker and entity_type == 'leads':
+                    # Fallback: determine assignee from Gözləmə columns. Admin Nizami
+                    # owns that board — do not treat Soltan/Sərmayə columns as a
+                    # different icraçı (that hid his funnel tasks after sync).
+                    if not assignee_name_from_marker and entity_type == 'leads' and not is_admin(chat_id):
                         _lead_status = leads_stage_cache.get(entity_id, 0)
                         _STATUS_TO_NAME = {109988184: 'Rüfət Həsənzadə', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
                         assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq", 4232108: "Import"}
+                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv", 4232108: "Import", 4239844: "passiv"}
                     task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
@@ -7615,6 +10868,11 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         "contact_name": contact_name,
                         "phone": phone,
                         "phones": phones,
+                        "source": contact_row.get("source") or "",
+                        "menbe": contact_row.get("source") or "",
+                        "utm": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                        "utm_tag": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                        "partner": get_deal_partner(entity_id) if entity_type == "leads" else "",
                         "responsible": responsible_name,
                         "assigneeName": assignee_name_from_marker,
                         "kommo_link": kommo_link,
@@ -7631,12 +10889,14 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                 tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
         except Exception as e:
             logger.error(f"Notifications fetch error: {e}")
-        # Filter by marker for non-admin users
+        # Gözləmə employees share Kommo licenses with funnel owners. Keep only
+        # tasks marked for this person or sitting in their Gözləmə column.
         if kommo_user_id != 10932455:
-            # Filter tasks by user's stage in Əməliyyatlar pipeline
             _user_status = TG_TO_STATUS_ID.get(chat_id)
+            _employee_name = get_employee_name_by_chat_id(chat_id, "")
+            _user_lead_ids = set()
+            _stage_ok = False
             if _user_status:
-                # Get leads on user's stage
                 try:
                     _stage_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads",
                         headers=HEADERS, params={
@@ -7644,47 +10904,57 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                             "filter[statuses][0][status_id]": _user_status,
                             "limit": 250
                         }, timeout=10)
-                    _user_lead_ids = set()
                     if _stage_resp.status_code == 200:
+                        _stage_ok = True
                         for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
-                            _user_lead_ids.add(_l['id'])
-                    # Keep tasks linked to the employee's Operations-stage leads. If the
-                    # optional stage lookup fails, do not erase the tasks already fetched.
-                    # A marker is also accepted because shared Kommo licenses are used by
-                    # several employees.
-                    _employee_name = get_employee_name_by_chat_id(chat_id, "")
-                    def _task_belongs_to_user(task_item):
-                        eid = task_item.get('entity_id')
-                        etype = task_item.get('entity_type', 'contacts')
-                        marker_name = task_item.get('assigneeName', '')
-                        if marker_name == _employee_name:
-                            return True
-                        if etype == 'leads' and eid in _user_lead_ids:
-                            return True
-                        if etype == 'contacts':
-                            for lid, cid in leads_contact_cache.items():
-                                if cid == eid and lid in _user_lead_ids:
-                                    return True
-                        return False
-                    # An empty result is valid only when Kommo successfully returned an
-                    # empty stage. On API failure, preserve the previously fetched list.
-                    if _stage_resp.status_code == 200 and _user_lead_ids:
-                        # Keep the responsible-user matches when Kommo returns no
-                        # stage leads (for example for contact-linked tasks).
-                        tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
+                            try:
+                                _user_lead_ids.add(int(_l['id']))
+                            except (KeyError, TypeError, ValueError):
+                                continue
                 except Exception as _fe:
                     logger.error(f"Stage filter error: {_fe}")
-                    # Fail open here: the responsible-user filter above is safer than
-                    # showing nobody any task because a secondary leads request failed.
+            def _task_belongs_to_user(task_item):
+                if _employee_name and task_item.get('assigneeName', '') == _employee_name:
+                    return True
+                if not _stage_ok:
+                    return False
+                try:
+                    eid = int(task_item.get('entity_id'))
+                except (TypeError, ValueError):
+                    eid = task_item.get('entity_id')
+                etype = _normalize_kommo_entity_type(task_item.get('entity_type', 'contacts'))
+                if etype == 'leads' and eid in _user_lead_ids:
+                    return True
+                if etype == 'contacts':
+                    for lid, cid in leads_contact_cache.items():
+                        if cid == eid and lid in _user_lead_ids:
+                            return True
+                return False
+            tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
         user_display_name = get_employee_name_by_chat_id(chat_id, "")
-        if funnel_overlay:
-            by_id = {item.get("id"): item for item in tasks_list}
-            for item in funnel_overlay:
-                by_id[item.get("id")] = item
-            tasks_list = sorted(
-                by_id.values(),
-                key=lambda item: (not item.get("is_overdue"), item.get("complete_till") or 9999999999),
-            )
+        if is_admin(chat_id):
+            funnel_overlay = []
+            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID)]
+            overviews = await asyncio.gather(*[
+                get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
+            ], return_exceptions=True)
+            for overview in overviews:
+                if not isinstance(overview, dict):
+                    logger.error("Admin funnel overlay skipped: %s", overview)
+                    continue
+                owner_name = overview.get("user_name") or overview.get("funnel_owner") or ""
+                for item in overview.get("tasks") or []:
+                    if not item.get("assigneeName"):
+                        item["assigneeName"] = owner_name
+                    funnel_overlay.append(item)
+            if funnel_overlay:
+                by_id = {item.get("id"): item for item in tasks_list}
+                for item in funnel_overlay:
+                    by_id[item.get("id")] = item
+                tasks_list = sorted(
+                    by_id.values(),
+                    key=lambda item: (not item.get("is_overdue"), item.get("complete_till") or 9999999999),
+                )
         return web.json_response({"success": True, "tasks": tasks_list, "is_admin": kommo_user_id == 10932455, "user_name": user_display_name})
     except Exception as e:
         logger.error(f"API notifications error: {e}")
@@ -7773,8 +11043,8 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         _SHORT_TO_FULL = {'Rüfət': 'Rüfət Həsənzadə', 'Soltan': 'Soltan Abbasov', 'Hüseyn': 'Hüseyn Səfərov',
                           'Nizami': 'Nizami Qasımov', 'Rasim': 'Rasim Əsgərov', 'Texniki': TECHNICAL_SUPPORT_NAME}
         _TASK_TYPE_NAMES_GOZ = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma",
-                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "Texniki tapşırıq",
-                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "xatırlat müşt."}
+                                3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv",
+                                4232108: "Import", XATIRLAT_TASK_TYPE_ID: "passiv"}
 
         lead_map = {}          # {lead_id: lead}
         lead_contact_id = {}   # {lead_id: contact_id}
@@ -7926,12 +11196,17 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
                     "contact_name": contact_name,
                     "phone": contact_phone,
                     "phones": contact_phones,
+                    "source": contact_row.get("source") or extract_menbe(lead),
+                    "menbe": contact_row.get("source") or extract_menbe(lead),
+                    "utm": (contact_row.get("source") or extract_menbe(lead)) if (contact_row.get("source") or extract_menbe(lead)) in MENBE_LABELS else menbe_from_utm(collect_utm_blob(lead)),
+                    "utm_tag": (contact_row.get("source") or extract_menbe(lead)) if (contact_row.get("source") or extract_menbe(lead)) in MENBE_LABELS else menbe_from_utm(collect_utm_blob(lead)),
+                    "partner": get_deal_partner(lead_id),
                     "responsible": KOMMO_USERS.get(task.get("responsible_user_id"), ""),
                     "assigneeName": assignee_name,
                     "assignee_name": assignee_name,
                     "kommo_link": f"https://texnikidestek50.kommo.com/leads/detail/{lead_id}",
                     "complete_till": deadline_ts,
-                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "xatırlat müşt."),
+                    "task_type_name": _TASK_TYPE_NAMES_GOZ.get(task.get("task_type_id"), "passiv"),
                     "task_type_id": task.get("task_type_id", XATIRLAT_TASK_TYPE_ID),
                     "last_note": last_note,
                     "priority": task_priorities.get(str(task.get("id")), task_priorities.get(task.get("id"), "")),
@@ -7999,6 +11274,21 @@ async def serve_webapp(request: web.Request) -> web.Response:
         logger.error("Web app index not found; checked: %s", ", ".join(candidates))
         return web.Response(status=404, text="Web app index not found")
     logger.info("Serving web app from %s", html_path)
+    resp = web.FileResponse(html_path)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+
+async def serve_deal_page(request: web.Request) -> web.Response:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", "deal.html"),
+        os.path.join(base_dir, "deal.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        return web.Response(status=404, text="Deal page not found")
     return web.FileResponse(html_path)
 
 @web.middleware
@@ -8084,6 +11374,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         # Step 2: Upload file parts
         offset = 0
         file_uuid = None
+        version_uuid = ""
         download_url = None
         version_href = ""
         while offset < file_size:
@@ -8097,7 +11388,7 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
             if "next_url" in up_data:
                 upload_url = up_data["next_url"]
             if "uuid" in up_data:
-                file_uuid = up_data["uuid"]
+                file_uuid, version_uuid = _drive_uuids_from_payload(up_data)
                 download_url = up_data.get("_links", {}).get("download", {}).get("href", "")
                 version_href = up_data.get("_links", {}).get("download_version", {}).get("href", "")
             offset += max_part
@@ -8115,10 +11406,9 @@ async def handle_upload_voice(request: web.Request) -> web.Response:
         if not attached:
             # Fallback: attach via note with note_type=file
             try:
-                version_uuid = ""
-                if version_href:
-                    _parts = [p for p in version_href.split("/") if p]
-                    version_uuid = _parts[-1] if _parts else ""
+                if not _is_drive_uuid(version_uuid):
+                    version_ids = _DRIVE_UUID_RE.findall(str(version_href or ""))
+                    version_uuid = version_ids[-1] if version_ids else ""
                 file_note_payload = [{"note_type": "file", "params": {"file_uuid": file_uuid, "file_name": filename, "version_uuid": version_uuid}}]
                 fn_resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, json=file_note_payload, timeout=10)
                 logger.info(f"File note attach: {fn_resp.status_code} {fn_resp.text[:200]}")
@@ -8166,7 +11456,7 @@ async def handle_voice_proxy(request: web.Request) -> web.Response:
         auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
         audio_resp = requests.get(download_url, headers=auth_h, timeout=15)
         if audio_resp.status_code == 200:
-            return web.Response(body=audio_resp.content, content_type="audio/ogg", headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"})
+            return _media_bytes_response(request, audio_resp.content, "audio/ogg")
     except:
         pass
     # Fallback: redirect to URL
@@ -8178,30 +11468,41 @@ async def handle_api_stages(request: web.Request) -> web.Response:
     return web.json_response({"pipeline_id": get_pipeline_id_for_chat(chat_id), "stages": {str(k): v for k, v in names.items()}})
 
 
-WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.environ.get(
-    "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "beintaskbot_webhook_verify_2026"
-)
+async def handle_api_pipelines(request: web.Request) -> web.Response:
+    raw_chat_id = request.headers.get("X-TG-User-ID") or request.rel_url.query.get("uid") or ""
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    try:
+        pipelines = await asyncio.to_thread(load_all_kommo_pipelines)
+    except Exception as exc:
+        logger.warning("Admin pipelines failed: %s", exc)
+        return web.json_response({"success": False, "error": "Hunilər yüklənmədi"}, status=502)
+    return web.json_response({"success": True, "pipelines": pipelines})
 
 
-async def handle_whatsapp_webhook_verify(request: web.Request) -> web.Response:
-    """Respond to Meta's webhook verification challenge."""
-    mode = request.query.get("hub.mode")
-    token = request.query.get("hub.verify_token")
-    challenge = request.query.get("hub.challenge")
-    if mode == "subscribe" and token == WHATSAPP_WEBHOOK_VERIFY_TOKEN and challenge:
-        return web.Response(text=challenge, content_type="text/plain")
-    return web.Response(text="Forbidden", status=403)
-
-
-async def handle_whatsapp_webhook_event(request: web.Request) -> web.Response:
-    """Accept WhatsApp Cloud API events and acknowledge them to Meta."""
+async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
+    if request.method == "GET":
+        mode = str(request.rel_url.query.get("hub.mode") or "")
+        token = str(request.rel_url.query.get("hub.verify_token") or "")
+        challenge = str(request.rel_url.query.get("hub.challenge") or "")
+        if mode == "subscribe" and token and token in WA_VERIFY_TOKENS and challenge:
+            return web.Response(text=challenge, content_type="text/plain")
+        return web.Response(text="forbidden", status=403)
     try:
         payload = await request.json()
-        logger.info("WhatsApp webhook event received: %s", payload)
     except Exception:
-        logger.warning("Invalid WhatsApp webhook payload", exc_info=True)
-        return web.json_response({"ok": False}, status=400)
-    return web.json_response({"ok": True})
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        await asyncio.to_thread(_process_whatsapp_payload, payload)
+    except Exception as exc:
+        logger.warning("WhatsApp webhook failed: %s", exc)
+    return web.Response(text="ok")
 
 
 async def start_webhook_server():
@@ -8212,14 +11513,24 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
-    app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook_verify)
-    app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook_event)
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
+    app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)
     app_web.router.add_route('OPTIONS', '/api/deal/view', lambda r: web.Response())
     app_web.router.add_get("/api/deal/view", handle_api_deal_view)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/chat", handle_api_deal_chat)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/react', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/read", handle_api_deal_chat_read)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())
@@ -8242,6 +11553,8 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
     app_web.router.add_get("/api/stages", handle_api_stages)
+    app_web.router.add_route('OPTIONS', '/api/pipelines', lambda r: web.Response())
+    app_web.router.add_get("/api/pipelines", handle_api_pipelines)
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())
@@ -8254,6 +11567,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_get("/webapp", serve_webapp)
+    app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
@@ -9062,7 +12376,18 @@ def main():
             _rehydrate_tecili_tasks()
         except Exception as _re_err:
             logger.warning(f"Təcili rehydrate skipped: {_re_err}")
-        logger.info(f"Bot started. Kommo webhook server on port {WEBHOOK_PORT}; Telegram polling active.")
+        logger.info("Bot started. Kommo webhook server on port %s; Telegram polling active.", WEBHOOK_PORT)
+        try:
+            webapp_url = os.environ.get(
+                "WEBAPP_PUBLIC_URL",
+                "https://worker-production-3e3e.up.railway.app/webapp?v=175",
+            )
+            await application.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="CRM", web_app=WebAppInfo(url=webapp_url))
+            )
+            logger.info("Telegram menu button set to %s", webapp_url)
+        except Exception as exc:
+            logger.warning("Could not set web app menu button: %s", exc)
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app
