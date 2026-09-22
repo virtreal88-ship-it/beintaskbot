@@ -236,7 +236,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790099359,
+    "at": 1790099566,
     "fields": [
       "messages"
     ]
@@ -343,6 +343,28 @@
       "message_type": "text",
       "created_at": 1790099350,
       "created": "22.09.2026 21:49",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU0NDZEMTRDNDIwRUJCNDRGQzg5QjBGRTk0NEY3NzIA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU0NDZEMTRDNDIwRUJCNDRGQzg5QjBGRTk0NEY3NzIA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Oneline SOFT",
+      "phone": "994102135104",
+      "text": "Salam. Proqram lazımdır",
+      "message_type": "text",
+      "created_at": 1790099564,
+      "created": "22.09.2026 21:52",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
