@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="193">
+    <meta name="pwa-build" content="194">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -1082,6 +1082,32 @@ function sourceTagHtml(record) {
 }
 function stripNamePrefix(text) {
     return String(text || '').replace(/^\s*\[[^\]]{1,60}\]\s*/, '');
+}
+const STAFF_CARD_NAMES = [
+    'rüfət həsənzadə', 'rufat hasanzade', 'soltan abbasov', 'hüseyn səfərov', 'huseyn seferov',
+    'nizami qasımov', 'nizami qasimov', 'rasim əsgərov', 'rasim asgarov',
+    'sərmayə əhmədsoy', 'sermaye ehmedsoy', 'asya agayeva', 'nuranə şirinova', 'nurane sirinova',
+    'texniki dəstək', 'texniki destek'
+];
+function foldStaffLabel(value) {
+    return String(value || '').toLowerCase().replace(/\(admin\)/g, '').replace(/\s+/g, ' ').trim();
+}
+function isStaffCardTitle(value, record) {
+    const folded = foldStaffLabel(value);
+    if(!folded) return false;
+    if(STAFF_CARD_NAMES.some(name => folded === name || folded.startsWith(name + ' '))) return true;
+    const extras = [
+        FUNNEL_OWNER_NAME,
+        record && record.responsible_name,
+        record && record.funnel_owner_name,
+        record && record.stage_name
+    ].map(foldStaffLabel).filter(Boolean);
+    return extras.includes(folded);
+}
+function dealCardTitle(record) {
+    const name = String((record && record.name) || '').trim();
+    if(!name || isStaffCardTitle(name, record)) return '';
+    return name;
 }
 function dealSourceLabel(record) {
     const partner = dealPartnerLabel(record);
@@ -2589,7 +2615,7 @@ function createCrmTaskCard(t, mode) {
     card.dataset.taskId = String(t.id);
     const displayDesc = stripNamePrefix(t.desc || t.task_text || t.text || '');
     const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
-    const title = t.contact_name || t.lead_name || displayDesc || 'Tapşırıq';
+    const title = t.contact_name || (isStaffCardTitle(t.lead_name || t.name, t) ? '' : (t.lead_name || t.name)) || displayDesc || 'Tapşırıq';
     const when = t.overdue_text || t.time || t.deadline || '';
     const phoneList = Array.isArray(t.phones) && t.phones.length ? t.phones : (t.phone ? [t.phone] : []);
     const phone = phoneList.filter(Boolean).join(', ');
@@ -3532,7 +3558,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
-                <div style="font-size:16px;font-weight:800">${escapeHtml(deal.name || '—')}</div>
+                <div style="font-size:16px;font-weight:800">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
                 <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
@@ -3907,7 +3933,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <aside class="deal-side">
                 <h3>Sövdələşmə</h3>
                 <div class="text-[13px] text-gray-700 space-y-1">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b>${escapeHtml(deal.name || '—')}</b>${sourceTagHtml(deal)}</div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
                     ${sourceUrlsHtml(deal)}
                     <div>🕒 ${escapeHtml(created)}</div>
                     <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
@@ -4182,7 +4208,7 @@ function renderSamilDeals() {
     container.innerHTML = stagesToRender.map(([key, label]) => {
         const deals = dealsForStage(key);
         const cardsHtml = deals.length ? deals.map(deal => {
-            const dealTitle = escapeHtml(deal.name || '—');
+            const dealTitle = escapeHtml(dealCardTitle(deal));
             const clientName = escapeHtml(deal.contact_name || '—');
             const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
             const phone = escapeHtml(phoneList.join(', ') || '—');
@@ -4196,7 +4222,7 @@ function renderSamilDeals() {
                     <span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
                     <div class="min-w-0 flex-1">
                         <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
-                        <div class="text-sm font-semibold text-slate-900 truncate">${dealTitle}</div>
+                        ${dealTitle ? `<div class="text-sm font-semibold text-slate-900 truncate">${dealTitle}</div>` : ''}
                     </div>
                     <div class="flex items-center gap-1.5">
                         <div class="flex flex-col items-end gap-0.5 min-w-0">
