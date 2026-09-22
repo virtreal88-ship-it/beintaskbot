@@ -5641,7 +5641,7 @@ async def health_check(request: web.Request) -> web.Response:
     at = int(_WA_LAST_HOOK.get("at") or 0)
     if at:
         hook = f" hook={max(0, int(_time_module.time()) - at)}s"
-    return web.Response(status=200, text=f"Bot is running v182{hook}")
+    return web.Response(status=200, text=f"Bot is running v183{hook}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8573,6 +8573,7 @@ WA_CLOUD_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
 # Only the number that was migrated to the official WhatsApp Business Platform
 # goes through Cloud API; the rest keep using the Kommo chat integration.
 WA_CLOUD_SENDER_DIGITS = re.sub(r"\D", "", os.environ.get("WHATSAPP_CLOUD_SENDER", RUFAT_WHATSAPP_NUMBER))
+WA_WABA_ID = str(os.environ.get("WHATSAPP_WABA_ID") or "1603840074450579").strip()
 WA_VERIFY_TOKEN = str(
     os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
     or os.environ.get("WHATSAPP_VERIFY_TOKEN")
@@ -8628,7 +8629,7 @@ def _wa_ensure_subscribed() -> None:
     token, phone_id = _wa_cloud_credentials()
     if not token:
         return
-    waba = str(os.environ.get("WHATSAPP_WABA_ID") or "").strip()
+    waba = str(WA_WABA_ID or os.environ.get("WHATSAPP_WABA_ID") or "").strip()
     if not waba and phone_id:
         data = _wa_graph_get(phone_id, {"fields": "whatsapp_business_account"})
         account = data.get("whatsapp_business_account") if isinstance(data, dict) else {}
