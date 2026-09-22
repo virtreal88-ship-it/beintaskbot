@@ -120,6 +120,7 @@
             }
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
             body:not(.sidebar-open) #side-tab-pending { position:relative; }
+            body:not(.sidebar-open) #side-tab-chats { position:relative; }
             #sidebar-user { margin-top:auto; padding:10px 8px 0; border:0; border-top:1px solid #e6e8eb; }
             #sidebar-sync { display:none; align-items:center; justify-content:center; }
             #sidebar-sync .sync-meter { width:28px; height:28px; }
@@ -401,6 +402,11 @@
         .chats-row-bottom { display:flex; align-items:center; gap:8px; margin-top:2px; }
         .chats-row-preview { flex:1; min-width:0; font-size:12px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .chats-unread { min-width:18px; height:18px; border-radius:9px; background:#25d366; color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; flex:none; }
+        #tab-chats { position:relative; }
+        #chats-menu-badge {
+            position:absolute; top:2px; right:12px; background:#ef4444; color:#fff; font-size:9px; font-weight:700;
+            min-width:16px; height:16px; border-radius:8px; display:none; align-items:center; justify-content:center; padding:0 4px;
+        }
         .chats-hide { flex:none; width:22px; height:22px; border:0; border-radius:50%; background:transparent; color:#94a3b8; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
         .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
         .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:700; }
@@ -499,7 +505,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sövdələşmələr</span>
         </button>
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Çatlar</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Çatlar</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
         <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="sidebar-item-label">Yeni</span>
@@ -903,7 +909,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sövdələşmələr</span>
     </button>
     <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Çatlar</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Çatlar</span><span id="chats-menu-badge"></span>
     </button>
     <button id="tab-create" onclick="switchTab('tab-create')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="mt-0.5">Yeni</span>
@@ -1353,6 +1359,7 @@ function applySamilWorkspace(payload) {
     });
     if(payload.user_name) setUserDisplayName(payload.user_name);
     applyPendingSamilStageMoves();
+    paintChatsUnreadBadge();
 }
 
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
@@ -4960,6 +4967,23 @@ function chatsIsUnread(deal, seen) {
     const lastSeen = Number((seen || getChatsSeen())[String(deal.id)] || 0);
     return Number(deal.updated_at || 0) > lastSeen;
 }
+function paintChatsUnreadBadge() {
+    const count = HAS_CHATS
+        ? chatsInboxDeals().filter(deal => chatsIsUnread(deal, getChatsSeen())).length
+        : 0;
+    const text = count > 99 ? '99+' : String(count);
+    const show = count > 0;
+    const side = document.getElementById('sidebar-chats-badge');
+    if(side) {
+        side.textContent = text;
+        side.style.display = show ? 'flex' : 'none';
+    }
+    const tab = document.getElementById('chats-menu-badge');
+    if(tab) {
+        tab.textContent = text;
+        tab.style.display = show ? 'flex' : 'none';
+    }
+}
 function chatsTimeLabel(ts) {
     const n = Number(ts || 0);
     if(!n) return '';
@@ -5062,6 +5086,7 @@ function renderChatsList() {
         };
     }
     if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
+    paintChatsUnreadBadge();
 }
 function closeInboxChat() {
     stopDealChatPolling();
