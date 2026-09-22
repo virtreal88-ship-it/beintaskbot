@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="191">
+    <meta name="pwa-build" content="192">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -1079,6 +1079,9 @@ function sourceTagHtml(record) {
     const key = Object.keys(SOURCE_COLORS).find(name => label.toLowerCase().startsWith(name.toLowerCase()));
     const color = SOURCE_COLORS[key] || '#64748b';
     return `<span class="source-tag" style="color:${color}">${escapeHtml(label)}</span>`;
+}
+function stripNamePrefix(text) {
+    return String(text || '').replace(/^\s*\[[^\]]{1,60}\]\s*/, '');
 }
 function dealSourceLabel(record) {
     const partner = dealPartnerLabel(record);
@@ -2584,7 +2587,7 @@ function createCrmTaskCard(t, mode) {
     card.className = 'crm-task-card';
     card.draggable = true;
     card.dataset.taskId = String(t.id);
-    const displayDesc = (t.desc || t.task_text || t.text || '').replace(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i, '');
+    const displayDesc = stripNamePrefix(t.desc || t.task_text || t.text || '');
     const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
     const title = t.contact_name || t.lead_name || displayDesc || 'Tapşırıq';
     const when = t.overdue_text || t.time || t.deadline || '';
@@ -3220,7 +3223,7 @@ function dealNoteRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconDel()}</button></span>`
         : '';
-    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(item.text || '')}</div></div>`;
+    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(stripNamePrefix(item.text))}</div></div>`;
 }
 function dealTaskRowHtml(item, readonly) {
     const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
@@ -3522,7 +3525,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
         ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`).join('')
         : `<div class="text-gray-400">${linkifyText(deal.last_note || 'Qeyd yoxdur')}</div>`;
     const tasksHtml = tasks.length
-        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}${item.responsible ? ` <span class="text-gray-400">· ${escapeHtml(item.responsible)}</span>` : ''}</div>`).join('')
+        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
     const chatHtml = dealChatRowsHtml(deal.chat, token, deal.chat_blocked, canReply && !(deal.chat && deal.chat.length));
     const composer = canReply ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
@@ -4186,7 +4189,7 @@ function renderSamilDeals() {
             const phone = escapeHtml(phoneList.join(', ') || '—');
             const stageName = escapeHtml(deal.stage_name || 'Naməlum mərhələ');
             const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
-            const note = escapeHtml(deal.last_note || '—');
+            const note = escapeHtml(stripNamePrefix(deal.last_note) || '—');
             const tasksHtml = dealTasksHtml(deal);
             const clientMessage = escapeHtml(dealLastClientMessage(deal) || '—');
             return `<article class="samil-deal-card bg-white p-3 rounded-xl" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || '')}">
