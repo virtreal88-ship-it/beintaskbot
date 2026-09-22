@@ -8151,7 +8151,6 @@ def _fetch_talks(lead_id: int, contact_ids: list[int]) -> list[dict]:
             talks[talk_id] = talk
 
     _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
-    _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "leads", "limit": 50})
     for contact_id in contact_ids:
         _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
     return list(talks.values())
@@ -8225,48 +8224,36 @@ def _join_channel_fields(*parts) -> str:
 
 
 def _origin_channel_key(blob: str) -> str:
-    text = str(blob or "").lower().replace("_", " ").replace("-", " ")
+    text = str(blob or "").lower()
     if not text.strip():
         return ""
     if "tiktok" in text or "tik tok" in text:
         return "tiktok"
-    if "instagram" in text or re.search(r"\binsta\b", text):
+    if "instagram" in text:
         return "instagram"
-    if "facebook" in text or "fb messenger" in text or re.search(r"\bfb\b", text):
+    if "facebook" in text or "fb messenger" in text:
         return "facebook"
-    if "whatsapp" in text or "waba" in text or "whats app" in text or re.search(r"\b(wa|capi)\b", text):
+    if any(token in text for token in ("whatsapp", "waba", "whats app", "whats-app")):
         return "whatsapp"
     return ""
 
 
-def _talk_looks_phone(talk: dict) -> bool:
-    chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
-    blob = _join_channel_fields(talk.get("origin"), talk.get("chat_id"), chat.get("id"), chat.get("type"))
-    return bool(re.search(r"\d{8,}", re.sub(r"\D", " ", blob)))
-
-
 def _talk_channel_key(talk: dict) -> str:
     chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
-    blob = _join_channel_fields(
-        talk.get("origin"),
-        talk.get("source"),
-        talk.get("category"),
-        talk.get("chat_id"),
-        chat.get("type"),
-        chat.get("origin"),
-        chat.get("category"),
-        chat.get("id"),
-        chat.get("name"),
-    )
-    key = _origin_channel_key(blob)
+    origin = " ".join(
+        str(part or "")
+        for part in (
+            talk.get("origin"),
+            talk.get("source"),
+            chat.get("type"),
+            chat.get("origin"),
+            talk.get("entity_type"),
+        )
+    ).strip().lower()
+    key = _origin_channel_key(origin)
     if key:
         return key
-    origin = str(talk.get("origin") or chat.get("type") or "").strip().lower()
-    if origin in {"", "chat", "capi", "wa", "im"}:
-        return "whatsapp"
-    if _talk_looks_phone(talk):
-        return "whatsapp"
-    return "instagram"
+    return "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
 
 
 def _note_channel_key(note: dict | None) -> str:
@@ -8602,9 +8589,9 @@ def _collect_deal_chat(
     except (TypeError, ValueError):
         page_count = 1
     page_count = max(1, min(page_count, 5))
-    wanted = str(channel or "").strip().lower()
+    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
     if wanted not in CHAT_CHANNEL_LABELS:
-        wanted = ""
+        wanted = "whatsapp"
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
     chat_blocked = False
@@ -8637,8 +8624,6 @@ def _collect_deal_chat(
     for row in channels:
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
-    if wanted not in {str(row.get("key") or "") for row in channels}:
-        wanted = str((channels[0] or {}).get("key") or "whatsapp") if channels else "whatsapp"
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     pages = page_count
     page_limit = 20

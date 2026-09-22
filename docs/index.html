@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="201">
+    <meta name="pwa-build" content="202">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -3206,6 +3206,7 @@ function paintDealChannels(channels, active) {
 }
 function preferredDealChannel(channels, messages) {
     const rows = Array.isArray(channels) ? channels : [];
+    if(rows.some(row => row.key === 'whatsapp')) return 'whatsapp';
     const list = Array.isArray(messages) ? messages : [];
     const lastIn = [...list].reverse().find(item => item && item.incoming) || list[list.length - 1];
     if(lastIn) {
@@ -3221,7 +3222,7 @@ function applyDealChannels(channels) {
     if(!_dealViewState.channelPicked) {
         _dealViewState.channel = preferredDealChannel(rows, _dealViewState.messages);
     } else if(rows.length && !rows.some(row => row.key === _dealViewState.channel)) {
-        _dealViewState.channel = rows[0].key;
+        _dealViewState.channel = rows.some(row => row.key === 'whatsapp') ? 'whatsapp' : rows[0].key;
     }
     paintDealChannels(rows, _dealViewState.channel);
 }
