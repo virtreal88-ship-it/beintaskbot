@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v186 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v187 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9372,7 +9372,12 @@ def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
     owner = get_funnel_owner(RUFAT_CHAT_ID) or {}
     stages = owner.get("stages") or {}
     names = owner.get("stage_names") or {}
-    status_to_key = {int(status_id): key for key, status_id in stages.items()}
+    status_to_key = {}
+    for key, status_id in stages.items():
+        try:
+            status_to_key[int(status_id)] = key
+        except (TypeError, ValueError):
+            continue
     try:
         status_id = int(lead.get("status_id") or 0)
     except (TypeError, ValueError):
@@ -9450,43 +9455,46 @@ def _apply_cloud_inbox_to_deals(deals: list) -> None:
     if not isinstance(deals, list):
         return
     try:
-        _rehome_orphaned_cloud_inbox()
+        _index_deal_phones(deals)
+        seen: set[int] = set()
+        for deal in deals:
+            if not isinstance(deal, dict):
+                continue
+            try:
+                lid = int(deal.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if lid:
+                seen.add(lid)
+            _paint_cloud_inbox_deal(deal)
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            cloud_ids = [key for key in store.keys() if str(key).isdigit()]
+        for key in cloud_ids:
+            try:
+                lid = int(key)
+            except (TypeError, ValueError):
+                continue
+            if lid in seen:
+                continue
+            rows = _sent_messages_for_lead(lid)
+            if not any(row.get("incoming") for row in rows):
+                continue
+            try:
+                lead = get_lead_details(lid)
+                if not _lead_open_in_rufat_chats(lead):
+                    continue
+                preview, ts, _has = _cloud_last_for_lead(lid)
+                row = _overview_deal_from_cloud_lead(lead, preview, ts)
+            except Exception as exc:
+                logger.warning("Cloud inbox inject failed lead=%s: %s", lid, exc)
+                continue
+            if row.get("id"):
+                _paint_cloud_inbox_deal(row)
+                deals.append(row)
+                seen.add(lid)
     except Exception as exc:
-        logger.warning("Cloud inbox rehome failed: %s", exc)
-    _index_deal_phones(deals)
-    seen: set[int] = set()
-    for deal in deals:
-        if not isinstance(deal, dict):
-            continue
-        try:
-            lid = int(deal.get("id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if lid:
-            seen.add(lid)
-        _paint_cloud_inbox_deal(deal)
-    store = _load_sent_messages()
-    with _wa_sent_lock:
-        cloud_ids = [key for key in store.keys() if str(key).isdigit()]
-    for key in cloud_ids:
-        try:
-            lid = int(key)
-        except (TypeError, ValueError):
-            continue
-        if lid in seen:
-            continue
-        rows = _sent_messages_for_lead(lid)
-        if not any(row.get("incoming") or row.get("via_cloud") for row in rows):
-            continue
-        lead = get_lead_details(lid)
-        if not _lead_open_in_rufat_chats(lead):
-            continue
-        preview, ts, _has = _cloud_last_for_lead(lid)
-        row = _overview_deal_from_cloud_lead(lead, preview, ts)
-        if row.get("id"):
-            _paint_cloud_inbox_deal(row)
-            deals.append(row)
-            seen.add(lid)
+        logger.warning("Cloud inbox overlay failed: %s", exc)
 
 
 def _wa_incoming_preview(message: dict) -> tuple[str, str]:
