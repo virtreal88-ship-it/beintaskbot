@@ -8410,7 +8410,11 @@ def _collect_deal_chat(
                 "label": CHAT_CHANNEL_LABELS.get(fallback_key, "WhatsApp"),
                 "talk_id": ranked[0],
                 "open": True,
+                "sender_phone": _wa_display_number(sender_digits) if fallback_key == "whatsapp" else "",
             }]
+    for row in channels:
+        if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
+            row["sender_phone"] = _wa_display_number(sender_digits)
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     pages = 3 if before else 1
     page_limit = 20
@@ -9047,7 +9051,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         "has_more": has_more,
         "channel": channel,
         "channels": channels,
-        "sender_phone": sender_digits,
+        "sender_phone": _wa_display_number(sender_digits),
         "can_reply": bool(reply_talk_id),
     })
 
