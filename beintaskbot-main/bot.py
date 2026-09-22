@@ -5637,7 +5637,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v178")
+    return web.Response(status=200, text="Bot is running v179")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11412,6 +11412,21 @@ async def serve_deal_page(request: web.Request) -> web.Response:
         return web.Response(status=404, text="Deal page not found")
     return web.FileResponse(html_path)
 
+
+async def serve_privacy_policy(request: web.Request) -> web.Response:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(base_dir)
+    candidates = (
+        os.path.join(base_dir, "docs", "privacy-policy.html"),
+        os.path.join(base_dir, "privacy-policy.html"),
+        os.path.join(parent_dir, "docs", "privacy-policy.html"),
+        os.path.join(parent_dir, "privacy-policy.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        return web.Response(status=404, text="Privacy policy not found")
+    return web.FileResponse(html_path)
+
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == 'OPTIONS':
@@ -11689,6 +11704,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/deal.html", serve_deal_page)
+    app_web.router.add_get("/privacy-policy", serve_privacy_policy)
+    app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)
     app_web.router.add_get("/", health_check)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
