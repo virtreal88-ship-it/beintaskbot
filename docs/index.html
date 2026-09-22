@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="197">
+    <meta name="pwa-build" content="198">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -333,6 +333,7 @@
         .wa-composer-field.has-voice textarea { display:none; }
         .deal-chat-row.comment { display:none; }
         .deal-chat-system { display:block; margin:10px auto; max-width:86%; text-align:center; font-size:11px; line-height:1.4; color:#667781; background:#dbe4ea; border-radius:8px; padding:6px 10px; box-shadow:none; }
+        .deal-chat-system a { color:#02735e; font-weight:800; text-decoration:underline; }
         .deal-chat-note { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:8px auto; max-width:92%; box-shadow:none; font-size:13px; line-height:1.35; }
         .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:700; margin-bottom:4px; }
         img.deal-zoom { cursor:zoom-in; }
@@ -2935,8 +2936,19 @@ function isDealDecryptNotice(text) {
     const folded = String(text || '').toLowerCase();
     return folded.includes('failed to decrypt') || folded.includes('cannot be read here') || folded.includes('view it on the whatsapp');
 }
-function dealDecryptNoticeText() {
-    return 'Mesajın məzmununu oxumaq mümkün olmadı. Bu mesajı burada açmaq olmur. Zəhmət olmasa WhatsApp tətbiqində baxın.';
+function dealChatClientPhone() {
+    const live = String(document.getElementById('deal-head-phone')?.value || '').trim();
+    if(live) return live;
+    const deal = _dealViewState && _dealViewState.deal;
+    const list = Array.isArray(deal && deal.phones) && deal.phones.length ? deal.phones : (deal && deal.phone ? [deal.phone] : []);
+    return String(list[0] || '').trim();
+}
+function dealDecryptNoticeHtml(when) {
+    const name = dealClientName(_dealViewState && _dealViewState.deal);
+    const url = waMeUrl(dealChatClientPhone());
+    const linkLabel = name ? `WhatsApp-da aç: ${name}` : 'WhatsApp-da aç';
+    const link = url ? ` <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkLabel)}</a>` : '';
+    return `<div class="deal-chat-system">${escapeHtml(dealDecryptNoticeText())}${link}${when ? `<div class="wa-when" style="margin-top:3px">${escapeHtml(when)}</div>` : ''}</div>`;
 }
 function dealChatItemHtml(item, token, readonly) {
     const isComment = !!(item && item.is_comment);
@@ -2946,7 +2958,7 @@ function dealChatItemHtml(item, token, readonly) {
         return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${escapeHtml(when)}</div><div>${linkifyText(item.text || '')}</div></div>`;
     }
     if(isDealDecryptNotice(item && item.text)) {
-        return `<div class="deal-chat-system">${escapeHtml(dealDecryptNoticeText())}${when ? `<div class="wa-when" style="margin-top:3px">${escapeHtml(when)}</div>` : ''}</div>`;
+        return dealDecryptNoticeHtml(when);
     }
     const cls = item.incoming ? 'in' : 'out';
     const channel = chatChannelKey(item);
