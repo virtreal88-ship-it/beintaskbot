@@ -1,5 +1,31 @@
 [
   {
+    "id": "8afee866",
+    "type": "confirm_stage",
+    "created_at": "2026-09-22T21:22:38.986226+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "Market Biləcəri",
+      "phone": "+994554807020",
+      "lead_id": 77952145,
+      "task_id": 94405881,
+      "status_id": 142,
+      "stage_name": "Uğurla tamamlandı",
+      "stage_key": "ugurlu",
+      "pipeline_id": 14243944,
+      "sender_name": "Rasim Əsgərov",
+      "sender_chat_id": 7920785774,
+      "conf_key": "59884aac",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/77952145",
+      "telegram_chat_id": 1628569350,
+      "telegram_message_id": 8536
+    },
+    "options": [
+      "Təsdiq et",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "641b6ed6",
     "type": "assign_executor",
     "created_at": "2026-09-21T15:17:38.384512+04:00",
