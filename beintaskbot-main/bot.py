@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v197 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v198 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9082,9 +9082,17 @@ def _wa_cloud_upload_media(content: bytes, filename: str, mime: str) -> tuple[st
     return "", detail or "Fayl WhatsApp-a yüklənmədi."
 
 
+def _is_ogg_bytes(raw: bytes) -> bool:
+    return bool(raw) and raw[:4] == b"OggS"
+
+
 def _ffmpeg_to_voice_ogg(raw: bytes, filename: str) -> bytes:
     """Convert a browser recording to mono Ogg/Opus, the only voice note format."""
-    suffix = os.path.splitext(str(filename or ""))[1] or ".webm"
+    if _is_ogg_bytes(raw):
+        return raw
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
+        suffix = ".webm"
     src_path = ""
     dst_path = ""
     try:
@@ -9092,20 +9100,27 @@ def _ffmpeg_to_voice_ogg(raw: bytes, filename: str) -> bytes:
             src.write(raw)
             src_path = src.name
         dst_path = src_path + ".ogg"
-        result = subprocess.run(
+        commands = [
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", dst_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
                 "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", dst_path,
             ],
-            capture_output=True,
-            timeout=90,
-        )
-        if result.returncode != 0:
-            logger.warning("ffmpeg voice convert failed: %s", (result.stderr or b"")[:240])
-            return b""
-        with open(dst_path, "rb") as handle:
-            return handle.read()
+        ]
+        last_err = b""
+        for cmd in commands:
+            result = subprocess.run(cmd, capture_output=True, timeout=90)
+            if result.returncode == 0 and os.path.exists(dst_path) and os.path.getsize(dst_path) > 0:
+                with open(dst_path, "rb") as handle:
+                    return handle.read()
+            last_err = result.stderr or last_err
+        logger.warning("ffmpeg voice convert failed: %s", last_err[:240])
+        return b""
     except Exception as exc:
         logger.warning("ffmpeg voice convert error: %s", exc)
         return b""
@@ -9122,10 +9137,10 @@ def _wa_cloud_media_kind(filename: str, content_type: str) -> str:
     name = f"{filename} {content_type}".lower()
     if str(content_type or "").startswith("image/") or re.search(r"\.(png|jpe?g|webp)$", name):
         return "image"
-    if str(content_type or "").startswith("video/") or re.search(r"\.(mp4|mov|3gp)$", name):
-        return "video"
     if _looks_voice_upload(filename, content_type):
         return "audio"
+    if str(content_type or "").startswith("video/") or re.search(r"\.(mp4|mov|3gp)$", name):
+        return "video"
     return "document"
 
 
@@ -11058,10 +11073,9 @@ def _deliver_via_cloud(
         payload, mime, name = raw, content_type or "application/octet-stream", filename or "file"
         if kind == "audio":
             converted = _ffmpeg_to_voice_ogg(raw, filename)
-            if converted:
-                payload, mime, name, voice = converted, "audio/ogg", "voice.ogg", True
-            elif "ogg" in str(content_type or "").lower():
-                mime, voice = "audio/ogg", True
+            if not converted:
+                return False, "Səs WhatsApp formatına çevrilmədi.", "", "audio"
+            payload, mime, name, voice = converted, "audio/ogg", "voice.ogg", True
         media_id, upload_error = _wa_cloud_upload_media(payload, name, mime)
         if not media_id:
             return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind
