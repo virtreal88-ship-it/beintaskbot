@@ -1374,21 +1374,50 @@ def _stage_key_from_kommo(name: str, status_id: int) -> str:
 
 
 _pipeline_stage_cache: dict[int, tuple[dict, dict, list]] = {}
+_all_pipelines_cache: list[dict] | None = None
+_all_pipelines_cache_at = 0.0
 
 
-def load_pipeline_stage_maps(pipeline_id: int) -> tuple[dict, dict, list]:
-    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
-    pid = int(pipeline_id)
-    cached = _pipeline_stage_cache.get(pid)
-    if cached:
-        return cached
-    packs = {
+def _personal_pipeline_packs() -> dict[int, tuple[dict, dict]]:
+    return {
         int(RUFAT_PIPELINE_ID): (RUFAT_STAGES, RUFAT_STAGE_NAMES),
         int(HUSEYN_PIPELINE_ID): (HUSEYN_STAGES, HUSEYN_STAGE_NAMES),
         int(RASIM_PIPELINE_ID): (RASIM_STAGES, RASIM_STAGE_NAMES),
         int(NIZAMI_PIPELINE_ID): (NIZAMI_STAGES, NIZAMI_STAGE_NAMES),
     }
-    pack = packs.get(pid)
+
+
+def _stage_maps_from_statuses(statuses: list) -> tuple[dict, dict, list]:
+    stages: dict[str, int] = {}
+    names: dict[int, str] = {}
+    ui: list[tuple[str, str]] = []
+    used: set[str] = set()
+    rows = sorted(statuses or [], key=lambda row: int((row or {}).get("sort") or 0))
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            sid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        label = str(row.get("name") or sid)
+        key = _stage_key_from_kommo(label, sid)
+        if key in used:
+            key = f"{key}_{sid}"
+        used.add(key)
+        stages[key] = sid
+        names[sid] = label
+        ui.append((key, label))
+    return stages, names, ui
+
+
+def load_pipeline_stage_maps(pipeline_id: int, *, fallback: bool = True) -> tuple[dict, dict, list]:
+    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
+    pid = int(pipeline_id)
+    cached = _pipeline_stage_cache.get(pid)
+    if cached:
+        return cached
+    pack = _personal_pipeline_packs().get(pid)
     if pack:
         stages_map, names_map = pack
         ui = [(key, names_map.get(sid, key)) for key, sid in stages_map.items()]
@@ -1401,29 +1430,87 @@ def load_pipeline_stage_maps(pipeline_id: int) -> tuple[dict, dict, list]:
         resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines/{pid}", headers=HEADERS, timeout=12)
         if resp.status_code == 200:
             statuses = (resp.json().get("_embedded") or {}).get("statuses") or []
-            statuses = sorted(statuses, key=lambda row: int(row.get("sort") or 0))
-            used = set()
-            for row in statuses:
-                try:
-                    sid = int(row.get("id"))
-                except (TypeError, ValueError):
-                    continue
-                label = str(row.get("name") or sid)
-                key = _stage_key_from_kommo(label, sid)
-                if key in used:
-                    key = f"{key}_{sid}"
-                used.add(key)
-                stages[key] = sid
-                names[sid] = label
-                ui.append((key, label))
+            stages, names, ui = _stage_maps_from_statuses(statuses)
     except Exception as exc:
         logger.warning("Pipeline %s stage load failed: %s", pid, exc)
-    if not stages:
+    if not stages and fallback:
         stages, names, ui = dict(RUFAT_STAGES), dict(RUFAT_STAGE_NAMES), [
             (key, RUFAT_STAGE_NAMES.get(sid, key)) for key, sid in RUFAT_STAGES.items()
         ]
-    _pipeline_stage_cache[pid] = (stages, names, ui)
-    return _pipeline_stage_cache[pid]
+    if stages:
+        _pipeline_stage_cache[pid] = (stages, names, ui)
+    return stages, names, ui
+
+
+def _ordered_ui_for_pipeline(pipeline_id: int, statuses: list) -> list[dict]:
+    stages_map, names, ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+    key_by_sid = {int(sid): key for key, sid in stages_map.items()}
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    for row in sorted(statuses or [], key=lambda item: int((item or {}).get("sort") or 0)):
+        if not isinstance(row, dict):
+            continue
+        try:
+            sid = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        key = key_by_sid.get(sid)
+        if not key:
+            continue
+        ordered.append({"key": key, "name": names.get(sid) or str(row.get("name") or key)})
+        seen.add(key)
+    for key, label in ui:
+        if key in seen:
+            continue
+        ordered.append({"key": key, "name": label})
+        seen.add(key)
+    return ordered
+
+
+def load_all_kommo_pipelines(*, force: bool = False) -> list[dict]:
+    """All active Kommo funnels with statuses in CRM sort order."""
+    global _all_pipelines_cache, _all_pipelines_cache_at
+    now = _time_module.time()
+    if not force and _all_pipelines_cache and (now - _all_pipelines_cache_at) < 300:
+        return _all_pipelines_cache
+    rows: list[dict] = []
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines", headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            rows = (resp.json().get("_embedded") or {}).get("pipelines") or []
+    except Exception as exc:
+        logger.warning("Kommo pipelines list failed: %s", exc)
+        if _all_pipelines_cache:
+            return _all_pipelines_cache
+        return []
+    result: list[dict] = []
+    packs = _personal_pipeline_packs()
+    for pipeline in sorted(rows, key=lambda item: int((item or {}).get("sort") or 0)):
+        if not isinstance(pipeline, dict) or pipeline.get("is_archive"):
+            continue
+        try:
+            pid = int(pipeline.get("id"))
+        except (TypeError, ValueError):
+            continue
+        statuses = (pipeline.get("_embedded") or {}).get("statuses") or []
+        if pid not in packs and pid not in _pipeline_stage_cache:
+            stages, names, ui = _stage_maps_from_statuses(statuses)
+            if stages:
+                _pipeline_stage_cache[pid] = (stages, names, ui)
+        ordered = _ordered_ui_for_pipeline(pid, statuses)
+        if not ordered:
+            continue
+        result.append({
+            "id": pid,
+            "name": str(pipeline.get("name") or pid),
+            "sort": int(pipeline.get("sort") or 0),
+            "is_main": bool(pipeline.get("is_main")),
+            "stages": ordered,
+        })
+    if result:
+        _all_pipelines_cache = result
+        _all_pipelines_cache_at = now
+    return result or (_all_pipelines_cache or [])
 
 
 def get_funnel_owner(chat_id) -> dict | None:
@@ -5733,7 +5820,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
             stage_key = str(data.get("stage_key") or "")
             lead = get_lead_details(lead_id) or {}
             pipeline_id = _lead_pipeline_id(lead) or get_pipeline_id_for_chat(chat_id)
-            stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
+            if is_admin(chat_id):
+                try:
+                    requested_pipeline = int(data.get("pipeline_id") or 0)
+                except (TypeError, ValueError):
+                    requested_pipeline = 0
+                if requested_pipeline:
+                    pipeline_id = requested_pipeline
+                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+            else:
+                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
             if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
             source_label = str(data.get("source") or data.get("menbe") or "").strip()
@@ -6314,14 +6410,27 @@ async def handle_api_action(request: web.Request) -> web.Response:
             owner = get_funnel_owner(chat_id)
             if not owner:
                 return web.json_response({"success": False, "error": "Huni tapılmadı."}, status=403)
+            pipeline_id = int(owner["pipeline_id"])
             stages = owner["stages"]
-            working_keys = {
-                str(key)
-                for key, _label in (owner.get("ui_stages") or [])
-                if key not in ("ugurlu", "imtina", "nerazobrannoye")
-            }
-            if stage_key not in stages or (working_keys and stage_key not in working_keys):
-                return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+            names = owner["stage_names"]
+            if is_admin(chat_id):
+                try:
+                    requested_pipeline = int(data.get("pipeline_id") or 0)
+                except (TypeError, ValueError):
+                    requested_pipeline = 0
+                if requested_pipeline:
+                    pipeline_id = requested_pipeline
+                    stages, names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+                if stage_key not in stages:
+                    return web.json_response({"success": False, "error": "Mərhələni hunidən seçin."})
+            else:
+                working_keys = {
+                    str(key)
+                    for key, _label in (owner.get("ui_stages") or [])
+                    if key not in ("ugurlu", "imtina", "nerazobrannoye")
+                }
+                if stage_key not in stages or (working_keys and stage_key not in working_keys):
+                    return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
             partner_name = str(data.get("partner") or "").strip()
             utm_blob = " ".join((
                 str(data.get("utm_source") or ""),
@@ -6345,7 +6454,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
             if not contact_id:
                 return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
-            lead_id = create_lead_for_contact(int(contact_id), customer_name, owner["pipeline_id"], stages[stage_key])
+            lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key])
             if not lead_id:
                 return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
             applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
@@ -6355,7 +6464,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if note_text:
                 add_note(int(lead_id), note_text, "leads")
             invalidate_rufat_overview_cache()
-            stage_label = owner["stage_names"].get(int(stages[stage_key]), stage_key)
+            stage_label = names.get(int(stages[stage_key]), stage_key)
             return web.json_response({
                 "success": True,
                 "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
@@ -7473,6 +7582,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         source = extract_menbe(contact) or extract_menbe(lead)
         deals.append({
             "id": lead_id,
+            "pipeline_id": pipeline_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
@@ -8412,6 +8522,7 @@ def _collect_deal_chat(
     channel: str = "whatsapp",
     sender_digits: str = "",
     employee_name: str = "",
+    pages: int | None = None,
 ) -> tuple[list[dict], bool, int, bool, list[dict], str]:
     """Load a merged timeline from all messenger talks; channel is the send target."""
     try:
@@ -8422,6 +8533,11 @@ def _collect_deal_chat(
         before = int(before or 0)
     except (TypeError, ValueError):
         before = 0
+    try:
+        page_count = int(pages) if pages is not None else (3 if before else 1)
+    except (TypeError, ValueError):
+        page_count = 1
+    page_count = max(1, min(page_count, 5))
     wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
     if wanted not in CHAT_CHANNEL_LABELS:
         wanted = "whatsapp"
@@ -8458,7 +8574,7 @@ def _collect_deal_chat(
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    pages = 3 if before else 1
+    pages = page_count
     page_limit = 20
     talk_has_more = False
     for row in channels:
@@ -8953,6 +9069,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     return {
         "id": lid,
         "name": lead.get("name") or "",
+        "pipeline_id": pipeline_id,
         "stage_key": status_to_key.get(status_id, ""),
         "stage_name": names.get(status_id, "Naməlum mərhələ"),
         "contact_name": contact_name,
@@ -9396,10 +9513,22 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
     lead_id = parse_deal_share_token(request.rel_url.query.get("k") or "")
     if not lead_id:
         return web.json_response({"success": False, "error": "Link etibarsızdır və ya müddəti bitib"}, status=403)
-    deal = build_deal_view_payload(lead_id, require_personal=False)
+    lead = get_lead_details(int(lead_id))
+    deal = build_deal_view_payload(lead_id, lead, require_personal=False)
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
+    contact_ids = _lead_contact_ids(lead or {})
+    chat, chat_blocked, _reply_talk_id, _has_more, _channels, _channel = _collect_deal_chat(
+        int(lead_id),
+        contact_ids,
+        limit=50,
+        pages=3,
+        employee_name=employee_name_for_lead(lead),
+    )
+    deal["chat"] = chat
+    deal["chat_blocked"] = chat_blocked
     deal.pop("kommo_link", None)
+    deal.pop("can_reply", None)
     return web.json_response({"success": True, "deal": deal, "readonly": True})
 
 
@@ -9486,6 +9615,11 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
         owner = get_funnel_owner(chat_id)
         if owner:
             overview["user_name"] = owner["name"]
+        if is_admin(chat_id):
+            try:
+                overview["pipelines"] = load_all_kommo_pipelines()
+            except Exception as exc:
+                logger.warning("Admin pipelines attach failed: %s", exc)
         return web.json_response({"success": True, **overview, "is_admin": is_admin(chat_id)})
     except Exception as exc:
         logger.error("Rüfət overview error: %s", exc)
@@ -10349,6 +10483,22 @@ async def handle_api_stages(request: web.Request) -> web.Response:
     return web.json_response({"pipeline_id": get_pipeline_id_for_chat(chat_id), "stages": {str(k): v for k, v in names.items()}})
 
 
+async def handle_api_pipelines(request: web.Request) -> web.Response:
+    raw_chat_id = request.headers.get("X-TG-User-ID") or request.rel_url.query.get("uid") or ""
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    try:
+        pipelines = await asyncio.to_thread(load_all_kommo_pipelines)
+    except Exception as exc:
+        logger.warning("Admin pipelines failed: %s", exc)
+        return web.json_response({"success": False, "error": "Hunilər yüklənmədi"}, status=502)
+    return web.json_response({"success": True, "pipelines": pipelines})
+
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
@@ -10391,6 +10541,8 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/kpi', lambda r: web.Response())
     app_web.router.add_get("/api/kpi", handle_api_kpi)
     app_web.router.add_get("/api/stages", handle_api_stages)
+    app_web.router.add_route('OPTIONS', '/api/pipelines', lambda r: web.Response())
+    app_web.router.add_get("/api/pipelines", handle_api_pipelines)
     app_web.router.add_route('OPTIONS', '/api/admin_balances', lambda r: web.Response())
     app_web.router.add_get("/api/admin_balances", handle_api_admin_balances)
     app_web.router.add_route('OPTIONS', '/api/push-subscribe', lambda r: web.Response())

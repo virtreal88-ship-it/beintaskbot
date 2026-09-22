@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="199">
+    <meta name="pwa-build" content="200">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -247,6 +247,7 @@
         .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:transparent; flex:none; }
         .deal-head-wa svg { width:16px; height:16px; display:block; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+        .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:800; text-decoration:none; color:#fff; letter-spacing:.02em; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
         .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; min-height:0; }
         .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -267,6 +268,8 @@
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
+        .deal-stage-row.admin-pipelines { flex-direction:column; align-items:stretch; }
+        .deal-stage-row.admin-pipelines select { width:100%; }
         .deal-stage-spin { width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; flex:none; }
         .deal-note-body[contenteditable="true"] { outline:1px solid #93c5fd; border-radius:6px; padding:4px 6px; background:#f8fafc; }
         .deal-ai-btn { border:0; border-radius:8px; background:#f1f5f9; color:#1e293b; font-size:10px; font-weight:800; padding:0; width:28px; height:28px; position:absolute; right:40px; top:50%; transform:translateY(-50%); z-index:2; }
@@ -909,6 +912,9 @@ if(FUNNEL_STAGE_PRESETS[CURRENT_USER_ID]) {
     SAMIL_UI_STAGES = FUNNEL_STAGE_PRESETS[CURRENT_USER_ID];
     SAMIL_ALL_STAGES = [['nerazobrannoye','Неразобранное'], ...SAMIL_UI_STAGES, ['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']];
 }
+let KOMMO_PIPELINES = [];
+let CURRENT_PIPELINE_ID = 0;
+let _pipelinesPromise = null;
 const SAMIL_COMPLETION_PIPELINES = {
     samil: {label: FUNNEL_OWNER_NAME || 'Öz vоронка', stages:SAMIL_ALL_STAGES},
     operations: {label:'Əməliyyatlar lövhəsi', stages:[
@@ -1224,6 +1230,8 @@ function applySamilWorkspace(payload) {
         const contactName = String(deal?.contact_name || '').trim();
         return {...deal, name: dealName, contact_name: contactName || '—'};
     };
+    if(payload.pipeline_id) CURRENT_PIPELINE_ID = Number(payload.pipeline_id) || CURRENT_PIPELINE_ID;
+    if(Array.isArray(payload.pipelines) && payload.pipelines.length) KOMMO_PIPELINES = payload.pipelines;
     if(Array.isArray(payload.ui_stages) && payload.ui_stages.length) {
         SAMIL_ALL_STAGES = payload.ui_stages;
         SAMIL_UI_STAGES = payload.ui_stages.filter(([key]) => key !== 'ugurlu' && key !== 'imtina' && key !== 'nerazobrannoye');
@@ -1839,11 +1847,13 @@ function openCreateDealModal() {
     document.getElementById('create-deal-modal')?.remove();
     const defaultStage = (SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) ? samilStageFilter : (SAMIL_UI_STAGES[0] && SAMIL_UI_STAGES[0][0])) || '';
     const stageOptions = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key === defaultStage ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    const pipelineBlock = isAdmin ? `<label class="text-xs font-bold text-gray-400 block mb-1">Huni</label>
+        <select id="create-deal-pipeline" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">${pipelineOptionsHtml(CURRENT_PIPELINE_ID)}</select>` : '';
     const modal = document.createElement('div');
     modal.id = 'create-deal-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     modal.onclick = (event) => { if(event.target === modal) closeCreateDealModal(); };
-    modal.innerHTML = `<div style="background:#fff;border-radius:20px;padding:18px;width:min(420px,100%);box-shadow:0 18px 50px rgba(15,23,42,.18)" onclick="event.stopPropagation()">
+    modal.innerHTML = `<div style="background:#fff;border-radius:20px;padding:18px;width:min(420px,100%);box-shadow:0 18px 50px rgba(15,23,42,.18);max-height:92vh;overflow:auto" onclick="event.stopPropagation()">
         <div style="font-size:16px;font-weight:800;margin-bottom:12px">Yeni sifariş</div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı</label>
         <input id="create-deal-name" type="text" placeholder="Ad Soyad" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
@@ -1856,6 +1866,7 @@ function openCreateDealModal() {
         <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
         <label class="text-xs font-bold text-gray-400 block mb-1">Partner</label>
         <div class="mb-2">${partnerFieldHtml('create-deal-partner','')}</div>
+        ${pipelineBlock}
         <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
         <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
         <div style="display:flex;gap:8px;margin-top:14px">
@@ -1865,6 +1876,9 @@ function openCreateDealModal() {
     </div>`;
     document.body.appendChild(modal);
     document.getElementById('create-deal-name')?.focus();
+    if(isAdmin) {
+        ensureAdminPipelines().then(() => fillAdminPipelinePickers('create-deal-pipeline', 'create-deal-stage', CURRENT_PIPELINE_ID, defaultStage));
+    }
 }
 function closeCreateDealModal() {
     document.getElementById('create-deal-modal')?.remove();
@@ -1875,9 +1889,15 @@ async function submitCreateDeal() {
     const note = document.getElementById('create-deal-note')?.value.trim() || '';
     const partner = document.getElementById('create-deal-partner')?.value || '';
     const stageKey = document.getElementById('create-deal-stage')?.value || '';
+    const pipelineId = Number(document.getElementById('create-deal-pipeline')?.value || 0);
     if(!name) { toast('Müştəri adını daxil edin!', true); return; }
     if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
-    if(!stageKey || !SAMIL_UI_STAGES.some(([key]) => key === stageKey)) { toast('Mərhələni öz huninizdən seçin!', true); return; }
+    if(isAdmin) {
+        const keys = stagesOfPipeline(pipelineId).map(([key]) => key);
+        if(!stageKey || (keys.length && !keys.includes(stageKey))) { toast('Mərhələni hunidən seçin!', true); return; }
+    } else if(!stageKey || !SAMIL_UI_STAGES.some(([key]) => key === stageKey)) {
+        toast('Mərhələni öz huninizdən seçin!', true); return;
+    }
     const btn = document.getElementById('create-deal-save');
     const orig = btn ? btn.innerHTML : '';
     if(btn) { btn.disabled = true; btn.innerHTML = 'Yüklənir...'; }
@@ -1886,7 +1906,7 @@ async function submitCreateDeal() {
         const r = await fetch(API_BASE + '/api/action', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note, partner})
+            body: JSON.stringify({action:'create_deal', phone, customer_name:name, stage_key:stageKey, note, partner, pipeline_id: pipelineId || undefined})
         });
         const j = await r.json();
         if(r.ok && j.success) {
@@ -3309,16 +3329,89 @@ function dealStageOptionsHtml(deal) {
     const stages = Array.isArray(SAMIL_ALL_STAGES) && SAMIL_ALL_STAGES.length ? SAMIL_ALL_STAGES : SAMIL_UI_STAGES;
     return stages.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key===deal.stage_key?'selected':''}>${escapeHtml(label)}</option>`).join('');
 }
+function pipelineStagePairs(pipeline) {
+    const stages = pipeline && pipeline.stages;
+    if(!Array.isArray(stages)) return [];
+    return stages.map(item => Array.isArray(item) ? item : [item.key, item.name || item.key]).filter(row => row[0]);
+}
+function stagesOfPipeline(pipelineId) {
+    const row = (KOMMO_PIPELINES || []).find(item => String(item.id) === String(pipelineId));
+    return row ? pipelineStagePairs(row) : (Array.isArray(SAMIL_ALL_STAGES) ? SAMIL_ALL_STAGES : SAMIL_UI_STAGES);
+}
+function pipelineOptionsHtml(selectedId) {
+    const want = String(selectedId || CURRENT_PIPELINE_ID || '');
+    return (KOMMO_PIPELINES || []).map(item => `<option value="${escapeHtml(String(item.id))}" ${String(item.id)===want?'selected':''}>${escapeHtml(item.name || item.id)}</option>`).join('');
+}
+function stageOptionsForPipelineHtml(pipelineId, selectedKey) {
+    return stagesOfPipeline(pipelineId).map(([key, label]) => `<option value="${escapeHtml(key)}" ${key===selectedKey?'selected':''}>${escapeHtml(label)}</option>`).join('');
+}
+function bindPipelineStagePair(pipelineEl, stageEl, selectedStage) {
+    if(!pipelineEl || !stageEl) return;
+    const fill = () => {
+        const keep = selectedStage && stagesOfPipeline(pipelineEl.value).some(([key]) => key === selectedStage) ? selectedStage : stageEl.value;
+        stageEl.innerHTML = stageOptionsForPipelineHtml(pipelineEl.value, keep);
+    };
+    pipelineEl.onchange = fill;
+}
+async function ensureAdminPipelines() {
+    if(!isAdmin) return [];
+    if(KOMMO_PIPELINES.length) return KOMMO_PIPELINES;
+    if(_pipelinesPromise) return _pipelinesPromise;
+    _pipelinesPromise = (async () => {
+        try {
+            const r = await fetch(API_BASE + '/api/pipelines', {headers:{'X-TG-User-ID': CURRENT_USER_ID}, cache:'no-store'});
+            const d = await r.json().catch(() => ({}));
+            if(d && Array.isArray(d.pipelines) && d.pipelines.length) KOMMO_PIPELINES = d.pipelines;
+        } catch(_err) {}
+        _pipelinesPromise = null;
+        return KOMMO_PIPELINES;
+    })();
+    return _pipelinesPromise;
+}
+function fillAdminPipelinePickers(pipelineId, stageId, selectedPid, selectedStage) {
+    const pipelineEl = document.getElementById(pipelineId);
+    const stageEl = document.getElementById(stageId);
+    if(!pipelineEl || !stageEl) return;
+    const pid = selectedPid || CURRENT_PIPELINE_ID || (KOMMO_PIPELINES[0] && KOMMO_PIPELINES[0].id) || '';
+    pipelineEl.innerHTML = pipelineOptionsHtml(pid);
+    stageEl.innerHTML = stageOptionsForPipelineHtml(pid, selectedStage);
+    bindPipelineStagePair(pipelineEl, stageEl, selectedStage);
+}
+function dealPipelineStageFieldsHtml(deal) {
+    if(isAdmin) {
+        const pid = deal && deal.pipeline_id || CURRENT_PIPELINE_ID;
+        return `<div class="deal-side-form deal-stage-row admin-pipelines">
+            <select id="deal-pipeline-select">${pipelineOptionsHtml(pid)}</select>
+            <div style="display:flex;gap:8px;align-items:center">
+                <select id="deal-stage-select">${KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal && deal.stage_key) : dealStageOptionsHtml(deal)}</select>
+                <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
+            </div>
+        </div>`;
+    }
+    return `<div class="deal-side-form deal-stage-row">
+        <select id="deal-stage-select">${dealStageOptionsHtml(deal)}</select>
+        <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
+    </div>`;
+}
 function applyDealSide(deal, readonly) {
     const notes = document.getElementById('deal-notes-list');
     const tasks = document.getElementById('deal-tasks-list');
     if(notes) notes.innerHTML = dealNotesListHtml(deal, readonly);
     if(tasks) tasks.innerHTML = dealTasksListHtml(deal, readonly);
     const stageEl = document.getElementById('deal-stage-select');
-    if(stageEl) {
+    const pipelineEl = document.getElementById('deal-pipeline-select');
+    if(pipelineEl && isAdmin) {
+        const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
+        if(KOMMO_PIPELINES.length) {
+            pipelineEl.innerHTML = pipelineOptionsHtml(pid);
+            pipelineEl.value = String(pid || pipelineEl.value);
+        }
+        if(stageEl) stageEl.innerHTML = KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pipelineEl.value || pid, deal.stage_key) : dealStageOptionsHtml(deal);
+    } else if(stageEl) {
         stageEl.innerHTML = dealStageOptionsHtml(deal);
         stageEl.value = deal.stage_key || stageEl.value;
     }
+    if(stageEl && deal.stage_key) stageEl.value = deal.stage_key;
     const headName = document.getElementById('deal-head-name') || document.querySelector('#deal-view-modal .deal-shell-head .name');
     const clientName = dealClientName(deal);
     if(headName) {
@@ -3446,21 +3539,46 @@ function bindDealSideActions(deal) {
     const saveHead = () => saveDealContactFromHeader(deal);
     if(headName) { headName.onblur = saveHead; headName.onkeydown = e => { if(e.key === 'Enter') { e.preventDefault(); headName.blur(); } }; }
     if(headPhone) { headPhone.onblur = saveHead; headPhone.onkeydown = e => { if(e.key === 'Enter') { e.preventDefault(); headPhone.blur(); } }; }
-    if(stageEl) stageEl.onchange = async () => {
-        const stageKey = stageEl.value;
-        if(!stageKey || stageKey === deal.stage_key) return;
+    const saveStage = async () => {
+        const pipelineEl = document.getElementById('deal-pipeline-select');
+        const nextPipeline = pipelineEl ? Number(pipelineEl.value || 0) : 0;
+        const stageKey = stageEl && stageEl.value;
+        if(!stageKey) return;
+        if(stageKey === deal.stage_key && (!nextPipeline || nextPipeline === Number(deal.pipeline_id || 0))) return;
         const spin = document.getElementById('deal-stage-spin');
-        stageEl.disabled = true;
+        if(stageEl) stageEl.disabled = true;
+        if(pipelineEl) pipelineEl.disabled = true;
         if(spin) spin.hidden = false;
         try {
-            await samilDealAction({action:'deal_edit', lead_id: deal.id, stage_key: stageKey});
-            const label = (SAMIL_ALL_STAGES.find(([k]) => k === stageKey) || [])[1] || stageKey;
+            const payload = {action:'deal_edit', lead_id: deal.id, stage_key: stageKey};
+            if(nextPipeline) payload.pipeline_id = nextPipeline;
+            await samilDealAction(payload);
+            const label = (stagesOfPipeline(nextPipeline || deal.pipeline_id).find(([k]) => k === stageKey) || SAMIL_ALL_STAGES.find(([k]) => k === stageKey) || [])[1] || stageKey;
             deal.stage_key = stageKey;
             deal.stage_name = label;
+            if(nextPipeline) deal.pipeline_id = nextPipeline;
             toast('Mərhələ dəyişdi');
-        } catch(err) { toast(err.message || 'Mərhələ dəyişmədi', true); stageEl.value = deal.stage_key || ''; }
-        finally { stageEl.disabled = false; if(spin) spin.hidden = true; }
+        } catch(err) {
+            toast(err.message || 'Mərhələ dəyişmədi', true);
+            if(pipelineEl) pipelineEl.value = String(deal.pipeline_id || '');
+            if(stageEl) stageEl.value = deal.stage_key || '';
+        } finally {
+            if(stageEl) stageEl.disabled = false;
+            if(pipelineEl) pipelineEl.disabled = false;
+            if(spin) spin.hidden = true;
+        }
     };
+    if(stageEl) stageEl.onchange = saveStage;
+    const pipelineEl = document.getElementById('deal-pipeline-select');
+    if(pipelineEl) {
+        pipelineEl.onchange = () => {
+            if(stageEl) {
+                const keep = stagesOfPipeline(pipelineEl.value).some(([key]) => key === deal.stage_key) ? deal.stage_key : '';
+                stageEl.innerHTML = stageOptionsForPipelineHtml(pipelineEl.value, keep);
+            }
+            saveStage();
+        };
+    }
 }
 async function saveDealContactFromHeader(deal) {
     if(!deal || !_dealViewState || _dealViewState.readonly) return;
@@ -3588,7 +3706,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
     const tasksHtml = tasks.length
         ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
-    const chatHtml = dealChatRowsHtml(deal.chat, token, deal.chat_blocked, canReply && !(deal.chat && deal.chat.length));
+    const chatHtml = dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
     const composer = canReply ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
@@ -3952,12 +4070,16 @@ function dealWorkspaceHtml(deal, token, readonly) {
             </div>
             </div>
         </div>`;
+    const kommoBtn = (canShowKommoLink() && deal.kommo_link)
+        ? `<a id="deal-head-kommo" class="deal-share-btn deal-kommo-btn" href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" title="Kommo-da aç">Kommo</a>`
+        : '';
     return `<div class="deal-shell">
         <div class="deal-shell-head">
             <div class="meta">
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
             </div>
+            ${kommoBtn}
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
             <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
         </div>
@@ -3976,10 +4098,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
                     ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
                     ${(canShowKommoLink() && deal.kommo_link) ? `<div><a href="${escapeHtml(deal.kommo_link)}" target="_blank" rel="noopener noreferrer" style="color:#008069;font-weight:700">Kommo-da aç</a></div>` : ''}
                 </div>
-                ${readonly ? '' : `<div class="deal-side-form deal-stage-row">
-                    <select id="deal-stage-select">${dealStageOptionsHtml(deal)}</select>
-                    <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
-                </div>`}
+                ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
                 <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
                 <div id="deal-notes-list">${notesHtml}</div>
                 ${readonly ? '' : `<div id="deal-note-form" class="deal-side-form" hidden>
@@ -4080,6 +4199,14 @@ function paintDealViewModal(deal, readonly) {
     bindDealChatThread();
     bindDealSideActions(deal);
     bindAudioWait(modal);
+    if(!readonly && isAdmin) {
+        ensureAdminPipelines().then(() => {
+            if(!_dealViewState || String(_dealViewState.id) !== String(deal.id)) return;
+            const live = _dealViewState.deal || deal;
+            fillAdminPipelinePickers('deal-pipeline-select', 'deal-stage-select', live.pipeline_id || CURRENT_PIPELINE_ID, live.stage_key);
+            bindDealSideActions(live);
+        });
+    }
     if(!readonly) {
         loadDealChatLatest();
         startDealChatPolling();
@@ -4329,7 +4456,11 @@ function showDealModal(deal, mode) {
         .map(name => `<option value="${name}" ${name === ownerName ? 'selected' : ''}>${name}</option>`).join('');
     let body = '';
     if(mode === 'edit') {
-        body = `<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
+        const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
+        const pipelineBlock = isAdmin ? `<label class="text-xs font-bold text-gray-400 block mb-1">Huni</label>
+        <select id="deal-modal-pipeline" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px;margin-bottom:8px">${pipelineOptionsHtml(pid)}</select>
+        <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>` : '';
+        body = `${pipelineBlock}<select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${isAdmin && KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal.stage_key) : SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
         <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Partner</label>
         <div class="mt-1">${partnerFieldHtml('deal-modal-partner', dealPartnerLabel(deal))}</div>`;
     } else {
@@ -4340,8 +4471,14 @@ function showDealModal(deal, mode) {
             body += `<select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">${assigneeOptions}</select>`;
         }
     }
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button type="button" id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button type="button" id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003;max-height:92vh;overflow:auto"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button type="button" id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button type="button" id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal);
+    if(mode === 'edit' && isAdmin) {
+        ensureAdminPipelines().then(() => {
+            if(!document.getElementById('deal-modal')) return;
+            fillAdminPipelinePickers('deal-modal-pipeline', 'deal-modal-stage', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+        });
+    }
     modal.querySelector('#deal-modal-cancel').onclick = () => modal.remove();
     const saveBtn = modal.querySelector('#deal-modal-save');
     let saving = false;
@@ -4350,7 +4487,9 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
+            const pipelineId = Number(modal.querySelector('#deal-modal-pipeline')?.value || 0);
             payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
+            if(pipelineId) payload.pipeline_id = pipelineId;
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
