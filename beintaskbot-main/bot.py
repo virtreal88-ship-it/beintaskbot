@@ -7136,10 +7136,10 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
     Per-deal note GETs used to fan out into hundreds of Kommo calls and trip
     temporary account blocks. A few pages of /leads/notes is enough for cards.
     """
-    latest: dict[int, str] = {}
-    latest_client: dict[int, str] = {}
+    latest: dict[int, tuple[int, str]] = {}
+    latest_client: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return latest, latest_client
+        return {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7171,18 +7171,26 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
             if entity_id not in lead_ids:
                 continue
             text = str((note.get("params") or {}).get("text") or "").strip()
-            if not text:
+            if not text or _note_is_deleted({"text": text}):
                 continue
-            if entity_id not in latest:
-                latest[entity_id] = text
+            created = int(note.get("created_at") or note.get("updated_at") or 0)
             note_type = str(note.get("note_type") or "")
-            if note_type in _CLIENT_MESSAGE_NOTE_TYPES and entity_id not in latest_client:
-                quote, body = _split_quote_prefix(text)
-                latest_client[entity_id] = body if quote else text
+            if note_type == "common":
+                known = latest.get(entity_id)
+                if not known or created > known[0]:
+                    latest[entity_id] = (created, text)
+            if note_type in _CLIENT_MESSAGE_NOTE_TYPES:
+                known = latest_client.get(entity_id)
+                if not known or created > known[0]:
+                    quote, body = _split_quote_prefix(text)
+                    latest_client[entity_id] = (created, body if quote else text)
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    return latest, latest_client
+    return (
+        {lead: value[1] for lead, value in latest.items()},
+        {lead: value[1] for lead, value in latest_client.items()},
+    )
 
 
 async def _load_rufat_open_tasks(entity_ids: list[int]) -> list[dict]:
@@ -8192,9 +8200,12 @@ def _send_kommo_talk_message(
             payloads.append(base)
     if attachment and str(attachment.get("type") or "") == "voice":
         # Kommo documents only file/video/picture attachments; keep voice first
-        # so WhatsApp can render a player, then retry the same upload as a file.
+        # so WhatsApp can render a player, then retry the same upload as a file,
+        # finally with a caption because validation can demand a text field.
         as_file = {**attachment, "type": "file"}
         payloads = payloads + [{**payload, "attachment": as_file} for payload in payloads]
+        if not text:
+            payloads.append({"text": "🎤 Səs mesajı", "attachment": as_file})
     last_resp = None
     for payload in payloads:
         try:
@@ -8516,11 +8527,18 @@ def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
         "read": "read",
         "seen": "read",
         "viewed": "read",
+        "-1": "error",
+        "3": "error",
+        "error": "error",
+        "failed": "error",
+        "undelivered": "error",
     }
     if text in mapping:
         return mapping[text]
     if "read" in text or "seen" in text:
         return "read"
+    if "undeliver" in text or "error" in text or "fail" in text:
+        return "error"
     if "deliver" in text:
         return "delivered"
     return "sent"
@@ -9181,6 +9199,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if not ok:
         if quote_on_whatsapp:
             last_error = "Cavab göndərilmədi."
+        elif attachment:
+            kind = str(attachment.get("type") or "")
+            last_error = "Səs mesajı göndərilmədi." if kind == "voice" else "Fayl göndərilmədi."
+        elif not last_error or last_error.startswith("{") or "validation" in last_error.lower():
+            last_error = "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error}, status=400)
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
