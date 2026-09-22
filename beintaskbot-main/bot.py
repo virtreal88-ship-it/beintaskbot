@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v192 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v193 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8044,8 +8044,12 @@ def _walk_media_urls(value, depth: int = 0) -> list[str]:
         for key in ("link", "url", "media", "recording", "recording_link", "call_record", "download_link", "file_link", "href"):
             preferred.extend(_walk_media_urls(value.get(key), depth + 1))
         extra = []
+        skip = {
+            "author", "sender", "avatar", "profile", "icon", "recipient",
+            "chat", "talk", "phone", "uniq", "source", "duration",
+        }
         for key, inner in value.items():
-            if str(key) in {"phone", "uniq", "source", "duration"}:
+            if str(key).casefold() in skip:
                 continue
             extra.extend(_walk_media_urls(inner, depth + 1))
         return preferred + extra
@@ -8143,6 +8147,11 @@ def _extract_file_uuid(params: dict) -> str:
 def _looks_audio_name(name: str) -> bool:
     n = str(name or "").casefold()
     return any(n.endswith(ext) for ext in (".ogg", ".mp3", ".m4a", ".wav", ".opus", ".aac", ".oga", ".webm", ".mpeg")) or "voice" in n or "audio" in n
+
+
+def _looks_profile_photo(file_name: str, message_type: str = "") -> bool:
+    blob = f"{file_name} {message_type}".casefold()
+    return any(token in blob for token in ("profile", "avatar", "userpic", "фото профил", "pp.jpg", "pp.jpeg"))
 
 
 def _deal_fmt_ts(ts) -> str:
@@ -10342,7 +10351,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         author = message.get("sender") if isinstance(message.get("sender"), dict) else {}
     attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
     created = int(message.get("created_at") or message.get("timestamp") or nested.get("timestamp") or 0)
-    media = _extract_media_url(attachment) or _extract_media_url(nested) or _extract_media_url(message)
+    media = _extract_media_url(attachment) or _extract_media_url(nested)
+    if not media:
+        media = _as_absolute_media_url(str(message.get("media") or message.get("link") or ""))
     file_uuid = _extract_file_uuid(attachment) or _extract_file_uuid(nested) or _extract_file_uuid(message)
     file_name = str(attachment.get("file_name") or nested.get("file_name") or message.get("file_name") or "").strip()
     message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
@@ -10366,7 +10377,14 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     incoming = direction == "incoming" or str(author.get("type") or "") == "external"
     if direction not in {"incoming", "outgoing"} and str(author.get("client_id") or ""):
         incoming = True
-    if not text and not media and not file_uuid:
+    author_avatar = _as_absolute_media_url(str((author or {}).get("avatar") or (author or {}).get("photo") or (author or {}).get("icon") or ""))
+    if incoming and _looks_profile_photo(file_name, message_type):
+        message_type = "avatar"
+        if text.casefold() in {"şəkil", "sekil", "picture", "sticker", "avatar"}:
+            text = ""
+        if not author_avatar:
+            author_avatar = media
+    if not text and not media and not file_uuid and not author_avatar:
         return None
     reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
     reply_id = ""
@@ -10400,9 +10418,10 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "reply_to_message_id": reply_id,
         "reply_to_text": reply_text,
         "reply_to_author": reply_author,
-        "media_url": media if _is_allowed_media_url(media) else "",
-        "file_uuid": file_uuid,
+        "media_url": "" if message_type == "avatar" else (media if _is_allowed_media_url(media) else ""),
+        "file_uuid": "" if message_type == "avatar" else file_uuid,
         "file_name": file_name,
+        "author_avatar": author_avatar,
         "delivery_status": _chat_delivery_status(message, nested, incoming),
     }
 
