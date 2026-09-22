@@ -241,6 +241,8 @@
         }
         .deal-shell { width:min(1100px,96vw); height:min(92vh,900px); background:#fff; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 50px #0004; }
         .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#1e293b; color:#fff; }
+        .deal-head-avatar { width:36px; height:36px; border-radius:50%; background:#334155; color:#e2e8f0; font-weight:800; font-size:13px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
+        .deal-head-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
         .deal-shell-head .meta { min-width:0; flex:1; }
         .deal-shell-head .name, .deal-head-name { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .deal-shell-head .sub { font-size:11px; opacity:.95; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
@@ -3040,7 +3042,8 @@ function dealMediaSrc(raw, token, uuid, extra) {
     if(uuid) q.set('uuid', uuid);
     else if(raw && !raw.startsWith('/api/') && !q.get('note_id')) q.set('src', raw);
     if(token) q.set('k', token);
-    if(_dealViewState && _dealViewState.id) q.set('lead_id', String(_dealViewState.id));
+    const leadId = meta.leadId || meta.lead_id || (_dealViewState && _dealViewState.id);
+    if(leadId) q.set('lead_id', String(leadId));
     if(CURRENT_USER_ID) q.set('uid', String(CURRENT_USER_ID));
     if(uuid || q.get('note_id') || (raw && !raw.startsWith('/api/'))) return API_BASE + '/api/deal/file?' + q.toString();
     if(!raw) return '';
@@ -3122,17 +3125,36 @@ function isChatProfilePhoto(item) {
     const name = String((item && item.file_name) || '').toLowerCase();
     return type === 'avatar' || type === 'profile' || /profile|avatar|userpic|фото профил/.test(name);
 }
-function chatAvatarSrc(raw, token) {
+function chatAvatarSrc(raw, token, leadId) {
     const url = String(raw || '').trim();
     if(!url) return '';
     if(/^https?:\/\//i.test(url) && !/kommo|amocrm|amojo/i.test(url)) return url;
-    return dealMediaSrc(url, token, '', {});
+    return dealMediaSrc(url, token, '', {leadId: leadId || ''});
 }
 function chatAvatarHtml(item, token) {
-    const raw = item && (item.author_avatar || (isChatProfilePhoto(item) && (item.media_url || item.media)));
-    const src = chatAvatarSrc(raw, token);
+    const deal = _dealViewState && _dealViewState.deal;
+    const raw = (item && item.author_avatar)
+        || (isChatProfilePhoto(item) && (item.media_url || item.media))
+        || (item && item.incoming && deal && deal.contact_avatar)
+        || '';
+    const src = chatAvatarSrc(raw, token, deal && deal.id);
     if(!src) return '';
-    return `<img class="chat-msg-avatar" src="${escapeHtml(src)}" alt="">`;
+    return `<img class="chat-msg-avatar" src="${escapeHtml(src)}" alt="" onerror="this.remove()">`;
+}
+function dealHeadAvatarHtml(deal, token) {
+    const name = dealClientName(deal);
+    const src = chatAvatarSrc(deal && deal.contact_avatar, token || '', deal && deal.id);
+    const initials = escapeHtml(chatsInitials(name));
+    if(src) return `<span id="deal-head-avatar" class="deal-head-avatar has-photo"><img src="${escapeHtml(src)}" alt="" onerror="this.remove()">${initials}</span>`;
+    return `<span id="deal-head-avatar" class="deal-head-avatar">${initials}</span>`;
+}
+function paintDealHeadAvatar(deal, token) {
+    const el = document.getElementById('deal-head-avatar');
+    if(!el) return;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = dealHeadAvatarHtml(deal, token || (_dealViewState && _dealViewState.token) || '');
+    const next = wrap.firstElementChild;
+    if(next) el.replaceWith(next);
 }
 function dealMediaBlock(item, token) {
     if(isChatProfilePhoto(item)) return '';
@@ -3887,6 +3909,7 @@ function applyDealSide(deal, readonly) {
     }
     bindDealSideActions(deal);
     bindAudioWait(document.getElementById('deal-info-drawer') || document.getElementById('deal-view-modal'));
+    paintDealHeadAvatar(deal);
 }
 function mergeDealSnapshot(prev, snap) {
     const next = Object.assign({}, prev || {}, snap || {});
@@ -4608,6 +4631,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
         return `<div class="deal-shell inbox-shell">
         <div class="deal-shell-head">
             <button type="button" id="chats-back" class="chats-back" aria-label="Geri">←</button>
+            ${dealHeadAvatarHtml(deal, token)}
             <div class="meta">
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
@@ -4626,6 +4650,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
     }
     return `<div class="deal-shell">
         <div class="deal-shell-head">
+            ${dealHeadAvatarHtml(deal, token)}
             <div class="meta">
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
@@ -5332,20 +5357,29 @@ function chatsInitials(name) {
     return ((parts[0][0] || '') + (parts[1] ? parts[1][0] : '')).toUpperCase();
 }
 function chatsAvatarHtml(deal, name) {
-    const src = chatAvatarSrc(deal && deal.contact_avatar, '');
+    const src = chatAvatarSrc(deal && deal.contact_avatar, '', deal && deal.id);
     const channel = chatsSourceKey(deal);
-    if(src) return `<span class="chats-avatar has-photo${channel ? ' ch-' + channel : ''}"><img src="${escapeHtml(src)}" alt=""></span>`;
-    return `<span class="chats-avatar${channel ? ' ch-' + channel : ''}">${escapeHtml(chatsInitials(name))}</span>`;
+    const initials = escapeHtml(chatsInitials(name));
+    if(src) return `<span class="chats-avatar has-photo${channel ? ' ch-' + channel : ''}"><img src="${escapeHtml(src)}" alt="" onerror="this.remove()">${initials}</span>`;
+    return `<span class="chats-avatar${channel ? ' ch-' + channel : ''}">${initials}</span>`;
 }
 function rememberDealAvatar(deal, messages) {
     if(!deal) return;
-    const incoming = (Array.isArray(messages) ? messages : []).find(item => item && item.incoming && item.author_avatar);
-    const url = String((incoming && incoming.author_avatar) || deal.contact_avatar || '').trim();
+    const rows = Array.isArray(messages) ? messages : [];
+    const incoming = rows.find(item => item && item.incoming && item.author_avatar);
+    const photo = rows.find(item => item && item.incoming && isChatProfilePhoto(item) && (item.author_avatar || item.media_url || item.media));
+    const url = String(
+        (incoming && incoming.author_avatar)
+        || (photo && (photo.author_avatar || photo.media_url || photo.media))
+        || deal.contact_avatar
+        || ''
+    ).trim();
     if(!url) return;
     deal.contact_avatar = url;
     const listed = (samilDeals || []).find(item => String(item.id) === String(deal.id));
     if(listed) listed.contact_avatar = url;
     persistLocalSamilWorkspace();
+    paintDealHeadAvatar(deal);
     if(_dealInboxMode) renderChatsList();
 }
 function chatsSourceKey(deal) {
@@ -6372,7 +6406,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=222');
+    const reg = await navigator.serviceWorker.register('sw.js?v=223');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

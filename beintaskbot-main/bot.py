@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v204 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v205 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8025,6 +8025,25 @@ def _is_allowed_kommo_media_url(raw: str) -> bool:
     )
 
 
+_PROFILE_PHOTO_SUFFIXES = (
+    "lookaside.fbsbx.com",
+    "fbcdn.net",
+    "cdninstagram.com",
+    "pps.whatsapp.net",
+    "mms.whatsapp.net",
+    "graph.facebook.com",
+)
+
+
+def _is_allowed_avatar_url(raw: str) -> bool:
+    if _is_allowed_media_url(raw):
+        return True
+    host = _media_host(raw)
+    if not host:
+        return False
+    return any(host == suffix or host.endswith("." + suffix) for suffix in _PROFILE_PHOTO_SUFFIXES)
+
+
 def _is_allowed_media_url(raw: str) -> bool:
     if _is_allowed_kommo_media_url(raw):
         return True
@@ -8169,11 +8188,13 @@ def _looks_profile_photo(file_name: str, message_type: str = "") -> bool:
     return any(token in blob for token in ("profile", "avatar", "userpic", "фото профил", "pp.jpg", "pp.jpeg"))
 
 
-def _first_avatar_url(*blobs) -> str:
+def _first_avatar_url(*blobs, depth: int = 0) -> str:
+    if depth > 4:
+        return ""
     for blob in blobs:
         if isinstance(blob, str):
             url = _as_absolute_media_url(blob)
-            if url and _is_allowed_media_url(url) and ("/profiles/" in url.lower() or _looks_profile_photo(url, "avatar")):
+            if url and _is_allowed_avatar_url(url) and ("/profiles/" in url.lower() or _looks_profile_photo(url, "avatar")):
                 return url
             continue
         if not isinstance(blob, dict):
@@ -8183,18 +8204,19 @@ def _first_avatar_url(*blobs) -> str:
             if isinstance(raw, dict):
                 raw = raw.get("url") or raw.get("link") or raw.get("src") or ""
             url = _as_absolute_media_url(str(raw or ""))
-            if url and _is_allowed_media_url(url):
+            if url and _is_allowed_avatar_url(url):
                 return url
         embedded = blob.get("_embedded") if isinstance(blob.get("_embedded"), dict) else {}
         for item in (embedded.get("contacts") or [])[:3]:
-            found = _first_avatar_url(item)
+            found = _first_avatar_url(item, depth=depth + 1)
             if found:
                 return found
-        chat = blob.get("chat")
-        if isinstance(chat, dict):
-            found = _first_avatar_url(chat)
-            if found:
-                return found
+        for nested_key in ("author", "peer", "client", "contact", "chat"):
+            nested = blob.get(nested_key)
+            if isinstance(nested, dict):
+                found = _first_avatar_url(nested, depth=depth + 1)
+                if found:
+                    return found
     return ""
 
 
