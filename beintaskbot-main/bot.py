@@ -8055,6 +8055,8 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         "file_name": file_name,
         "message_type": message_type,
         "is_chat": is_chat,
+        "incoming": _note_is_incoming(ntype),
+        "channel": _note_channel_key(note) or "",
         "author": KOMMO_USERS.get(note.get("created_by") or note.get("responsible_user_id"), "") or "",
     }
 
@@ -8258,6 +8260,13 @@ def _talk_channel_key(talk: dict) -> str:
     return "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
 
 
+def _note_is_incoming(note_type: str) -> bool:
+    text = str(note_type or "").lower()
+    if "outgoing" in text or text in {"sms_out", "call_out"}:
+        return False
+    return "incoming" in text or text in {"sms_in", "call_in"}
+
+
 def _note_channel_key(note: dict | None) -> str:
     data = note if isinstance(note, dict) else {}
     note_type = str(data.get("note_type") or data.get("type") or "").lower()
@@ -8316,6 +8325,7 @@ def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dic
             "key": key,
             "label": CHAT_CHANNEL_LABELS[key],
             "talk_id": _talk_id_of(talk),
+            "chat_id": str(talk.get("chat_id") or ""),
             "open": _talk_is_open(talk),
             "sender_phone": _wa_display_number(sender_digits) if key == "whatsapp" else "",
         })
@@ -8738,19 +8748,32 @@ def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tupl
 
 
 _WA_SENT_FILE = "wa_sent_messages.json"
-_wa_sent_messages = read_json(_WA_SENT_FILE) or {}
-if not isinstance(_wa_sent_messages, dict):
-    _wa_sent_messages = {}
+_wa_sent_messages: dict | None = None
 _WA_SENT_PER_LEAD = 300
 _wa_sent_lock = threading.Lock()
 _wa_sent_save_timer: threading.Timer | None = None
+
+
+def _load_sent_messages() -> dict:
+    """Load the Cloud API send log lazily so GitHub I/O cannot block startup."""
+    global _wa_sent_messages
+    if _wa_sent_messages is None:
+        try:
+            data = read_json(_WA_SENT_FILE) or {}
+        except Exception as exc:
+            logger.warning("Sent message store load failed: %s", exc)
+            data = {}
+        with _wa_sent_lock:
+            if _wa_sent_messages is None:
+                _wa_sent_messages = data if isinstance(data, dict) else {}
+    return _wa_sent_messages
 
 
 def _flush_sent_messages() -> None:
     global _wa_sent_save_timer
     with _wa_sent_lock:
         _wa_sent_save_timer = None
-        snapshot = json.loads(json.dumps(_wa_sent_messages, ensure_ascii=False))
+        snapshot = json.loads(json.dumps(_load_sent_messages(), ensure_ascii=False))
     try:
         write_json(_WA_SENT_FILE, snapshot)
     except Exception as exc:
@@ -8774,21 +8797,27 @@ def _remember_sent_message(lead_id: int, item: dict) -> None:
     key = str(int(lead_id or 0))
     if key == "0" or not isinstance(item, dict):
         return
+    store = _load_sent_messages()
     with _wa_sent_lock:
-        rows = _wa_sent_messages.get(key)
+        rows = store.get(key)
         if not isinstance(rows, list):
             rows = []
         rows.append(item)
-        _wa_sent_messages[key] = rows[-_WA_SENT_PER_LEAD:]
+        store[key] = rows[-_WA_SENT_PER_LEAD:]
     _schedule_sent_messages_save()
 
 
 def _sent_messages_for_lead(lead_id: int) -> list[dict]:
-    with _wa_sent_lock:
-        rows = _wa_sent_messages.get(str(int(lead_id or 0)))
-        if not isinstance(rows, list):
-            return []
-        return [dict(row) for row in rows if isinstance(row, dict)]
+    try:
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            rows = store.get(str(int(lead_id or 0)))
+            if not isinstance(rows, list):
+                return []
+            return [dict(row) for row in rows if isinstance(row, dict)]
+    except Exception as exc:
+        logger.warning("Sent message read failed: %s", exc)
+        return []
 
 
 _WA_REACTIONS_KEY = "reactions"
@@ -8800,11 +8829,12 @@ def _remember_reaction(lead_id: int, wamid: str, emoji: str) -> None:
     target = str(wamid or "")
     if key == "0" or not target:
         return
+    store = _load_sent_messages()
     with _wa_sent_lock:
-        bucket = _wa_sent_messages.get(_WA_REACTIONS_KEY)
+        bucket = store.get(_WA_REACTIONS_KEY)
         if not isinstance(bucket, dict):
             bucket = {}
-            _wa_sent_messages[_WA_REACTIONS_KEY] = bucket
+            store[_WA_REACTIONS_KEY] = bucket
         rows = bucket.get(key)
         if not isinstance(rows, dict):
             rows = {}
@@ -8817,19 +8847,25 @@ def _remember_reaction(lead_id: int, wamid: str, emoji: str) -> None:
 
 
 def _reactions_for_lead(lead_id: int) -> dict:
-    with _wa_sent_lock:
-        bucket = _wa_sent_messages.get(_WA_REACTIONS_KEY)
-        if not isinstance(bucket, dict):
-            return {}
-        rows = bucket.get(str(int(lead_id or 0)))
-        return dict(rows) if isinstance(rows, dict) else {}
+    try:
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            bucket = store.get(_WA_REACTIONS_KEY)
+            if not isinstance(bucket, dict):
+                return {}
+            rows = bucket.get(str(int(lead_id or 0)))
+            return dict(rows) if isinstance(rows, dict) else {}
+    except Exception as exc:
+        logger.warning("Reaction store read failed: %s", exc)
+        return {}
 
 
 def _update_sent_message(lead_id: int, wamid: str, **fields) -> None:
     wanted = str(wamid or "")
     changed = False
+    store = _load_sent_messages()
     with _wa_sent_lock:
-        rows = _wa_sent_messages.get(str(int(lead_id or 0)))
+        rows = store.get(str(int(lead_id or 0)))
         if isinstance(rows, list):
             for row in rows:
                 if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
@@ -8884,6 +8920,69 @@ def _chat_item_key(item: dict) -> tuple:
         int(item.get("created_at") or 0),
         str(item.get("file_uuid") or ""),
     )
+
+
+def _normalized_channel(key: str) -> str:
+    wanted = str(key or "").strip().lower()
+    return wanted if wanted in CHAT_CHANNEL_LABELS else "whatsapp"
+
+
+def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
+    """Turn a Kommo chat-note into the same shape as a talk message."""
+    if not isinstance(note, dict) or not note.get("is_chat"):
+        return None
+    incoming = bool(note.get("incoming"))
+    channel = _normalized_channel(note.get("channel"))
+    author = str(note.get("author") or "")
+    if incoming:
+        author = "" if _is_generic_chat_author(author) else author
+    elif channel == "whatsapp" or _is_generic_chat_author(author):
+        author = employee_name or author
+    return {
+        "id": note.get("id"),
+        "external_id": "",
+        "direction": "incoming" if incoming else "outgoing",
+        "incoming": incoming,
+        "author": author,
+        "text": str(note.get("text") or ""),
+        "message_type": note.get("message_type") or "text",
+        "created_at": int(note.get("created_at") or 0),
+        "created": note.get("created") or _deal_fmt_ts(note.get("created_at") or 0),
+        "origin": channel,
+        "channel": channel,
+        "reply_to_message_id": "",
+        "reply_to_text": "",
+        "reply_to_author": "",
+        "media_url": note.get("media_url") or "",
+        "file_uuid": note.get("file_uuid") or "",
+        "file_name": note.get("file_name") or "",
+        "delivery_status": "" if incoming else "sent",
+    }
+
+
+def _load_kommo_chat_fallback(lid: int, contact_ids: list[int], employee_name: str = "") -> list[dict]:
+    """When talks/messages is forbidden, Kommo still keeps the same history in notes and events."""
+    rows: list[dict] = []
+    for note in _fetch_entity_notes("leads", lid):
+        item = _chat_item_from_note(note, employee_name)
+        if item:
+            rows.append(item)
+    for contact_id in contact_ids:
+        for note in _fetch_entity_notes("contacts", int(contact_id)):
+            item = _chat_item_from_note(note, employee_name)
+            if item:
+                rows.append(item)
+    events, _skipped = _fetch_chat_events(lid, contact_ids)
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        item["channel"] = _normalized_channel(item.get("channel") or _origin_channel_key(str(item.get("origin") or "")))
+        if not item.get("incoming"):
+            author = str(item.get("author") or "")
+            if item["channel"] == "whatsapp" or _is_generic_chat_author(author):
+                item["author"] = employee_name or author
+        rows.append(item)
+    return rows
 
 
 def _collect_deal_chat(
@@ -8956,6 +9055,15 @@ def _collect_deal_chat(
             continue
         channel_key = str(row.get("key") or wanted)
         messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
+        if not messages:
+            chat_ref = str(row.get("chat_id") or "")
+            if not chat_ref:
+                source_talk = next((item for item in talks if _talk_id_of(item) == talk_id), {})
+                chat_ref = str((source_talk or {}).get("chat_id") or "")
+            if chat_ref:
+                messages = _fetch_chat_history_by_chat_id(chat_ref)
+                if messages:
+                    blocked = False
         talk_has_more = talk_has_more or maybe_more
         chat_blocked = chat_blocked or blocked
         for message in messages:
@@ -8968,6 +9076,16 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
             _add_chat(formatted)
+    if not chat:
+        # v4/talks/{id}/messages needs the Chats API scope. Notes/events still
+        # hold WhatsApp, Instagram, TikTok and Facebook history from Kommo.
+        try:
+            for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
+                _add_chat(item)
+            if chat:
+                chat_blocked = False
+        except Exception as exc:
+            logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
     # Cloud API sends are not returned by Kommo talks, so replay our own log and
     # drop the copies Kommo did mirror back.
     known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
@@ -9617,6 +9735,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         sender_digits=sender_digits,
         employee_name=employee_name_for_lead(lead),
     )
+    cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
     return web.json_response({
         "success": True,
         "chat": chat,
@@ -9626,7 +9745,8 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         "channel": channel,
         "channels": channels,
         "sender_phone": _wa_display_number(sender_digits),
-        "can_reply": bool(reply_talk_id),
+        "can_reply": bool(reply_talk_id) or cloud_ready,
+        "cloud_ready": cloud_ready,
     })
 
 
@@ -10339,7 +10459,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     _task_pipes = _task_entity_pipeline_ids(
                         entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
                     )
-                    if _task_pipes & _employee_funnels:
+                    if _task_pipes & _employee_funnels and not is_admin(chat_id):
                         continue
                     contact_row = {}
                     if entity_type == "contacts":
