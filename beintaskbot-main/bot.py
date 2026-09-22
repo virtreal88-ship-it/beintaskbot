@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v198 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v199 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10980,6 +10980,19 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
 VOICE_CAPTION_TEXT = "🎤 Səs mesajı"
 
 
+def _with_visible_quote(text: str, quote: str) -> str:
+    preview = " ".join(str(quote or "").split())[:120]
+    if not preview:
+        return str(text or "").strip()
+    body = str(text or "").strip()
+    wrapped = f"«{preview}»"
+    if not body:
+        return wrapped
+    if body.startswith("«") or preview in body:
+        return body
+    return f"{wrapped}\n{body}"
+
+
 def _looks_voice_upload(filename: str, content_type: str) -> bool:
     return str(content_type or "").startswith("audio/") or bool(
         re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", str(filename or "").lower())
@@ -11213,6 +11226,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
+        if reply_preview and channel != "whatsapp":
+            kommo_text = _with_visible_quote(kommo_text, reply_preview)
         quote_id = reply_to_message_id or reply_external
         kommo_ok, kommo_error, _status = _send_kommo_talk_message(
             reply_talk_id,
