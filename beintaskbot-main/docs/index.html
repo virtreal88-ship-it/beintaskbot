@@ -283,6 +283,7 @@
         .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
         .audio-wait .audio-spin { position:absolute; left:8px; top:50%; width:12px; height:12px; margin-top:-6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; pointer-events:none; }
         .audio-wait.ready .audio-spin { display:none; }
+        .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:800; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:700; font-size:12px; }
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#eef1f4; }
@@ -393,7 +394,33 @@
         .chats-row { display:flex; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row.on { background:#e8f5e9; }
-        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#dcf8c6; color:#128c7e; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; }
+        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; }
+        .chats-avatar.ch-whatsapp { background:#dcf8c6; color:#128c7e; }
+        .chats-avatar.ch-instagram { background:#fce7f3; color:#db2777; }
+        .chats-avatar.ch-facebook { background:#dbeafe; color:#1877F2; }
+        .chats-avatar.ch-tiktok { background:#111; color:#fff; }
+        .chats-source { display:inline-flex; align-items:center; gap:4px; flex:none; font-size:10px; font-weight:800; line-height:1; padding:3px 7px; border-radius:999px; }
+        .chats-source svg { width:12px; height:12px; display:block; }
+        .chats-source-whatsapp { background:#dcfce7; color:#15803d; }
+        .chats-source-instagram { background:#fce7f3; color:#be185d; }
+        .chats-source-facebook { background:#dbeafe; color:#1d4ed8; }
+        .chats-source-tiktok { background:#111; color:#fff; }
+        #deal-info-drawer { position:fixed; inset:0; z-index:13000; display:none; }
+        #deal-info-drawer.open { display:block; }
+        #deal-info-drawer .deal-info-dim { position:absolute; inset:0; background:rgba(15,23,42,.4); }
+        #deal-info-drawer .deal-info-panel {
+            position:absolute; top:0; right:0; bottom:0; width:min(420px, 92vw); background:#fff;
+            box-shadow:-12px 0 32px rgba(15,23,42,.18); display:flex; flex-direction:column;
+            transform:translateX(100%); transition:transform .22s ease;
+        }
+        #deal-info-drawer.open .deal-info-panel { transform:translateX(0); }
+        #deal-info-drawer .deal-info-head {
+            flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px;
+            padding:12px 14px; background:#0f172a; color:#fff;
+        }
+        #deal-info-drawer .deal-info-head h3 { margin:0; font-size:14px; font-weight:800; }
+        #deal-info-drawer .deal-info-head button { border:0; background:#ffffff22; color:#fff; border-radius:8px; padding:7px 10px; font-weight:700; font-size:12px; }
+        #deal-info-drawer .deal-info-body { flex:1; min-height:0; overflow:auto; padding:14px; border-right:0; }
         .chats-row-main { min-width:0; flex:1; }
         .chats-row-top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
         .chats-row-name { font-weight:800; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -490,14 +517,14 @@
         <span>CRM</span>
     </div>
     <div class="sidebar-nav">
+        <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Çatlar</span>
+        </button>
         <button id="side-tab-tasks" class="sidebar-item active" onclick="switchTab('tab-tasks')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg></span><span class="sidebar-item-label">Tapşırıqlar</span>
         </button>
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sövdələşmələr</span>
-        </button>
-        <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Çatlar</span>
         </button>
         <button id="side-tab-create" class="sidebar-item" style="display:none;" onclick="switchTab('tab-create')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="sidebar-item-label">Yeni</span>
@@ -894,14 +921,14 @@
 
 <!-- BOTTOM NAVIGATION -->
 <div id="tab-bar" class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 h-[64px] flex justify-around items-center px-2 z-40 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
+    <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Çatlar</span>
+    </button>
     <button id="tab-tasks" onclick="switchTab('tab-tasks')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><path d="M9 12h6M9 16h4"/></svg><span class="mt-0.5">Tapşırıqlar</span>
     </button>
     <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sövdələşmələr</span>
-    </button>
-    <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Çatlar</span>
     </button>
     <button id="tab-create" onclick="switchTab('tab-create')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span class="mt-0.5">Yeni</span>
@@ -967,6 +994,7 @@ const CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
 const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
+const HAS_CHATS = ['6824377548','7962757442','1628569350'].includes(CURRENT_USER_ID);
 const CHAT_SENDER_LINES = [
     {digits:'994102135105', label:'Rüfət'},
     {digits:'994502072240', label:'Nizami'}
@@ -1046,9 +1074,9 @@ function applySamilUi() {
     const mobileDeals = document.getElementById('tab-samil-deals');
     if(mobileDeals) mobileDeals.style.display = isAdmin ? 'none' : 'flex';
     const sideChats = document.getElementById('side-tab-chats');
-    if(sideChats) sideChats.style.display = 'flex';
+    if(sideChats) sideChats.style.display = HAS_CHATS ? 'flex' : 'none';
     const mobileChats = document.getElementById('tab-chats');
-    if(mobileChats) mobileChats.style.display = 'flex';
+    if(mobileChats) mobileChats.style.display = HAS_CHATS ? 'flex' : 'none';
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
 const SAMIL_WORKSPACE_CACHE_KEY = 'cached_samil_workspace_' + CURRENT_USER_ID;
@@ -2923,7 +2951,18 @@ function bindAudioWait(root) {
         el.addEventListener('waiting', wait);
         el.addEventListener('canplay', done);
         el.addEventListener('playing', done);
-        el.addEventListener('error', done);
+        el.addEventListener('error', () => {
+            done();
+            if(!wrap.querySelector('.audio-dl')) {
+                const link = document.createElement('a');
+                link.className = 'audio-dl';
+                link.href = el.currentSrc || el.src || '#';
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.textContent = 'Yüklə';
+                wrap.appendChild(link);
+            }
+        });
         if(el.readyState >= 3) done();
         const speed = document.createElement('button');
         speed.type = 'button';
@@ -3129,7 +3168,7 @@ function splitQuotePrefix(text) {
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
-    return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat)).map(item => ({
+    return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat) && item.type !== 'call_in' && item.type !== 'call_out').map(item => ({
         id: 'note-' + (item.id || item.created_at || ''),
         is_comment: true,
         incoming: false,
@@ -3140,10 +3179,31 @@ function commentItemsFromDeal(deal) {
         channel: 'comment'
     })).filter(item => !isDealSystemNoise(item.text));
 }
+function callItemsFromDeal(deal) {
+    const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
+    return notes.filter(item => item && (item.type === 'call_in' || item.type === 'call_out' || ((item.media_url || item.file_uuid) && /audio|voice|call/i.test(String(item.message_type || item.type || ''))))).map(item => ({
+        id: item.id || ('call-' + (item.created_at || '')),
+        incoming: item.type === 'call_in' || !!item.incoming,
+        text: item.text || (item.type === 'call_out' ? 'Gedən zəng' : 'Gələn zəng'),
+        created_at: Number(item.created_at || 0),
+        created: item.created || '',
+        author: item.author || '',
+        channel: item.channel || 'whatsapp',
+        message_type: item.message_type || item.type || 'audio',
+        media_url: item.media_url || '',
+        file_uuid: item.file_uuid || '',
+        file_name: item.file_name || ''
+    }));
+}
 function dealTimelineMessages(chat, deal) {
     const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text));
     const have = new Set(rows.map(item => String(item.id || '')));
     commentItemsFromDeal(deal).forEach(item => {
+        if(have.has(String(item.id))) return;
+        have.add(String(item.id));
+        rows.push(item);
+    });
+    callItemsFromDeal(deal).forEach(item => {
         if(have.has(String(item.id))) return;
         have.add(String(item.id));
         rows.push(item);
@@ -3540,7 +3600,9 @@ function dealNoteRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-note-edit" title="Dəyiş" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconEdit()}</button><button type="button" class="deal-note-del" title="Sil" data-note-id="${escapeHtml(String(item.id))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-note-type="${escapeHtml(String(item.type || 'common'))}">${dealIconDel()}</button></span>`
         : '';
-    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>Qeyd</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(stripNamePrefix(item.text))}</div></div>`;
+    const kind = (item && (item.type === 'call_in' || item.type === 'call_out')) ? 'Zəng' : 'Qeyd';
+    const media = dealMediaBlock(item, _dealViewState && _dealViewState.token);
+    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>${kind}</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(stripNamePrefix(item.text))}</div>${media}</div>`;
 }
 function dealTaskRowHtml(item, readonly) {
     const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
@@ -3664,6 +3726,7 @@ function applyDealSide(deal, readonly) {
         wa.hidden = !url;
     }
     bindDealSideActions(deal);
+    bindAudioWait(document.getElementById('deal-info-drawer') || document.getElementById('deal-view-modal'));
 }
 function mergeDealSnapshot(prev, snap) {
     const next = Object.assign({}, prev || {}, snap || {});
@@ -4020,11 +4083,63 @@ function closeDealViewModal() {
     document.body.classList.remove('deal-modal-open');
     document.getElementById('deal-photo-zoom')?.remove();
     document.getElementById('deal-view-modal')?.remove();
+    closeDealInfoDrawer();
     if(wasInbox) {
         const pane = document.getElementById('chats-pane');
         if(pane) pane.innerHTML = chatsEmptyHtml();
         document.getElementById('chats-app')?.classList.remove('chat-open');
         if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
+    }
+}
+function dealInfoBodyHtml(deal, readonly) {
+    const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
+    return `<h3>Sövdələşmə</h3>
+        <div class="text-[13px] text-gray-700 space-y-1">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
+            ${sourceUrlsHtml(deal)}
+            <div>🕒 ${escapeHtml(created)}</div>
+            <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
+            ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
+            ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline">Kommo-da aç</a></div>` : ''}
+        </div>
+        ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
+        <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
+        <div id="deal-notes-list">${dealNotesListHtml(deal, readonly)}</div>
+        ${readonly ? '' : `<div id="deal-note-form" class="deal-side-form" hidden>
+            <textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea>
+            <button type="button" id="deal-note-save">Qeyd əlavə et</button>
+        </div>`}
+        <h3>Tapşırıq ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>'}</h3>
+        <div id="deal-tasks-list">${dealTasksListHtml(deal, readonly)}</div>`;
+}
+function closeDealInfoDrawer() {
+    document.getElementById('deal-info-drawer')?.remove();
+}
+function openDealInfoDrawer(deal, readonly) {
+    if(!deal) return;
+    closeDealInfoDrawer();
+    const drawer = document.createElement('div');
+    drawer.id = 'deal-info-drawer';
+    drawer.innerHTML = `<div class="deal-info-dim"></div>
+        <aside class="deal-info-panel">
+            <div class="deal-info-head">
+                <h3>${escapeHtml(dealClientName(deal) || 'Sövdələşmə')}</h3>
+                <button type="button" id="deal-info-close">Bağla</button>
+            </div>
+            <div class="deal-info-body deal-side">${dealInfoBodyHtml(deal, readonly)}</div>
+        </aside>`;
+    document.body.appendChild(drawer);
+    requestAnimationFrame(() => drawer.classList.add('open'));
+    drawer.querySelector('.deal-info-dim').onclick = closeDealInfoDrawer;
+    drawer.querySelector('#deal-info-close').onclick = closeDealInfoDrawer;
+    bindDealSideActions(deal);
+    bindAudioWait(drawer);
+    if(!readonly && isAdmin) {
+        ensureAdminPipelines().then(() => {
+            const live = (_dealViewState && _dealViewState.deal) || deal;
+            fillAdminPipelinePickers('deal-pipeline-select', 'deal-stage-select', live.pipeline_id || CURRENT_PIPELINE_ID, live.stage_key);
+            bindDealSideActions(live);
+        });
     }
 }
 let _dealViewState = null;
@@ -4357,24 +4472,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
         </div>
         <div class="deal-shell-body show-chat" id="deal-shell-body">
             <aside class="deal-side">
-                <h3>Sövdələşmə</h3>
-                <div class="text-[13px] text-gray-700 space-y-1">
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
-                    ${sourceUrlsHtml(deal)}
-                    <div>🕒 ${escapeHtml(created)}</div>
-                    <div>⏰ ${escapeHtml(deal.deadline || '—')}</div>
-                    ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
-                    ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline">Kommo-da aç</a></div>` : ''}
-                </div>
-                ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
-                <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
-                <div id="deal-notes-list">${notesHtml}</div>
-                ${readonly ? '' : `<div id="deal-note-form" class="deal-side-form" hidden>
-                    <textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea>
-                    <button type="button" id="deal-note-save">Qeyd əlavə et</button>
-                </div>`}
-                <h3>Tapşırıq ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>'}</h3>
-                <div id="deal-tasks-list">${tasksHtml}</div>
+                ${dealInfoBodyHtml(deal, readonly)}
             </aside>
             <section class="wa-pane">
                 <div class="wa-channels" id="deal-chat-channels"></div>
@@ -4429,7 +4527,7 @@ function paintDealViewModal(deal, readonly, opts) {
         const dealBtn = document.getElementById('chats-open-deal');
         if(dealBtn) dealBtn.onclick = () => {
             const live = (_dealViewState && _dealViewState.deal) || deal;
-            paintDealViewModal(live, readonly);
+            openDealInfoDrawer(live, readonly);
         };
     } else {
         const modal = document.createElement('div');
@@ -4924,6 +5022,19 @@ function chatsInitials(name) {
     if(!parts.length) return '?';
     return ((parts[0][0] || '') + (parts[1] ? parts[1][0] : '')).toUpperCase();
 }
+function chatsSourceKey(deal) {
+    const raw = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
+    if(CHAT_CHANNEL_META[raw]) return raw;
+    const utm = String(dealUtmLabel(deal) || '').toLowerCase();
+    if(CHAT_CHANNEL_META[utm]) return utm;
+    return '';
+}
+function chatsSourceChip(deal) {
+    const key = chatsSourceKey(deal);
+    if(!key) return '';
+    const meta = chatChannelMeta(key);
+    return `<span class="chats-source chats-source-${key}">${meta.svg}<span>${escapeHtml(meta.label)}</span></span>`;
+}
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     return (samilDeals || []).filter(deal => {
@@ -4977,12 +5088,13 @@ function renderChatsList() {
             const preview = dealLastClientMessage(deal) || 'Çat';
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
-            const channel = sourceTagHtml(deal);
+            const channel = chatsSourceKey(deal);
+            const chip = chatsSourceChip(deal);
             return `<button type="button" class="chats-row${on ? ' on' : ''}" data-lead="${escapeHtml(String(deal.id))}">
-                <span class="chats-avatar">${escapeHtml(chatsInitials(name))}</span>
+                <span class="chats-avatar${channel ? ' ch-' + channel : ''}">${escapeHtml(chatsInitials(name))}</span>
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
-                    <span class="chats-row-bottom"><span class="chats-row-preview">${channel}${channel ? ' · ' : ''}${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
+                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
                 </span>
             </button>`;
         }).join('');
@@ -4993,6 +5105,7 @@ function renderChatsList() {
     if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
 }
 function closeInboxChat() {
+    closeDealInfoDrawer();
     stopDealChatPolling();
     cancelDealVoice();
     clearDealPendingFile();
@@ -5021,11 +5134,12 @@ async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
     if(!deal) return;
     markChatsSeen(deal.id);
+    closeDealInfoDrawer();
     paintDealViewModal(deal, false, {inbox: true});
     renderChatsList();
 }
 async function openChats() {
-    if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
+    if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
     fillChatsLineSelect();
     if(!samilDeals.length) {
@@ -5381,7 +5495,7 @@ function switchTab(tabId, updateHash = true) {
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
     } else if(tabId === 'tab-chats') {
-        if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
+        if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
         const chatsTab = document.getElementById('tab-chats');
         if(chatsTab) chatsTab.className = activeClass;
         openChats();

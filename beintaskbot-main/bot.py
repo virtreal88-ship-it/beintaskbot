@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v190 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v191 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7968,14 +7968,39 @@ def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
 
 
-def _is_allowed_kommo_media_url(raw: str) -> bool:
+_TELEPHONY_MEDIA_SUFFIXES = (
+    "sipuni.com",
+    "mango-office.ru",
+    "onlinepbx.ru",
+    "telphin.ru",
+    "zadarma.com",
+    "binotel.ua",
+    "uiscom.ru",
+    "callgear.ru",
+    "voximplant.com",
+    "mcn.ru",
+    "novofon.com",
+    "gravitel.ru",
+    "beeline-cloud.ru",
+    "proto.online",
+    "uis.st",
+)
+
+
+def _media_host(raw: str) -> str:
     try:
         parsed = urlparse(str(raw or "").strip())
     except Exception:
-        return False
+        return ""
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return parsed.netloc.split("@")[-1].split(":")[0].casefold()
+
+
+def _is_allowed_kommo_media_url(raw: str) -> bool:
+    host = _media_host(raw)
+    if not host:
         return False
-    host = parsed.netloc.split("@")[-1].split(":")[0].casefold()
     return (
         host.endswith(".kommo.com")
         or host.endswith(".amocrm.ru")
@@ -7983,6 +8008,65 @@ def _is_allowed_kommo_media_url(raw: str) -> bool:
         or host.endswith(".amojo.ru")
         or host in {"kommo.com", "amocrm.ru", "amocrm.com", "amojo.kommo.com", "amojo.amocrm.ru"}
     )
+
+
+def _is_allowed_media_url(raw: str) -> bool:
+    if _is_allowed_kommo_media_url(raw):
+        return True
+    host = _media_host(raw)
+    if not host:
+        return False
+    return any(host == suffix or host.endswith("." + suffix) for suffix in _TELEPHONY_MEDIA_SUFFIXES)
+
+
+def _extract_media_url(params: dict) -> str:
+    if not isinstance(params, dict):
+        return ""
+    candidates = [
+        params.get("link"),
+        params.get("url"),
+        params.get("media"),
+        params.get("recording"),
+        params.get("recording_link"),
+        params.get("call_record"),
+        params.get("download_link"),
+        params.get("file_link"),
+    ]
+    file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
+    candidates.extend([file_obj.get("link"), file_obj.get("url"), file_obj.get("download_link")])
+    source = str(params.get("source") or "").strip()
+    if source.lower().startswith("http"):
+        candidates.append(source)
+    for raw in candidates:
+        val = str(raw or "").strip()
+        if _is_allowed_media_url(val):
+            return val
+    return ""
+
+
+def _sniff_media_type(body: bytes, hinted: str = "", src: str = "", name: str = "") -> str:
+    head = body[:16] if body else b""
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+    if head.startswith(b"ID3") or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
+        return "audio/mpeg"
+    if head.startswith(b"RIFF") and b"WAVE" in head:
+        return "audio/wav"
+    if len(head) >= 8 and head[4:8] == b"ftyp":
+        return "audio/mp4"
+    hinted = str(hinted or "").split(";")[0].strip().lower()
+    if hinted.startswith("audio/") and hinted != "application/octet-stream":
+        return hinted
+    low = f"{src} {name}".lower()
+    if any(token in low for token in (".mp3", ".mpeg")):
+        return "audio/mpeg"
+    if ".wav" in low:
+        return "audio/wav"
+    if any(token in low for token in (".m4a", ".mp4", ".aac")):
+        return "audio/mp4"
+    if any(token in low for token in (".ogg", ".oga", ".opus")):
+        return "audio/ogg"
+    return hinted or "application/octet-stream"
 
 
 def _drive_file_download_url(file_uuid: str) -> str:
@@ -8053,7 +8137,7 @@ def _deal_fmt_ts(ts) -> str:
 def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = "") -> bool:
     ntype = str(note_type or "").casefold()
     combined = f"{ntype} {file_name} {message_type}".casefold()
-    if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba"}:
+    if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba", "call_in", "call_out"}:
         return True
     if ntype in {"attachment", "file"}:
         return _looks_audio_name(file_name) or message_type in {"voice", "audio", "picture", "video"}
@@ -8072,9 +8156,7 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
     created = int(note.get("created_at") or 0)
     file_name = str(params.get("file_name") or params.get("original_name") or "").strip()
     file_uuid = _extract_file_uuid(params)
-    media = str(params.get("link") or params.get("url") or params.get("media") or "").strip()
-    if not _is_allowed_kommo_media_url(media):
-        media = ""
+    media = _extract_media_url(params)
     text = ""
     message_type = "text"
     if ntype == "common":
@@ -8086,16 +8168,13 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         text = f"{label} {phone}".strip()
         if duration:
             text += f" ({duration}s)"
-        media = media or str(params.get("source") or "").strip()
         message_type = "audio" if media or file_uuid else "text"
     elif ntype in {"attachment", "file"}:
         text = _extract_nested_text(params) or file_name or "Fayl"
         message_type = "audio" if _looks_audio_name(file_name) else "file"
     else:
         text = _extract_nested_text(params)
-        media = media or str(params.get("link") or params.get("url") or "").strip()
-        if not _is_allowed_kommo_media_url(media):
-            media = ""
+        media = media or _extract_media_url(params)
     if not text and not media and not file_uuid:
         return None
     if _looks_audio_name(file_name) and not text:
@@ -9763,7 +9842,7 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
     ntype = str(note.get("type") or "").casefold()
     chat_types = {
         "incoming_chat_message", "outgoing_chat_message", "whatsapp", "waba",
-        "facebook_message", "instagram_business", "chat",
+        "facebook_message", "instagram_business", "chat", "call_in", "call_out",
     }
     if not note.get("is_chat") and ntype not in chat_types:
         return None
@@ -10180,17 +10259,14 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         author = message.get("sender") if isinstance(message.get("sender"), dict) else {}
     attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
     created = int(message.get("created_at") or message.get("timestamp") or nested.get("timestamp") or 0)
-    media = str(
-        attachment.get("link")
-        or nested.get("media")
-        or message.get("media")
-        or ""
-    ).strip()
+    media = _extract_media_url(attachment) or _extract_media_url(nested) or _extract_media_url(message)
     file_uuid = _extract_file_uuid(attachment) or _extract_file_uuid(nested) or _extract_file_uuid(message)
     file_name = str(attachment.get("file_name") or nested.get("file_name") or message.get("file_name") or "").strip()
     message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
     if message_type in {"incoming", "outgoing"}:
         message_type = str(nested.get("type") or "text")
+    if message_type in {"call", "call_in", "call_out"}:
+        message_type = "audio" if media or file_uuid else message_type
     text = str(nested.get("text") or message.get("text") or "").strip()
     folded = text.casefold()
     if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
@@ -10241,7 +10317,7 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "reply_to_message_id": reply_id,
         "reply_to_text": reply_text,
         "reply_to_author": reply_author,
-        "media_url": media if _is_allowed_kommo_media_url(media) else "",
+        "media_url": media if _is_allowed_media_url(media) else "",
         "file_uuid": file_uuid,
         "file_name": file_name,
         "delivery_status": _chat_delivery_status(message, nested, incoming),
@@ -10300,7 +10376,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "created_at": created,
                 "created": _deal_fmt_ts(created),
                 "origin": etype,
-                "media_url": media if _is_allowed_kommo_media_url(media) else "",
+                "media_url": media if _is_allowed_media_url(media) else "",
                 "file_uuid": file_uuid,
                 "file_name": "",
                 "delivery_status": "" if incoming else "sent",
@@ -10409,7 +10485,11 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         unique_notes.append(note)
     notes = [
         item for item in unique_notes
-        if (item.get("type") == "common" or not item.get("is_chat")) and not _note_is_deleted(item)
+        if (
+            item.get("type") == "common"
+            or item.get("type") in {"call_in", "call_out"}
+            or not item.get("is_chat")
+        ) and not _note_is_deleted(item)
     ]
     tasks = _fetch_open_tasks_for_entities([lid, *contact_ids])
     first_task = tasks[0] if tasks else {}
@@ -11102,9 +11182,11 @@ def _media_bytes_response(request: web.Request, body: bytes, content_type: str) 
 async def handle_api_deal_file(request: web.Request) -> web.Response:
     src = unquote(str(request.rel_url.query.get("src") or "").strip())
     file_uuid = str(request.rel_url.query.get("uuid") or "").strip()
+    from_drive = False
     if file_uuid and not src:
         src = _drive_file_download_url(file_uuid)
-    if not _is_allowed_kommo_media_url(src):
+        from_drive = bool(src)
+    if not src or (not from_drive and not _is_allowed_media_url(src)):
         return web.Response(status=400, text="Invalid media")
     token = request.rel_url.query.get("k") or ""
     if token:
@@ -11123,14 +11205,14 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         if not lead or not _user_can_view_personal_lead(chat_id, lead):
             return web.Response(status=403, text="Forbidden")
     try:
-        audio_resp = requests.get(src, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, timeout=20, allow_redirects=True)
+        headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(src) else {}
+        audio_resp = requests.get(src, headers=headers, timeout=20, allow_redirects=True)
         if audio_resp.status_code != 200:
             audio_resp = requests.get(src, timeout=20, allow_redirects=True)
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
-        content_type = audio_resp.headers.get("Content-Type") or "application/octet-stream"
-        if file_uuid and (content_type == "application/octet-stream" or "ogg" in (src or "").lower()):
-            content_type = "audio/ogg"
+        file_name = str(request.rel_url.query.get("name") or "")
+        content_type = _sniff_media_type(audio_resp.content, audio_resp.headers.get("Content-Type") or "", src, file_name)
         return _media_bytes_response(request, audio_resp.content, content_type)
     except Exception as exc:
         logger.warning("Deal media proxy failed: %s", exc)
