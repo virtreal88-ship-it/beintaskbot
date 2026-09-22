@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v191 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v192 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8019,28 +8019,49 @@ def _is_allowed_media_url(raw: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in _TELEPHONY_MEDIA_SUFFIXES)
 
 
+def _as_absolute_media_url(raw: str) -> str:
+    val = str(raw or "").strip()
+    if not val:
+        return ""
+    if val.startswith("//"):
+        val = "https:" + val
+    if val.startswith("/"):
+        val = f"{KOMMO_BASE_URL}{val}"
+    parsed = urlparse(val)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return val
+    return ""
+
+
+def _walk_media_urls(value, depth: int = 0) -> list[str]:
+    if depth > 5 or value is None:
+        return []
+    if isinstance(value, str):
+        found = _as_absolute_media_url(value)
+        return [found] if found else []
+    if isinstance(value, dict):
+        preferred = []
+        for key in ("link", "url", "media", "recording", "recording_link", "call_record", "download_link", "file_link", "href"):
+            preferred.extend(_walk_media_urls(value.get(key), depth + 1))
+        extra = []
+        for key, inner in value.items():
+            if str(key) in {"phone", "uniq", "source", "duration"}:
+                continue
+            extra.extend(_walk_media_urls(inner, depth + 1))
+        return preferred + extra
+    if isinstance(value, list):
+        found: list[str] = []
+        for inner in value:
+            found.extend(_walk_media_urls(inner, depth + 1))
+        return found
+    return []
+
+
 def _extract_media_url(params: dict) -> str:
     if not isinstance(params, dict):
         return ""
-    candidates = [
-        params.get("link"),
-        params.get("url"),
-        params.get("media"),
-        params.get("recording"),
-        params.get("recording_link"),
-        params.get("call_record"),
-        params.get("download_link"),
-        params.get("file_link"),
-    ]
-    file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
-    candidates.extend([file_obj.get("link"), file_obj.get("url"), file_obj.get("download_link")])
-    source = str(params.get("source") or "").strip()
-    if source.lower().startswith("http"):
-        candidates.append(source)
-    for raw in candidates:
-        val = str(raw or "").strip()
-        if _is_allowed_media_url(val):
-            return val
+    for url in _walk_media_urls(params):
+        return url
     return ""
 
 
@@ -8168,7 +8189,7 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         text = f"{label} {phone}".strip()
         if duration:
             text += f" ({duration}s)"
-        message_type = "audio" if media or file_uuid else "text"
+        message_type = "audio"
     elif ntype in {"attachment", "file"}:
         text = _extract_nested_text(params) or file_name or "Fayl"
         message_type = "audio" if _looks_audio_name(file_name) else "file"
@@ -8201,6 +8222,66 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         "channel": _note_channel_key(note) or "",
         "author": KOMMO_USERS.get(note.get("created_by") or note.get("responsible_user_id"), "") or "",
     }
+
+
+def _fetch_raw_notes(entity_type: str, entity_id: int, pages: int = 3) -> list[dict]:
+    rows: list[dict] = []
+    for page in range(1, pages + 1):
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{int(entity_id)}/notes",
+                headers=HEADERS,
+                params={"limit": 250, "page": page, "order[created_at]": "desc"},
+                timeout=10,
+            )
+        except Exception as exc:
+            logger.warning("Deal notes %s/%s failed: %s", entity_type, entity_id, exc)
+            break
+        if resp.status_code == 204:
+            break
+        if resp.status_code != 200:
+            logger.warning("Deal notes %s/%s status %s", entity_type, entity_id, resp.status_code)
+            break
+        notes = resp.json().get("_embedded", {}).get("notes", []) or []
+        if not notes:
+            break
+        rows.extend(note for note in notes if isinstance(note, dict))
+        if len(notes) < 250:
+            break
+    return rows
+
+
+def _find_raw_note(note_id: int, lead: dict | None = None, entity_type: str = "", entity_id: int = 0) -> dict | None:
+    wanted = int(note_id or 0)
+    if not wanted:
+        return None
+    targets: list[tuple[str, int]] = []
+    if entity_type and entity_id:
+        targets.append((str(entity_type), int(entity_id)))
+    if lead:
+        try:
+            targets.append(("leads", int(lead.get("id") or 0)))
+        except (TypeError, ValueError):
+            pass
+        for cid in _lead_contact_ids(lead):
+            targets.append(("contacts", int(cid)))
+    seen: set[tuple[str, int]] = set()
+    for etype, eid in targets:
+        if not eid or (etype, eid) in seen:
+            continue
+        seen.add((etype, eid))
+        for note in _fetch_raw_notes(etype, eid):
+            try:
+                if int(note.get("id") or 0) == wanted:
+                    return note
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _note_recording_src(note: dict) -> tuple[str, str]:
+    params = note.get("params") if isinstance(note.get("params"), dict) else {}
+    return _extract_media_url(params), _extract_file_uuid(params)
 
 
 def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 3) -> list[dict]:
@@ -9876,6 +9957,8 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         "media_url": note.get("media_url") or "",
         "file_uuid": note.get("file_uuid") or "",
         "file_name": note.get("file_name") or "",
+        "entity_type": note.get("entity_type") or "leads",
+        "entity_id": note.get("entity_id") or "",
         "delivery_status": "" if incoming else "sent",
     }
 
@@ -11182,13 +11265,25 @@ def _media_bytes_response(request: web.Request, body: bytes, content_type: str) 
 async def handle_api_deal_file(request: web.Request) -> web.Response:
     src = unquote(str(request.rel_url.query.get("src") or "").strip())
     file_uuid = str(request.rel_url.query.get("uuid") or "").strip()
-    from_drive = False
-    if file_uuid and not src:
-        src = _drive_file_download_url(file_uuid)
-        from_drive = bool(src)
-    if not src or (not from_drive and not _is_allowed_media_url(src)):
-        return web.Response(status=400, text="Invalid media")
+    note_id = 0
+    entity_id = 0
+    try:
+        note_id = int(request.rel_url.query.get("note_id") or 0)
+    except (TypeError, ValueError):
+        note_id = 0
+    try:
+        entity_id = int(request.rel_url.query.get("entity_id") or 0)
+    except (TypeError, ValueError):
+        entity_id = 0
+    entity_type = str(request.rel_url.query.get("entity_type") or "").strip().lower()
+    if entity_type.startswith("contact"):
+        entity_type = "contacts"
+    elif entity_type.startswith("lead"):
+        entity_type = "leads"
+    else:
+        entity_type = ""
     token = request.rel_url.query.get("k") or ""
+    lead = None
     if token:
         if not parse_deal_share_token(token):
             return web.Response(status=403, text="Forbidden")
@@ -11204,6 +11299,22 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         lead = get_lead_details(lead_id)
         if not lead or not _user_can_view_personal_lead(chat_id, lead):
             return web.Response(status=403, text="Forbidden")
+    from_note = False
+    if note_id:
+        raw_note = _find_raw_note(note_id, lead, entity_type, entity_id)
+        if raw_note:
+            note_src, note_uuid = _note_recording_src(raw_note)
+            if note_src:
+                src = note_src
+                from_note = True
+            if note_uuid and not file_uuid:
+                file_uuid = note_uuid
+    from_drive = False
+    if file_uuid and not src:
+        src = _drive_file_download_url(file_uuid)
+        from_drive = bool(src)
+    if not src or (not from_drive and not from_note and not _is_allowed_media_url(src)):
+        return web.Response(status=400, text="Invalid media")
     try:
         headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(src) else {}
         audio_resp = requests.get(src, headers=headers, timeout=20, allow_redirects=True)

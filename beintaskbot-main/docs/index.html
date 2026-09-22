@@ -2927,14 +2927,19 @@ function setSamilStageFilter(stageKey) {
     renderSamilDeals();
 }
 
-function dealMediaSrc(raw, token, uuid) {
+function dealMediaSrc(raw, token, uuid, extra) {
+    const meta = extra || {};
+    const noteId = String(meta.noteId || '').replace(/^note-/, '');
     const q = new URLSearchParams();
+    if(noteId && /^\d+$/.test(noteId)) q.set('note_id', noteId);
+    if(meta.entityType) q.set('entity_type', String(meta.entityType));
+    if(meta.entityId) q.set('entity_id', String(meta.entityId));
     if(uuid) q.set('uuid', uuid);
-    else if(raw && !raw.startsWith('/api/')) q.set('src', raw);
+    else if(raw && !raw.startsWith('/api/') && !q.get('note_id')) q.set('src', raw);
     if(token) q.set('k', token);
     if(_dealViewState && _dealViewState.id) q.set('lead_id', String(_dealViewState.id));
     if(CURRENT_USER_ID) q.set('uid', String(CURRENT_USER_ID));
-    if(uuid || (raw && !raw.startsWith('/api/'))) return API_BASE + '/api/deal/file?' + q.toString();
+    if(uuid || q.get('note_id') || (raw && !raw.startsWith('/api/'))) return API_BASE + '/api/deal/file?' + q.toString();
     if(!raw) return '';
     const voice = raw.startsWith('http') ? raw : API_BASE + raw;
     const join = voice.includes('?') ? '&' : '?';
@@ -3014,14 +3019,16 @@ function dealMediaBlock(item, token) {
     const uuid = item && item.file_uuid || '';
     const kind = (item && (item.message_type || item.type)) || '';
     const fileName = (item && item.file_name) || '';
-    const src = dealMediaSrc(raw, token, uuid);
+    const text = String((item && item.text) || '');
+    const type = String(kind || '').toLowerCase();
+    const isCall = type === 'call_in' || type === 'call_out' || type === 'call' || /Gələn zəng|Gedən zəng/i.test(text);
+    const src = dealMediaSrc(raw, token, uuid, {noteId: item && item.id, entityType: item && item.entity_type, entityId: item && item.entity_id});
     if(!src) return '';
     const safe = escapeHtml(src);
-    const type = String(kind || '').toLowerCase();
-    if(type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName)) {
+    if(!isCall && (type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName))) {
         return `<img class="deal-zoom" src="${safe}" alt="">`;
     }
-    if(type === 'voice' || type === 'audio' || type === 'call_in' || type === 'call_out' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
+    if(isCall || type === 'voice' || type === 'audio' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
         return audioWaitHtml(src);
     }
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:700">${escapeHtml(fileName || 'Fayl')}</a>`;
@@ -3196,7 +3203,9 @@ function callItemsFromDeal(deal) {
         message_type: item.message_type || item.type || 'audio',
         media_url: item.media_url || '',
         file_uuid: item.file_uuid || '',
-        file_name: item.file_name || ''
+        file_name: item.file_name || '',
+        entity_type: item.entity_type || 'leads',
+        entity_id: item.entity_id || ''
     }));
 }
 function dealTimelineMessages(chat, deal) {
