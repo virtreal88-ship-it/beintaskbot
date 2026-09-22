@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v199 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v200 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10438,7 +10438,14 @@ def _is_generic_chat_author(name: str) -> bool:
 
 def _split_quote_prefix(text: str) -> tuple[str, str]:
     raw = str(text or "")
-    if not raw.lstrip().startswith(">"):
+    stripped = raw.lstrip()
+    if stripped.startswith("«") and "»" in stripped:
+        quote, sep, rest = stripped.partition("»")
+        body = rest.lstrip("\n").strip()
+        preview = quote[1:].strip()
+        if preview and body:
+            return preview, body
+    if not stripped.startswith(">"):
         return "", raw
     quote_lines: list[str] = []
     rest: list[str] = []
@@ -10567,7 +10574,7 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "created_at": created,
         "created": _deal_fmt_ts(created),
         "origin": origin or str(message.get("origin") or ""),
-        "channel": str(origin or "").strip().lower(),
+        "channel": _origin_channel_key(origin) or str(origin or "").strip().lower(),
         "reply_to_message_id": reply_id,
         "reply_to_text": reply_text,
         "reply_to_author": reply_author,
@@ -11226,7 +11233,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
-        if reply_preview and channel != "whatsapp":
+        if reply_preview:
             kommo_text = _with_visible_quote(kommo_text, reply_preview)
         quote_id = reply_to_message_id or reply_external
         kommo_ok, kommo_error, _status = _send_kommo_talk_message(

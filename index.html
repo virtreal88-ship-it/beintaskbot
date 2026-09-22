@@ -2993,8 +2993,23 @@ function chatChannelMeta(key) {
     return CHAT_CHANNEL_META[String(key || '').toLowerCase()] || CHAT_CHANNEL_META.whatsapp;
 }
 function chatChannelKey(item) {
-    const raw = String((item && (item.channel || item.origin)) || 'whatsapp').toLowerCase();
-    return CHAT_CHANNEL_META[raw] ? raw : 'whatsapp';
+    const raw = String((item && (item.channel || item.origin)) || '').toLowerCase();
+    if(CHAT_CHANNEL_META[raw]) return raw;
+    if(raw.includes('tiktok')) return 'tiktok';
+    if(raw.includes('telegram')) return 'telegram';
+    if(raw.includes('instagram')) return 'instagram';
+    if(raw.includes('facebook') || raw.includes('fb')) return 'facebook';
+    return 'whatsapp';
+}
+function dealChatReplyPreview(item) {
+    const t = String((item && item.text) || '').trim();
+    if(t) return t.slice(0, 180);
+    const kind = String((item && item.message_type) || (item && item.type) || '').toLowerCase();
+    if(kind === 'picture' || kind === 'image' || (item && item.media_url)) return 'Şəkil';
+    if(kind === 'audio' || kind === 'voice' || kind === 'ptt') return 'Səs mesajı';
+    if(kind === 'video') return 'Video';
+    if(kind === 'file' || kind === 'document') return 'Fayl';
+    return '';
 }
 function dealClientName(deal) {
     return String((deal && deal.contact_name) || '').trim();
@@ -3908,7 +3923,7 @@ function setDealChatReply(item) {
     if(!_dealViewState || _dealViewState.readonly || !item || item.is_comment) return;
     _dealViewState.replyTo = {
         id: item.id,
-        text: String(item.text || '').slice(0, 180),
+        text: dealChatReplyPreview(item),
         author: dealChatActor(item) || item.author || '',
         externalId: item.external_id || '',
         channel: chatChannelKey(item),
