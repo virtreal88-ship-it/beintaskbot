@@ -19,10 +19,12 @@ import hashlib
 import logging
 import requests
 import subprocess
+import tempfile
 import glob
 import traceback
 import asyncio
 import uuid
+import threading
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote
@@ -8505,33 +8507,374 @@ def _normalize_wa_number(phone: str) -> str:
     return digits
 
 
-def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:
+WA_CLOUD_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
+# Only the number that was migrated to the official WhatsApp Business Platform
+# goes through Cloud API; the rest keep using the Kommo chat integration.
+WA_CLOUD_SENDER_DIGITS = re.sub(r"\D", "", os.environ.get("WHATSAPP_CLOUD_SENDER", RUFAT_WHATSAPP_NUMBER))
+
+
+def _wa_cloud_credentials() -> tuple[str, str]:
     token = os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or ""
     phone_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID") or ""
+    return str(token).strip(), str(phone_id).strip()
+
+
+def _wa_cloud_ready(sender_digits: str = "") -> bool:
+    token, phone_id = _wa_cloud_credentials()
     if not token or not phone_id:
-        return False, ""
-    to = _normalize_wa_number(phone)
-    if len(to) < 8:
-        return False, "WhatsApp nömrəsi tapılmadı."
-    url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
-    body = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": text, "preview_url": False}}
-    quoted = str(reply_to or "").strip()
-    if quoted:
-        body["context"] = {"message_id": quoted}
+        return False
+    wanted = re.sub(r"\D", "", str(sender_digits or ""))
+    if not wanted or not WA_CLOUD_SENDER_DIGITS:
+        return True
+    return wanted == WA_CLOUD_SENDER_DIGITS
+
+
+_WA_CLOUD_ERRORS = {
+    131047: "24 saatlıq pəncərə bağlıdır. Müştəri yazana qədər yalnız şablon göndərilə bilər.",
+    131026: "Nömrə WhatsApp mesajını qəbul etmir.",
+    131051: "Bu mesaj tipi WhatsApp-da dəstəklənmir.",
+    131052: "Fayl WhatsApp tərəfindən qəbul edilmədi.",
+    133010: "WhatsApp nömrəsi qeydiyyatdan keçməyib.",
+    190: "WhatsApp tokeni etibarsızdır. Yenilə.",
+    368: "WhatsApp nömrəsi müvəqqəti bloklanıb.",
+    80007: "WhatsApp limiti aşıldı, bir az sonra yenidən yoxla.",
+}
+
+
+def _wa_cloud_error_text(resp) -> str:
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return str(getattr(resp, "text", ""))[:240]
+    error = payload.get("error") if isinstance(payload, dict) else {}
+    if isinstance(error, dict):
+        try:
+            code = int(error.get("code") or 0)
+        except (TypeError, ValueError):
+            code = 0
+        friendly = _WA_CLOUD_ERRORS.get(code)
+        if friendly:
+            return friendly
+        detail = str(error.get("error_user_msg") or error.get("message") or "").strip()
+        if detail:
+            return detail[:240]
+    return str(getattr(resp, "text", ""))[:240]
+
+
+def _wa_cloud_post(body: dict) -> tuple[bool, str, str]:
+    """POST to the Cloud API messages endpoint; returns ok, error and wamid."""
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return False, "WhatsApp Cloud API konfiqurasiya olunmayıb.", ""
+    url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/messages"
     try:
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=body,
-            timeout=15,
+            json={"messaging_product": "whatsapp", **body},
+            timeout=20,
         )
     except Exception as exc:
         logger.warning("WhatsApp Cloud send failed: %s", exc)
-        return False, "WhatsApp API xətası."
+        return False, "WhatsApp API xətası.", ""
     if resp.status_code in {200, 201}:
-        return True, ""
-    logger.warning("WhatsApp Cloud status %s: %s", resp.status_code, resp.text[:240])
-    return False, "WhatsApp mesajı göndərilmədi."
+        try:
+            payload = resp.json() or {}
+        except Exception:
+            payload = {}
+        messages = payload.get("messages") if isinstance(payload, dict) else []
+        wamid = ""
+        if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+            wamid = str(messages[0].get("id") or "")
+        return True, "", wamid
+    detail = _wa_cloud_error_text(resp)
+    logger.warning("WhatsApp Cloud status %s: %s", resp.status_code, detail)
+    return False, detail or "WhatsApp mesajı göndərilmədi.", ""
+
+
+def _wa_cloud_upload_media(content: bytes, filename: str, mime: str) -> tuple[str, str]:
+    """Upload media to Cloud API and return its media id."""
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return "", "WhatsApp Cloud API konfiqurasiya olunmayıb."
+    url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/media"
+    try:
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            data={"messaging_product": "whatsapp", "type": mime},
+            files={"file": (filename or "file", content, mime or "application/octet-stream")},
+            timeout=60,
+        )
+    except Exception as exc:
+        logger.warning("WhatsApp Cloud media upload failed: %s", exc)
+        return "", "Fayl WhatsApp-a yüklənmədi."
+    if resp.status_code in {200, 201}:
+        try:
+            media_id = str(((resp.json() or {}).get("id")) or "")
+        except Exception:
+            media_id = ""
+        if media_id:
+            return media_id, ""
+    detail = _wa_cloud_error_text(resp)
+    logger.warning("WhatsApp Cloud media status %s: %s", resp.status_code, detail)
+    return "", detail or "Fayl WhatsApp-a yüklənmədi."
+
+
+def _ffmpeg_to_voice_ogg(raw: bytes, filename: str) -> bytes:
+    """Convert a browser recording to mono Ogg/Opus, the only voice note format."""
+    suffix = os.path.splitext(str(filename or ""))[1] or ".webm"
+    src_path = ""
+    dst_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        dst_path = src_path + ".ogg"
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", dst_path,
+            ],
+            capture_output=True,
+            timeout=90,
+        )
+        if result.returncode != 0:
+            logger.warning("ffmpeg voice convert failed: %s", (result.stderr or b"")[:240])
+            return b""
+        with open(dst_path, "rb") as handle:
+            return handle.read()
+    except Exception as exc:
+        logger.warning("ffmpeg voice convert error: %s", exc)
+        return b""
+    finally:
+        for path in (src_path, dst_path):
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+
+def _wa_cloud_media_kind(filename: str, content_type: str) -> str:
+    name = f"{filename} {content_type}".lower()
+    if str(content_type or "").startswith("image/") or re.search(r"\.(png|jpe?g|webp)$", name):
+        return "image"
+    if str(content_type or "").startswith("video/") or re.search(r"\.(mp4|mov|3gp)$", name):
+        return "video"
+    if _looks_voice_upload(filename, content_type):
+        return "audio"
+    return "document"
+
+
+def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı.", ""
+    body: dict = {"recipient_type": "individual", "to": to, "type": "text",
+                  "text": {"body": text, "preview_url": True}}
+    quoted = str(reply_to or "").strip()
+    if quoted:
+        body["context"] = {"message_id": quoted}
+    return _wa_cloud_post(body)
+
+
+def _wa_cloud_send_media(
+    phone: str,
+    kind: str,
+    media_id: str,
+    *,
+    caption: str = "",
+    filename: str = "",
+    reply_to: str = "",
+    voice: bool = False,
+) -> tuple[bool, str, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı.", ""
+    media: dict = {"id": media_id}
+    if kind == "audio" and voice:
+        media["voice"] = True
+    if kind in {"image", "video", "document"} and caption:
+        media["caption"] = caption
+    if kind == "document" and filename:
+        media["filename"] = filename
+    body: dict = {"recipient_type": "individual", "to": to, "type": kind, kind: media}
+    quoted = str(reply_to or "").strip()
+    if quoted:
+        body["context"] = {"message_id": quoted}
+    return _wa_cloud_post(body)
+
+
+def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str) -> tuple[bool, str]:
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı."
+    ok, error, _wamid = _wa_cloud_post({
+        "recipient_type": "individual",
+        "to": to,
+        "type": "reaction",
+        # An empty emoji removes the reaction.
+        "reaction": {"message_id": str(wamid or ""), "emoji": str(emoji or "")},
+    })
+    return ok, error
+
+
+def _wa_cloud_mark_read(wamid: str, typing: bool = False) -> bool:
+    body: dict = {"status": "read", "message_id": str(wamid or "")}
+    if typing:
+        body["typing_indicator"] = {"type": "text"}
+    ok, _error, _wamid = _wa_cloud_post(body)
+    return ok
+
+
+def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:
+    token, phone_id = _wa_cloud_credentials()
+    if not token or not phone_id:
+        return False, ""
+    ok, error, _wamid = _wa_cloud_send_text(phone, text, reply_to)
+    return ok, error
+
+
+_WA_SENT_FILE = "wa_sent_messages.json"
+_wa_sent_messages = read_json(_WA_SENT_FILE) or {}
+if not isinstance(_wa_sent_messages, dict):
+    _wa_sent_messages = {}
+_WA_SENT_PER_LEAD = 300
+_wa_sent_lock = threading.Lock()
+_wa_sent_save_timer: threading.Timer | None = None
+
+
+def _flush_sent_messages() -> None:
+    global _wa_sent_save_timer
+    with _wa_sent_lock:
+        _wa_sent_save_timer = None
+        snapshot = json.loads(json.dumps(_wa_sent_messages, ensure_ascii=False))
+    try:
+        write_json(_WA_SENT_FILE, snapshot)
+    except Exception as exc:
+        logger.warning("Sent message store failed: %s", exc)
+
+
+def _schedule_sent_messages_save() -> None:
+    """Persist in the background; every write_json is a commit on the data branch."""
+    global _wa_sent_save_timer
+    with _wa_sent_lock:
+        if _wa_sent_save_timer is not None:
+            return
+        timer = threading.Timer(5.0, _flush_sent_messages)
+        timer.daemon = True
+        _wa_sent_save_timer = timer
+    timer.start()
+
+
+def _remember_sent_message(lead_id: int, item: dict) -> None:
+    """Keep messages we sent through Cloud API; Kommo does not mirror them back."""
+    key = str(int(lead_id or 0))
+    if key == "0" or not isinstance(item, dict):
+        return
+    with _wa_sent_lock:
+        rows = _wa_sent_messages.get(key)
+        if not isinstance(rows, list):
+            rows = []
+        rows.append(item)
+        _wa_sent_messages[key] = rows[-_WA_SENT_PER_LEAD:]
+    _schedule_sent_messages_save()
+
+
+def _sent_messages_for_lead(lead_id: int) -> list[dict]:
+    with _wa_sent_lock:
+        rows = _wa_sent_messages.get(str(int(lead_id or 0)))
+        if not isinstance(rows, list):
+            return []
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+_WA_REACTIONS_KEY = "reactions"
+
+
+def _remember_reaction(lead_id: int, wamid: str, emoji: str) -> None:
+    """Reactions we send are not echoed back, so keep them for the chat view."""
+    key = str(int(lead_id or 0))
+    target = str(wamid or "")
+    if key == "0" or not target:
+        return
+    with _wa_sent_lock:
+        bucket = _wa_sent_messages.get(_WA_REACTIONS_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            _wa_sent_messages[_WA_REACTIONS_KEY] = bucket
+        rows = bucket.get(key)
+        if not isinstance(rows, dict):
+            rows = {}
+            bucket[key] = rows
+        if emoji:
+            rows[target] = str(emoji)
+        else:
+            rows.pop(target, None)
+    _schedule_sent_messages_save()
+
+
+def _reactions_for_lead(lead_id: int) -> dict:
+    with _wa_sent_lock:
+        bucket = _wa_sent_messages.get(_WA_REACTIONS_KEY)
+        if not isinstance(bucket, dict):
+            return {}
+        rows = bucket.get(str(int(lead_id or 0)))
+        return dict(rows) if isinstance(rows, dict) else {}
+
+
+def _update_sent_message(lead_id: int, wamid: str, **fields) -> None:
+    wanted = str(wamid or "")
+    changed = False
+    with _wa_sent_lock:
+        rows = _wa_sent_messages.get(str(int(lead_id or 0)))
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
+                    row.update(fields)
+                    changed = True
+                    break
+    if changed:
+        _schedule_sent_messages_save()
+
+
+def _sent_message_item(
+    *,
+    wamid: str,
+    text: str,
+    author: str,
+    channel: str = "whatsapp",
+    message_type: str = "text",
+    file_uuid: str = "",
+    file_name: str = "",
+    reply_id: str = "",
+    reply_text: str = "",
+    reply_author: str = "",
+) -> dict:
+    created = int(_time_module.time())
+    return {
+        "id": f"wa-{wamid or uuid.uuid4().hex}",
+        "external_id": str(wamid or ""),
+        "direction": "outgoing",
+        "incoming": False,
+        "author": author or "",
+        "text": text or "",
+        "message_type": message_type,
+        "created_at": created,
+        "created": _deal_fmt_ts(created),
+        "origin": channel,
+        "channel": channel,
+        "reply_to_message_id": str(reply_id or ""),
+        "reply_to_text": str(reply_text or "")[:200],
+        "reply_to_author": str(reply_author or "")[:80],
+        "media_url": "",
+        "file_uuid": str(file_uuid or ""),
+        "file_name": str(file_name or ""),
+        "delivery_status": "sent",
+        "via_cloud": True,
+    }
 
 
 def _chat_item_key(item: dict) -> tuple:
@@ -8625,6 +8968,27 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
             _add_chat(formatted)
+    # Cloud API sends are not returned by Kommo talks, so replay our own log and
+    # drop the copies Kommo did mirror back.
+    known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
+    outgoing_seen = [
+        (str(item.get("text") or ""), int(item.get("created_at") or 0))
+        for item in chat
+        if not item.get("incoming")
+    ]
+    for item in _sent_messages_for_lead(lid):
+        external = str(item.get("external_id") or "")
+        if external and external in known_external:
+            continue
+        text = str(item.get("text") or "")
+        created = int(item.get("created_at") or 0)
+        if text and any(
+            text == other_text and abs(created - other_created) <= 180
+            for other_text, other_created in outgoing_seen
+        ):
+            continue
+        item.setdefault("author", employee_name or "")
+        _add_chat(item)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -8634,6 +8998,12 @@ def _collect_deal_chat(
         page = chat[-limit:] if chat else []
         has_more = talk_has_more or len(chat) > limit
     _apply_saved_replies(page)
+    reactions = _reactions_for_lead(lid)
+    if reactions:
+        for item in page:
+            emoji = reactions.get(str(item.get("external_id") or "")) or reactions.get(str(item.get("id") or ""))
+            if emoji:
+                item["my_reaction"] = emoji
     return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
 
 
@@ -9336,6 +9706,54 @@ def _stamp_sent_reply(chat: list[dict], text: str, reply_id: str, reply_text: st
         return
 
 
+def _deliver_via_cloud(
+    lead: dict,
+    text: str,
+    raw: bytes,
+    filename: str,
+    content_type: str,
+    quote_id: str,
+) -> tuple[bool, str, str, str]:
+    """Send one message through WhatsApp Cloud API; returns ok, error, wamid, type."""
+    _ids, phones = _contact_ids_and_phones(lead)
+    if not phones:
+        return False, "Müştəri nömrəsi tapılmadı.", "", "text"
+    kind = "text"
+    media_id = ""
+    voice = False
+    if raw:
+        kind = _wa_cloud_media_kind(filename, content_type)
+        payload, mime, name = raw, content_type or "application/octet-stream", filename or "file"
+        if kind == "audio":
+            converted = _ffmpeg_to_voice_ogg(raw, filename)
+            if converted:
+                payload, mime, name, voice = converted, "audio/ogg", "voice.ogg", True
+            elif "ogg" in str(content_type or "").lower():
+                mime, voice = "audio/ogg", True
+        media_id, upload_error = _wa_cloud_upload_media(payload, name, mime)
+        if not media_id:
+            return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind
+    last_error = ""
+    for phone in phones:
+        if kind == "text":
+            ok, error, wamid = _wa_cloud_send_text(phone, text, quote_id)
+        else:
+            ok, error, wamid = _wa_cloud_send_media(
+                phone,
+                kind,
+                media_id,
+                caption=text,
+                filename=filename,
+                reply_to=quote_id,
+                voice=voice,
+            )
+        if ok:
+            return True, "", wamid, kind
+        if error:
+            last_error = error
+    return False, last_error or "WhatsApp mesajı göndərilmədi.", "", kind
+
+
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -9344,6 +9762,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     channel = "whatsapp"
     lead_id = 0
     attachment = None
+    upload_raw = b""
+    upload_name = ""
+    upload_type = ""
     reply_to_message_id = ""
     reply_external = ""
     reply_preview = ""
@@ -9368,22 +9789,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             hinted_talk = 0
         uploaded = form.get("file")
         if uploaded is not None and getattr(uploaded, "file", None):
-            raw = uploaded.file.read()
-            filename = str(getattr(uploaded, "filename", None) or "file")
-            file_type = str(getattr(uploaded, "content_type", None) or "application/octet-stream")
-            if len(raw) > 15 * 1024 * 1024:
+            upload_raw = uploaded.file.read()
+            upload_name = str(getattr(uploaded, "filename", None) or "file")
+            upload_type = str(getattr(uploaded, "content_type", None) or "application/octet-stream")
+            if len(upload_raw) > 15 * 1024 * 1024:
                 return web.json_response({"success": False, "error": "Fayl 15MB-dan böyükdür"}, status=400)
-            file_uuid, version_uuid = _upload_kommo_drive_bytes(filename, raw, file_type)
-            if not file_uuid or not version_uuid:
-                return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
-            attachment = {
-                "type": _attachment_kind(filename, file_type),
-                "drive_uuid": file_uuid,
-                "drive_version_uuid": version_uuid,
-            }
-            if _looks_voice_upload(filename, file_type) and not text:
-                # Kommo rejects an empty text even when a file is attached.
-                text = VOICE_CAPTION_TEXT
     else:
         try:
             data = await request.json()
@@ -9407,7 +9817,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             hinted_talk = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    if not text and not attachment:
+    if not text and not upload_raw:
         return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
@@ -9415,44 +9825,71 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if err:
         return err
     sender_digits = _wa_sender_digits_for_chat(chat_id)
+    use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
     reply_talk_id = _resolve_channel_talk_id(lead, channel, sender_digits, hinted_talk)
-    if not reply_talk_id:
+    if not reply_talk_id and not use_cloud:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
-    quote_on_whatsapp = bool(reply_to_message_id) and channel == "whatsapp" and not attachment
     wa_quote_id = reply_external if reply_external.lower().startswith("wamid") else ""
+    drive_uuid = ""
+    drive_version = ""
+    if upload_raw:
+        # Drive keeps a durable copy so the file stays playable inside the app.
+        drive_uuid, drive_version = _upload_kommo_drive_bytes(upload_name, upload_raw, upload_type)
+        if not drive_uuid or not drive_version:
+            return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
+        attachment = {
+            "type": _attachment_kind(upload_name, upload_type),
+            "drive_uuid": drive_uuid,
+            "drive_version_uuid": drive_version,
+        }
     ok = False
     last_error = ""
-    if quote_on_whatsapp and wa_quote_id:
-        _ids, phones = _contact_ids_and_phones(lead)
-        for phone in phones:
-            cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text, wa_quote_id)
-            if cloud_ok:
-                ok = True
-                last_error = ""
-                break
-            if cloud_error:
-                last_error = cloud_error
-    if not ok:
-        ok, last_error, _status = _send_kommo_talk_message(reply_talk_id, text, attachment)
-    if not ok and channel == "whatsapp" and not reply_to_message_id and not attachment:
-        _ids, phones = _contact_ids_and_phones(lead)
-        for phone in phones:
-            cloud_ok, cloud_error = _send_whatsapp_cloud_text(phone, text)
-            if cloud_ok:
-                ok = True
-                last_error = ""
-                break
-            if cloud_error:
-                last_error = cloud_error
+    sent_wamid = ""
+    sent_via_cloud = False
+    sent_text = text
+    sent_type = "text"
+    if use_cloud:
+        ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
+            _deliver_via_cloud,
+            lead,
+            text,
+            upload_raw,
+            upload_name,
+            upload_type,
+            wa_quote_id,
+        )
+        sent_via_cloud = ok
+    if not ok and reply_talk_id:
+        kommo_text = text
+        if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
+            # Kommo rejects an empty text even when a file is attached.
+            kommo_text = VOICE_CAPTION_TEXT
+        kommo_ok, kommo_error, _status = _send_kommo_talk_message(reply_talk_id, kommo_text, attachment)
+        if kommo_ok:
+            ok = True
+            last_error = ""
+            sent_text = kommo_text
+        elif kommo_error and not last_error:
+            last_error = kommo_error
     if not ok:
         detail = last_error
-        if quote_on_whatsapp:
-            last_error = "Cavab göndərilmədi."
-        elif attachment:
-            last_error = "Fayl göndərilmədi."
-        elif not last_error or last_error.startswith("{") or "validation" in last_error.lower():
-            last_error = "Mesaj göndərilmədi."
+        if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
+            last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
+    if sent_via_cloud:
+        # The app renders Kommo message types, so translate the Cloud API kind.
+        local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
+        _remember_sent_message(int(lead.get("id") or lead_id), _sent_message_item(
+            wamid=sent_wamid,
+            text=sent_text or (VOICE_CAPTION_TEXT if local_type == "audio" else upload_name),
+            author=employee_name_for_lead(lead),
+            message_type=local_type,
+            file_uuid=drive_uuid,
+            file_name="" if local_type == "audio" else upload_name,
+            reply_id=reply_to_message_id or wa_quote_id,
+            reply_text=reply_preview,
+            reply_author=reply_author,
+        ))
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
@@ -9474,6 +9911,70 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "channel": channel,
         "channels": channels,
     })
+
+
+async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    emoji = str(data.get("emoji") or "").strip()[:8]
+    if not lead_id or not wamid:
+        return web.json_response({"success": False, "error": "lead_id və mesaj id lazımdır"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    if not _wa_cloud_ready(_wa_sender_digits_for_chat(chat_id)):
+        return web.json_response({"success": False, "error": "Reaksiya yalnız rəsmi WhatsApp nömrəsində işləyir."}, status=400)
+    _ids, phones = _contact_ids_and_phones(lead)
+    if not phones:
+        return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+    last_error = ""
+    for phone in phones:
+        ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, wamid, emoji)
+        if ok:
+            _remember_reaction(int(lead.get("id") or lead_id), wamid, emoji)
+            return web.json_response({"success": True, "emoji": emoji})
+        if error:
+            last_error = error
+    return web.json_response({"success": False, "error": last_error or "Reaksiya göndərilmədi."}, status=400)
+
+
+async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    typing = bool(data.get("typing"))
+    if not lead_id or not wamid:
+        return web.json_response({"success": True, "skipped": True})
+    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    if not _wa_cloud_ready(_wa_sender_digits_for_chat(chat_id)):
+        return web.json_response({"success": True, "skipped": True})
+    ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
+    return web.json_response({"success": bool(ok)})
 
 
 async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
@@ -10551,6 +11052,10 @@ async def start_webhook_server():
     app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/react', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/read", handle_api_deal_chat_read)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())

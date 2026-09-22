@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="203">
+    <meta name="pwa-build" content="204">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -313,6 +313,10 @@
         .wa-state { font-size:9px; font-weight:600; color:#9aa7b0; letter-spacing:.01em; }
         .wa-state.failed { color:#dc2626; }
         .chat-reply-btn { border:0; background:transparent; color:#64748b; font-size:13px; font-weight:700; padding:0 2px; cursor:pointer; }
+        .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
+        .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); }
+        .chat-react-pop { position:fixed; z-index:120; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
+        .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; }
         .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
         .chat-quote-bar[hidden] { display:none !important; }
@@ -3007,7 +3011,11 @@ function dealChatItemHtml(item, token, readonly) {
     const quote = dealChatQuoteHtml(item);
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${meta.svg}${headName}</div>${quote}<div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${replyBtn}</div></div>`;
+    const wamid = String(item.external_id || '');
+    const canReact = !readonly && !!item.incoming && wamid.toLowerCase().startsWith('wamid');
+    const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(wamid)}" title="Reaksiya">☺</button>` : '';
+    const reaction = item.my_reaction ? `<span class="chat-reaction">${escapeHtml(item.my_reaction)}</span>` : '';
+    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${meta.svg}${headName}</div>${quote}<div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
 }
 function dealChatQuoteHtml(item) {
     const text = String(item && item.reply_to_text || '').trim();
@@ -3145,9 +3153,96 @@ function bindDealChatMedia(thread) {
             if(item) setDealChatReply(item);
         };
     });
+    thread.querySelectorAll('.chat-react-btn').forEach(btn => {
+        btn.onclick = event => {
+            event.stopPropagation();
+            openChatReactionPicker(btn, btn.getAttribute('data-react-id'));
+        };
+    });
     thread.querySelectorAll('img.deal-zoom').forEach(img => {
         img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
     });
+}
+const CHAT_REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+function openChatReactionPicker(anchor, wamid) {
+    document.getElementById('chat-react-pop')?.remove();
+    if(!anchor || !wamid) return;
+    const current = ((_dealViewState && _dealViewState.messages) || []).find(item => String(item.external_id || '') === String(wamid));
+    const pop = document.createElement('div');
+    pop.id = 'chat-react-pop';
+    pop.className = 'chat-react-pop';
+    const buttons = CHAT_REACTION_EMOJI.map(emoji => `<button type="button" data-emoji="${escapeHtml(emoji)}">${emoji}</button>`).join('');
+    const clear = current && current.my_reaction ? '<button type="button" data-emoji="" title="Sil">✕</button>' : '';
+    pop.innerHTML = buttons + clear;
+    const close = () => { pop.remove(); document.removeEventListener('click', onAway, true); };
+    const onAway = event => { if(!pop.contains(event.target)) close(); };
+    pop.querySelectorAll('[data-emoji]').forEach(btn => {
+        btn.onclick = event => {
+            event.stopPropagation();
+            close();
+            sendChatReaction(wamid, btn.getAttribute('data-emoji') || '');
+        };
+    });
+    document.body.appendChild(pop);
+    const box = anchor.getBoundingClientRect();
+    const width = pop.offsetWidth || 220;
+    pop.style.left = Math.max(8, Math.min(box.left - width / 2, window.innerWidth - width - 8)) + 'px';
+    pop.style.top = Math.max(8, box.top - (pop.offsetHeight || 40) - 6) + 'px';
+    setTimeout(() => document.addEventListener('click', onAway, true), 0);
+}
+async function sendChatReaction(wamid, emoji) {
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return;
+    const leadId = _dealViewState.id;
+    const seq = _dealViewState.seq;
+    const target = (_dealViewState.messages || []).find(item => String(item.external_id || '') === String(wamid));
+    const previous = target ? target.my_reaction : '';
+    if(target) { target.my_reaction = emoji; paintDealChatThread({stickBottom: false, force: true}); }
+    try {
+        const r = await fetch(API_BASE + '/api/deal/chat/react', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({lead_id: leadId, external_id: wamid, emoji})
+        });
+        const d = await r.json().catch(() => ({}));
+        if(!d.success) throw new Error(d.error || 'Reaksiya göndərilmədi.');
+    } catch(err) {
+        if(target && requestMatchesDeal(seq, leadId)) {
+            target.my_reaction = previous || '';
+            paintDealChatThread({stickBottom: false, force: true});
+        }
+        toast(String(err && err.message || 'Reaksiya göndərilmədi.'), false);
+    }
+}
+function lastIncomingWamid() {
+    const list = (_dealViewState && _dealViewState.messages) || [];
+    for(let i = list.length - 1; i >= 0; i--) {
+        const item = list[i];
+        const wamid = String((item && item.external_id) || '');
+        if(item && item.incoming && wamid.toLowerCase().startsWith('wamid')) return wamid;
+    }
+    return '';
+}
+let _chatReadSent = '';
+let _chatTypingAt = 0;
+function markDealChatRead(typing) {
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly) return;
+    if(_dealViewState.channel && _dealViewState.channel !== 'whatsapp') return;
+    const wamid = lastIncomingWamid();
+    if(!wamid) return;
+    if(typing) {
+        // The typing indicator lives for 25s, so refresh it at most every 15s.
+        if(Date.now() - _chatTypingAt < 15000) return;
+        _chatTypingAt = Date.now();
+    } else {
+        const key = _dealViewState.id + '|' + wamid;
+        if(_chatReadSent === key) return;
+        _chatReadSent = key;
+    }
+    fetch(API_BASE + '/api/deal/chat/read', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+        body: JSON.stringify({lead_id: _dealViewState.id, external_id: wamid, typing: !!typing})
+    }).catch(() => {});
 }
 function openDealPhotoZoom(src) {
     if(!src) return;
@@ -3267,6 +3362,7 @@ async function loadDealChatLatest() {
         _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 20;
         applyDealChannels(d.channels || _dealViewState.channels);
         paintDealChatThread({stickBottom: true, force: true});
+        markDealChatRead(false);
     } catch(_err) {
         if(requestMatchesDeal(seq, _dealViewState && _dealViewState.id)) {
             _dealViewState.loading = false;
@@ -3311,6 +3407,7 @@ async function pollDealChat() {
         const thread = document.getElementById('deal-chat-thread');
         const nearBottom = thread ? (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80) : true;
         paintDealChatThread({stickBottom: nearBottom});
+        markDealChatRead(false);
     } catch(_err) {}
 }
 function dealIconEdit() {
@@ -4082,7 +4179,7 @@ function dealWorkspaceHtml(deal, token, readonly) {
             <div class="wa-composer">
             <div class="wa-composer-field">
                 <button type="button" class="wa-attach-in" id="deal-chat-attach" title="Fayl">📎</button>
-                <input type="file" id="deal-chat-file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
+                <input type="file" id="deal-chat-file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx" hidden>
                 <div id="deal-voice-preview" class="wa-voice-preview" hidden>
                     <audio controls preload="metadata"></audio>
                     <button type="button" id="deal-voice-drop" title="Səs yazısını sil">🗑</button>
@@ -4181,6 +4278,7 @@ function paintDealViewModal(deal, readonly) {
     if(input) input.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
     });
+    if(input) input.addEventListener('input', () => markDealChatRead(true));
     if(attachBtn && fileInput) {
         attachBtn.onclick = () => {
             if(_dealVoiceRec) { cancelDealVoice(); return; }
