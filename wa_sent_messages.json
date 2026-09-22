@@ -236,7 +236,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790105154,
+    "at": 1790106391,
     "fields": [
       "messages"
     ]
@@ -283,7 +283,7 @@
       "media_url": "",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "delivered",
+      "delivery_status": "read",
       "via_cloud": true
     },
     {
