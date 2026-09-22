@@ -5074,7 +5074,7 @@ function chatsTimeLabel(ts) {
     if(stamp === chatsDayKey(yest)) return 'Dünən';
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
-    return day + '.' + month;
+    return day + '.' + month + '.' + d.getFullYear();
 }
 function chatsInitials(name) {
     const parts = String(name || '').trim().split(/\s+/).filter(Boolean);

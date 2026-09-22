@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v196 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v197 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8789,8 +8789,7 @@ def _send_kommo_talk_message(
         for body in quote_bodies:
             attempts.append((talk_messages, body, {}))
             attempts.append((talk_send, body, {}))
-    else:
-        attempts.append((talk_send, payload, {}))
+    attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_status = 0
     for url, body, extra in attempts:
@@ -8806,17 +8805,6 @@ def _send_kommo_talk_message(
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
         logger.warning("Talk send status %s %s: %s", resp.status_code, url, last_detail)
-        if resp.status_code not in {400, 401, 403, 404, 405, 422}:
-            break
-    if reply_id:
-        logger.warning("Native Kommo reply rejected for talk %s; not sending a plain stand-in", talk_id)
-        if last_status == 403:
-            return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
-        if last_status == 422:
-            return False, "Çat bağlıdır. Kommo-da söhbəti açın.", last_status
-        if last_status == 402:
-            return False, "Kommo Chat API limiti bitib.", last_status
-        return False, last_detail or "Sitat göndərilmədi. Kommo bu kanalda native reply qəbul etmədi.", last_status
     if last_status == 403:
         return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
     if last_status == 422:
