@@ -8143,7 +8143,16 @@ def _kommo_error_detail(resp) -> str:
     except Exception:
         payload = {}
     if isinstance(payload, dict):
+        # "Request validation failed" alone says nothing; keep the field paths.
+        fields = []
+        for group in payload.get("validation-errors") or []:
+            for err in (group or {}).get("errors") or []:
+                path = str((err or {}).get("path") or "").strip()
+                text = str((err or {}).get("detail") or (err or {}).get("code") or "").strip()
+                fields.append(f"{path}: {text}".strip(": "))
         detail = str(payload.get("detail") or payload.get("title") or payload.get("error") or "").strip()
+        if fields:
+            return f"{detail} — {'; '.join(fields)}".strip(" —")[:240]
         if detail:
             return detail
     return (resp.text or "")[:240]
@@ -8197,18 +8206,6 @@ def _send_kommo_talk_message(
         ]
         if keep_plain:
             payloads.append(base)
-    if attachment and str(attachment.get("type") or "") == "voice":
-        # Kommo documents only file/video/picture attachments, and its validator
-        # rejects unknown keys, so walk from the richest voice payload down to a
-        # plain file upload with a caption.
-        slim = {key: value for key, value in attachment.items() if key != "media_duration"}
-        variants = [attachment, slim, {**slim, "type": "file"}]
-        extra = []
-        for variant in variants:
-            extra.extend({**payload, "attachment": variant} for payload in payloads)
-        if not text:
-            extra.append({"text": "🎤 Səs mesajı", "attachment": {**slim, "type": "file"}})
-        payloads = extra
     last_resp = None
     for payload in payloads:
         try:
@@ -9023,9 +9020,10 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
 
 
 def _attachment_kind(filename: str, content_type: str) -> str:
+    # Kommo only accepts file/video/picture here, so audio travels as a file.
     name = f"{filename} {content_type}".lower()
     if content_type.startswith("audio/") or re.search(r"\.(ogg|oga|opus|mp3|m4a|wav)$", name):
-        return "voice"
+        return "file"
     if content_type.startswith("image/") or re.search(r"\.(png|jpe?g|gif|webp)$", name):
         return "picture"
     if content_type.startswith("video/") or re.search(r"\.(mp4|mov|webm)$", name):
@@ -9133,12 +9131,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 "drive_uuid": file_uuid,
                 "drive_version_uuid": version_uuid,
             }
-            try:
-                duration = int(float(form.get("duration") or 0))
-            except (TypeError, ValueError):
-                duration = 0
-            if duration > 0 and attachment["type"] == "voice":
-                attachment["media_duration"] = duration
+            is_voice = file_type.startswith("audio/") or bool(re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", filename.lower()))
+            if is_voice and not text:
+                # Kommo rejects an empty text even when a file is attached.
+                text = "🎤 Səs mesajı"
     else:
         try:
             data = await request.json()
@@ -9210,8 +9206,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if quote_on_whatsapp:
             last_error = "Cavab göndərilmədi."
         elif attachment:
-            kind = str(attachment.get("type") or "")
-            last_error = "Səs mesajı göndərilmədi." if kind == "voice" else "Fayl göndərilmədi."
+            last_error = "Fayl göndərilmədi."
         elif not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)

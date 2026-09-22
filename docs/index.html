@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="192">
+    <meta name="pwa-build" content="193">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-192.png">
@@ -3804,7 +3804,6 @@ async function sendDealChatMessage(fileArg) {
             if(replyAuthor) form.append('reply_to_author', replyAuthor);
             if(replyExternal) form.append('reply_external_id', replyExternal);
             if(talkId) form.append('talk_id', String(talkId));
-            if(_dealPendingSeconds) form.append('duration', String(_dealPendingSeconds));
             form.append('file', file, file.name || 'file');
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
