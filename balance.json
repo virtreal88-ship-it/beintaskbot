@@ -987,6 +987,21 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-20 13:28:12"
+      },
+      {
+        "id": "10d7fc3c908b48c9a247caf12e390cfd",
+        "task_id": 94405881,
+        "executor": "Rasim Əsgərov",
+        "client": "Market Biləcəri",
+        "phone": "+994554807020",
+        "task_type": "",
+        "amount": 100.0,
+        "status": "pending",
+        "task_text": "Tapşırıq təsdiqləndi (100.00 AZN)",
+        "result_text": "login marketucuz",
+        "kpi": 0,
+        "type": "task",
+        "date": "2026-09-22 17:23:03"
       }
     ],
     "balance": -100.0
