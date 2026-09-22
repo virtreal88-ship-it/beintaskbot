@@ -5637,7 +5637,11 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v181")
+    hook = ""
+    at = int(_WA_LAST_HOOK.get("at") or 0)
+    if at:
+        hook = f" hook={max(0, int(_time_module.time()) - at)}s"
+    return web.Response(status=200, text=f"Bot is running v182{hook}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7256,11 +7260,74 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     return result
 
 
-async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
-    """Load the newest common lead note. WhatsApp inbox previews come from Cloud API."""
+async def _load_kommo_talks_inbox(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, int]]:
+    """Existing WhatsApp/Instagram deals still live in Kommo talks; Cloud inbound is extra."""
+    client_by_lead: dict[int, str] = {}
+    channel_by_lead: dict[int, str] = {}
+    updated_by_lead: dict[int, int] = {}
+    if not lead_ids:
+        return client_by_lead, channel_by_lead, updated_by_lead
+    for page in range(1, 9):
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/talks",
+                params={"limit": 250, "page": page},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Kommo talks page %s unavailable: %s", page, exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Kommo talks page %s failed: %s", page, response.status_code)
+            break
+        talks = (response.json().get("_embedded") or {}).get("talks") or []
+        if not talks:
+            break
+        for talk in talks:
+            if not isinstance(talk, dict):
+                continue
+            lids: list[int] = []
+            try:
+                lids.append(int(talk.get("entity_id") or 0))
+            except (TypeError, ValueError):
+                pass
+            for lead in ((talk.get("_embedded") or {}).get("leads") or []):
+                if not isinstance(lead, dict):
+                    continue
+                try:
+                    lids.append(int(lead.get("id") or 0))
+                except (TypeError, ValueError):
+                    continue
+            lids = [lid for lid in lids if lid in lead_ids]
+            if not lids:
+                continue
+            channel = _talk_channel_key(talk)
+            if channel not in {"whatsapp", "instagram", "facebook", "tiktok"}:
+                continue
+            try:
+                updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+            except (TypeError, ValueError):
+                updated = 0
+            unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+            for lid in lids:
+                known = updated_by_lead.get(lid, 0)
+                if updated >= known:
+                    updated_by_lead[lid] = updated
+                    channel_by_lead[lid] = channel
+                    if unread:
+                        client_by_lead[lid] = "Yeni mesaj"
+        if len(talks) < 250:
+            break
+    return client_by_lead, channel_by_lead, updated_by_lead
+
+
+async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int]]:
+    """Common notes plus Kommo talk channels so existing chats stay in Çatlar."""
     latest: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7301,10 +7368,12 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
+    client_by_lead, channel_by_lead, talk_updated = await _load_kommo_talks_inbox(lead_ids)
     return (
         {lead: value[1] for lead, value in latest.items()},
-        {},
-        {},
+        client_by_lead,
+        channel_by_lead,
+        talk_updated,
     )
 
 
@@ -7617,7 +7686,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead, client_message_by_lead, channel_by_lead = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -7626,6 +7695,16 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
         deal["chat_channel"] = channel_by_lead.get(lead_id, "")
+        try:
+            talk_ts = int((talk_updated or {}).get(lead_id) or 0)
+        except (TypeError, ValueError):
+            talk_ts = 0
+        try:
+            current = int(deal.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        if talk_ts > current:
+            deal["updated_at"] = talk_ts
         deal["task_desc"] = task.get("text", "")
         deal["deadline_ts"] = deadline_ts
         deal["deadline"] = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if deadline_ts else ""
@@ -8524,6 +8603,51 @@ def _wa_cloud_ready(sender_digits: str = "") -> bool:
     return wanted == WA_CLOUD_SENDER_DIGITS
 
 
+_WA_LAST_HOOK = {"at": 0, "fields": [], "in": 0, "lead": 0}
+
+
+def _wa_graph_get(path: str, params: dict | None = None):
+    token, _phone_id = _wa_cloud_credentials()
+    if not token:
+        return {}
+    try:
+        resp = requests.get(
+            f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{path.lstrip('/')}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params or {},
+            timeout=12,
+        )
+        return resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning("WhatsApp Graph GET %s failed: %s", path, exc)
+        return {}
+
+
+def _wa_ensure_subscribed() -> None:
+    """Ask Meta to send live WABA inbound to this app, not only dashboard tests."""
+    token, phone_id = _wa_cloud_credentials()
+    if not token:
+        return
+    waba = str(os.environ.get("WHATSAPP_WABA_ID") or "").strip()
+    if not waba and phone_id:
+        data = _wa_graph_get(phone_id, {"fields": "whatsapp_business_account"})
+        account = data.get("whatsapp_business_account") if isinstance(data, dict) else {}
+        if isinstance(account, dict):
+            waba = str(account.get("id") or "").strip()
+    if not waba:
+        logger.warning("WhatsApp WABA id missing; live inbound may stay on Kommo")
+        return
+    try:
+        resp = requests.post(
+            f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{waba}/subscribed_apps",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=12,
+        )
+        logger.info("WhatsApp subscribed_apps status=%s", resp.status_code)
+    except Exception as exc:
+        logger.warning("WhatsApp subscribe failed: %s", exc)
+
+
 _WA_CLOUD_ERRORS = {
     131047: "24 saatlıq pəncərə bağlıdır. Müştəri yazana qədər yalnız şablon göndərilə bilər.",
     131026: "Nömrə WhatsApp mesajını qəbul etmir.",
@@ -9245,24 +9369,66 @@ def _ingest_cloud_incoming(value: dict) -> None:
         except Exception:
             pass
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
+        _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
+        _WA_LAST_HOOK["lead"] = int(lead_id)
+
+
+def _ingest_cloud_echoes(value: dict) -> None:
+    """Messages sent from WhatsApp Business App are echoes, not inbound `messages`."""
+    if not isinstance(value, dict):
+        return
+    echoes = value.get("message_echoes") or value.get("messages") or []
+    for message in echoes:
+        if not isinstance(message, dict):
+            continue
+        wamid = str(message.get("id") or "")
+        phone = str(message.get("to") or message.get("recipient") or "")
+        if not phone:
+            continue
+        preview, kind = _wa_incoming_preview(message)
+        if kind == "reaction" or not preview:
+            continue
+        try:
+            created = int(message.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        lead_id = _resolve_cloud_lead(phone, "")
+        if not lead_id:
+            logger.warning("WhatsApp echo has no lead phone=%s", phone)
+            continue
+        if wamid and _already_have_wamid(lead_id, wamid):
+            continue
+        _remember_sent_message(lead_id, _sent_message_item(
+            wamid=wamid,
+            text=preview,
+            author="",
+            message_type=kind,
+            incoming=False,
+            created_at=created,
+        ))
+        try:
+            invalidate_rufat_overview_cache()
+        except Exception:
+            pass
+        logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
 
 
 def _process_whatsapp_payload(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
+    fields = [
+        str((change or {}).get("field") or "")
+        for entry in (payload.get("entry") or [])
+        if isinstance(entry, dict)
+        for change in (entry.get("changes") or [])
+        if isinstance(change, dict)
+    ]
+    _WA_LAST_HOOK["at"] = int(_time_module.time())
+    _WA_LAST_HOOK["fields"] = fields
     try:
         store = _load_sent_messages()
         with _wa_sent_lock:
-            store["_last_hook"] = {
-                "at": int(_time_module.time()),
-                "fields": [
-                    str((change or {}).get("field") or "")
-                    for entry in (payload.get("entry") or [])
-                    if isinstance(entry, dict)
-                    for change in (entry.get("changes") or [])
-                    if isinstance(change, dict)
-                ],
-            }
+            store["_last_hook"] = {"at": _WA_LAST_HOOK["at"], "fields": fields}
         _schedule_sent_messages_save()
     except Exception:
         pass
@@ -9272,10 +9438,15 @@ def _process_whatsapp_payload(payload: dict) -> None:
         for change in entry.get("changes") or []:
             if not isinstance(change, dict):
                 continue
-            if str(change.get("field") or "") not in {"messages", ""}:
-                continue
             value = change.get("value")
-            if isinstance(value, dict):
+            if not isinstance(value, dict):
+                continue
+            field = str(change.get("field") or "")
+            if field in {"smb_message_echoes", "smb_app_state_sync"} or value.get("message_echoes"):
+                if field != "smb_app_state_sync":
+                    _ingest_cloud_echoes(value)
+                continue
+            if field in {"messages", "history", ""} or value.get("messages") or value.get("statuses"):
                 _ingest_cloud_incoming(value)
 
 
@@ -9442,16 +9613,15 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
             _add_chat(formatted)
-    if not chat:
-        # v4/talks/{id}/messages needs the Chats API scope. Notes/events still
-        # hold WhatsApp, Instagram, TikTok and Facebook history from Kommo.
-        try:
-            for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
-                _add_chat(item)
-            if chat:
-                chat_blocked = False
-        except Exception as exc:
-            logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
+    # Talks/messages is often 403. Notes/events still hold WhatsApp history,
+    # including inbound that Kommo received while Cloud webhook stayed silent.
+    try:
+        for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
+            _add_chat(item)
+        if chat:
+            chat_blocked = False
+    except Exception as exc:
+        logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
     # Cloud API sends are not returned by Kommo talks, so replay our own log and
     # drop the copies Kommo did mirror back.
     known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
@@ -11568,6 +11738,10 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 
 async def start_webhook_server():
+    try:
+        await asyncio.to_thread(_wa_ensure_subscribed)
+    except Exception as exc:
+        logger.warning("WhatsApp subscribe on start failed: %s", exc)
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
