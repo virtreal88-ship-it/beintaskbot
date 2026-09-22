@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v188 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v189 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7749,7 +7749,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "deadline": datetime.fromtimestamp(int(related.get("complete_till", 0) or 0), tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if related.get("complete_till") else "",
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
-    _apply_cloud_inbox_to_deals(deals)
+    _apply_cloud_inbox_to_deals(deals, pipeline_id)
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
@@ -7898,9 +7898,10 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         now = _time_module.monotonic()
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
-        if not force and cached is not None and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
-            _apply_cloud_inbox_to_deals(cached.get("deals") or [])
-            return _overview_with_partners(cached, owner)
+        if cached is not None:
+            _apply_cloud_inbox_to_deals(cached.get("deals") or [], pipeline_id)
+            if not force or now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
+                return _overview_with_partners(cached, owner)
         try:
             overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
             _personal_overview_cache[pipeline_id] = overview
@@ -7909,7 +7910,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         except Exception as exc:
             logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
             if cached is not None:
-                _apply_cloud_inbox_to_deals(cached.get("deals") or [])
+                _apply_cloud_inbox_to_deals(cached.get("deals") or [], pipeline_id)
                 return _overview_with_partners(cached, owner)
             raise
 
@@ -9428,7 +9429,19 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         deal["updated_at"] = ts
 
 
-def _apply_cloud_inbox_to_deals(deals: list) -> None:
+def _patch_cloud_inbox_into_rufat_cache() -> None:
+    """Put Cloud inbound on Rüfət's cached Çatlar without dropping the whole workspace."""
+    overview = _personal_overview_cache.get(int(RUFAT_PIPELINE_ID))
+    if not isinstance(overview, dict):
+        return
+    deals = overview.get("deals")
+    if not isinstance(deals, list):
+        return
+    _apply_cloud_inbox_to_deals(deals, int(RUFAT_PIPELINE_ID))
+    _personal_overview_cache_at[int(RUFAT_PIPELINE_ID)] = _time_module.monotonic()
+
+
+def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
     if not isinstance(deals, list):
         return
     try:
@@ -9444,6 +9457,8 @@ def _apply_cloud_inbox_to_deals(deals: list) -> None:
             if lid:
                 seen.add(lid)
             _paint_cloud_inbox_deal(deal)
+        if int(pipeline_id or 0) != int(RUFAT_PIPELINE_ID):
+            return
         store = _load_sent_messages()
         with _wa_sent_lock:
             cloud_ids = [key for key in store.keys() if str(key).isdigit()]
@@ -9544,7 +9559,7 @@ def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = Tru
     if lead_id:
         _remember_phone_lead(phone, int(lead_id))
         try:
-            invalidate_rufat_overview_cache()
+            _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
     return int(lead_id or 0)
@@ -9623,7 +9638,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             phone=phone,
         ))
         try:
-            invalidate_rufat_overview_cache()
+            _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
