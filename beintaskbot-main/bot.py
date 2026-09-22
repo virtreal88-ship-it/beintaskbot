@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v193 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v194 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7299,7 +7299,7 @@ def _apply_talk_to_inbox(
     if not lids:
         return
     channel = _talk_channel_key(talk)
-    if channel not in {"whatsapp", "instagram", "facebook", "tiktok"}:
+    if channel not in {"whatsapp", "instagram", "facebook", "tiktok", "telegram"}:
         return
     try:
         updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
@@ -8412,6 +8412,7 @@ CHAT_CHANNEL_LABELS = {
     "instagram": "Instagram",
     "facebook": "Facebook",
     "tiktok": "TikTok",
+    "telegram": "Telegram",
 }
 
 
@@ -8490,6 +8491,8 @@ def _origin_channel_key(blob: str) -> str:
         return ""
     if "tiktok" in text or "tik tok" in text:
         return "tiktok"
+    if "telegram" in text or "tg " in text or text.endswith(" tg"):
+        return "telegram"
     if "instagram" in text:
         return "instagram"
     if "facebook" in text or "fb messenger" in text:
@@ -8567,7 +8570,7 @@ def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dic
             continue
         grouped.setdefault(key, []).append(talk)
     rows = []
-    order = ["whatsapp", "instagram", "facebook", "tiktok"]
+    order = ["whatsapp", "instagram", "facebook", "tiktok", "telegram"]
     for key in order:
         group = grouped.get(key) or []
         if not group:
@@ -8655,6 +8658,7 @@ def _send_kommo_talk_message(
     talk_id: int,
     text: str,
     attachment: dict | None = None,
+    reply_to: str = "",
 ) -> tuple[bool, str, int]:
     # Kommo send_message accepts only text plus a file/video/picture attachment and
     # bills every call against the Chats API quota, so each message is one request.
@@ -8666,22 +8670,38 @@ def _send_kommo_talk_message(
         payload["attachment"] = attachment
     if not payload:
         return False, "Mesaj boş ola bilməz", 0
-    try:
-        resp = _http.post(url, headers=HEADERS, json=payload, timeout=20)
-    except Exception as exc:
-        logger.warning("Talk send failed: %s", exc)
-        return False, "Kommo çata göndərmək alınmadı.", 0
-    if resp.status_code in {200, 202}:
-        return True, "", resp.status_code
-    detail = _kommo_error_detail(resp)
-    logger.warning("Talk send status %s: %s", resp.status_code, detail)
-    if resp.status_code == 403:
-        return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", resp.status_code
-    if resp.status_code == 422:
-        return False, "Çat bağlıdır. Kommo-da söhbəti açın.", resp.status_code
-    if resp.status_code == 402:
-        return False, "Kommo Chat API limiti bitib.", resp.status_code
-    return False, detail or "Mesaj göndərilmədi.", resp.status_code
+    reply_id = str(reply_to or "").strip()
+    bodies = [payload]
+    if reply_id:
+        bodies = [
+            {**payload, "reply_to": {"msgid": reply_id}},
+            {**payload, "reply_to": {"message_id": reply_id}},
+            {**payload, "reply_to": reply_id},
+            {**payload, "quoted_message_id": reply_id},
+            payload,
+        ]
+    last_detail = ""
+    last_status = 0
+    for body in bodies:
+        try:
+            resp = _http.post(url, headers=HEADERS, json=body, timeout=20)
+        except Exception as exc:
+            logger.warning("Talk send failed: %s", exc)
+            return False, "Kommo çata göndərmək alınmadı.", 0
+        last_status = resp.status_code
+        if resp.status_code in {200, 202}:
+            return True, "", resp.status_code
+        last_detail = _kommo_error_detail(resp)
+        logger.warning("Talk send status %s: %s", resp.status_code, last_detail)
+        if resp.status_code not in {400, 422}:
+            break
+    if last_status == 403:
+        return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
+    if last_status == 422:
+        return False, "Çat bağlıdır. Kommo-da söhbəti açın.", last_status
+    if last_status == 402:
+        return False, "Kommo Chat API limiti bitib.", last_status
+    return False, last_detail or "Mesaj göndərilmədi.", last_status
 
 
 def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
@@ -11056,7 +11076,12 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
-        kommo_ok, kommo_error, _status = _send_kommo_talk_message(reply_talk_id, kommo_text, attachment)
+        kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+            reply_talk_id,
+            kommo_text,
+            attachment,
+            reply_to=reply_to_message_id,
+        )
         if kommo_ok:
             ok = True
             last_error = ""
