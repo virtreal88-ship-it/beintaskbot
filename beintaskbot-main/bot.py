@@ -5637,7 +5637,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v177")
+    return web.Response(status=200, text="Bot is running v178")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7362,35 +7362,66 @@ async def _fetch_lead_notes_page(params: dict) -> list[dict]:
     return [note for note in ((response.json().get("_embedded") or {}).get("notes") or []) if isinstance(note, dict)]
 
 
-async def _backfill_kommo_inbox_notes(
-    missing: list[int],
+async def _load_kommo_talks_inbox(
     lead_ids: set[int],
-    latest_client: dict[int, tuple[int, str]],
     latest_in_channel: dict[int, tuple[int, str]],
     latest_any_channel: dict[int, tuple[int, str]],
 ) -> None:
-    chunks = [missing[index:index + 20] for index in range(0, len(missing), 20)]
-    sem = asyncio.Semaphore(4)
-
-    async def _load_chunk(chunk: list[int]) -> None:
-        async with sem:
-            for page in (1, 2):
-                notes = await _fetch_lead_notes_page({
-                    "limit": 250,
-                    "page": page,
-                    "order[updated_at]": "desc",
-                    "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
-                    "filter[entity_id][]": chunk,
-                })
-                if not notes:
-                    break
-                for note in notes:
-                    _ingest_inbox_chat_note(note, lead_ids, latest_client, latest_in_channel, latest_any_channel)
-                if len(notes) < 250:
-                    break
-
-    if chunks:
-        await asyncio.gather(*(_load_chunk(chunk) for chunk in chunks))
+    """Talks still list WhatsApp/TikTok/Instagram dialogs when chat notes are empty."""
+    for page in range(1, 9):
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/talks",
+                params={"limit": 250, "page": page},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Kommo talks page %s unavailable: %s", page, exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Kommo talks page %s failed: %s", page, response.status_code)
+            break
+        talks = (response.json().get("_embedded") or {}).get("talks") or []
+        if not talks:
+            break
+        for talk in talks:
+            if not isinstance(talk, dict):
+                continue
+            lids: list[int] = []
+            try:
+                lids.append(int(talk.get("entity_id") or 0))
+            except (TypeError, ValueError):
+                pass
+            for lead in ((talk.get("_embedded") or {}).get("leads") or []):
+                if not isinstance(lead, dict):
+                    continue
+                try:
+                    lids.append(int(lead.get("id") or 0))
+                except (TypeError, ValueError):
+                    continue
+            lids = [lid for lid in lids if lid in lead_ids]
+            if not lids:
+                continue
+            channel = _talk_channel_key(talk)
+            if channel not in {"whatsapp", "instagram"}:
+                continue
+            try:
+                updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+            except (TypeError, ValueError):
+                updated = 0
+            for lid in lids:
+                known = latest_any_channel.get(lid)
+                if not known or updated > known[0]:
+                    latest_any_channel[lid] = (updated, channel)
+                unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+                if unread:
+                    known = latest_in_channel.get(lid)
+                    if not known or updated > known[0]:
+                        latest_in_channel[lid] = (updated, channel)
+        if len(talks) < 250:
+            break
 
 
 async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], dict[int, str], dict[int, str]]:
@@ -7442,30 +7473,8 @@ async def _load_rufat_latest_notes(lead_ids: set[int]) -> tuple[dict[int, str], 
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    for chat_page in range(1, 9):
-        notes = await _fetch_lead_notes_page({
-            "limit": 250,
-            "page": chat_page,
-            "order[updated_at]": "desc",
-            "filter[note_type][]": ["incoming_chat_message", "outgoing_chat_message"],
-        })
-        if not notes:
-            break
-        for note in notes:
-            _ingest_inbox_chat_note(note, lead_ids, latest_client, latest_in_channel, latest_any_channel)
-        if len(notes) < 250:
-            break
     _merge_kommo_inbox_cache(lead_ids, latest_client, latest_in_channel, latest_any_channel)
-    missing = [
-        lid for lid in lead_ids
-        if lid not in latest_in_channel and lid not in latest_any_channel and lid not in _KOMMO_INBOX_CACHE
-    ]
-    if missing:
-        await _backfill_kommo_inbox_notes(
-            missing, lead_ids, latest_client, latest_in_channel, latest_any_channel
-        )
-        for lid in missing:
-            _KOMMO_INBOX_CACHE.setdefault(lid, {"client": (0, ""), "in_ch": (0, ""), "any_ch": (0, "")})
+    await _load_kommo_talks_inbox(lead_ids, latest_in_channel, latest_any_channel)
     _store_kommo_inbox_cache(latest_client, latest_in_channel, latest_any_channel)
     channel_by_lead = {
         lead: (latest_in_channel[lead][1] if lead in latest_in_channel else value[1])
@@ -8380,7 +8389,7 @@ def _origin_channel_key(blob: str) -> str:
         return "instagram"
     if "facebook" in text or "fb messenger" in text:
         return "facebook"
-    if any(token in text for token in ("whatsapp", "waba", "whats app", "whats-app")):
+    if any(token in text for token in ("whatsapp", "waba", "amocrmwa", "amojo", "whats app", "whats-app")):
         return "whatsapp"
     return ""
 
@@ -9137,6 +9146,20 @@ def _apply_cloud_inbox_to_deals(deals: list) -> None:
             lid = int(deal.get("id") or 0)
         except (TypeError, ValueError):
             continue
+        cached = _KOMMO_INBOX_CACHE.get(lid)
+        if isinstance(cached, dict):
+            talk_ts = 0
+            for key in ("in_ch", "any_ch", "client"):
+                try:
+                    talk_ts = max(talk_ts, int((cached.get(key) or (0, ""))[0] or 0))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            try:
+                current = int(deal.get("updated_at") or 0)
+            except (TypeError, ValueError):
+                current = 0
+            if talk_ts > current:
+                deal["updated_at"] = talk_ts
         preview, ts, has = _cloud_last_for_lead(lid)
         if not has:
             continue
