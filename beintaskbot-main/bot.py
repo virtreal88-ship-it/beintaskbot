@@ -5637,7 +5637,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         return web.Response(status=200, text="OK")
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(status=200, text="Bot is running v180")
+    return web.Response(status=200, text="Bot is running v181")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8957,9 +8957,115 @@ def _cloud_last_for_lead(lead_id: int) -> tuple[str, int, bool]:
     return str(preview_src.get("text") or "").strip(), int(newest.get("created_at") or 0), True
 
 
+def _index_deal_phones(deals: list) -> None:
+    """Map contact phones to existing deals so Cloud incoming lands in that chat."""
+    ranked: list[tuple[int, int, list[str]]] = []
+    for deal in deals or []:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lid = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not lid:
+            continue
+        phones = []
+        if isinstance(deal.get("phones"), list):
+            phones.extend(str(phone) for phone in deal.get("phones") if phone)
+        if deal.get("phone"):
+            phones.append(str(deal.get("phone")))
+        if not phones:
+            continue
+        try:
+            updated = int(deal.get("updated_at") or deal.get("created_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        ranked.append((updated, lid, phones))
+    ranked.sort()
+    for _updated, lid, phones in ranked:
+        for phone in phones:
+            _remember_phone_lead(phone, lid)
+
+
+def _lead_ids_from_contact(contact: dict) -> list[int]:
+    rows = []
+    for linked in (contact.get("_embedded") or {}).get("leads") or []:
+        if not isinstance(linked, dict):
+            continue
+        try:
+            lid = int(linked.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lid:
+            rows.append(lid)
+    return rows
+
+
+def _pick_existing_lead(lead_ids: list[int]) -> int:
+    personal = employee_personal_pipeline_ids() | {int(RUFAT_PIPELINE_ID)}
+    rufat = []
+    other_personal = []
+    other = []
+    for lid in lead_ids:
+        details = get_lead_details(lid) or {}
+        if not details:
+            continue
+        try:
+            pipeline_id = int(_lead_pipeline_id(details) or 0)
+        except (TypeError, ValueError):
+            pipeline_id = 0
+        if pipeline_id == int(RUFAT_PIPELINE_ID):
+            rufat.append(lid)
+        elif pipeline_id in personal:
+            other_personal.append(lid)
+        else:
+            other.append(lid)
+    for bucket in (rufat, other_personal, other):
+        if bucket:
+            return int(bucket[0])
+    return 0
+
+
+def _search_lead_ids_by_phone(phone: str) -> list[int]:
+    key = _wa_phone_key(phone)
+    variants = {phone, key, "+" + key if key else ""}
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) >= 9:
+        variants.add(digits[-9:])
+    found: list[int] = []
+    seen: set[int] = set()
+    for variant in variants:
+        if not variant:
+            continue
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/leads",
+                headers=HEADERS,
+                params={"query": variant, "limit": 10},
+                timeout=8,
+            )
+        except Exception as exc:
+            logger.warning("Lead phone search failed: %s", exc)
+            continue
+        if resp.status_code != 200:
+            continue
+        for lead in (resp.json().get("_embedded") or {}).get("leads") or []:
+            if not isinstance(lead, dict):
+                continue
+            try:
+                lid = int(lead.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if lid and lid not in seen:
+                seen.add(lid)
+                found.append(lid)
+    return found
+
+
 def _apply_cloud_inbox_to_deals(deals: list) -> None:
     if not isinstance(deals, list):
         return
+    _index_deal_phones(deals)
     for deal in deals:
         if not isinstance(deal, dict):
             continue
@@ -9025,6 +9131,7 @@ def _resolve_cloud_lead(phone: str, contact_name: str) -> int:
         lead = get_lead_details(stored)
         if lead:
             return stored
+    lead_ids: list[int] = []
     contacts = search_contact_by_phone(phone)
     name = str(contact_name or "").strip() or phone
     contact_id = 0
@@ -9036,19 +9143,12 @@ def _resolve_cloud_lead(phone: str, contact_name: str) -> int:
     if contact_id:
         full = get_contact_details(contact_id) or {}
         name = str(full.get("name") or name).strip() or name
-        for linked in (full.get("_embedded") or {}).get("leads") or []:
-            if not isinstance(linked, dict):
-                continue
-            try:
-                lid = int(linked.get("id") or 0)
-            except (TypeError, ValueError):
-                continue
-            if not lid:
-                continue
-            details = get_lead_details(lid) or linked
-            if _lead_pipeline_id(details) == int(RUFAT_PIPELINE_ID):
-                _remember_phone_lead(phone, lid)
-                return lid
+        lead_ids.extend(_lead_ids_from_contact(full))
+    lead_ids.extend(_search_lead_ids_by_phone(phone))
+    existing = _pick_existing_lead(list(dict.fromkeys(lead_ids)))
+    if existing:
+        _remember_phone_lead(phone, existing)
+        return existing
     if not contact_id:
         created = create_contact_kommo(name, "+" + _wa_phone_key(phone) if _wa_phone_key(phone) else phone)
         try:
@@ -9150,6 +9250,22 @@ def _ingest_cloud_incoming(value: dict) -> None:
 def _process_whatsapp_payload(payload: dict) -> None:
     if not isinstance(payload, dict):
         return
+    try:
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            store["_last_hook"] = {
+                "at": int(_time_module.time()),
+                "fields": [
+                    str((change or {}).get("field") or "")
+                    for entry in (payload.get("entry") or [])
+                    if isinstance(entry, dict)
+                    for change in (entry.get("changes") or [])
+                    if isinstance(change, dict)
+                ],
+            }
+        _schedule_sent_messages_save()
+    except Exception:
+        pass
     for entry in payload.get("entry") or []:
         if not isinstance(entry, dict):
             continue
@@ -9965,6 +10081,9 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
+    _ids, phones = _contact_ids_and_phones(lead)
+    for phone in phones:
+        _remember_phone_lead(phone, int(lead.get("id") or lead_id))
     contact_ids = _lead_contact_ids(lead)
     try:
         limit = int(request.rel_url.query.get("limit") or 20)
