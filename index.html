@@ -1360,6 +1360,7 @@ function applySamilWorkspace(payload) {
     if(payload.user_name) setUserDisplayName(payload.user_name);
     applyPendingSamilStageMoves();
     paintChatsUnreadBadge();
+    watchIncomingChats();
 }
 
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
@@ -1509,6 +1510,12 @@ function setSidebarActive(tabId) {
 
 function applyHashRoute() {
     if(window.location.hash === '#pending' && isAdmin) switchTab('tab-pending', false);
+    const chatMatch = String(window.location.hash || '').match(/^#chat-(\d+)/);
+    if(chatMatch && HAS_CHATS) {
+        switchTab('tab-chats', false);
+        if(!(samilDeals || []).some(item => String(item.id) === chatMatch[1])) restoreSamilWorkspaceFromCache();
+        openInboxChat(chatMatch[1]);
+    }
 }
 
 async function initApp() {
@@ -4991,6 +4998,84 @@ function paintChatsUnreadBadge() {
         tab.style.display = show ? 'flex' : 'none';
     }
 }
+let _chatAlertMap = {};
+let _chatAlertSeeded = false;
+const _chatAlertLock = {};
+function isViewingDealChat(leadId) {
+    return !!(document.hasFocus() && !document.hidden && _dealInboxMode && _dealViewState && String(_dealViewState.id) === String(leadId));
+}
+function playIncomingChatSound() {
+    try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if(!Ctx) return;
+        const ctx = new Ctx();
+        const now = ctx.currentTime;
+        const beep = (when, freq, dur) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.0001, now + when);
+            gain.gain.exponentialRampToValueAtTime(0.16, now + when + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + when + dur);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now + when);
+            osc.stop(now + when + dur + 0.02);
+        };
+        beep(0, 880, 0.08);
+        beep(0.1, 1240, 0.12);
+        setTimeout(() => { try { ctx.close(); } catch(_err) {} }, 700);
+    } catch(_err) {}
+}
+function showIncomingChatNotice(deal) {
+    const title = dealClientName(deal) || 'Çat';
+    const body = dealLastClientMessage(deal) || 'Yeni mesaj';
+    const url = '#chat-' + deal.id;
+    if(navigator.serviceWorker) {
+        navigator.serviceWorker.ready.then(reg => {
+            return reg.showNotification(title, {
+                body,
+                icon: 'icon-192.png',
+                badge: 'icon-192.png',
+                tag: 'chat-' + deal.id,
+                renotify: true,
+                data: url
+            });
+        }).catch(() => {});
+        return;
+    }
+    if(window.Notification && Notification.permission === 'granted') {
+        new Notification(title, {body, tag: 'chat-' + deal.id});
+    }
+}
+function alertIncomingDeal(deal, fromPush) {
+    const id = String((deal && deal.id) || '');
+    if(!id) return;
+    const now = Date.now();
+    if(_chatAlertLock[id] && now - _chatAlertLock[id] < 4000) return;
+    _chatAlertLock[id] = now;
+    if(isViewingDealChat(id)) return;
+    playIncomingChatSound();
+    if(!fromPush) showIncomingChatNotice(deal);
+}
+function watchIncomingChats() {
+    if(!HAS_CHATS) return;
+    const next = {};
+    const fresh = [];
+    chatsInboxDeals().forEach(deal => {
+        const id = String(deal.id);
+        const preview = dealLastClientMessage(deal) || '';
+        next[id] = preview;
+        if(_chatAlertSeeded && preview && preview !== _chatAlertMap[id]) fresh.push(deal);
+    });
+    _chatAlertMap = next;
+    if(!_chatAlertSeeded) {
+        _chatAlertSeeded = true;
+        return;
+    }
+    fresh.forEach(deal => alertIncomingDeal(deal, false));
+}
 function chatsTimeLabel(ts) {
     const n = Number(ts || 0);
     if(!n) return '';
@@ -6034,7 +6119,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=189');
+    const reg = await navigator.serviceWorker.register('sw.js?v=222');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
@@ -6059,6 +6144,10 @@ if(navigator.serviceWorker) {
     if(ev.data && ev.data.type === 'URGENT_ALARM') {
       _alarmAudio.currentTime = 0;
       _alarmAudio.play().catch(()=>{});
+    }
+    if(ev.data && ev.data.type === 'CHAT_INCOMING') {
+      const deal = (samilDeals || []).find(item => String(item.id) === String(ev.data.leadId));
+      alertIncomingDeal(deal || {id: ev.data.leadId}, true);
     }
   });
 }

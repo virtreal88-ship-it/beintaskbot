@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v203 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v204 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9992,6 +9992,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
+        _notify_cloud_chat_incoming(lead_id, name, preview)
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
         _WA_LAST_HOOK["lead"] = int(lead_id)
@@ -12340,12 +12341,39 @@ async def handle_push_subscribe(request):
         logger.info(f"Push subscription saved for user {user_id}")
     return web.json_response({'success': True})
 
-def send_push_notification(user_id, title, body, url=None, urgent=False):
+def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str) -> None:
+    title = str(name or "").strip()
+    if not title:
+        overview = _personal_overview_cache.get(int(RUFAT_PIPELINE_ID)) or {}
+        for deal in overview.get("deals") or []:
+            try:
+                if int(deal.get("id") or 0) == int(lead_id):
+                    if str(deal.get("stage_key") or "").lower() in {"ugurlu", "imtina"}:
+                        return
+                    title = str(deal.get("contact_name") or "").strip()
+                    break
+            except (TypeError, ValueError):
+                continue
+    title = (title or "WhatsApp")[:80]
+    body = str(preview or "Yeni mesaj").strip()[:140] or "Yeni mesaj"
+    url = f"#chat-{int(lead_id)}"
+    for uid in {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}:
+        send_push_notification(uid, title, body, url, lead_id=int(lead_id))
+
+
+def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0):
     """Send push notification to a user if subscribed."""
     sub = get_push_subscription(str(user_id))
     if not sub:
         return
-    payload = json.dumps({'title': title, 'body': body, 'url': url or '/', 'urgent': bool(urgent)})
+    payload = json.dumps({
+        "title": title,
+        "body": body,
+        "url": url or "/",
+        "urgent": bool(urgent),
+        "chat": bool(lead_id),
+        "lead_id": int(lead_id or 0),
+    })
     try:
         webpush(
             subscription_info=sub,

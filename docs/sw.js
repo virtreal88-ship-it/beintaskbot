@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-22-221';
+const CACHE_NAME = 'beintaskbot-v2026-09-22-222';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -41,6 +41,10 @@ self.addEventListener('push', e => {
     data: data.url || '/',
     vibrate: data.urgent ? [200, 100, 200, 100, 200] : [200, 100, 200]
   };
+  if (data.chat || data.lead_id) {
+    opts.tag = 'chat-' + (data.lead_id || data.url || '');
+    opts.renotify = true;
+  }
   if (data.urgent) {
     opts.tag = 'tecili-' + Date.now();
     opts.renotify = true;
@@ -48,18 +52,20 @@ self.addEventListener('push', e => {
   }
   e.waitUntil(
     self.registration.showNotification(data.title || 'Bein Systems', opts).then(() => {
-      if (data.urgent) {
-        return self.clients.matchAll({type: 'window'}).then(cls => {
-          cls.forEach(c => c.postMessage({type: 'URGENT_ALARM'}));
+      return self.clients.matchAll({type: 'window'}).then(cls => {
+        cls.forEach(c => {
+          if (data.urgent) c.postMessage({type: 'URGENT_ALARM'});
+          if (data.chat || data.lead_id) c.postMessage({type: 'CHAT_INCOMING', leadId: data.lead_id || ''});
         });
-      }
+      });
     })
   );
 });
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const target = String(e.notification.data || '');
+  const raw = e.notification.data;
+  const target = raw && typeof raw === 'object' ? String(raw.url || '') : String(raw || '');
   const pwaBaseUrl = 'https://virtreal88-ship-it.github.io/beintaskbot/';
   const hashIndex = target.indexOf('#');
   const hash = hashIndex >= 0 ? target.slice(hashIndex) : '';
