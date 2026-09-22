@@ -401,7 +401,8 @@
         .chats-row { display:flex; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row.on { background:#e8f5e9; }
-        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; }
+        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
+        .chats-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
         .chats-avatar.ch-whatsapp { background:#dcf8c6; color:#128c7e; }
         .chats-avatar.ch-instagram { background:#fce7f3; color:#db2777; }
         .chats-avatar.ch-facebook { background:#dbeafe; color:#1877F2; }
@@ -1357,10 +1358,11 @@ function applySamilWorkspace(payload) {
     gozlemeItems = Array.isArray(payload.gozleme) ? payload.gozleme : [];
     applyPendingTaskMoves(mockTasks, gozlemeItems);
     if(Array.isArray(payload.partners)) employeePartners = payload.partners.map(name => String(name || '').trim()).filter(Boolean);
+    const prevAvatars = Object.fromEntries((samilDeals || []).filter(item => item && item.id && item.contact_avatar).map(item => [String(item.id), item.contact_avatar]));
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
-        return {...deal, name: dealName, contact_name: contactName || '—'};
+        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || ''};
     };
     if(payload.pipeline_id) CURRENT_PIPELINE_ID = Number(payload.pipeline_id) || CURRENT_PIPELINE_ID;
     if(Array.isArray(payload.pipelines) && payload.pipelines.length) KOMMO_PIPELINES = payload.pipelines;
@@ -3577,6 +3579,7 @@ async function loadDealChatLatest() {
         _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
         _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 20;
         applyDealChannels(d.channels || _dealViewState.channels);
+        rememberDealAvatar(_dealViewState.deal, _dealViewState.messages);
         paintDealChatThread({stickBottom: true, force: true});
         markDealChatRead(false);
     } catch(_err) {
@@ -3769,6 +3772,7 @@ function mergeDealSnapshot(prev, snap) {
     const next = Object.assign({}, prev || {}, snap || {});
     if((prev && Array.isArray(prev.notes) && prev.notes.length) && !(snap && Array.isArray(snap.notes) && snap.notes.length)) next.notes = prev.notes;
     if((prev && Array.isArray(prev.tasks) && prev.tasks.length) && !(snap && Array.isArray(snap.tasks) && snap.tasks.length)) next.tasks = prev.tasks;
+    if(prev && prev.contact_avatar && !next.contact_avatar) next.contact_avatar = prev.contact_avatar;
     return next;
 }
 async function refreshDealSnapshot(deal) {
@@ -4069,10 +4073,10 @@ function dealDetailSectionsHtml(deal, token, opts) {
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
                 ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700">🔗 Kommo-da aç</a></div>` : ''}
             </div>
-            <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
-            <div>${notesHtml}</div>
             <div style="margin-top:14px;font-size:12px;font-weight:800">Tapşırıqlar</div>
             <div>${tasksHtml}</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
+            <div>${notesHtml}</div>
             <div style="margin-top:14px;font-size:12px;font-weight:800">WhatsApp</div>
             <div id="deal-chat-thread" class="deal-chat-thread">${chatHtml}</div>
             ${composer}
@@ -4147,14 +4151,14 @@ function dealInfoBodyHtml(deal, readonly) {
             ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline">Kommo-da aç</a></div>` : ''}
         </div>
         ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
+        <h3>Tapşırıq ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>'}</h3>
+        <div id="deal-tasks-list">${dealTasksListHtml(deal, readonly)}</div>
         <h3>Qeyd ${readonly ? '' : '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>'}</h3>
         <div id="deal-notes-list">${dealNotesListHtml(deal, readonly)}</div>
         ${readonly ? '' : `<div id="deal-note-form" class="deal-side-form" hidden>
             <textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea>
             <button type="button" id="deal-note-save">Qeyd əlavə et</button>
-        </div>`}
-        <h3>Tapşırıq ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>'}</h3>
-        <div id="deal-tasks-list">${dealTasksListHtml(deal, readonly)}</div>`;
+        </div>`}`;
 }
 function closeDealInfoDrawer() {
     document.getElementById('deal-info-drawer')?.remove();
@@ -4840,8 +4844,8 @@ function renderSamilDeals() {
                         <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
                     </div>
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
-                    <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
+                    <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div class="grid grid-cols-2 gap-2 text-gray-500"><div>🕒 ${created}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                     <div class="truncate">💬 <b>Son mesaj:</b> ${clientMessage}</div>
                 </div>
@@ -5048,22 +5052,51 @@ function chatsIsUnread(deal, seen) {
     const lastSeen = Number((seen || getChatsSeen())[String(deal.id)] || 0);
     return Number(deal.updated_at || 0) > lastSeen;
 }
+function chatsDayKey(value) {
+    const d = value instanceof Date ? value : new Date(value);
+    if(Number.isNaN(d.getTime())) return '';
+    return [d.getFullYear(), d.getMonth(), d.getDate()].join('-');
+}
 function chatsTimeLabel(ts) {
     const n = Number(ts || 0);
     if(!n) return '';
-    const d = new Date(n * 1000);
+    const d = new Date(n * (n > 1e12 ? 1 : 1000));
     if(Number.isNaN(d.getTime())) return '';
-    const now = new Date();
-    if(d.toDateString() === now.toDateString()) return d.toLocaleTimeString('az-AZ', {hour:'2-digit', minute:'2-digit'});
-    const yest = new Date(now);
-    yest.setDate(now.getDate() - 1);
-    if(d.toDateString() === yest.toDateString()) return 'Dünən';
-    return d.toLocaleDateString('az-AZ', {day:'2-digit', month:'2-digit'});
+    const today = chatsDayKey(new Date());
+    const stamp = chatsDayKey(d);
+    if(stamp === today) {
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        return hh + ':' + mm;
+    }
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    if(stamp === chatsDayKey(yest)) return 'Dünən';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return day + '.' + month;
 }
 function chatsInitials(name) {
     const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
     if(!parts.length) return '?';
     return ((parts[0][0] || '') + (parts[1] ? parts[1][0] : '')).toUpperCase();
+}
+function chatsAvatarHtml(deal, name) {
+    const src = chatAvatarSrc(deal && deal.contact_avatar, '');
+    const channel = chatsSourceKey(deal);
+    if(src) return `<span class="chats-avatar has-photo${channel ? ' ch-' + channel : ''}"><img src="${escapeHtml(src)}" alt=""></span>`;
+    return `<span class="chats-avatar${channel ? ' ch-' + channel : ''}">${escapeHtml(chatsInitials(name))}</span>`;
+}
+function rememberDealAvatar(deal, messages) {
+    if(!deal) return;
+    const incoming = (Array.isArray(messages) ? messages : []).find(item => item && item.incoming && item.author_avatar);
+    const url = String((incoming && incoming.author_avatar) || deal.contact_avatar || '').trim();
+    if(!url) return;
+    deal.contact_avatar = url;
+    const listed = (samilDeals || []).find(item => String(item.id) === String(deal.id));
+    if(listed) listed.contact_avatar = url;
+    persistLocalSamilWorkspace();
+    if(_dealInboxMode) renderChatsList();
 }
 function chatsSourceKey(deal) {
     const raw = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
@@ -5113,10 +5146,9 @@ function renderChatsList() {
             const preview = dealLastClientMessage(deal) || 'Çat';
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
-            const channel = chatsSourceKey(deal);
             const chip = chatsSourceChip(deal);
             return `<button type="button" class="chats-row${on ? ' on' : ''}" data-lead="${escapeHtml(String(deal.id))}">
-                <span class="chats-avatar${channel ? ' ch-' + channel : ''}">${escapeHtml(chatsInitials(name))}</span>
+                ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
                     <span class="chats-row-bottom">${chip}<span class="chats-row-preview">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>

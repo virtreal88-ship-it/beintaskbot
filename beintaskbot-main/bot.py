@@ -5644,7 +5644,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v195 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v196 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7294,6 +7294,7 @@ def _apply_talk_to_inbox(
     channel_by_lead: dict[int, str],
     updated_by_lead: dict[int, int],
     contact_to_lead: dict[int, int] | None = None,
+    avatar_by_lead: dict[int, str] | None = None,
 ) -> None:
     lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
     if not lids:
@@ -7307,24 +7308,28 @@ def _apply_talk_to_inbox(
         updated = 0
     unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
     preview = "Yeni mesaj" if unread else "Çat"
+    avatar = _first_avatar_url(talk)
     for lid in lids:
         known = updated_by_lead.get(lid, 0)
         if updated >= known:
             updated_by_lead[lid] = updated
             channel_by_lead[lid] = channel
             client_by_lead[lid] = preview
+        if avatar and avatar_by_lead is not None:
+            avatar_by_lead[lid] = avatar
 
 
 async def _load_kommo_talks_inbox(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, int]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, int], dict[int, str]]:
     """Existing WhatsApp/Instagram deals still live in Kommo talks; Cloud inbound is extra."""
     client_by_lead: dict[int, str] = {}
     channel_by_lead: dict[int, str] = {}
     updated_by_lead: dict[int, int] = {}
+    avatar_by_lead: dict[int, str] = {}
     if not lead_ids:
-        return client_by_lead, channel_by_lead, updated_by_lead
+        return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead
     for page in range(1, 7):
         try:
             response = await _kommo_get_async(
@@ -7345,20 +7350,28 @@ async def _load_kommo_talks_inbox(
             break
         for talk in talks:
             if isinstance(talk, dict):
-                _apply_talk_to_inbox(talk, lead_ids, client_by_lead, channel_by_lead, updated_by_lead, contact_to_lead)
+                _apply_talk_to_inbox(
+                    talk,
+                    lead_ids,
+                    client_by_lead,
+                    channel_by_lead,
+                    updated_by_lead,
+                    contact_to_lead,
+                    avatar_by_lead,
+                )
         if len(talks) < 250:
             break
-    return client_by_lead, channel_by_lead, updated_by_lead
+    return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead
 
 
 async def _load_rufat_latest_notes(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int], dict[int, str]]:
     """Common notes plus Kommo talk channels so existing chats stay in Çatlar."""
     latest: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return {}, {}, {}, {}
+        return {}, {}, {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7399,12 +7412,13 @@ async def _load_rufat_latest_notes(
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    client_by_lead, channel_by_lead, talk_updated = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
+    client_by_lead, channel_by_lead, talk_updated, avatar_by_lead = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
     return (
         {lead: value[1] for lead, value in latest.items()},
         client_by_lead,
         channel_by_lead,
         talk_updated,
+        avatar_by_lead,
     )
 
 
@@ -7686,7 +7700,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "contacts": contact_rows,
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
-            "last_note": "", "last_client_message": "", "chat_channel": "", "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "", "last_client_message": "", "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
@@ -7720,7 +7734,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated, avatar_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -7729,6 +7743,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
         deal["chat_channel"] = channel_by_lead.get(lead_id, "")
+        deal["contact_avatar"] = (avatar_by_lead or {}).get(lead_id, "") or deal.get("contact_avatar") or ""
         try:
             talk_ts = int((talk_updated or {}).get(lead_id) or 0)
         except (TypeError, ValueError):
@@ -8152,6 +8167,35 @@ def _looks_audio_name(name: str) -> bool:
 def _looks_profile_photo(file_name: str, message_type: str = "") -> bool:
     blob = f"{file_name} {message_type}".casefold()
     return any(token in blob for token in ("profile", "avatar", "userpic", "фото профил", "pp.jpg", "pp.jpeg"))
+
+
+def _first_avatar_url(*blobs) -> str:
+    for blob in blobs:
+        if isinstance(blob, str):
+            url = _as_absolute_media_url(blob)
+            if url and _is_allowed_media_url(url) and ("/profiles/" in url.lower() or _looks_profile_photo(url, "avatar")):
+                return url
+            continue
+        if not isinstance(blob, dict):
+            continue
+        for key in ("avatar", "avatar_url", "photo", "picture", "icon"):
+            raw = blob.get(key)
+            if isinstance(raw, dict):
+                raw = raw.get("url") or raw.get("link") or raw.get("src") or ""
+            url = _as_absolute_media_url(str(raw or ""))
+            if url and _is_allowed_media_url(url):
+                return url
+        embedded = blob.get("_embedded") if isinstance(blob.get("_embedded"), dict) else {}
+        for item in (embedded.get("contacts") or [])[:3]:
+            found = _first_avatar_url(item)
+            if found:
+                return found
+        chat = blob.get("chat")
+        if isinstance(chat, dict):
+            found = _first_avatar_url(chat)
+            if found:
+                return found
+    return ""
 
 
 def _deal_fmt_ts(ts) -> str:
@@ -10651,6 +10695,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     contact_rows = []
     all_phones: list[str] = []
     contact_ids: list[int] = []
+    contact_avatar = ""
     source = extract_menbe(lead)
     utm_blob = collect_utm_blob(lead)
     source_urls = collect_source_urls(lead)
@@ -10669,6 +10714,8 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
             if phone not in all_phones:
                 all_phones.append(phone)
         contact_rows.append({"id": linked_id, "name": full.get("name", ""), "phones": phones})
+        if not contact_avatar:
+            contact_avatar = _first_avatar_url(full)
         source = extract_menbe(full) or source
         utm_blob = " ".join((utm_blob, collect_utm_blob(full)))
         for url in collect_source_urls(full):
@@ -10716,6 +10763,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         if updated >= best_talk:
             best_talk = updated
             chat_channel = key
+            contact_avatar = _first_avatar_url(talk) or contact_avatar
     funnel_owner_name = owner_name_for_pipeline(pipeline_id)
     responsible_name = funnel_owner_name or KOMMO_USERS.get(lead.get("responsible_user_id"), "") or ""
     return {
@@ -10740,6 +10788,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "updated_at": lead.get("updated_at", 0),
         "last_note": last_note,
         "chat_channel": chat_channel,
+        "contact_avatar": contact_avatar,
         "notes": notes,
         "task_desc": first_task.get("text") or "",
         "deadline": first_task.get("deadline") or "",
