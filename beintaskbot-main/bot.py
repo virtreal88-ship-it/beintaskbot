@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v246 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v247 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9783,8 +9783,12 @@ def _wa_cloud_error_text(resp) -> str:
         if friendly:
             return friendly
         detail = str(error.get("error_user_msg") or error.get("message") or "").strip()
+        extra = error.get("error_data") if isinstance(error.get("error_data"), dict) else {}
+        specifics = str((extra or {}).get("details") or "").strip()
+        if specifics and specifics.lower() not in detail.lower():
+            detail = f"{detail} {specifics}".strip()
         if detail:
-            return detail[:240]
+            return detail[:400]
     return str(getattr(resp, "text", ""))[:240]
 
 
@@ -9996,10 +10000,18 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
         header_format = ""
         body_text = ""
         buttons: list[dict] = []
+        parts: list[str] = []
         for component in item.get("components") or []:
             if not isinstance(component, dict):
                 continue
             kind = str(component.get("type") or "").upper()
+            part_format = str(component.get("format") or "")
+            part_buttons = [
+                str(button.get("type") or "")
+                for button in (component.get("buttons") or [])
+                if isinstance(button, dict)
+            ]
+            parts.append(kind + (":" + part_format if part_format else "") + (("[" + ",".join(part_buttons) + "]") if part_buttons else ""))
             if kind == "HEADER":
                 header_format = str(component.get("format") or "TEXT").upper()
                 if header_format == "TEXT":
@@ -10040,6 +10052,7 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
             "body_vars": body_vars,
             "body_names": body_names,
             "buttons": buttons,
+            "parts": parts,
         })
     rows.sort(key=lambda row: (row.get("name") or "", row.get("language") or ""))
     if rows:
