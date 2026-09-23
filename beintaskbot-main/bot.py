@@ -5720,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v227 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v228 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10186,7 +10186,7 @@ def _inject_outside_funnel_talk_deals(
     allowed = _sovdelesmeler_chat_lead_ids()
     added = 0
     for updated, lid, talk in ranked:
-        if added >= 80:
+        if added >= 20:
             break
         channel = _talk_channel_key(talk)
         if lid in seen or (lid not in allowed and channel != "whatsapp"):

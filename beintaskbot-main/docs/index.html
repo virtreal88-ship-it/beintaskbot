@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="243">
+    <meta name="pwa-build" content="244">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=243">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=243">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=244">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=244">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -6173,23 +6173,6 @@ async function incomingNoticeBody(deal) {
             if(text) return text;
         }
     }
-    try {
-        const q = new URLSearchParams({lead_id: String(deal.id), limit: '12', _ts: String(Date.now())});
-        const channel = chatsSourceKey(deal);
-        if(channel) q.set('channel', channel);
-        const r = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
-            cache: 'no-store',
-            headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        });
-        const data = await r.json().catch(() => ({}));
-        const rows = Array.isArray(data.chat) ? data.chat : [];
-        for(let i = rows.length - 1; i >= 0; i -= 1) {
-            const item = rows[i];
-            if(!item || !item.incoming || item.is_comment) continue;
-            const text = chatNoticeText(item.text);
-            if(text) return text;
-        }
-    } catch(_err) {}
     return 'Yeni mesaj';
 }
 function dealNoticePhone(deal) {
@@ -7580,7 +7563,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=260');
+    const reg = await navigator.serviceWorker.register('sw.js?v=261');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
