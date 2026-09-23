@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="240">
+    <meta name="pwa-build" content="241">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=240">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=240">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=241">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=241">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -315,8 +315,8 @@
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
         .deal-source-row { align-items:center; }
         .deal-chat-channels { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; min-width:0; }
-        .deal-chat-channels .wa-chip { border-radius:8px; border:1px solid #e5e7eb; box-shadow:none; }
-        .deal-chat-channels .wa-chip.on { border-color:#cbd5e1; box-shadow:none; }
+        .deal-chat-channels .wa-chip,
+        .deal-chat-channels .wa-chip.on { border-radius:8px; border:0; box-shadow:none; }
         .deal-source-empty { font-size:12px; font-weight:400; color:#9ca3af; }
         .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
         .wa-chip[data-channel] { width:32px; height:32px; padding:0; }
@@ -7532,7 +7532,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=257');
+    const reg = await navigator.serviceWorker.register('sw.js?v=258');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
