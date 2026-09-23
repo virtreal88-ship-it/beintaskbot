@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="233">
+    <meta name="pwa-build" content="234">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=233">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=233">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=234">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=234">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -268,8 +268,12 @@
         .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; min-height:0; }
         .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:600; }
-        .deal-note-row { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:0 0 8px; position:relative; }
-        .deal-task-row { padding:10px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; margin:0 0 8px; position:relative; }
+        .deal-note-row, .deal-task-row { padding:10px 12px; border:1px solid #e8ecf0; background:#fff; border-radius:12px; margin:0 0 8px; position:relative; font-family:'Nunito Sans', sans-serif; font-size:13px; font-weight:400; line-height:1.45; color:#111827; }
+        .deal-note-row { border-left:3px solid #f5c16c; }
+        .deal-task-row { border-left:3px solid #93c5fd; }
+        .deal-note-meta, .deal-task-meta { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; margin-bottom:4px; font-size:11px; font-weight:600; color:#6b7280; }
+        .deal-note-body, .deal-task-text { font-weight:400; }
+        .deal-note-body b, .deal-task-text b { font-weight:600; }
         .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:8px; top:8px; width:10px; height:10px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         #deal-tasks-list.saving { position:relative; min-height:28px; }
         #deal-tasks-list.saving::after { content:''; position:absolute; right:4px; top:0; width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
@@ -4317,7 +4321,7 @@ function dealNoteRowHtml(item, readonly) {
         : '';
     const kind = (item && (item.type === 'call_in' || item.type === 'call_out')) ? 'Zəng' : 'Qeyd';
     const media = dealMediaBlock(item, _dealViewState && _dealViewState.token);
-    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="text-[11px] text-amber-700" style="display:flex;justify-content:space-between;gap:8px"><span><b>${kind}</b> · ${escapeHtml(item.created || '')}</span>${actions}</div><div class="deal-note-body">${linkifyText(stripNamePrefix(item.text))}</div>${media}</div>`;
+    return `<div class="deal-note-row" data-note-id="${escapeHtml(String(item.id || ''))}" data-entity-id="${escapeHtml(String(item.entity_id || ''))}" data-entity-type="${escapeHtml(String(item.entity_type || 'leads'))}"><div class="deal-note-meta"><span>${kind}${item.created ? ' · ' + escapeHtml(item.created) : ''}</span>${actions}</div><div class="deal-note-body">${linkifyText(stripNamePrefix(item.text))}</div>${media}</div>`;
 }
 function dealTaskRowHtml(item, readonly) {
     const text = (item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—';
@@ -4325,7 +4329,7 @@ function dealTaskRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-task-edit" title="Dəyiş" data-task-id="${escapeHtml(String(item.id))}">${dealIconEdit()}</button><button type="button" class="deal-task-del" title="Sil" data-task-id="${escapeHtml(String(item.id))}">${dealIconDel()}</button></span>`
         : '';
-    return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div><div class="text-[10px] font-extrabold text-blue-700 uppercase tracking-wide">Tapşırıq</div>${linkifyText(text)}</div>${actions}</div></div>`;
+    return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div class="deal-task-meta"><span>Tapşırıq</span>${actions}</div><div class="deal-task-text">${linkifyText(text)}</div></div>`;
 }
 function dealNotesListHtml(deal, readonly) {
     const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && (item.text || item.id)) : [];
@@ -7508,7 +7512,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=250');
+    const reg = await navigator.serviceWorker.register('sw.js?v=251');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
