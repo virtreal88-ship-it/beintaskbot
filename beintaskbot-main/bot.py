@@ -2331,67 +2331,11 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
         eid = int(entity_id or 0)
     except (TypeError, ValueError):
         eid = 0
-    primary = _note_entity_kind(entity_type)
-    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
-    extra = []
-    for value in extra_ids or []:
-        try:
-            extra.append(int(value))
-        except (TypeError, ValueError):
-            continue
-    found_kind, found_eid, found_type = _lookup_note(nid, kinds, [eid, *extra])
-    if found_kind:
-        kinds = [found_kind] + [k for k in kinds if k != found_kind]
-    if found_eid:
-        eid = found_eid
-    types: list[str] = []
-    for item in (str(note_type or "").strip(), str(found_type or "").strip(), "common"):
-        if item and item not in types:
-            types.append(item)
-    last_err = "Qeyd silinmədi."
-    for kind in kinds:
-        note_urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}"]
-        if eid:
-            note_urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes/{nid}")
-        for url in note_urls:
-            try:
-                resp = _http.delete(url, headers=HEADERS, timeout=10)
-            except Exception as exc:
-                logger.error("Delete note error: %s", exc)
-                last_err = str(exc)
-                continue
-            if resp.status_code in {200, 202, 204} and found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
-                return True, ""
-            last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
-            logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
-        for ntype in types:
-            body = {"id": nid, "note_type": ntype, "is_deleted": True}
-            if eid:
-                body["entity_id"] = eid
-            for url in note_urls + [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]:
-                payload = body if url.endswith(f"/notes/{nid}") else [body]
-                try:
-                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
-                except Exception as exc:
-                    logger.error("Soft-delete note error: %s", exc)
-                    last_err = str(exc)
-                    continue
-                if resp.status_code in {200, 202, 204} and found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
-                    return True, ""
-                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
-                logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    _kommo_ajax_delete_note(nid, found_eid or eid, found_kind or kinds[0])
-    if found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
+    ok, err = update_note(nid, " ", _note_entity_kind(entity_type), eid)
+    if ok:
         _forget_cached_note(nid)
         return True, ""
-    if found_kind:
-        ok, err = update_note(nid, " ", found_kind, found_eid or eid)
-        if ok and _note_text_is_blank(nid, found_kind):
-            _forget_cached_note(nid)
-            return True, ""
-        if err:
-            last_err = err
-    return False, _note_delete_error(last_err)
+    return False, err or "Qeyd silinmədi."
 
 def _note_entity_kind(entity_type: str) -> str:
     raw = str(entity_type or "").strip().lower()
@@ -6207,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v238 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v239 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -6494,11 +6438,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
             if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            extra_ids = [lead_id]
-            lead_obj = get_lead_details(lead_id) or {}
-            extra_ids.extend(_lead_contact_ids(lead_obj))
-            hint_type = str(data.get("note_type") or "").strip()
-            ok, err = delete_note(note_id, entity_type, entity_id, extra_ids=extra_ids, note_type=hint_type)
+            ok, err = delete_note(note_id, entity_type, entity_id)
             if ok:
                 invalidate_rufat_overview_cache()
             return web.json_response({
