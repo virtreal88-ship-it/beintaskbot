@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="238">
+    <meta name="pwa-build" content="239">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=238">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=238">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=239">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=239">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -313,7 +313,9 @@
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
-        .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#fff; overflow:auto; flex:none; border-bottom:1px solid #e8ecf0; }
+        .deal-source-row { align-items:center; }
+        .deal-chat-channels { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; min-width:0; }
+        .deal-source-empty { font-size:12px; font-weight:400; color:#9ca3af; }
         .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
         .wa-chip[data-channel] { width:32px; height:32px; padding:0; }
         .wa-chip.on { border-color:#1e293b; box-shadow:0 0 0 1px #1e293b; }
@@ -4192,21 +4194,20 @@ function dealWaSenderPhone() {
     return '+994502072240';
 }
 function paintDealChannels(channels, active) {
-    const bar = document.getElementById('deal-chat-channels');
-    if(!bar) return;
+    const bars = document.querySelectorAll('.deal-chat-channels');
+    if(!bars.length) return;
     const rows = Array.isArray(channels) && channels.length ? channels : [];
-    if(!rows.length) {
-        const loading = _dealViewState && _dealViewState.loading;
-        bar.innerHTML = `<span class="wa-chip">${loading ? 'Kanal yüklənir...' : 'Kanal yoxdur'}</span>`;
-        return;
-    }
-    bar.innerHTML = rows.map(row => {
+    const loading = _dealViewState && _dealViewState.loading;
+    const html = rows.length ? rows.map(row => {
         const meta = chatChannelMeta(row.key);
         const label = row.label || meta.label;
         return `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${meta.svg}</button>`;
-    }).join('');
-    bar.querySelectorAll('[data-channel]').forEach(btn => {
-        btn.onclick = () => switchDealChatChannel(btn.getAttribute('data-channel'));
+    }).join('') : `<span class="deal-source-empty">${loading ? 'Kanal yüklənir...' : 'Kanal yoxdur'}</span>`;
+    bars.forEach(bar => {
+        bar.innerHTML = html;
+        bar.querySelectorAll('[data-channel]').forEach(btn => {
+            btn.onclick = () => switchDealChatChannel(btn.getAttribute('data-channel'));
+        });
     });
 }
 function preferredDealChannel(channels, messages) {
@@ -4936,6 +4937,7 @@ function dealInfoBodyHtml(deal, readonly) {
             <div class="deal-info-field"><span>Ad</span>${readonly ? `<b>${escapeHtml(name || '—')}</b>` : `<input id="deal-side-name" class="deal-side-input" value="${escapeHtml(name)}" placeholder="Müştəri">`}</div>
             <div class="deal-info-field"><span>Telefon</span>${readonly ? `<b>${escapeHtml(phone || '—')}</b>` : `<input id="deal-side-phone" class="deal-side-input" type="tel" value="${escapeHtml(phone)}" placeholder="Telefon">`}</div>
             ${staffHtml}
+            <div class="deal-info-field deal-source-row"><span>Mənbə</span><div class="deal-chat-channels"></div></div>
         </div>
         <h3>Sövdələşmə</h3>
         <div class="text-[13px] text-gray-700 space-y-1">
@@ -4976,6 +4978,7 @@ function openDealInfoDrawer(deal, readonly) {
     drawer.querySelector('.deal-info-dim').onclick = closeDealInfoDrawer;
     drawer.querySelector('#deal-info-close').onclick = closeDealInfoDrawer;
     bindDealSideActions(deal);
+    if(_dealViewState) paintDealChannels(_dealViewState.channels, _dealViewState.channel);
     bindAudioWait(drawer);
     if(!readonly && isAdmin) {
         ensureAdminPipelines().then(() => {
@@ -5339,7 +5342,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
         </div>
         <div class="deal-shell-body show-chat" id="deal-shell-body">
             <section class="wa-pane">
-                <div class="wa-channels" id="deal-chat-channels"></div>
                 <div id="deal-pin-bar" class="chat-pin-bar" hidden>
                     <button type="button" class="chat-pin-jump" id="deal-pin-jump">
                         <div class="chat-pin-label">Sabitlənmiş mesaj</div>
@@ -5375,7 +5377,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 ${dealInfoBodyHtml(deal, readonly)}
             </aside>
             <section class="wa-pane">
-                <div class="wa-channels" id="deal-chat-channels"></div>
                 <div id="deal-pin-bar" class="chat-pin-bar" hidden>
                     <button type="button" class="chat-pin-jump" id="deal-pin-jump">
                         <div class="chat-pin-label">Sabitlənmiş mesaj</div>
@@ -7529,7 +7530,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=255');
+    const reg = await navigator.serviceWorker.register('sw.js?v=256');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
