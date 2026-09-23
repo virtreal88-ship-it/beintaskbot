@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="236">
+    <meta name="pwa-build" content="237">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=236">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=236">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=237">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=237">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -260,8 +260,7 @@
         .deal-head-name, .deal-head-phone { width:100%; background:transparent; border:0; color:#fff; padding:0; outline:none; font-family:inherit; }
         .deal-head-phone { font-size:14px; font-weight:600; opacity:1; width:auto; min-width:0; flex:none; }
         .deal-head-phone-row { display:inline-flex; align-items:center; gap:4px; }
-        .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:transparent; flex:none; }
-        .deal-head-wa svg { width:16px; height:16px; display:block; }
+        .deal-head-wa { display:inline-flex; align-items:center; flex:none; font-size:12px; font-weight:600; color:#93c5fd; text-decoration:underline; white-space:nowrap; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
         .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:600; text-decoration:none; color:#fff; letter-spacing:.02em; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
@@ -555,7 +554,7 @@
         }
         .inbox-shell .deal-head-name, .inbox-shell .deal-head-phone { color:#111827; }
         .inbox-shell .deal-head-avatar { background:#e5e7eb; color:#374151; }
-        .inbox-shell .deal-head-wa { color:#25d366; }
+        .inbox-shell .deal-head-wa { color:#2563eb; }
         .inbox-shell .deal-sum-btn, .inbox-shell .chats-deal-link, .inbox-shell .chats-back {
             background:#f3f4f6; color:#374151;
         }
@@ -3496,7 +3495,7 @@ function dealChatItemHtml(item, token, readonly) {
     const quote = dealChatQuoteHtml(item);
     const profile = isChatProfilePhoto(item);
     const avatar = chatAvatarHtml(item, token);
-    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
+    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">${item.incoming ? '↪' : '↩'}</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
     const reactKey = chatReactKey(item);
     const canReact = !readonly && !!reactKey;
@@ -4182,6 +4181,11 @@ function formatWaPretty(value) {
         return '+994 ' + digits.slice(3, 5) + ' ' + digits.slice(5, 8) + ' ' + digits.slice(8, 10) + ' ' + digits.slice(10, 12);
     }
     return digits ? '+' + digits : '';
+}
+function dealStaffLine() {
+    if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return {name:'Rüfət Həsənzadə', phone:'+994 10 213 51 05'};
+    if(CURRENT_USER_ID === '1628569350') return {name:'Nizami Qasımov', phone:'+994 50 207 22 40'};
+    return null;
 }
 function dealWaSenderPhone() {
     if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return '+994102135105';
@@ -4925,10 +4929,13 @@ function dealInfoBodyHtml(deal, readonly) {
     const name = dealClientName(deal);
     const phones = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
     const phone = phones[0] || '';
+    const staff = dealStaffLine();
+    const staffHtml = staff ? `<div class="deal-info-field"><span>Əməkdaş</span><b>${escapeHtml(staff.name)}</b></div><div class="deal-info-field"><span>WhatsApp</span><b>${escapeHtml(staff.phone)}</b></div>` : '';
     return `<h3>Müştəri</h3>
         <div class="deal-info-fields">
             <div class="deal-info-field"><span>Ad</span>${readonly ? `<b>${escapeHtml(name || '—')}</b>` : `<input id="deal-side-name" class="deal-side-input" value="${escapeHtml(name)}" placeholder="Müştəri">`}</div>
             <div class="deal-info-field"><span>Telefon</span>${readonly ? `<b>${escapeHtml(phone || '—')}</b>` : `<input id="deal-side-phone" class="deal-side-input" type="tel" value="${escapeHtml(phone)}" placeholder="Telefon">`}</div>
+            ${staffHtml}
         </div>
         <h3>Sövdələşmə</h3>
         <div class="text-[13px] text-gray-700 space-y-1">
@@ -5290,7 +5297,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
     const phoneHtml = readonly
         ? escapeHtml(phoneVal || '—')
         : `<input id="deal-head-phone" class="deal-head-phone" value="${escapeHtml(phoneVal)}" placeholder="Telefon">`;
-    const waHtml = `<a id="deal-head-wa" class="deal-head-wa" href="${escapeHtml(waUrl || '#')}" target="_blank" rel="noopener noreferrer" title="WhatsApp" ${waUrl ? '' : 'hidden'}>${CHAT_CHANNEL_META.whatsapp.svg}</a>`;
+    const waHtml = `<a id="deal-head-wa" class="deal-head-wa" href="${escapeHtml(waUrl || '#')}" target="_blank" rel="noopener noreferrer" ${waUrl ? '' : 'hidden'}>WhatsApp-da aç</a>`;
     const composer = readonly ? '' : `<div class="wa-composer-wrap">
             <div id="deal-chat-quote" class="chat-quote-bar" hidden>
                 <div style="flex:1;min-width:0">
@@ -7522,7 +7529,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=253');
+    const reg = await navigator.serviceWorker.register('sw.js?v=254');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
