@@ -10578,6 +10578,33 @@ def _update_sent_message(lead_id: int, wamid: str, **fields) -> None:
         _schedule_sent_messages_save()
 
 
+def _wa_preview_cards(raw) -> list[dict]:
+    """Keep a small, safe copy of carousel cards so the chat can draw them."""
+    cards: list[dict] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        image = str(item.get("image") or item.get("header_media") or "").strip()
+        if not image.startswith("https://"):
+            image = ""
+        body = str(item.get("body") or "").strip()[:900]
+        buttons: list[dict] = []
+        for button in item.get("buttons") or []:
+            if not isinstance(button, dict):
+                continue
+            label = str(button.get("text") or "").strip()[:80]
+            if label:
+                buttons.append({"text": label})
+            if len(buttons) >= 3:
+                break
+        if not image and not body and not buttons:
+            continue
+        cards.append({"image": image[:1000], "body": body, "buttons": buttons})
+        if len(cards) >= 10:
+            break
+    return cards
+
+
 def _sent_message_item(
     *,
     wamid: str,
@@ -10593,9 +10620,11 @@ def _sent_message_item(
     incoming: bool = False,
     created_at: int = 0,
     phone: str = "",
+    cards: list | None = None,
 ) -> dict:
     created = int(created_at or _time_module.time())
-    return {
+    gallery = _wa_preview_cards(cards)
+    item = {
         "id": f"wa-{wamid or uuid.uuid4().hex}",
         "external_id": str(wamid or ""),
         "direction": "incoming" if incoming else "outgoing",
@@ -10617,6 +10646,10 @@ def _sent_message_item(
         "delivery_status": "" if incoming else "sent",
         "via_cloud": True,
     }
+    if gallery:
+        item["cards"] = gallery
+        item["message_type"] = "carousel"
+    return item
 
 
 _WA_PHONE_LEADS_KEY = "_phone_leads"
@@ -11673,10 +11706,26 @@ def _collect_deal_chat(
     ]
     for item in _sent_messages_for_lead(lid):
         external = str(item.get("external_id") or "")
-        if external and external in known_external:
-            continue
+        cards = item.get("cards") if isinstance(item.get("cards"), list) else []
         text = str(item.get("text") or "")
         created = int(item.get("created_at") or 0)
+        if cards:
+            for existing in chat:
+                if existing.get("incoming"):
+                    continue
+                same_ext = bool(external) and str(existing.get("external_id") or "") == external
+                same_text = (
+                    text
+                    and str(existing.get("text") or "") == text
+                    and abs(int(existing.get("created_at") or 0) - created) <= 180
+                )
+                if same_ext or same_text:
+                    if not existing.get("cards"):
+                        existing["cards"] = cards
+                        existing["message_type"] = "carousel"
+                    break
+        if external and external in known_external:
+            continue
         if text and any(
             text == other_text and abs(created - other_created) <= 180
             for other_text, other_created in outgoing_seen
@@ -13179,22 +13228,27 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     if not ok:
         return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
     preview = str(data.get("preview") or "").strip() or name
+    preview_cards = _wa_preview_cards(data.get("preview_cards"))
     if lead:
         lid = int(lead.get("id") or lead_id)
         author = employee_name_for_lead(lead)
-        _remember_sent_message(lid, _sent_message_item(wamid=wamid, text=preview, author=author))
-        _append_chat_tail(lid, {
+        sent_item = _sent_message_item(wamid=wamid, text=preview, author=author, cards=preview_cards)
+        _remember_sent_message(lid, sent_item)
+        tail = {
             "id": f"sent-{wamid or uuid.uuid4().hex}",
             "external_id": str(wamid or ""),
             "incoming": False,
             "direction": "outgoing",
             "text": preview,
             "created_at": int(_time_module.time()),
-            "message_type": "text",
+            "message_type": "carousel" if preview_cards else "text",
             "channel": "whatsapp",
             "author": author,
             "delivery_status": "sent",
-        })
+        }
+        if preview_cards:
+            tail["cards"] = preview_cards
+        _append_chat_tail(lid, tail)
     return web.json_response({
         "success": True,
         "wamid": wamid,
