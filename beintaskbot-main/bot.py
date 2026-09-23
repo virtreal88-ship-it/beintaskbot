@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v241 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v242 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9679,6 +9679,15 @@ def _wa_cloud_credentials() -> tuple[str, str]:
     return str(token).strip(), str(phone_id).strip()
 
 
+def _kommo_external_send_denied(error: str) -> bool:
+    return "Sending to external chats" in str(error or "")
+
+
+def _wa_cloud_configured() -> bool:
+    token, phone_id = _wa_cloud_credentials()
+    return bool(token and phone_id)
+
+
 def _wa_cloud_ready(sender_digits: str = "") -> bool:
     token, phone_id = _wa_cloud_credentials()
     if not token or not phone_id:
@@ -12811,7 +12820,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                     sent_text = fallback_text
                 elif kommo_error and not last_error:
                     last_error = kommo_error
-    if not ok and use_cloud:
+    if not ok and channel == "whatsapp" and _wa_cloud_configured() and (use_cloud or _kommo_external_send_denied(last_error)):
         ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
             _deliver_via_cloud,
             lead,
