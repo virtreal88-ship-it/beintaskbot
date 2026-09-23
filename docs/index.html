@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="256">
+    <meta name="pwa-build" content="257">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4380,6 +4380,23 @@ async function fetchDealChatTail() {
     if(!requestMatchesDeal(seq, leadId)) return {stale:true};
     return payload;
 }
+function applyDealSidePreview(payload) {
+    if(!_dealViewState || !payload || !payload.side_ready) return;
+    const deal = _dealViewState.deal;
+    if(!deal) return;
+    let changed = false;
+    const note = payload.last_note;
+    const task = payload.last_task;
+    if(note && String(note.text || '').trim() && !(Array.isArray(deal.notes) && deal.notes.length)) {
+        deal.notes = [note];
+        changed = true;
+    }
+    if(task && task.id && !(Array.isArray(deal.tasks) && deal.tasks.length)) {
+        deal.tasks = [task];
+        changed = true;
+    }
+    if(changed) applyDealSide(deal, !!_dealViewState.readonly);
+}
 function applyDealChatTail(seq, dealId, rows) {
     if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
     const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-8);
@@ -4406,7 +4423,10 @@ async function loadDealChatLatest() {
     paintDealChatThread({stickBottom: true, force: true});
     let tail = null;
     try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
-    if(tail && tail.success && !tail.stale && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+    if(tail && tail.success && !tail.stale) {
+        applyDealSidePreview(tail);
+        if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+    }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
     _dealViewState.loading = true;
     _dealViewState.has_more = true;
@@ -4414,7 +4434,10 @@ async function loadDealChatLatest() {
         await new Promise(resolve => setTimeout(resolve, 1200));
         if(!requestMatchesDeal(seq, deal && deal.id)) return;
         try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
-        if(tail && tail.success && !tail.stale && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+        if(tail && tail.success && !tail.stale) {
+            applyDealSidePreview(tail);
+            if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+        }
     }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
     _dealViewState.loading = false;
@@ -4452,6 +4475,7 @@ async function pollDealChat() {
     try {
         const d = await fetchDealChatTail();
         if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
+        applyDealSidePreview(d);
         _dealViewState.blocked = !!d.chat_blocked;
         applyChatDelivery(_dealViewState.messages, d.chat);
         dropMatchedLocalVoices(d.chat);
@@ -4487,7 +4511,7 @@ function dealTaskRowHtml(item, readonly) {
     return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div class="deal-task-meta"><span>Tapşırıq</span>${actions}</div><div class="deal-task-text">${linkifyText(text)}</div></div>`;
 }
 function dealNotesListHtml(deal, readonly) {
-    const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && (item.text || item.id)) : [];
+    const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && String(item.text || '').trim() && String(item.text).trim() !== '⟦silindi⟧') : [];
     if(notes.length) return notes.map(item => dealNoteRowHtml(item, readonly)).join('');
     if(deal.last_note) return dealNoteRowHtml({text: deal.last_note}, true);
     return '<div class="text-gray-400">Qeyd yoxdur</div>';
@@ -7828,7 +7852,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=273');
+    const reg = await navigator.serviceWorker.register('sw.js?v=274');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

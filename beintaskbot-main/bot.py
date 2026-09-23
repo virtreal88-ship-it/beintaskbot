@@ -2243,6 +2243,27 @@ def _note_is_present(note_id: int, kind: str, entity_id: int) -> bool | None:
     return None
 
 
+def _note_text_is_blank(note_id: int, kind: str) -> bool:
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return False
+    if not nid or not kind:
+        return False
+    try:
+        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", headers=HEADERS, timeout=8)
+    except Exception as exc:
+        logger.warning("Blank note check %s failed: %s", note_id, exc)
+        return False
+    if resp.status_code in {204, 404}:
+        return True
+    if resp.status_code != 200:
+        return False
+    payload = resp.json() if resp.content else {}
+    params = payload.get("params") if isinstance(payload, dict) and isinstance(payload.get("params"), dict) else {}
+    return not str(params.get("text") or "").strip()
+
+
 def _kommo_ajax_delete_note(note_id: int, entity_id: int, kind: str) -> bool:
     element_type = "1" if str(kind).startswith("contact") else "2"
     form_headers = {
@@ -2361,7 +2382,15 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
     _kommo_ajax_delete_note(nid, found_eid or eid, found_kind or kinds[0])
     if found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
+        _forget_cached_note(nid)
         return True, ""
+    if found_kind:
+        ok, err = update_note(nid, " ", found_kind, found_eid or eid)
+        if ok and _note_text_is_blank(nid, found_kind):
+            _forget_cached_note(nid)
+            return True, ""
+        if err:
+            last_err = err
     return False, _note_delete_error(last_err)
 
 def _note_entity_kind(entity_type: str) -> str:
@@ -6178,7 +6207,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v237 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v238 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11881,7 +11910,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
             contact_avatar = _first_avatar_url(talk) or contact_avatar
     funnel_owner_name = owner_name_for_pipeline(pipeline_id)
     responsible_name = funnel_owner_name or KOMMO_USERS.get(lead.get("responsible_user_id"), "") or ""
-    return {
+    payload = {
         "id": lid,
         "name": lead.get("name") or "",
         "pipeline_id": pipeline_id,
@@ -11916,6 +11945,9 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
+    visible_notes = [item for item in notes if str(item.get("text") or "").strip()]
+    _remember_deal_side(lid, visible_notes[0] if visible_notes else None, first_task or None)
+    return payload
 
 
 async def handle_api_deal_view(request: web.Request) -> web.Response:
@@ -11998,6 +12030,7 @@ _chat_tail_warm_lock = threading.Lock()
 _chat_tail_warm_task: asyncio.Task | None = None
 _tail_refresh_pending: set[int] = set()
 _chat_tail_inflight: set[int] = set()
+_deal_side_cache: dict[int, dict] = {}
 
 
 def _tail_identity(item: dict) -> tuple:
@@ -12174,7 +12207,69 @@ def _contact_ids_from_cached_deal(lead_id: int) -> list[int]:
     return ids
 
 
+def _remember_deal_side(lead_id: int, note: dict | None, task: dict | None) -> None:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not lid:
+        return
+    _deal_side_cache[lid] = {
+        "note": note if isinstance(note, dict) and str(note.get("text") or "").strip() else None,
+        "task": task if isinstance(task, dict) and task.get("id") else None,
+    }
+
+
+def _forget_cached_note(note_id: int) -> None:
+    try:
+        nid = int(note_id)
+    except (TypeError, ValueError):
+        return
+    for side in _deal_side_cache.values():
+        note = side.get("note") if isinstance(side, dict) else None
+        if isinstance(note, dict) and int(note.get("id") or 0) == nid:
+            side["note"] = None
+
+
+def _load_deal_side(lead_id: int) -> None:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    note = None
+    try:
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/leads/{lid}/notes",
+            headers=HEADERS,
+            params={"limit": 15, "order[created_at]": "desc"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            for raw in ((resp.json() or {}).get("_embedded") or {}).get("notes") or []:
+                formatted = _format_deal_note(raw, "leads")
+                if not formatted or _note_is_deleted(formatted):
+                    continue
+                if formatted.get("type") in {"call_in", "call_out"} or formatted.get("is_chat"):
+                    continue
+                if str(formatted.get("text") or "").strip():
+                    note = formatted
+                    break
+    except Exception as exc:
+        logger.warning("Latest note failed lead=%s: %s", lid, exc)
+    task = None
+    try:
+        tasks = _fetch_open_tasks_for_entities([lid])
+        task = tasks[0] if tasks else None
+    except Exception as exc:
+        logger.warning("Latest task failed lead=%s: %s", lid, exc)
+    _remember_deal_side(lid, note, task)
+
+
 def _warm_one_chat_tail(lead_id: int) -> None:
+    try:
+        _load_deal_side(int(lead_id))
+    except Exception as exc:
+        logger.warning("Deal side warm failed lead=%s: %s", lead_id, exc)
     page, blocked, _talk, _more, _channels, _channel = _collect_deal_chat(
         int(lead_id),
         _contact_ids_from_cached_deal(lead_id),
@@ -12212,7 +12307,9 @@ def _priority_chat_tail(lead_id: int) -> None:
         lid = int(lead_id)
     except (TypeError, ValueError):
         return
-    if not lid or _chat_open_preview.get(lid):
+    has_tail = bool(_chat_open_preview.get(lid))
+    has_side = lid in _deal_side_cache
+    if not lid or (has_tail and has_side):
         return
     try:
         loop = asyncio.get_running_loop()
@@ -12229,7 +12326,10 @@ def _priority_chat_tail(lead_id: int) -> None:
 
     async def _run() -> None:
         try:
-            await asyncio.to_thread(_warm_one_chat_tail, lid)
+            if not _chat_open_preview.get(lid):
+                await asyncio.to_thread(_warm_one_chat_tail, lid)
+            elif lid not in _deal_side_cache:
+                await asyncio.to_thread(_load_deal_side, lid)
         except Exception as exc:
             logger.warning("Priority chat tail failed lead=%s: %s", lid, exc)
         finally:
@@ -12392,7 +12492,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
                     if rows:
                         remembered = list(rows)[-_CHAT_TAIL_KEEP:]
                         break
-        if not remembered:
+        if not remembered or lid not in _deal_side_cache:
             _priority_chat_tail(lid)
         return web.json_response({
             "success": True,
@@ -12402,6 +12502,9 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
             "chat_blocked": False,
             "channel": channel,
             "channels": [],
+            "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
+            "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
+            "side_ready": lid in _deal_side_cache,
         })
     cache_key = (int(lead.get("id") or lead_id), channel, int(before or 0), str(sender_digits or ""), int(limit))
     now = _time_module.monotonic()
