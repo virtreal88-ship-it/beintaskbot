@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="252">
+    <meta name="pwa-build" content="253">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -1809,6 +1809,7 @@ async function initApp() {
 
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
+        resumeInboxPulse();
         if(HAS_OWN_FUNNEL && !isAdmin) {
             if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
             loadSamilWorkspace();
@@ -1818,6 +1819,10 @@ document.addEventListener('visibilitychange', () => {
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
         }
     }
+});
+window.addEventListener('focus', resumeInboxPulse);
+window.addEventListener('pageshow', event => {
+    if(event.persisted) resumeInboxPulse();
 });
 window.addEventListener('hashchange', applyHashRoute);
 
@@ -6804,6 +6809,7 @@ function stopChatsPolling() {
 let _inboxPulseRev = 0;
 let _inboxFullAt = Date.now();
 let _inboxFullBusy = false;
+let _inboxResumeAt = 0;
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
@@ -6876,6 +6882,15 @@ function startChatsPolling() {
         pollInboxPulse();
     }, 3000);
 }
+function resumeInboxPulse() {
+    if(!HAS_CHATS || !CURRENT_USER_ID) return;
+    const now = Date.now();
+    if(now - _inboxResumeAt < 1500) return;
+    _inboxResumeAt = now;
+    if(document.getElementById('screen-chats')?.classList.contains('active')) startChatsPolling();
+    pollInboxPulse();
+}
+try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch(_err) {}
 async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
     if(!deal) return;
@@ -7793,7 +7808,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=269');
+    const reg = await navigator.serviceWorker.register('sw.js?v=270');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
