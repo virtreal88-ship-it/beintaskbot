@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="265">
+    <meta name="pwa-build" content="266">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5331,6 +5331,23 @@ function paintWaTplForm() {
             const label = String(btn.type || '').toUpperCase() === 'COPY_CODE' ? 'Kupon kodu' : ('Düymə: ' + (btn.text || ''));
             html += `<div><label>${escapeHtml(label)}</label><input type="text" id="wa-tpl-btn-${Number(btn.index) || 0}" autocomplete="off"></div>`;
         });
+        (Array.isArray(tpl.cards) ? tpl.cards : []).forEach((card, index) => {
+            const cardFormat = String(card.header_format || 'IMAGE').toUpperCase();
+            const cardMedia = cardFormat === 'VIDEO' ? 'Video linki' : 'Şəkil linki';
+            if(cardFormat === 'IMAGE' || cardFormat === 'VIDEO' || cardFormat === 'DOCUMENT') {
+                html += `<div><label>Kart ${index + 1}: ${cardMedia}</label><input type="url" id="wa-tpl-card-media-${index}" placeholder="https://" autocomplete="off"></div>`;
+            }
+            const cardNames = Array.isArray(card.body_names) ? card.body_names : [];
+            const cardCount = waTplVarCount(card, 'body');
+            for(let i = 1; i <= cardCount; i++) {
+                const label = cardNames[i - 1] || ('Dəyişən ' + i);
+                html += `<div><label>Kart ${index + 1}: ${escapeHtml(label)}</label><input type="text" id="wa-tpl-card-${index}-b${i}" autocomplete="off"></div>`;
+            }
+            (Array.isArray(card.buttons) ? card.buttons : []).forEach(btn => {
+                if(!btn || !btn.needs_value) return;
+                html += `<div><label>Kart ${index + 1}: ${escapeHtml(btn.text || 'Düymə')}</label><input type="text" id="wa-tpl-card-${index}-btn-${Number(btn.index) || 0}" autocomplete="off"></div>`;
+            });
+        });
         varsBox.innerHTML = html;
         varsBox.querySelectorAll('input').forEach(input => { input.oninput = paintWaTplPreview; });
     }
@@ -5353,6 +5370,14 @@ function paintWaTplPreview() {
         const field = document.getElementById('wa-tpl-btn-' + (Number(btn.index) || 0));
         const value = field ? String(field.value || '').trim() : '';
         lines.push((btn.text || 'Düymə') + (value ? ': ' + value : ''));
+    });
+    (Array.isArray(tpl.cards) ? tpl.cards : []).forEach((card, index) => {
+        const mediaField = document.getElementById('wa-tpl-card-media-' + index);
+        const cardLines = ['Kart ' + (index + 1)];
+        if(mediaField && String(mediaField.value || '').trim()) cardLines.push(String(mediaField.value).trim());
+        const cardBody = waTplFill(card.body, waTplValues('wa-tpl-card-' + index + '-b', waTplVarCount(card, 'body')), card.body_names);
+        if(cardBody) cardLines.push(cardBody);
+        lines.push(cardLines.join('\n'));
     });
     preview.textContent = lines.join('\n\n');
 }
@@ -5425,6 +5450,23 @@ async function sendWaTemplate(options) {
         buttonParams.push({index: Number(btn.index) || 0, value, type: btn.type || ''});
     }
     if([...headerParams, ...bodyParams].some(value => !value)) { toast('Dəyişənləri doldurun', true); return; }
+    const cardPayload = [];
+    for(const [index, card] of (Array.isArray(tpl.cards) ? tpl.cards : []).entries()) {
+        const mediaField = document.getElementById('wa-tpl-card-media-' + index);
+        const cardMedia = mediaField ? String(mediaField.value || '').trim() : '';
+        if(mediaField && !cardMedia.startsWith('https://')) { toast('Kart ' + (index + 1) + ': linki https:// ilə yazın', true); return; }
+        const cardParams = waTplValues('wa-tpl-card-' + index + '-b', waTplVarCount(card, 'body'));
+        if(cardParams.some(value => !value)) { toast('Kart ' + (index + 1) + ': dəyişənləri doldurun', true); return; }
+        const cardButtons = [];
+        for(const btn of (Array.isArray(card.buttons) ? card.buttons : [])) {
+            if(!btn || !btn.needs_value) continue;
+            const field = document.getElementById('wa-tpl-card-' + index + '-btn-' + (Number(btn.index) || 0));
+            const value = field ? String(field.value || '').trim() : '';
+            if(!value) { toast('Kart ' + (index + 1) + ': düymə dəyərini yazın', true); return; }
+            cardButtons.push({index: Number(btn.index) || 0, value});
+        }
+        cardPayload.push({header_media: cardMedia, params: cardParams, buttons: cardButtons});
+    }
     const preview = document.getElementById('wa-tpl-preview');
     const sendBtn = document.getElementById('wa-tpl-send');
     _waTplSending = true;
@@ -5442,6 +5484,7 @@ async function sendWaTemplate(options) {
                 header_params: headerParams,
                 header_media: headerMedia,
                 buttons: buttonParams,
+                cards: cardPayload,
                 preview: preview ? preview.textContent : ''
             })
         });
@@ -8097,7 +8140,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=282');
+    const reg = await navigator.serviceWorker.register('sw.js?v=283');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

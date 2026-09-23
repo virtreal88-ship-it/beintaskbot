@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v247 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v248 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9973,6 +9973,50 @@ def _wa_template_placeholders(text: str) -> tuple[int, list[str]]:
     return (max(numbers) if numbers else 0), names
 
 
+def _wa_template_button_rows(raw_buttons) -> list[dict]:
+    rows: list[dict] = []
+    for index, button in enumerate(raw_buttons or []):
+        if not isinstance(button, dict):
+            continue
+        button_type = str(button.get("type") or "").upper()
+        button_url = str(button.get("url") or "")
+        url_count, url_names = _wa_template_placeholders(button_url)
+        rows.append({
+            "index": index,
+            "type": button_type,
+            "text": str(button.get("text") or ""),
+            "vars": 1 if button_type == "COPY_CODE" else url_count,
+            "names": url_names,
+            "needs_value": button_type == "COPY_CODE" or url_count > 0 or bool(url_names),
+        })
+    return rows
+
+
+def _wa_template_card(card: dict, index: int) -> dict:
+    header_format = ""
+    body_text = ""
+    buttons: list[dict] = []
+    for component in card.get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        kind = str(component.get("type") or "").upper()
+        if kind == "HEADER":
+            header_format = str(component.get("format") or "IMAGE").upper()
+        elif kind == "BODY":
+            body_text = str(component.get("text") or "")
+        elif kind == "BUTTONS":
+            buttons = _wa_template_button_rows(component.get("buttons") or [])
+    body_vars, body_names = _wa_template_placeholders(body_text)
+    return {
+        "index": index,
+        "header_format": header_format,
+        "body": body_text,
+        "body_vars": body_vars,
+        "body_names": body_names,
+        "buttons": buttons,
+    }
+
+
 def _wa_template_rows(force: bool = False) -> list[dict]:
     """Approved WABA templates, shaped for the app picker."""
     now = _time_module.monotonic()
@@ -10000,6 +10044,7 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
         header_format = ""
         body_text = ""
         buttons: list[dict] = []
+        cards: list[dict] = []
         parts: list[str] = []
         for component in item.get("components") or []:
             if not isinstance(component, dict):
@@ -10019,21 +10064,12 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
             elif kind == "BODY":
                 body_text = str(component.get("text") or "")
             elif kind == "BUTTONS":
-                for index, button in enumerate(component.get("buttons") or []):
-                    if not isinstance(button, dict):
-                        continue
-                    button_type = str(button.get("type") or "").upper()
-                    button_url = str(button.get("url") or "")
-                    url_count, url_names = _wa_template_placeholders(button_url)
-                    needs_value = button_type == "COPY_CODE" or url_count > 0 or bool(url_names)
-                    buttons.append({
-                        "index": index,
-                        "type": button_type,
-                        "text": str(button.get("text") or ""),
-                        "vars": 1 if button_type == "COPY_CODE" else url_count,
-                        "names": url_names,
-                        "needs_value": needs_value,
-                    })
+                buttons = _wa_template_button_rows(component.get("buttons") or [])
+            elif kind == "CAROUSEL":
+                for index, card in enumerate(component.get("cards") or []):
+                    if isinstance(card, dict):
+                        cards.append(_wa_template_card(card, index))
+                        parts[-1] = f"CAROUSEL:{len(cards)}:{cards[-1].get('header_format') or '-'}"
         header_vars, header_names = _wa_template_placeholders(header_text)
         body_vars, body_names = _wa_template_placeholders(body_text)
         parameter_format = str(item.get("parameter_format") or "").upper()
@@ -10052,6 +10088,7 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
             "body_vars": body_vars,
             "body_names": body_names,
             "buttons": buttons,
+            "cards": cards,
             "parts": parts,
         })
     rows.sort(key=lambda row: (row.get("name") or "", row.get("language") or ""))
@@ -10146,7 +10183,90 @@ def _wa_template_components(spec: dict, values: dict) -> tuple[list[dict], str]:
             "index": str(index),
             "parameters": [parameter],
         })
+    carousel, carousel_error = _wa_carousel_component(spec.get("cards") or [], values.get("cards") or [])
+    if carousel_error:
+        return [], carousel_error
+    if carousel:
+        components.append(carousel)
     return components, ""
+
+
+def _wa_card_button_components(buttons: list, supplied: dict) -> tuple[list[dict], str]:
+    components: list[dict] = []
+    for button in buttons or []:
+        if not isinstance(button, dict):
+            continue
+        try:
+            index = int(button.get("index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        button_type = str(button.get("type") or "").upper()
+        if button_type == "QUICK_REPLY":
+            payload = str(button.get("text") or "ok").strip()[:128] or "ok"
+            components.append({
+                "type": "button",
+                "sub_type": "quick_reply",
+                "index": str(index),
+                "parameters": [{"type": "payload", "payload": payload}],
+            })
+            continue
+        if not button.get("needs_value"):
+            continue
+        text = str(supplied.get(index) or "").strip()
+        if not text:
+            return [], "Düymə dəyərini yazın."
+        if button_type == "COPY_CODE":
+            if len(text) > 15:
+                return [], "Kupon kodu 15 simvoldan uzun ola bilməz."
+            parameter = {"type": "coupon_code", "coupon_code": text}
+            sub_type = "copy_code"
+        else:
+            parameter = {"type": "text", "text": text[:200]}
+            button_names = list(button.get("names") or [])
+            if button_names:
+                parameter["parameter_name"] = button_names[0]
+            sub_type = "url"
+        components.append({
+            "type": "button",
+            "sub_type": sub_type,
+            "index": str(index),
+            "parameters": [parameter],
+        })
+    return components, ""
+
+
+def _wa_carousel_component(cards: list, supplied_cards: list) -> tuple[dict | None, str]:
+    if not cards:
+        return None, ""
+    built: list[dict] = []
+    for index, card in enumerate(cards):
+        if not isinstance(card, dict):
+            continue
+        supplied = supplied_cards[index] if index < len(supplied_cards) and isinstance(supplied_cards[index], dict) else {}
+        card_components: list[dict] = []
+        header_format = str(card.get("header_format") or "IMAGE").upper()
+        media_key = _WA_HEADER_MEDIA.get(header_format)
+        if media_key:
+            link = str(supplied.get("header_media") or "").strip()
+            if not link.startswith("https://"):
+                return None, f"Kart {index + 1}: linki https:// ilə yazın."
+            media = {"link": link[:1000]}
+            card_components.append({"type": "header", "parameters": [{"type": media_key, media_key: media}]})
+        names = list(card.get("body_names") or [])
+        count = len(names) or int(card.get("body_vars") or 0)
+        body_values = [str(value).strip() for value in (supplied.get("body_params") or [])][:count]
+        if count and (len(body_values) < count or any(not value for value in body_values)):
+            return None, f"Kart {index + 1}: dəyişənləri doldurun."
+        if count:
+            card_components.append({"type": "body", "parameters": _wa_text_parameters(body_values, names, 900)})
+        button_components, button_error = _wa_card_button_components(card.get("buttons") or [], supplied.get("buttons") or {})
+        if button_error:
+            return None, f"Kart {index + 1}: {button_error}"
+        card_components.extend(button_components)
+        built.append({"card_index": index, "components": card_components})
+    if not built:
+        return None, ""
+    return {"type": "carousel", "cards": built}, ""
 
 
 def _wa_cloud_send_template(phone: str, spec: dict, values: dict) -> tuple[bool, str, str]:
@@ -12943,6 +13063,24 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
         except (TypeError, ValueError):
             continue
         button_values[index] = str(item.get("value") or "").strip()
+    card_values: list[dict] = []
+    for item in data.get("cards") or []:
+        if not isinstance(item, dict):
+            continue
+        nested: dict[int, str] = {}
+        for button in item.get("buttons") or []:
+            if not isinstance(button, dict):
+                continue
+            try:
+                button_index = int(button.get("index"))
+            except (TypeError, ValueError):
+                continue
+            nested[button_index] = str(button.get("value") or "").strip()
+        card_values.append({
+            "header_media": str(item.get("header_media") or "").strip(),
+            "body_params": [str(value).strip() for value in (item.get("params") or [])],
+            "buttons": nested,
+        })
     try:
         lead_id = int(data.get("lead_id") or 0)
     except (TypeError, ValueError):
@@ -12967,6 +13105,7 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
             "header_params": header_params,
             "header_media": header_media,
             "buttons": button_values,
+            "cards": card_values,
         },
     )
     if not ok:
