@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v221 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v222 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11138,9 +11138,19 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             call_event = "call" in etype
             if call_event and (not text or _call_is_missed(message if isinstance(message, dict) else {}, text) or _call_is_missed(payload, text)):
                 text = "Buraxılmış zəng"
+            origin = ""
+            if isinstance(message, dict):
+                origin = str(message.get("origin") or message.get("source") or "").strip()
+            if not origin and isinstance(payload, dict):
+                origin = str(payload.get("origin") or "").strip()
+            channel = _origin_channel_key(origin) or _origin_channel_key(etype)
             if not text and not media and not file_uuid:
-                skipped = True
-                continue
+                if etype in {"incoming_chat_message", "outgoing_chat_message"}:
+                    label = CHAT_CHANNEL_LABELS.get(channel, "")
+                    text = f"{label} mesajı" if label else "Mesaj"
+                else:
+                    skipped = True
+                    continue
             created = int(event.get("created_at") or 0)
             msgid = _first_msgid(message, payload, event) if isinstance(message, dict) else _first_msgid(payload, event)
             wamid = _first_wamid(message, payload, event)
@@ -11148,8 +11158,8 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             if isinstance(message, dict) and not external:
                 external = str(message.get("id") or message.get("msgid") or "").strip()
             rows.append({
-                "id": event.get("id"),
-                "msgid": msgid or wamid,
+                "id": event.get("id") or external,
+                "msgid": msgid or wamid or external,
                 "external_id": external,
                 "direction": "incoming" if incoming else "outgoing",
                 "incoming": incoming,
@@ -11158,7 +11168,8 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "message_type": "call_missed" if call_event or str(text).startswith("Buraxılmış") else ("audio" if _looks_audio_name(text) else "text"),
                 "created_at": created,
                 "created": _deal_fmt_ts(created),
-                "origin": etype,
+                "origin": origin or etype,
+                "channel": channel,
                 "media_url": media if _is_allowed_media_url(media) else "",
                 "file_uuid": file_uuid,
                 "file_name": "",
