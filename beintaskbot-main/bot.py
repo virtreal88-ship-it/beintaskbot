@@ -5568,7 +5568,7 @@ def _incoming_message_preview(text: str, message_type: str) -> str:
     return "Yeni mesaj"
 
 
-def _apply_inbox_incoming(lead_id: int, preview: str, created_at: int, origin: str) -> None:
+def _apply_inbox_incoming(lead_id: int, preview: str, created_at: int, origin: str) -> bool:
     """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
     global _inbox_pulse_rev
     channel = _origin_channel_key(origin)
@@ -5736,9 +5736,9 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         seen.add(lid)
         deal = visible.get(lid)
         if not deal:
-        if row.get("refresh"):
-            refresh = True
-        continue
+            if row.get("refresh"):
+                refresh = True
+            continue
         chats.append({
             "id": lid,
             "contact_name": deal.get("contact_name") or "",
