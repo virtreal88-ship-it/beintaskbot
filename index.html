@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="209">
+    <meta name="pwa-build" content="210">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -280,7 +280,7 @@
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
-        .deal-stage-row.admin-pipelines { flex-direction:column; align-items:stretch; }
+        .deal-stage-row.admin-pipelines { align-items:center; }
         .deal-stage-row.admin-pipelines select { width:100%; }
         .deal-stage-spin { width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; flex:none; }
         .deal-note-body[contenteditable="true"] { outline:1px solid #93c5fd; border-radius:6px; padding:4px 6px; background:#f8fafc; }
@@ -2143,9 +2143,9 @@ function openCreateDealModal() {
     if(!HAS_OWN_FUNNEL) return;
     document.getElementById('create-deal-modal')?.remove();
     const defaultStage = (SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) ? samilStageFilter : (SAMIL_UI_STAGES[0] && SAMIL_UI_STAGES[0][0])) || '';
-    const stageOptions = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key === defaultStage ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
-    const pipelineBlock = isAdmin ? `<label class="text-xs font-bold text-gray-400 block mb-1">Huni</label>
-        <select id="create-deal-pipeline" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">${pipelineOptionsHtml(CURRENT_PIPELINE_ID)}</select>` : '';
+    const stageOptions = isAdmin
+        ? adminPipelineStageOptionsHtml(CURRENT_PIPELINE_ID, defaultStage)
+        : SAMIL_UI_STAGES.map(([key, label]) => `<option value="${escapeHtml(key)}" ${key === defaultStage ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
     const modal = document.createElement('div');
     modal.id = 'create-deal-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
@@ -2163,8 +2163,7 @@ function openCreateDealModal() {
         <textarea id="create-deal-note" placeholder="Qeyd (istəyə bağlı)" class="w-full p-2.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2 h-20 resize-none"></textarea>
         <label class="text-xs font-bold text-gray-400 block mb-1">Partner</label>
         <div class="mb-2">${partnerFieldHtml('create-deal-partner','')}</div>
-        ${pipelineBlock}
-        <label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
+        <label class="text-xs font-bold text-gray-400 block mb-1">${isAdmin ? 'Huni / mərhələ' : 'Mərhələ'}</label>
         <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
         <div style="display:flex;gap:8px;margin-top:14px">
             <button type="button" onclick="closeCreateDealModal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Ləğv et</button>
@@ -2174,7 +2173,7 @@ function openCreateDealModal() {
     document.body.appendChild(modal);
     document.getElementById('create-deal-name')?.focus();
     if(isAdmin) {
-        ensureAdminPipelines().then(() => fillAdminPipelinePickers('create-deal-pipeline', 'create-deal-stage', CURRENT_PIPELINE_ID, defaultStage));
+        ensureAdminPipelines().then(() => fillAdminPipelineStageSelect('create-deal-stage', CURRENT_PIPELINE_ID, defaultStage));
     }
 }
 function closeCreateDealModal() {
@@ -2185,8 +2184,9 @@ async function submitCreateDeal() {
     const phone = document.getElementById('create-deal-phone')?.value.trim() || '';
     const note = document.getElementById('create-deal-note')?.value.trim() || '';
     const partner = document.getElementById('create-deal-partner')?.value || '';
-    const stageKey = document.getElementById('create-deal-stage')?.value || '';
-    const pipelineId = Number(document.getElementById('create-deal-pipeline')?.value || 0);
+    const picked = isAdmin ? parsePipelineStageToken(document.getElementById('create-deal-stage')?.value || '') : {pipelineId: 0, stageKey: document.getElementById('create-deal-stage')?.value || ''};
+    const stageKey = picked.stageKey;
+    const pipelineId = picked.pipelineId;
     if(!name) { toast('Müştəri adını daxil edin!', true); return; }
     if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
     if(isAdmin) {
@@ -3891,7 +3891,44 @@ function pipelineOptionsHtml(selectedId) {
 function stageOptionsForPipelineHtml(pipelineId, selectedKey) {
     return stagesOfPipeline(pipelineId).map(([key, label]) => `<option value="${escapeHtml(key)}" ${key===selectedKey?'selected':''}>${escapeHtml(label)}</option>`).join('');
 }
+function pipelineStageToken(pipelineId, stageKey) {
+    return String(pipelineId || '') + ':' + String(stageKey || '');
+}
+function parsePipelineStageToken(raw) {
+    const text = String(raw || '');
+    const cut = text.indexOf(':');
+    if(cut < 0) return {pipelineId: Number(CURRENT_PIPELINE_ID || 0), stageKey: text};
+    return {pipelineId: Number(text.slice(0, cut) || 0), stageKey: text.slice(cut + 1)};
+}
+function adminPipelineStageOptionsHtml(selectedPid, selectedStage) {
+    const wantPid = String(selectedPid || CURRENT_PIPELINE_ID || '');
+    const wantKey = String(selectedStage || '');
+    const pipes = Array.isArray(KOMMO_PIPELINES) ? KOMMO_PIPELINES : [];
+    if(!pipes.length) {
+        const stages = Array.isArray(SAMIL_ALL_STAGES) && SAMIL_ALL_STAGES.length ? SAMIL_ALL_STAGES : SAMIL_UI_STAGES;
+        return stages.map(([key, label]) => `<option value="${escapeHtml(pipelineStageToken(wantPid, key))}" ${key===wantKey?'selected':''}>${escapeHtml(label)}</option>`).join('');
+    }
+    return pipes.map(pipe => {
+        const pid = String(pipe.id || '');
+        const opts = pipelineStagePairs(pipe).map(([key, label]) => {
+            const selected = pid === wantPid && String(key) === wantKey ? ' selected' : '';
+            return `<option value="${escapeHtml(pipelineStageToken(pid, key))}"${selected}>${escapeHtml(label)}</option>`;
+        }).join('');
+        return `<optgroup label="${escapeHtml(pipe.name || pid)}">${opts}</optgroup>`;
+    }).join('');
+}
+function fillAdminPipelineStageSelect(selectId, selectedPid, selectedStage) {
+    const el = document.getElementById(selectId);
+    if(!el) return;
+    el.innerHTML = adminPipelineStageOptionsHtml(selectedPid, selectedStage);
+    const token = pipelineStageToken(selectedPid || CURRENT_PIPELINE_ID, selectedStage);
+    if([...el.options].some(opt => opt.value === token)) el.value = token;
+}
 function bindPipelineStagePair(pipelineEl, stageEl, selectedStage) {
+    if(stageEl && !pipelineEl) {
+        fillAdminPipelineStageSelect(stageEl.id, CURRENT_PIPELINE_ID, selectedStage);
+        return;
+    }
     if(!pipelineEl || !stageEl) return;
     const fill = () => {
         const keep = selectedStage && stagesOfPipeline(pipelineEl.value).some(([key]) => key === selectedStage) ? selectedStage : stageEl.value;
@@ -3915,23 +3952,14 @@ async function ensureAdminPipelines() {
     return _pipelinesPromise;
 }
 function fillAdminPipelinePickers(pipelineId, stageId, selectedPid, selectedStage) {
-    const pipelineEl = document.getElementById(pipelineId);
-    const stageEl = document.getElementById(stageId);
-    if(!pipelineEl || !stageEl) return;
-    const pid = selectedPid || CURRENT_PIPELINE_ID || (KOMMO_PIPELINES[0] && KOMMO_PIPELINES[0].id) || '';
-    pipelineEl.innerHTML = pipelineOptionsHtml(pid);
-    stageEl.innerHTML = stageOptionsForPipelineHtml(pid, selectedStage);
-    bindPipelineStagePair(pipelineEl, stageEl, selectedStage);
+    fillAdminPipelineStageSelect(stageId, selectedPid, selectedStage);
 }
 function dealPipelineStageFieldsHtml(deal) {
     if(isAdmin) {
         const pid = deal && deal.pipeline_id || CURRENT_PIPELINE_ID;
         return `<div class="deal-side-form deal-stage-row admin-pipelines">
-            <select id="deal-pipeline-select">${pipelineOptionsHtml(pid)}</select>
-            <div style="display:flex;gap:8px;align-items:center">
-                <select id="deal-stage-select">${KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal && deal.stage_key) : dealStageOptionsHtml(deal)}</select>
-                <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
-            </div>
+            <select id="deal-stage-select">${adminPipelineStageOptionsHtml(pid, deal && deal.stage_key)}</select>
+            <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
         </div>`;
     }
     return `<div class="deal-side-form deal-stage-row">
@@ -3945,19 +3973,12 @@ function applyDealSide(deal, readonly) {
     if(notes) notes.innerHTML = dealNotesListHtml(deal, readonly);
     if(tasks) tasks.innerHTML = dealTasksListHtml(deal, readonly);
     const stageEl = document.getElementById('deal-stage-select');
-    const pipelineEl = document.getElementById('deal-pipeline-select');
-    if(pipelineEl && isAdmin) {
-        const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
-        if(KOMMO_PIPELINES.length) {
-            pipelineEl.innerHTML = pipelineOptionsHtml(pid);
-            pipelineEl.value = String(pid || pipelineEl.value);
-        }
-        if(stageEl) stageEl.innerHTML = KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pipelineEl.value || pid, deal.stage_key) : dealStageOptionsHtml(deal);
+    if(stageEl && isAdmin) {
+        fillAdminPipelineStageSelect('deal-stage-select', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
     } else if(stageEl) {
         stageEl.innerHTML = dealStageOptionsHtml(deal);
-        stageEl.value = deal.stage_key || stageEl.value;
+        if(deal.stage_key) stageEl.value = deal.stage_key;
     }
-    if(stageEl && deal.stage_key) stageEl.value = deal.stage_key;
     const headName = document.getElementById('deal-head-name') || document.querySelector('#deal-view-modal .deal-shell-head .name');
     const clientName = dealClientName(deal);
     if(headName) {
@@ -4090,14 +4111,13 @@ function bindDealSideActions(deal) {
     if(headName) { headName.onblur = saveHead; headName.onkeydown = e => { if(e.key === 'Enter') { e.preventDefault(); headName.blur(); } }; }
     if(headPhone) { headPhone.onblur = saveHead; headPhone.onkeydown = e => { if(e.key === 'Enter') { e.preventDefault(); headPhone.blur(); } }; }
     const saveStage = async () => {
-        const pipelineEl = document.getElementById('deal-pipeline-select');
-        const nextPipeline = pipelineEl ? Number(pipelineEl.value || 0) : 0;
-        const stageKey = stageEl && stageEl.value;
+        const picked = isAdmin ? parsePipelineStageToken(stageEl && stageEl.value || '') : {pipelineId: 0, stageKey: stageEl && stageEl.value};
+        const stageKey = picked.stageKey;
+        const nextPipeline = picked.pipelineId;
         if(!stageKey) return;
         if(stageKey === deal.stage_key && (!nextPipeline || nextPipeline === Number(deal.pipeline_id || 0))) return;
         const spin = document.getElementById('deal-stage-spin');
         if(stageEl) stageEl.disabled = true;
-        if(pipelineEl) pipelineEl.disabled = true;
         if(spin) spin.hidden = false;
         try {
             const payload = {action:'deal_edit', lead_id: deal.id, stage_key: stageKey};
@@ -4114,25 +4134,14 @@ function bindDealSideActions(deal) {
             toast('Mərhələ dəyişdi');
         } catch(err) {
             toast(err.message || 'Mərhələ dəyişmədi', true);
-            if(pipelineEl) pipelineEl.value = String(deal.pipeline_id || '');
-            if(stageEl) stageEl.value = deal.stage_key || '';
+            if(stageEl && isAdmin) fillAdminPipelineStageSelect('deal-stage-select', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+            else if(stageEl) stageEl.value = deal.stage_key || '';
         } finally {
             if(stageEl) stageEl.disabled = false;
-            if(pipelineEl) pipelineEl.disabled = false;
             if(spin) spin.hidden = true;
         }
     };
     if(stageEl) stageEl.onchange = saveStage;
-    const pipelineEl = document.getElementById('deal-pipeline-select');
-    if(pipelineEl) {
-        pipelineEl.onchange = () => {
-            if(stageEl) {
-                const keep = stagesOfPipeline(pipelineEl.value).some(([key]) => key === deal.stage_key) ? deal.stage_key : '';
-                stageEl.innerHTML = stageOptionsForPipelineHtml(pipelineEl.value, keep);
-            }
-            saveStage();
-        };
-    }
 }
 async function saveDealContactFromHeader(deal) {
     if(!deal || !_dealViewState || _dealViewState.readonly) return;
@@ -6643,7 +6652,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=226');
+    const reg = await navigator.serviceWorker.register('sw.js?v=227');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
