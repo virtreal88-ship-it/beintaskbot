@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v242 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v243 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9539,6 +9539,16 @@ def _send_kommo_talk_message(
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
     if not reply_id:
+        ajax = {"X-Requested-With": "XMLHttpRequest"}
+        if chat_id:
+            amojo_body = {"text": text}
+            if attachment:
+                amojo_body["attachment"] = attachment
+            attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", payload, ajax))
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", payload, ajax))
+        attempts.append((talk_messages, payload, {}))
+        attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", payload, ajax))
         attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_status = 0
@@ -9551,7 +9561,8 @@ def _send_kommo_talk_message(
             last_status = 0
             continue
         last_status = resp.status_code
-        if resp.status_code in {200, 202}:
+        folded = (resp.text or "").lower()
+        if resp.status_code in {200, 202} and "<html" not in folded and "sending to external chats" not in folded:
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
         logger.warning("Talk send status %s %s: %s", resp.status_code, url, last_detail)
@@ -12780,6 +12791,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 reply_talk_id,
                 kommo_text,
                 attachment,
+                chat_id=reply_chat_id,
             )
             if kommo_ok:
                 ok = True
@@ -12820,7 +12832,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                     sent_text = fallback_text
                 elif kommo_error and not last_error:
                     last_error = kommo_error
-    if not ok and channel == "whatsapp" and _wa_cloud_configured() and (use_cloud or _kommo_external_send_denied(last_error)):
+    if not ok and use_cloud:
         ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
             _deliver_via_cloud,
             lead,

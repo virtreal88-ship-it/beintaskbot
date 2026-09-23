@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="261">
+    <meta name="pwa-build" content="262">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4425,7 +4425,28 @@ async function loadDealChatLatest() {
     try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
     if(tail && tail.success && !tail.stale) {
         applyDealSidePreview(tail);
-        if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+        const applied = applyDealChatTail(seq, deal && deal.id, tail.chat);
+        const hasIncoming = (_dealViewState.messages || []).some(row => row && row.incoming && !row.preview);
+        if(applied && hasIncoming) return;
+    }
+    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    const hasIncoming = (_dealViewState.messages || []).some(row => row && row.incoming && !row.preview);
+    if(!hasIncoming) {
+        try {
+            const page = await fetchDealChatPage(0);
+            const rows = page && !page.stale && Array.isArray(page.chat) ? page.chat.filter(row => row && !row.preview) : [];
+            if(requestMatchesDeal(seq, deal && deal.id) && rows.length) {
+                const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
+                _dealViewState.messages = dropTailStubs(mergeDealChat(local, rows, false));
+                _dealViewState.loading = false;
+                _dealViewState.fullReady = true;
+                _dealViewState.has_more = !!page.has_more;
+                rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
+                paintDealChatThread({stickBottom: true, force: true});
+                markDealChatRead(false);
+                return;
+            }
+        } catch(_err) {}
     }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
     _dealViewState.loading = true;
@@ -5472,7 +5493,8 @@ async function sendDealChatMessage(fileArg) {
         }
         applyChatDelivery(_dealViewState.messages, serverChat);
         dropMatchedLocalVoices(serverChat);
-        _dealViewState.messages = mergeDealChat(_dealViewState.messages, serverChat, false);
+        const kept = (_dealViewState.messages || []).filter(row => row && !row.preview);
+        _dealViewState.messages = mergeDealChat(kept.length ? kept : (_dealViewState.messages || []), serverChat, false);
         if(replyId || replyText) {
             const outgoing = [..._dealViewState.messages].reverse().filter(item => item && !item.incoming && !item.is_comment);
             const sent = outgoing.find(item => String(item.text || '').trim() === text) || outgoing[0];
@@ -7857,7 +7879,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=278');
+    const reg = await navigator.serviceWorker.register('sw.js?v=279');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
