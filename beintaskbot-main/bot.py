@@ -1262,6 +1262,47 @@ def resolve_time_from_text(text: str) -> str | None:
     return None
 
 # ─── Kommo API Helpers ───────────────────────────────────────────────────────
+# Kommo blocks the account above 7 requests per second. Parallel chats, tasks
+# and webhooks share one queue and stay at 6/s so a burst cannot cross the line.
+KOMMO_MAX_RPS = 6
+_kommo_pace_lock = threading.Lock()
+_kommo_next_at = 0.0
+
+def _is_kommo_url(url) -> bool:
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "kommo.com" or host.endswith(".kommo.com") or host == "amocrm.ru" or host.endswith(".amocrm.ru")
+
+def _kommo_wait() -> None:
+    global _kommo_next_at
+    gap = 1.0 / KOMMO_MAX_RPS
+    with _kommo_pace_lock:
+        now = _time_module.monotonic()
+        slot = now if now > _kommo_next_at else _kommo_next_at
+        _kommo_next_at = slot + gap
+    delay = slot - _time_module.monotonic()
+    if delay > 0:
+        _time_module.sleep(delay)
+
+_orig_session_request = requests.Session.request
+
+def _paced_session_request(self, method, url, *args, **kwargs):
+    kommo = _is_kommo_url(url)
+    response = None
+    for attempt in range(2):
+        if kommo:
+            _kommo_wait()
+        response = _orig_session_request(self, method, url, *args, **kwargs)
+        if not kommo or getattr(response, "status_code", 0) != 429 or attempt:
+            return response
+        logger.warning("Kommo returned 429; waiting before one retry")
+        _time_module.sleep(1.0)
+    return response
+
+requests.Session.request = _paced_session_request
+
 # An empty env var is not the only failure mode: a stale or truncated
 # KOMMO_TOKEN on Railway returns 401 and the whole CRM (deals, tasks, chats)
 # looks empty even though the built-in token still works.
