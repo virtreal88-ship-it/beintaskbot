@@ -265,7 +265,7 @@
         .deal-head-wa[hidden] { display:none !important; }
         .deal-head-wa svg { width:16px; height:16px; display:block; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
-        .deal-kommo-btn { width:auto; height:34px; padding:0 10px; font-size:11px; font-weight:600; text-decoration:none; color:#fff; letter-spacing:.02em; }
+        .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:600; text-decoration:none; color:#fff; letter-spacing:.02em; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
         .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; min-height:0; }
         .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -605,7 +605,6 @@
         .inbox-shell .deal-sum-btn, .inbox-shell .chats-deal-link, .inbox-shell .chats-back {
             background:#f3f4f6; color:#374151;
         }
-        .inbox-shell .deal-kommo-btn { background:#2563eb; color:#fff; }
         .inbox-shell .chats-deal-link.on { background:#2b8cff; color:#fff; }
         .chats-deal-link { width:34px; height:34px; padding:0; border:0; background:#f3f4f6; color:#374151; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; }
         .chats-deal-link svg { width:18px; height:18px; display:block; }
@@ -5883,8 +5882,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
     const nameVal = dealClientName(deal);
     const phoneVal = phoneList[0] || '';
     const waUrl = waMeUrl(phoneVal);
-    const kommoUrl = canShowKommoLink() ? dealKommoUrl(deal) : '';
-    const kommoHtml = kommoUrl ? `<a class="deal-head-wa deal-kommo-btn" href="${escapeHtml(kommoUrl)}" target="_blank" rel="noopener noreferrer" title="Kommo">Kommo</a>` : '';
     const nameHtml = readonly
         ? `<div class="name">${escapeHtml(nameVal || 'Müştəri')}</div>`
         : `<input id="deal-head-name" class="deal-head-name" value="${escapeHtml(nameVal)}" placeholder="Müştəri">`;
@@ -5929,7 +5926,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${phoneHtml}</span></div>
             </div>
-            ${kommoHtml}
             ${waHtml}
             <button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et" aria-label="Xülasə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></button>
             <button type="button" id="chats-open-deal" class="chats-deal-link on" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
@@ -5958,7 +5954,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 ${nameHtml}
                 <div class="sub"><span class="deal-head-phone-row">${phoneHtml}</span></div>
             </div>
-            ${kommoHtml}
             ${waHtml}
             ${readonly ? '' : '<button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et" aria-label="Xülasə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></button>'}
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
