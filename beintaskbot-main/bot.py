@@ -5568,11 +5568,23 @@ def _incoming_message_preview(text: str, message_type: str) -> str:
     return "Yeni mesaj"
 
 
-def _apply_inbox_incoming(lead_id: int, preview: str, created_at: int, origin: str) -> bool:
+def _apply_inbox_incoming(
+    lead_id: int,
+    preview: str,
+    created_at: int,
+    origin: str,
+    *,
+    pipeline_id: int = 0,
+    contact_name: str = "",
+    phone: str = "",
+) -> bool:
     """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
     global _inbox_pulse_rev
     channel = _origin_channel_key(origin)
     found = False
+    event_pipe = int(pipeline_id or 0)
+    event_name = str(contact_name or "")
+    event_phone = str(phone or "")
     for overview in _personal_overview_cache.values():
         if not isinstance(overview, dict):
             continue
@@ -5594,12 +5606,22 @@ def _apply_inbox_incoming(lead_id: int, preview: str, created_at: int, origin: s
             deal["chat_at"] = max(chat_at, int(created_at or 0))
             if channel and not str(deal.get("chat_channel") or "").strip():
                 deal["chat_channel"] = channel
+            if not event_pipe:
+                try:
+                    event_pipe = int(deal.get("pipeline_id") or 0)
+                except (TypeError, ValueError):
+                    event_pipe = 0
+            event_name = str(deal.get("contact_name") or event_name or "")
+            event_phone = str(deal.get("phone") or event_phone or "")
             found = True
     with _inbox_pulse_lock:
         _inbox_pulse_rev += 1
         _inbox_pulse_events.append({
             "rev": _inbox_pulse_rev,
             "lead_id": int(lead_id),
+            "pipeline_id": event_pipe,
+            "contact_name": event_name,
+            "phone": event_phone,
             "last_client_message": preview,
             "last_incoming_at": int(created_at or 0),
             "chat_channel": channel,
@@ -5690,6 +5712,49 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
     return placed
 
 
+def _cached_lead_id_for_contact(contact_id: int) -> int:
+    try:
+        wanted = int(contact_id)
+    except (TypeError, ValueError):
+        return 0
+    if not wanted:
+        return 0
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if not isinstance(deal, dict):
+                continue
+            for contact in deal.get("contacts") or []:
+                if not isinstance(contact, dict):
+                    continue
+                try:
+                    current = int(contact.get("id") or 0)
+                    lead_id = int(deal.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if current == wanted and lead_id:
+                    return lead_id
+    return 0
+
+
+def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict) -> bool:
+    try:
+        lead_id = int(row.get("lead_id") or 0)
+        event_pipe = int(row.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        return False
+    if lead_id and lead_id in visible:
+        return True
+    channel = str(row.get("chat_channel") or "")
+    nizami = int(NIZAMI_PIPELINE_ID)
+    if int(user_pipeline) == nizami:
+        if event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
+            return True
+        return channel == "whatsapp" and bool(event_pipe)
+    return bool(event_pipe and event_pipe == int(user_pipeline))
+
+
 async def _hydrate_inbox_lead(lead_id: int, preview: str, created_at: int, origin: str) -> None:
     try:
         lead = await asyncio.to_thread(get_lead_details, int(lead_id))
@@ -5697,10 +5762,44 @@ async def _hydrate_inbox_lead(lead_id: int, preview: str, created_at: int, origi
         logger.warning("Inbox hydrate failed lead=%s: %s", lead_id, exc)
         lead = None
     channel = _origin_channel_key(origin) or "whatsapp"
-    if isinstance(lead, dict) and _place_inbox_deal(lead, preview, created_at, channel):
-        _apply_inbox_incoming(int(lead_id), preview, created_at, origin)
+    pipe = 0
+    name = ""
+    phone = ""
+    if isinstance(lead, dict):
+        _place_inbox_deal(lead, preview, created_at, channel)
+        try:
+            pipe = int(lead.get("pipeline_id") or 0)
+        except (TypeError, ValueError):
+            pipe = 0
+        _ids, phones = _contact_ids_and_phones(lead)
+        name = str(lead.get("name") or "").strip()
+        phone = phones[0] if phones else ""
+    _apply_inbox_incoming(
+        int(lead_id), preview, created_at, origin,
+        pipeline_id=pipe, contact_name=name, phone=phone,
+    )
+
+
+async def _hydrate_inbox_contact(contact_id: int, preview: str, created_at: int, origin: str) -> None:
+    cached = _cached_lead_id_for_contact(int(contact_id))
+    if cached:
+        await _hydrate_inbox_lead(cached, preview, created_at, origin)
         return
-    _flag_inbox_refresh(int(lead_id))
+    try:
+        leads = await asyncio.to_thread(_leads_linked_to_contact, int(contact_id))
+    except Exception as exc:
+        logger.warning("Inbox contact hydrate failed contact=%s: %s", contact_id, exc)
+        leads = []
+    lead_id = 0
+    for item in leads or []:
+        try:
+            lead_id = int(item.get("id") if isinstance(item, dict) else item)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if lead_id:
+            break
+    if lead_id:
+        await _hydrate_inbox_lead(lead_id, preview, created_at, origin)
 
 
 def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
@@ -5724,31 +5823,27 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         rev = int(_inbox_pulse_rev)
         fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
     chats = []
-    refresh = False
     seen: set[int] = set()
-    for row in fresh:
+    for row in reversed(fresh):
         try:
             lid = int(row.get("lead_id") or 0)
         except (TypeError, ValueError):
             continue
-        if not lid or lid in seen:
+        if not lid or lid in seen or not _pulse_event_visible(pipeline_id, row, visible):
             continue
         seen.add(lid)
-        deal = visible.get(lid)
-        if not deal:
-            if row.get("refresh"):
-                refresh = True
-            continue
+        deal = visible.get(lid) or {}
+        incoming_at = int(row.get("last_incoming_at") or deal.get("last_incoming_at") or 0)
         chats.append({
             "id": lid,
-            "contact_name": deal.get("contact_name") or "",
-            "phone": deal.get("phone") or "",
-            "last_client_message": deal.get("last_client_message") or row.get("last_client_message") or "",
-            "last_incoming_at": int(deal.get("last_incoming_at") or row.get("last_incoming_at") or 0),
-            "chat_at": int(deal.get("chat_at") or 0),
-            "chat_channel": deal.get("chat_channel") or row.get("chat_channel") or "",
+            "contact_name": deal.get("contact_name") or row.get("contact_name") or "",
+            "phone": deal.get("phone") or row.get("phone") or "",
+            "last_client_message": row.get("last_client_message") or deal.get("last_client_message") or "",
+            "last_incoming_at": incoming_at,
+            "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
+            "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
         })
-    return {"success": True, "rev": rev, "chats": chats, "refresh": refresh}
+    return {"success": True, "rev": rev, "chats": chats, "refresh": False}
 
 
 async def handle_api_chats_pulse(request: web.Request) -> web.Response:
@@ -5784,13 +5879,11 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         if incoming_rows:
             for row in incoming_rows:
                 entity_type = str(row.get("entity_type") or "lead").strip().lower()
-                if entity_type and entity_type not in {"lead", "2", "leads"}:
-                    continue
                 try:
-                    lead_id = int(row.get("entity_id") or row.get("element_id") or 0)
+                    entity_id = int(row.get("entity_id") or row.get("element_id") or 0)
                 except (TypeError, ValueError):
-                    lead_id = 0
-                if not lead_id:
+                    entity_id = 0
+                if not entity_id:
                     continue
                 try:
                     created_at = int(row.get("created_at") or 0)
@@ -5800,8 +5893,16 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     created_at = int(_time_module.time())
                 preview = _incoming_message_preview(str(row.get("text") or ""), str(row.get("message_type") or ""))
                 origin = str(row.get("origin") or "")
-                if not _apply_inbox_incoming(lead_id, preview, created_at, origin):
-                    asyncio.create_task(_hydrate_inbox_lead(lead_id, preview, created_at, origin))
+                if entity_type in {"contact", "contacts", "1"}:
+                    mapped = _cached_lead_id_for_contact(entity_id)
+                    if mapped and _apply_inbox_incoming(mapped, preview, created_at, origin):
+                        continue
+                    asyncio.create_task(_hydrate_inbox_contact(entity_id, preview, created_at, origin))
+                    continue
+                if entity_type and entity_type not in {"lead", "2", "leads"}:
+                    continue
+                if not _apply_inbox_incoming(entity_id, preview, created_at, origin):
+                    asyncio.create_task(_hydrate_inbox_lead(entity_id, preview, created_at, origin))
             return web.Response(status=200, text="OK")
         # Detect event type
         is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
@@ -5985,7 +6086,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v234 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v235 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:

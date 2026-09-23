@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="251">
+    <meta name="pwa-build" content="252">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -6803,7 +6803,7 @@ function stopChatsPolling() {
 }
 let _inboxPulseRev = 0;
 let _inboxFullAt = Date.now();
-let _inboxForceAt = 0;
+let _inboxFullBusy = false;
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
@@ -6837,36 +6837,34 @@ function applyInboxPulseRow(row) {
 }
 async function pollInboxPulse() {
     if(!HAS_CHATS || !CURRENT_USER_ID) return;
-    if(document.getElementById('screen-chats')?.classList.contains('active') && Date.now() - _inboxFullAt > 180000) {
-        _inboxFullAt = Date.now();
-        loadSamilWorkspace(false, null, true);
-        return;
-    }
+    const chatsOpen = !!document.getElementById('screen-chats')?.classList.contains('active');
     try {
         const response = await fetch(API_BASE + '/api/chats/pulse?rev=' + encodeURIComponent(String(_inboxPulseRev)) + '&_ts=' + Date.now(), {
             cache: 'no-store',
             headers: {'X-TG-User-ID': CURRENT_USER_ID}
         });
         const payload = await response.json().catch(() => ({}));
-        if(!response.ok || !payload.success) return;
-        const rev = Number(payload.rev || 0);
-        if(rev < _inboxPulseRev) _inboxPulseRev = rev;
-        else _inboxPulseRev = rev;
-        const rows = Array.isArray(payload.chats) ? payload.chats : [];
-        let changed = false;
-        rows.forEach(row => { if(applyInboxPulseRow(row)) changed = true; });
-        if(changed) {
-            persistLocalSamilWorkspace();
-            if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
-            watchIncomingChats();
-            const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
-            if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
-        }
-        if(payload.refresh && Date.now() - _inboxForceAt > 8000) {
-            _inboxForceAt = Date.now();
-            loadSamilWorkspace(false, null, true);
+        if(response.ok && payload.success) {
+            const rev = Number(payload.rev || 0);
+            if(rev < _inboxPulseRev) _inboxPulseRev = rev;
+            else _inboxPulseRev = rev;
+            const rows = Array.isArray(payload.chats) ? payload.chats : [];
+            let changed = false;
+            rows.forEach(row => { if(applyInboxPulseRow(row)) changed = true; });
+            if(changed) {
+                persistLocalSamilWorkspace();
+                if(chatsOpen) renderChatsList();
+                watchIncomingChats();
+                const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
+                if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
+            }
         }
     } catch(_err) {}
+    if(chatsOpen && !_inboxFullBusy && Date.now() - _inboxFullAt > 180000) {
+        _inboxFullAt = Date.now();
+        _inboxFullBusy = true;
+        Promise.resolve(loadSamilWorkspace(false, null, true)).finally(() => { _inboxFullBusy = false; });
+    }
 }
 function startChatsPolling() {
     stopChatsPolling();
@@ -7795,7 +7793,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=268');
+    const reg = await navigator.serviceWorker.register('sw.js?v=269');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
