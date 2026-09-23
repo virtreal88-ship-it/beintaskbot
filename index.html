@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="237">
+    <meta name="pwa-build" content="238">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=237">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=237">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=238">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=238">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -3495,7 +3495,7 @@ function dealChatItemHtml(item, token, readonly) {
     const quote = dealChatQuoteHtml(item);
     const profile = isChatProfilePhoto(item);
     const avatar = chatAvatarHtml(item, token);
-    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">${item.incoming ? '↪' : '↩'}</button>`;
+    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">${item.incoming ? '↩' : '↪'}</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
     const reactKey = chatReactKey(item);
     const canReact = !readonly && !!reactKey;
@@ -7529,7 +7529,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=254');
+    const reg = await navigator.serviceWorker.register('sw.js?v=255');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
