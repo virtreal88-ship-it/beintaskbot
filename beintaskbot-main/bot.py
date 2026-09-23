@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v213 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v214 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9006,6 +9006,7 @@ def _send_kommo_talk_message(
         attempts.append((talk_messages, primary, {}))
         attempts.append((talk_messages, msgid_only, {}))
         attempts.append((talk_messages, id_only, {}))
+        attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", primary, ajax))
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
     if not reply_id:
@@ -11455,16 +11456,22 @@ def _stamp_sent_reply(chat: list[dict], text: str, reply_id: str, reply_text: st
     if not preview and not reply_id:
         return
     wanted = str(text or "").strip()
+    fallback = None
     for item in reversed(chat):
-        if item.get("incoming"):
+        if item.get("incoming") or item.get("is_comment"):
             continue
-        if str(item.get("text") or "").strip() != wanted:
+        if fallback is None:
+            fallback = item
+        if wanted and str(item.get("text") or "").strip() != wanted:
             continue
-        item["reply_to_message_id"] = reply_id or item.get("reply_to_message_id") or ""
-        item["reply_to_text"] = preview or item.get("reply_to_text") or ""
-        item["reply_to_author"] = reply_author or item.get("reply_to_author") or ""
-        _remember_chat_reply(item.get("id"), item["reply_to_message_id"], item["reply_to_text"], item["reply_to_author"])
+        fallback = item
+        break
+    if not fallback:
         return
+    fallback["reply_to_message_id"] = reply_id or fallback.get("reply_to_message_id") or ""
+    fallback["reply_to_text"] = preview or fallback.get("reply_to_text") or ""
+    fallback["reply_to_author"] = reply_author or fallback.get("reply_to_author") or ""
+    _remember_chat_reply(fallback.get("id"), fallback["reply_to_message_id"], fallback["reply_to_text"], fallback["reply_to_author"])
 
 
 def _deliver_via_cloud(

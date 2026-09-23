@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="215">
+    <meta name="pwa-build" content="216">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -193,10 +193,11 @@
         .search-icon-btn { width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .search-icon-btn svg { width:18px; height:18px; display:block; }
         .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
-        .search-expand { display:none; align-items:center; gap:8px; }
+        .search-expand { display:none; align-items:center; gap:8px; position:relative; }
         .search-expand.on { display:flex; }
         .search-expand input { flex:1; min-width:0; }
-        .search-close { width:32px; height:32px; border:0; background:#f1f5f9; color:#64748b; border-radius:8px; font-size:18px; line-height:1; flex:none; }
+        .search-expand.loading::after { content:''; width:12px; height:12px; flex:none; order:1; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .search-close { width:32px; height:32px; border:0; background:#f1f5f9; color:#64748b; border-radius:8px; font-size:18px; line-height:1; flex:none; order:2; }
         .page-user-name { color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
@@ -472,6 +473,13 @@
         .chats-ctx { position:fixed; z-index:14000; min-width:210px; background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(15,23,42,.2); overflow:hidden; }
         .chats-ctx button { display:block; width:100%; text-align:left; border:0; background:#fff; padding:12px 14px; font-size:13px; font-weight:700; color:#111b21; font-family:inherit; cursor:pointer; }
         .chats-ctx button:hover { background:#f0f2f5; }
+        .chat-pin-bar { display:flex; align-items:center; gap:8px; flex:none; padding:7px 10px; background:#fff; border-bottom:1px solid #e5e7eb; }
+        .chat-pin-bar[hidden] { display:none !important; }
+        .chat-pin-jump { flex:1; min-width:0; border:0; background:transparent; text-align:left; padding:0; font-family:inherit; cursor:pointer; }
+        .chat-pin-label { font-size:10px; font-weight:800; color:#128c7e; }
+        .chat-pin-text { font-size:12px; color:#334155; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .chat-pin-clear { border:0; background:transparent; color:#64748b; font-size:18px; line-height:1; padding:0 2px; }
+        .deal-chat-row.pin-flash { outline:2px solid #25d366; outline-offset:1px; }
         #tab-chats { position:relative; }
         #chats-menu-badge {
             position:absolute; top:2px; right:12px; background:#ef4444; color:#fff; font-size:9px; font-weight:700;
@@ -3384,7 +3392,9 @@ function dealChatItemHtml(item, token, readonly) {
         return `<div class="deal-chat-row ${cls} avatar-only" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar || ''}${meta.svg}${headName}</div><div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span></div></div>`;
     }
     const reactAttr = canReact ? ` data-react-id="${escapeHtml(wamid)}"` : '';
-    return `<div class="deal-chat-row ${cls}"${reactAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
+    const msgId = String(item.id || '');
+    const msgAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
+    return `<div class="deal-chat-row ${cls}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
 }
 function dealChatQuoteHtml(item) {
     const text = String(item && item.reply_to_text || '').trim();
@@ -3560,12 +3570,140 @@ function bindDealChatMedia(thread) {
     });
     thread.querySelectorAll('.deal-chat-row[data-react-id]').forEach(row => {
         row.addEventListener('click', event => {
+            if(thread.dataset.skipClick) { delete thread.dataset.skipClick; return; }
             if(event.target.closest('.chat-reply-btn, .chat-react-btn, a, button, audio, video, img')) return;
             openChatReactionPicker(row, row.getAttribute('data-react-id'));
         });
     });
     thread.querySelectorAll('img.deal-zoom').forEach(img => {
         img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
+    });
+    bindDealMessageMenu(thread);
+}
+function chatMsgPinnedKey() { return 'chats_msg_pinned_v1_' + CURRENT_USER_ID; }
+function getPinnedChatMessages() {
+    try { return JSON.parse(localStorage.getItem(chatMsgPinnedKey()) || '{}') || {}; }
+    catch(_err) { return {}; }
+}
+function savePinnedChatMessages(data) {
+    try { localStorage.setItem(chatMsgPinnedKey(), JSON.stringify(data || {})); } catch(_err) {}
+}
+function getPinnedChatMessage(leadId) {
+    const row = getPinnedChatMessages()[String(leadId || '')];
+    return row && row.id ? row : null;
+}
+function setPinnedChatMessage(leadId, item) {
+    const id = String(leadId || '');
+    if(!id) return;
+    const data = getPinnedChatMessages();
+    if(!item || !item.id) delete data[id];
+    else data[id] = {
+        id: String(item.id),
+        text: dealChatReplyPreview(item) || String(item.text || '').slice(0, 140),
+        author: dealChatActor(item) || item.author || ''
+    };
+    savePinnedChatMessages(data);
+    paintDealPinBar();
+}
+function hideChatMsgMenu() {
+    document.getElementById('chat-msg-ctx')?.remove();
+    document.removeEventListener('click', hideChatMsgMenu, true);
+}
+function showChatMsgMenu(x, y, item) {
+    hideChatMsgMenu();
+    if(!item || !item.id || item.is_comment) return;
+    const leadId = _dealViewState && _dealViewState.id;
+    const pinned = getPinnedChatMessage(leadId);
+    const isPinned = !!(pinned && String(pinned.id) === String(item.id));
+    const pop = document.createElement('div');
+    pop.id = 'chat-msg-ctx';
+    pop.className = 'chats-ctx';
+    pop.innerHTML = `<button type="button" data-act="reply">Cavab</button>
+        <button type="button" data-act="pin">${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
+    document.body.appendChild(pop);
+    const left = Math.max(8, Math.min(x, window.innerWidth - pop.offsetWidth - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - pop.offsetHeight - 8));
+    pop.style.left = left + 'px';
+    pop.style.top = top + 'px';
+    pop.querySelector('[data-act="reply"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChatMsgMenu();
+        setDealChatReply(item);
+    };
+    pop.querySelector('[data-act="pin"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChatMsgMenu();
+        setPinnedChatMessage(leadId, isPinned ? null : item);
+    };
+    window.setTimeout(() => document.addEventListener('click', hideChatMsgMenu, true), 0);
+}
+function jumpToPinnedChatMessage() {
+    const thread = document.getElementById('deal-chat-thread');
+    const pinned = getPinnedChatMessage(_dealViewState && _dealViewState.id);
+    if(!thread || !pinned) return;
+    const id = String(pinned.id).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const row = thread.querySelector('.deal-chat-row[data-msg-id="' + id + '"]');
+    if(!row) { toast('Mesaj hələ yüklənməyib', true); return; }
+    row.scrollIntoView({block: 'center', behavior: 'smooth'});
+    row.classList.add('pin-flash');
+    window.setTimeout(() => row.classList.remove('pin-flash'), 1600);
+}
+function paintDealPinBar() {
+    const bar = document.getElementById('deal-pin-bar');
+    const text = document.getElementById('deal-pin-text');
+    if(!bar) return;
+    const pinned = getPinnedChatMessage(_dealViewState && _dealViewState.id);
+    if(!pinned) { bar.hidden = true; if(text) text.textContent = ''; return; }
+    const who = String(pinned.author || '').trim();
+    if(text) text.textContent = (who ? who + ': ' : '') + String(pinned.text || 'Mesaj');
+    bar.hidden = false;
+}
+function bindDealPinBar() {
+    const jump = document.getElementById('deal-pin-jump');
+    const clear = document.getElementById('deal-pin-clear');
+    if(jump) jump.onclick = jumpToPinnedChatMessage;
+    if(clear) clear.onclick = () => setPinnedChatMessage(_dealViewState && _dealViewState.id, null);
+}
+function bindDealMessageMenu(thread) {
+    if(!thread || thread.dataset.menuBound) return;
+    thread.dataset.menuBound = '1';
+    let pressTimer = 0;
+    let pressItem = null;
+    const itemFromEvent = event => {
+        const row = event.target.closest('.deal-chat-row[data-msg-id]');
+        if(!row || event.target.closest('.chat-reply-btn, .chat-react-btn, a, button, audio, video, img')) return null;
+        const id = row.getAttribute('data-msg-id');
+        return (_dealViewState && _dealViewState.messages || []).find(rowItem => String(rowItem.id) === String(id)) || null;
+    };
+    thread.addEventListener('contextmenu', event => {
+        const item = itemFromEvent(event);
+        if(!item) return;
+        event.preventDefault();
+        showChatMsgMenu(event.clientX, event.clientY, item);
+    });
+    thread.addEventListener('pointerdown', event => {
+        if(event.pointerType === 'mouse' && event.button !== 0) return;
+        const item = itemFromEvent(event);
+        if(!item) return;
+        pressItem = item;
+        pressTimer = window.setTimeout(() => {
+            pressTimer = 0;
+            if(pressItem) {
+                thread.dataset.skipClick = '1';
+                showChatMsgMenu(event.clientX || 24, event.clientY || 80, pressItem);
+            }
+        }, 520);
+    });
+    const cancelPress = () => {
+        if(pressTimer) { window.clearTimeout(pressTimer); pressTimer = 0; }
+        pressItem = null;
+    };
+    thread.addEventListener('pointerup', cancelPress);
+    thread.addEventListener('pointercancel', cancelPress);
+    thread.addEventListener('pointermove', event => {
+        if(Math.abs(event.movementX) + Math.abs(event.movementY) > 6) cancelPress();
     });
 }
 const CHAT_REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
@@ -3686,6 +3824,7 @@ function paintDealChatThread(opts) {
     const prevTop = thread.scrollTop;
     thread.innerHTML = dealChatRowsHtml(_dealViewState.messages, _dealViewState.token, _dealViewState.blocked, _dealViewState.loading);
     bindDealChatMedia(thread);
+    paintDealPinBar();
     paintDealOlderBar();
     if(stickBottom && opts && opts.force) {
         const last = thread.querySelector('.deal-chat-row:last-child');
@@ -4364,6 +4503,7 @@ async function copyText(value) {
 }
 function closeDealViewModal() {
     persistOpenChatDraft();
+    hideChatMsgMenu();
     const wasInbox = _dealInboxMode;
     stopDealChatPolling();
     cancelDealVoice();
@@ -4455,10 +4595,12 @@ function dealAiPayload(mode) {
         }))
     };
 }
+let _dealAiBusy = false;
 async function requestDealAiReply() {
     const btn = document.getElementById('deal-chat-ai');
     const input = document.getElementById('deal-chat-input');
-    if(!_dealViewState || !CURRENT_USER_ID) return;
+    if(_dealAiBusy || !_dealViewState || !CURRENT_USER_ID) return;
+    _dealAiBusy = true;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
     try {
         const r = await fetch(API_BASE + '/api/deal/chat/suggest', {
@@ -4475,7 +4617,10 @@ async function requestDealAiReply() {
         }
         toast('AI cavab hazırdır');
     } catch(err) { toast(err.message || 'AI cavab alınmadı', true); }
-    finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
+    finally {
+        _dealAiBusy = false;
+        if(btn) { btn.disabled = false; btn.classList.remove('loading'); }
+    }
 }
 async function requestDealSummary() {
     const btn = document.getElementById('deal-chat-summary');
@@ -4590,7 +4735,9 @@ function cancelDealVoice() {
     _dealVoiceCancelled = true;
     try { _dealVoiceRec.stop(); } catch(_err) { resetDealVoice(); }
 }
+let _dealVoiceStarting = false;
 async function toggleDealVoice() {
+    if(_dealVoiceStarting) return;
     if(_dealVoiceRec) {
         _dealVoiceCancelled = false;
         try { _dealVoiceRec.stop(); } catch(_err) { resetDealVoice(); }
@@ -4599,15 +4746,22 @@ async function toggleDealVoice() {
     if(_dealChatSending || !_dealViewState || _dealViewState.readonly) return;
     if(!navigator.mediaDevices || typeof MediaRecorder === 'undefined') { toast('Səs yazısı dəstəklənmir', true); return; }
     let stream;
+    _dealVoiceStarting = true;
     try { stream = await navigator.mediaDevices.getUserMedia({audio: true}); }
-    catch(_err) { toast('Mikrofona icazə verilmədi', true); return; }
+    catch(_err) {
+        _dealVoiceStarting = false;
+        toast('Mikrofona icazə verilmədi', true);
+        return;
+    }
     const mime = dealVoiceMime();
     try { _dealVoiceRec = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined); }
     catch(_err) {
+        _dealVoiceStarting = false;
         stream.getTracks().forEach(track => { try { track.stop(); } catch(_e) {} });
         toast('Səs yazısı başlamadı', true);
         return;
     }
+    _dealVoiceStarting = false;
     _dealVoiceChunks = [];
     _dealVoiceCancelled = false;
     _dealVoiceStart = Date.now();
@@ -4689,8 +4843,9 @@ async function sendDealChatMessage(fileArg) {
         setChatDraft(leadId, '');
         clearDealPendingFile();
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
-        if(replyId) {
-            const sent = [..._dealViewState.messages].reverse().find(item => item && !item.incoming && !item.is_comment && String(item.text || '').trim() === text);
+        if(replyId || replyText) {
+            const outgoing = [..._dealViewState.messages].reverse().filter(item => item && !item.incoming && !item.is_comment);
+            const sent = outgoing.find(item => String(item.text || '').trim() === text) || outgoing[0];
             if(sent) {
                 sent.reply_to_message_id = sent.reply_to_message_id || replyId;
                 sent.reply_to_text = sent.reply_to_text || replyText;
@@ -4769,6 +4924,13 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
         <div class="deal-shell-body show-chat" id="deal-shell-body">
             <section class="wa-pane">
                 <div class="wa-channels" id="deal-chat-channels"></div>
+                <div id="deal-pin-bar" class="chat-pin-bar" hidden>
+                    <button type="button" class="chat-pin-jump" id="deal-pin-jump">
+                        <div class="chat-pin-label">Sabitlənmiş mesaj</div>
+                        <div class="chat-pin-text" id="deal-pin-text"></div>
+                    </button>
+                    <button type="button" class="chat-pin-clear" id="deal-pin-clear" title="Sabitdən çıxar">×</button>
+                </div>
                 <div id="deal-chat-older-bar" class="wa-older" hidden></div>
                 <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
                 ${composer}
@@ -4797,6 +4959,13 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
             </aside>
             <section class="wa-pane">
                 <div class="wa-channels" id="deal-chat-channels"></div>
+                <div id="deal-pin-bar" class="chat-pin-bar" hidden>
+                    <button type="button" class="chat-pin-jump" id="deal-pin-jump">
+                        <div class="chat-pin-label">Sabitlənmiş mesaj</div>
+                        <div class="chat-pin-text" id="deal-pin-text"></div>
+                    </button>
+                    <button type="button" class="chat-pin-clear" id="deal-pin-clear" title="Sabitdən çıxar">×</button>
+                </div>
                 <div id="deal-chat-older-bar" class="wa-older" hidden></div>
                 <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
                 ${composer}
@@ -4874,9 +5043,23 @@ function paintDealViewModal(deal, readonly, opts) {
         });
     }
     const aiBtn = document.getElementById('deal-chat-ai');
-    if(aiBtn) aiBtn.onclick = requestDealAiReply;
+    if(aiBtn) {
+        aiBtn.addEventListener('pointerdown', event => {
+            if(event.pointerType === 'mouse' && event.button !== 0) return;
+            event.preventDefault();
+            requestDealAiReply();
+        });
+    }
     const sumBtn = document.getElementById('deal-chat-summary');
-    if(sumBtn) sumBtn.onclick = requestDealSummary;
+    if(sumBtn) {
+        sumBtn.addEventListener('pointerdown', event => {
+            if(event.pointerType === 'mouse' && event.button !== 0) return;
+            event.preventDefault();
+            requestDealSummary();
+        });
+    }
+    bindDealPinBar();
+    paintDealPinBar();
     if(input) {
         restoreChatDraft(deal.id);
         input.addEventListener('input', persistOpenChatDraft);
@@ -4897,7 +5080,13 @@ function paintDealViewModal(deal, readonly, opts) {
         };
     }
     const micBtn = document.getElementById('deal-chat-mic');
-    if(micBtn) micBtn.onclick = toggleDealVoice;
+    if(micBtn) {
+        micBtn.addEventListener('pointerdown', event => {
+            if(event.pointerType === 'mouse' && event.button !== 0) return;
+            event.preventDefault();
+            toggleDealVoice();
+        });
+    }
     const attachClear = document.getElementById('deal-chat-attachment-clear');
     if(attachClear) attachClear.onclick = clearDealPendingFile;
     const voiceDrop = document.getElementById('deal-voice-drop');
@@ -5650,12 +5839,17 @@ function usesKommoChatSearch() {
     return HAS_CHATS && !IS_RUFAT;
 }
 let _chatsSearchTimer = null;
+let _chatsSearchSeq = 0;
 function chatsSearchHitsBox() {
     return document.getElementById('chats-search-results');
+}
+function setChatsSearchLoading(on) {
+    document.getElementById('chats-search-wrap')?.classList.toggle('loading', !!on);
 }
 function hideChatsSearchHits() {
     const box = chatsSearchHitsBox();
     if(box) { box.hidden = true; box.innerHTML = ''; }
+    setChatsSearchLoading(false);
 }
 function paintChatsSearchHits(rows, emptyText) {
     const box = chatsSearchHitsBox();
@@ -5709,11 +5903,18 @@ function scheduleChatsSearch() {
     if(!usesKommoChatSearch() && localHits && !phoneQ) { hideChatsSearchHits(); return; }
     if(query.length < 2 && !phoneQ) { hideChatsSearchHits(); return; }
     _chatsSearchTimer = setTimeout(async () => {
+        const seq = ++_chatsSearchSeq;
+        setChatsSearchLoading(true);
+        paintChatsSearchHits([], 'Axtarılır…');
         try {
             const rows = await fetchChatsContactHits(query);
+            if(seq !== _chatsSearchSeq) return;
             paintChatsSearchHits(rows, rows.length ? '' : 'Kontakt tapılmadı');
         } catch(_err) {
+            if(seq !== _chatsSearchSeq) return;
             paintChatsSearchHits([], 'Axtarış alınmadı');
+        } finally {
+            if(seq === _chatsSearchSeq) setChatsSearchLoading(false);
         }
     }, 450);
 }
@@ -5729,6 +5930,7 @@ function bindSearchToggle(toggleId, wrapId, inputId, onClose) {
     toggle.dataset.bound = '1';
     const close = () => {
         setSearchOpen(wrap, toggle, false);
+        _chatsSearchSeq += 1;
         hideChatsSearchHits();
         if(input.value) {
             input.value = '';
@@ -5908,6 +6110,7 @@ function bindChatsRowMenu(box) {
 }
 function closeInboxChat() {
     persistOpenChatDraft();
+    hideChatMsgMenu();
     closeDealInfoDrawer();
     stopDealChatPolling();
     cancelDealVoice();
@@ -6855,7 +7058,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=232');
+    const reg = await navigator.serviceWorker.register('sw.js?v=233');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
