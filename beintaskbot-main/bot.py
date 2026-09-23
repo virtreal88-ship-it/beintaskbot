@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v214 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v215 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8920,6 +8920,14 @@ def _chat_message_ids(message: dict, nested: dict) -> tuple[str, str, str]:
     return msg_id, msgid, external
 
 
+def _first_wamid(*values) -> str:
+    for raw in values:
+        found = _find_wamid(raw)
+        if found:
+            return found
+    return ""
+
+
 def _kommo_quote_ids(*values) -> list[str]:
     rows: list[str] = []
     seen: set[str] = set()
@@ -9009,6 +9017,10 @@ def _send_kommo_talk_message(
         attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", primary, ajax))
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
+        # WABA talks only accept official send_message; reply_to is best-effort.
+        attempts.append((talk_send, primary, {}))
+        attempts.append((talk_send, msgid_only, {}))
+        attempts.append((talk_send, {**payload, "reply_to_message_id": reply_id}, {}))
     if not reply_id:
         attempts.append((talk_send, payload, {}))
     last_detail = ""
@@ -9023,9 +9035,6 @@ def _send_kommo_talk_message(
             continue
         last_status = resp.status_code
         if resp.status_code in {200, 202}:
-            if reply_id and _is_official_talk_send(url):
-                logger.warning("Official send_message ignored reply_to talk=%s", talk_id)
-                continue
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
         logger.warning("Talk send status %s %s: %s", resp.status_code, url, last_detail)
@@ -11019,11 +11028,14 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 skipped = True
                 continue
             created = int(event.get("created_at") or 0)
-            external = ""
-            if isinstance(message, dict):
+            msgid = _first_msgid(message, payload, event) if isinstance(message, dict) else _first_msgid(payload, event)
+            wamid = _first_wamid(message, payload, event)
+            external = wamid or msgid or ""
+            if isinstance(message, dict) and not external:
                 external = str(message.get("id") or message.get("msgid") or "").strip()
             rows.append({
                 "id": event.get("id"),
+                "msgid": msgid or wamid,
                 "external_id": external,
                 "direction": "incoming" if incoming else "outgoing",
                 "incoming": incoming,
@@ -11599,7 +11611,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id and not use_cloud:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
-    wa_quote_id = reply_external if reply_external.lower().startswith("wamid") else ""
+    wa_quote_id = _first_wamid(reply_external, reply_to_message_id)
+    want_quote = bool(reply_to_message_id or reply_external or reply_preview)
     drive_uuid = ""
     drive_version = ""
     if upload_raw:
@@ -11618,7 +11631,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     sent_via_cloud = False
     sent_text = text
     sent_type = "text"
-    if use_cloud:
+    if use_cloud and (wa_quote_id or not want_quote):
         ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
             _deliver_via_cloud,
             lead,
@@ -11668,6 +11681,17 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 sent_text = fallback_text
             elif kommo_error and not last_error:
                 last_error = kommo_error
+    if not ok and use_cloud:
+        ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
+            _deliver_via_cloud,
+            lead,
+            text,
+            upload_raw,
+            upload_name,
+            upload_type,
+            wa_quote_id,
+        )
+        sent_via_cloud = ok
     if not ok:
         detail = last_error
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():

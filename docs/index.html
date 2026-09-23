@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="216">
+    <meta name="pwa-build" content="217">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -4382,13 +4382,21 @@ function switchDealChatChannel(channel) {
     _dealViewState.channel = channel;
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
 }
+function chatWamid(item) {
+    const vals = [item && item.external_id, item && item.msgid, item && item.id];
+    return vals.map(val => String(val || '').trim()).find(val => val.toLowerCase().startsWith('wamid')) || '';
+}
 function chatQuoteId(item) {
+    const wamid = chatWamid(item);
+    if(wamid) return wamid;
     const msgid = String((item && item.msgid) || '').trim();
     const ext = String((item && item.external_id) || '').trim();
     const id = String((item && item.id) || '').trim();
     const skip = val => !val || /^note-/i.test(val);
+    if(!skip(msgid) && !/^\d+$/.test(msgid)) return msgid;
+    if(!skip(ext) && !/^\d+$/.test(ext)) return ext;
     if(!skip(msgid)) return msgid;
-    if(!skip(ext) && (ext.toLowerCase().startsWith('wamid') || !/^\d+$/.test(ext))) return ext;
+    if(!skip(ext)) return ext;
     if(!skip(id)) return id;
     return ext || msgid || id;
 }
@@ -4397,11 +4405,12 @@ function setDealChatReply(item) {
     const quoteId = chatQuoteId(item);
     const msgid = String((item && item.msgid) || '').trim();
     const ext = String((item && item.external_id) || '').trim();
+    const wamid = chatWamid(item);
     _dealViewState.replyTo = {
         id: quoteId,
         text: dealChatReplyPreview(item),
         author: dealChatActor(item) || item.author || '',
-        externalId: msgid || ext || quoteId,
+        externalId: wamid || msgid || ext || quoteId,
         channel: chatChannelKey(item),
         talkId: item.talk_id || 0
     };
@@ -7058,7 +7067,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=233');
+    const reg = await navigator.serviceWorker.register('sw.js?v=234');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
