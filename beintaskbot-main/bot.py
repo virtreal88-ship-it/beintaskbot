@@ -2190,7 +2190,57 @@ def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple
                 except (TypeError, ValueError):
                     continue
                 return kind, eid, str(note.get("note_type") or "common")
-    return (kinds[0] if kinds else "leads"), (ids[0] if ids else 0), "common"
+    return "", 0, ""
+
+
+def _note_is_present(note_id: int, kind: str, entity_id: int) -> bool | None:
+    """True when Kommo still has the note, False when a read proves it is gone."""
+    try:
+        nid = int(note_id)
+        eid = int(entity_id or 0)
+    except (TypeError, ValueError):
+        return None
+    if not nid or not kind:
+        return None
+    urls: list[tuple[str, dict | None]] = []
+    if eid:
+        urls.append((f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes", {"filter[id][]": nid, "limit": 5}))
+    urls.append((f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", None))
+    saw_answer = False
+    for url, params in urls:
+        try:
+            resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
+        except Exception as exc:
+            logger.warning("Recheck note %s failed: %s", url, exc)
+            continue
+        if resp.status_code in {204, 404}:
+            saw_answer = True
+            continue
+        if resp.status_code != 200:
+            continue
+        saw_answer = True
+        payload = resp.json() if resp.content else {}
+        notes = []
+        if isinstance(payload, dict) and payload.get("id"):
+            notes = [payload]
+        elif isinstance(payload, dict):
+            notes = ((payload.get("_embedded") or {}).get("notes") or [])
+        for note in notes:
+            if not isinstance(note, dict):
+                continue
+            try:
+                if int(note.get("id") or 0) != nid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if note.get("is_deleted") in {True, 1, "1"}:
+                continue
+            return True
+        if url.endswith(f"/notes/{nid}"):
+            return False
+    if saw_answer:
+        return False
+    return None
 
 
 def _kommo_ajax_delete_note(note_id: int, entity_id: int, kind: str) -> bool:
@@ -2289,7 +2339,7 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                 logger.error("Delete note error: %s", exc)
                 last_err = str(exc)
                 continue
-            if resp.status_code in {200, 202, 204}:
+            if resp.status_code in {200, 202, 204} and found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
                 return True, ""
             last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
             logger.warning("Delete note %s %s: %s", resp.status_code, url, last_err)
@@ -2305,11 +2355,12 @@ def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, ex
                     logger.error("Soft-delete note error: %s", exc)
                     last_err = str(exc)
                     continue
-                if resp.status_code in {200, 202, 204}:
+                if resp.status_code in {200, 202, 204} and found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
                     return True, ""
                 last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
                 logger.warning("Soft-delete note %s %s: %s", resp.status_code, url, last_err)
-    if _kommo_ajax_delete_note(nid, eid, kinds[0]):
+    _kommo_ajax_delete_note(nid, found_eid or eid, found_kind or kinds[0])
+    if found_kind and _note_is_present(nid, found_kind, found_eid or eid) is False:
         return True, ""
     return False, _note_delete_error(last_err)
 
@@ -6127,7 +6178,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v236 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v237 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11946,6 +11997,7 @@ _chat_tail_queued: set[int] = set()
 _chat_tail_warm_lock = threading.Lock()
 _chat_tail_warm_task: asyncio.Task | None = None
 _tail_refresh_pending: set[int] = set()
+_chat_tail_inflight: set[int] = set()
 
 
 def _tail_identity(item: dict) -> tuple:
@@ -12143,6 +12195,8 @@ async def _warm_chat_tail_loop() -> None:
                 return
             lead_id = _chat_tail_queue.pop(0)
             _chat_tail_queued.discard(lead_id)
+        if lead_id in _chat_tail_inflight:
+            continue
         if lead_id in _chat_tail_warmed and _chat_open_preview.get(lead_id):
             continue
         try:
@@ -12150,6 +12204,38 @@ async def _warm_chat_tail_loop() -> None:
         except Exception as exc:
             logger.warning("Chat tail warm failed lead=%s: %s", lead_id, exc)
         await asyncio.sleep(0.45)
+
+
+def _priority_chat_tail(lead_id: int) -> None:
+    """Fetch one open chat before the background warm of the rest of the list."""
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not lid or _chat_open_preview.get(lid):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    with _chat_tail_warm_lock:
+        if lid in _chat_tail_inflight:
+            return
+        _chat_tail_inflight.add(lid)
+        if lid in _chat_tail_queued:
+            _chat_tail_queue[:] = [item for item in _chat_tail_queue if item != lid]
+            _chat_tail_queued.discard(lid)
+        _chat_tail_warmed.discard(lid)
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(_warm_one_chat_tail, lid)
+        except Exception as exc:
+            logger.warning("Priority chat tail failed lead=%s: %s", lid, exc)
+        finally:
+            _chat_tail_inflight.discard(lid)
+
+    loop.create_task(_run())
 
 
 def _schedule_chat_tail_warm(deals_or_ids) -> None:
@@ -12306,6 +12392,8 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
                     if rows:
                         remembered = list(rows)[-_CHAT_TAIL_KEEP:]
                         break
+        if not remembered:
+            _priority_chat_tail(lid)
         return web.json_response({
             "success": True,
             "preview": True,

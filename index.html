@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="254">
+    <meta name="pwa-build" content="255">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4407,27 +4407,19 @@ async function loadDealChatLatest() {
     let tail = null;
     try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
     if(tail && tail.success && !tail.stale && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
-    try {
-        const d = await fetchDealChatPage(0);
-        if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
-        if(!d.success) { _dealViewState.fullReady = true; _dealViewState.loading = false; paintDealChatThread({stickBottom: true, force: true}); return; }
-        _dealViewState.fullReady = true;
-        _dealViewState.blocked = !!d.chat_blocked;
-        _dealViewState.loading = false;
-        _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
-        rememberOpenedChat(_dealViewState.id, d.channel || _dealViewState.channel, _dealViewState.messages);
-        _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 10;
-        applyDealChannels(d.channels || _dealViewState.channels);
-        rememberDealAvatar(_dealViewState.deal, _dealViewState.messages);
-        paintDealChatThread({stickBottom: true, force: true});
-        markDealChatRead(false);
-    } catch(_err) {
-        if(requestMatchesDeal(seq, _dealViewState && _dealViewState.id)) {
-            _dealViewState.fullReady = true;
-            _dealViewState.loading = false;
-            paintDealChatThread({stickBottom: true, force: true});
-        }
+    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    _dealViewState.loading = true;
+    _dealViewState.has_more = true;
+    for(let attempt = 0; attempt < 12; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        if(!requestMatchesDeal(seq, deal && deal.id)) return;
+        try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
+        if(tail && tail.success && !tail.stale && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
     }
+    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    _dealViewState.loading = false;
+    _dealViewState.fullReady = true;
+    paintDealChatThread({stickBottom: true, force: true});
 }
 async function loadOlderDealChat() {
     if(!_dealViewState || _dealViewState.loadingOlder || !_dealViewState.has_more || _dealViewState.loading) return;
@@ -7836,7 +7828,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=271');
+    const reg = await navigator.serviceWorker.register('sw.js?v=272');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
