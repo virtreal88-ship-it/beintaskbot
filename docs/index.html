@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="266">
+    <meta name="pwa-build" content="267">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5335,7 +5335,7 @@ function paintWaTplForm() {
             const cardFormat = String(card.header_format || 'IMAGE').toUpperCase();
             const cardMedia = cardFormat === 'VIDEO' ? 'Video linki' : 'Şəkil linki';
             if(cardFormat === 'IMAGE' || cardFormat === 'VIDEO' || cardFormat === 'DOCUMENT') {
-                html += `<div><label>Kart ${index + 1}: ${cardMedia}</label><input type="url" id="wa-tpl-card-media-${index}" placeholder="https://" autocomplete="off"></div>`;
+                html += `<div><label>Kart ${index + 1}: ${cardMedia}</label><input type="url" id="wa-tpl-card-media-${index}" placeholder="https://" value="${escapeHtml(card.header_link || '')}" autocomplete="off"></div>`;
             }
             const cardNames = Array.isArray(card.body_names) ? card.body_names : [];
             const cardCount = waTplVarCount(card, 'body');
@@ -5492,6 +5492,10 @@ async function sendWaTemplate(options) {
         if(!r.ok || !d.success) throw new Error(d.error || 'Şablon göndərilmədi');
         closeWaTemplateModal();
         toast('Şablon göndərildi');
+        if(!options.leadId) {
+            rememberWaOutbox(d.phone || phone, preview ? preview.textContent : '');
+            renderChatsList();
+        }
         if(options.leadId && _dealViewState && String(_dealViewState.id) === String(options.leadId)) pollDealChat();
     } catch(err) {
         toast(err.message || 'Şablon göndərilmədi', true);
@@ -5912,12 +5916,12 @@ function paintDealViewModal(deal, readonly, opts) {
         readonly: !!readonly,
         replyTo: null,
         deal,
-        messages: [],
+        messages: deal.outbox && Array.isArray(deal.chat) ? deal.chat.slice() : [],
         channels: [],
         channel: '',
         channelPicked: false,
-        has_more: true,
-        loading: !readonly,
+        has_more: !deal.outbox,
+        loading: !readonly && !deal.outbox,
         loadingOlder: false,
         blocked: false
     };
@@ -6049,9 +6053,11 @@ function paintDealViewModal(deal, readonly, opts) {
             bindDealSideActions(live);
         });
     }
-    if(!readonly) {
+    if(!readonly && !deal.outbox) {
         loadDealChatLatest().then(() => refreshDealSnapshot(deal).catch(() => {}));
         startDealChatPolling();
+    } else if(deal.outbox) {
+        paintDealChatThread({stickBottom: true, force: true});
     }
     const shareBtn = root.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
@@ -6806,10 +6812,55 @@ function chatsIsClosedDeal(deal) {
     const status = Number(deal && deal.status_id);
     return status === 142 || status === 143;
 }
+function waOutboxKey() {
+    return 'wa_outbox_' + String(CURRENT_USER_ID || '0');
+}
+function loadWaOutbox() {
+    try { return JSON.parse(localStorage.getItem(waOutboxKey()) || '[]') || []; } catch(_err) { return []; }
+}
+function saveWaOutbox(rows) {
+    try { localStorage.setItem(waOutboxKey(), JSON.stringify((rows || []).slice(0, 40))); } catch(_err) {}
+}
+function waPhoneDigits(value) {
+    return String(value || '').replace(/\D/g, '');
+}
+function rememberWaOutbox(phone, preview) {
+    const digits = waPhoneDigits(phone);
+    if(digits.length < 8) return;
+    const now = Math.floor(Date.now() / 1000);
+    const text = String(preview || '').trim() || 'Şablon göndərildi';
+    const row = {
+        id: 'wa-' + digits,
+        phone: String(phone || digits),
+        phones: [String(phone || digits)],
+        contact_name: String(phone || digits),
+        last_client_message: text.slice(0, 140),
+        chat_at: now,
+        last_outgoing_at: now,
+        chat_channel: 'whatsapp',
+        inbox_only: true,
+        outbox: true,
+        chat: [{
+            id: 'out-' + now,
+            incoming: false,
+            direction: 'outgoing',
+            text,
+            created_at: now,
+            message_type: 'text',
+            channel: 'whatsapp',
+            delivery_status: 'sent'
+        }]
+    };
+    const rest = loadWaOutbox().filter(item => waPhoneDigits(item && item.phone) !== digits);
+    saveWaOutbox([row].concat(rest));
+}
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
-    return (samilDeals || []).filter(deal => {
+    const knownPhones = new Set();
+    const deals = (samilDeals || []).filter(deal => {
+        const digits = waPhoneDigits((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone);
+        if(digits) knownPhones.add(digits);
         if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
@@ -6818,7 +6869,19 @@ function chatsInboxDeals() {
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
         return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q);
-    }).sort((a, b) => {
+    });
+    loadWaOutbox().forEach(row => {
+        if(!row || Object.prototype.hasOwnProperty.call(hidden, String(row.id))) return;
+        const digits = waPhoneDigits(row.phone);
+        if(!digits || knownPhones.has(digits)) return;
+        const preview = String(row.last_client_message || '');
+        if(q && !usesKommoChatSearch()) {
+            const phone = String(row.phone || '');
+            if(!phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) && !preview.toLowerCase().includes(q)) return;
+        }
+        deals.push(row);
+    });
+    return deals.sort((a, b) => {
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
@@ -7219,7 +7282,8 @@ function resumeInboxPulse() {
 }
 try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch(_err) {}
 async function openInboxChat(leadId) {
-    const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
+    let deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
+    if(!deal) deal = loadWaOutbox().find(item => String(item.id) === String(leadId));
     if(!deal) return;
     _chatSlideSeq += 1;
     markChatsSeen(deal.id);
@@ -8140,7 +8204,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=283');
+    const reg = await navigator.serviceWorker.register('sw.js?v=284');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

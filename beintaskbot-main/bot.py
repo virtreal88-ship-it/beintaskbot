@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v248 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v249 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9992,8 +9992,25 @@ def _wa_template_button_rows(raw_buttons) -> list[dict]:
     return rows
 
 
+def _wa_example_https(component: dict) -> str:
+    example = component.get("example") if isinstance(component.get("example"), dict) else {}
+    candidates: list[str] = []
+    for key in ("header_handle", "header_url", "header_link"):
+        value = example.get(key)
+        if isinstance(value, list):
+            candidates.extend(str(item) for item in value)
+        elif isinstance(value, str):
+            candidates.append(value)
+    for item in candidates:
+        link = item.strip()
+        if link.startswith("https://"):
+            return link[:1000]
+    return ""
+
+
 def _wa_template_card(card: dict, index: int) -> dict:
     header_format = ""
+    header_link = ""
     body_text = ""
     buttons: list[dict] = []
     for component in card.get("components") or []:
@@ -10002,6 +10019,7 @@ def _wa_template_card(card: dict, index: int) -> dict:
         kind = str(component.get("type") or "").upper()
         if kind == "HEADER":
             header_format = str(component.get("format") or "IMAGE").upper()
+            header_link = _wa_example_https(component)
         elif kind == "BODY":
             body_text = str(component.get("text") or "")
         elif kind == "BUTTONS":
@@ -10010,6 +10028,7 @@ def _wa_template_card(card: dict, index: int) -> dict:
     return {
         "index": index,
         "header_format": header_format,
+        "header_link": header_link,
         "body": body_text,
         "body_vars": body_vars,
         "body_names": body_names,
@@ -10247,7 +10266,7 @@ def _wa_carousel_component(cards: list, supplied_cards: list) -> tuple[dict | No
         header_format = str(card.get("header_format") or "IMAGE").upper()
         media_key = _WA_HEADER_MEDIA.get(header_format)
         if media_key:
-            link = str(supplied.get("header_media") or "").strip()
+            link = str(supplied.get("header_media") or card.get("header_link") or card.get("header_media") or "").strip()
             if not link.startswith("https://"):
                 return None, f"Kart {index + 1}: linki https:// ilə yazın."
             media = {"link": link[:1000]}
