@@ -111,6 +111,10 @@ ADMIN_KOMMO_USER_ID = 10932455
 HUSEYN_CHAT_ID = 7329891614
 RASIM_CHAT_ID = 7920785774
 NIZAMI_PIPELINE_ID = 14243944
+# Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it,
+# except the stage NÖMRƏ ALINIB (danışıqlar Aparılır).
+SOVDELESMELER_PIPELINE_ID = 8329347
+NIZAMI_CHAT_SKIP_STATUS_ID = 108537924
 HUSEYN_PIPELINE_ID = 14358480
 RASIM_PIPELINE_ID = 14461812
 # Live Kommo snapshots. Nizami's pipeline is still the shared Gözləmə board.
@@ -5717,7 +5721,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v222 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v223 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10106,6 +10110,49 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
     }
 
 
+def _sovdelesmeler_chat_lead_ids() -> set[int]:
+    """Lead ids in Sövdələşmələr that Nizami's Çatlar may show."""
+    allowed: set[int] = set()
+    page = 1
+    while page <= 20:
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/leads",
+                headers=HEADERS,
+                params={
+                    "filter[pipeline_id]": int(SOVDELESMELER_PIPELINE_ID),
+                    "limit": 250,
+                    "page": page,
+                },
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Sövdələşmələr chat leads page %s failed: %s", page, exc)
+            break
+        if resp.status_code == 204:
+            break
+        if resp.status_code != 200:
+            logger.warning("Sövdələşmələr chat leads page %s status %s", page, resp.status_code)
+            break
+        batch = (resp.json().get("_embedded") or {}).get("leads") or []
+        if not batch:
+            break
+        for lead in batch:
+            if not isinstance(lead, dict):
+                continue
+            try:
+                lid = int(lead.get("id") or 0)
+                status_id = int(lead.get("status_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if lid and status_id != int(NIZAMI_CHAT_SKIP_STATUS_ID):
+                allowed.add(lid)
+        if len(batch) < 250:
+            break
+        page += 1
+    return allowed
+
+
 def _inject_outside_funnel_talk_deals(
     deals: list,
     outside_by_lead: dict[int, dict],
@@ -10115,7 +10162,7 @@ def _inject_outside_funnel_talk_deals(
     avatar_by_lead: dict[int, str],
     talk_updated: dict[int, int],
 ) -> None:
-    """Incoming Kommo chats must appear even if the deal lives in another funnel."""
+    """Nizami also sees Sövdələşmələr talks, except NÖMRƏ ALINIB."""
     if not isinstance(deals, list) or not outside_by_lead:
         return
     seen = set()
@@ -10138,11 +10185,23 @@ def _inject_outside_funnel_talk_deals(
             updated = 0
         ranked.append((updated, lid_int, talk))
     ranked.sort(reverse=True)
-    for updated, lid, talk in ranked[:40]:
-        if lid in seen:
+    allowed = _sovdelesmeler_chat_lead_ids()
+    added = 0
+    for updated, lid, talk in ranked:
+        if added >= 40:
+            break
+        if lid in seen or lid not in allowed:
             continue
         lead = get_lead_details(lid)
         if not lead:
+            continue
+        if _lead_pipeline_id(lead) != int(SOVDELESMELER_PIPELINE_ID):
+            continue
+        try:
+            status_id = int(lead.get("status_id") or 0)
+        except (TypeError, ValueError):
+            status_id = 0
+        if status_id == int(NIZAMI_CHAT_SKIP_STATUS_ID):
             continue
         channel = _talk_channel_key(talk)
         if channel not in CHAT_CHANNEL_LABELS:
@@ -10161,6 +10220,7 @@ def _inject_outside_funnel_talk_deals(
             row["contact_avatar"] = avatar_by_lead[lid]
         deals.append(row)
         seen.add(lid)
+        added += 1
 
 
 def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
