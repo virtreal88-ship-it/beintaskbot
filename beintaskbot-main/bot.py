@@ -5719,7 +5719,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v224 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v225 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -13248,7 +13248,7 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str) -> None:
             except (TypeError, ValueError):
                 continue
     title = (title or "WhatsApp")[:80]
-    body = str(preview or "Yeni mesaj").strip()[:140] or "Yeni mesaj"
+    body = " ".join(str(preview or "Yeni mesaj").split())[:140] or "Yeni mesaj"
     url = f"#chat-{int(lead_id)}"
     for uid in {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}:
         send_push_notification(uid, title, body, url, lead_id=int(lead_id))

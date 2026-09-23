@@ -6,16 +6,19 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="231">
+    <meta name="pwa-build" content="232">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=231">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=231">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=232">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=232">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #f8f9fa; margin:0; padding:0; }
+        @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;1,6..12,400&display=swap');
+        html, body { font-family: 'Nunito Sans', sans-serif; }
+        body { background-color: #f8f9fa; margin:0; padding:0; font-weight: 600; }
+        button, input, select, textarea { font-family: inherit; }
+        .font-bold, .font-extrabold, .font-black, .font-semibold { font-weight: 600 !important; }
         .filter-pill { border:1px solid #cbd5e1; background:#fff; color:#1e293b; transition:all 0.2s ease; }
         .filter-pill.active { border-color:#1a252f; background-color:#1a252f; color:#fff; }
         .custom-scroll::-webkit-scrollbar { width:4px; }
@@ -24,9 +27,9 @@
         .sync-spinner { width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite; }
         .sync-meter { position:relative; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
         .sync-meter .sync-spinner { position:absolute; inset:0; width:28px; height:28px; margin:0; }
-        .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:800; color:#64748b; line-height:1; }
+        .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:600; color:#64748b; line-height:1; }
         #sync-indicator .sync-meter .sync-pct { color:#cbd5e1; }
-        #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:700; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
+        #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:600; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
         #preloader { pointer-events:none !important; }
         #tab-bar { z-index:11060 !important; }
         #toast.error { background:#b91c1c; }
@@ -99,7 +102,7 @@
             .sidebar-icon-btn.active { background:#e2e8f0; color:#0f172a; }
             body.sidebar-open #pin-sidebar-btn { margin-left:auto; margin-top:0; }
             #desktop-sidebar .sidebar-brand { padding:0 8px 12px; border:0; margin:0; flex-shrink:0; min-height:36px; }
-            #desktop-sidebar .sidebar-brand h1 { font-size:14px; font-weight:700; letter-spacing:-0.03em; margin:0; color:#0f172a; white-space:nowrap; overflow:hidden; }
+            #desktop-sidebar .sidebar-brand h1 { font-size:14px; font-weight:600; letter-spacing:-0.03em; margin:0; color:#0f172a; white-space:nowrap; overflow:hidden; }
             #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand h1,
             body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
@@ -116,7 +119,7 @@
             .sidebar-item.active { background:#dbeafe; color:#1d4ed8; box-shadow:none; }
             .sidebar-item .sidebar-icon { font-size:16px; width:20px; text-align:center; flex-shrink:0; }
             .sidebar-badge {
-                margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:700;
+                margin-left:auto; background:#ef4444; color:#fff; font-size:10px; font-weight:600;
                 min-width:18px; height:18px; border-radius:9px; display:flex; align-items:center; justify-content:center; padding:0 5px;
             }
             body:not(.sidebar-open) .sidebar-badge { position:absolute; top:4px; right:6px; margin:0; min-width:16px; height:16px; font-size:9px; }
@@ -161,15 +164,15 @@
         .samil-deal-card.dragging, .crm-task-card.dragging { opacity:.45; }
         .samil-deal-card.is-saving, .crm-task-card.is-saving { opacity:.62; pointer-events:none; }
         .crm-task-card { position:relative; padding:10px 12px; border-radius:10px; text-align:left; }
-        .source-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:800; line-height:1; letter-spacing:.02em; padding:4px 8px; border-radius:999px; background:#1e293b; color:#fff; }
-        .partner-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:800; line-height:1; padding:4px 8px; border-radius:999px; background:#7c3aed; color:#fff; }
+        .source-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:600; line-height:1; letter-spacing:.02em; padding:4px 8px; border-radius:999px; background:#1e293b; color:#fff; }
+        .partner-badge { display:inline-flex; align-items:center; flex-shrink:0; font-size:10px; font-weight:600; line-height:1; padding:4px 8px; border-radius:999px; background:#7c3aed; color:#fff; }
         .source-badge[data-source="Partner"] { background:#7c3aed; }
         .source-badge[data-source="Instagram"] { background:#db2777; }
         .source-badge[data-source="TikTok"] { background:#0f172a; }
         .source-badge[data-source="Facebook"] { background:#2563eb; }
         .source-badge[data-source="SEO"] { background:#0f766e; }
         .source-badge[data-source="WhatsApp"] { background:#15803d; }
-        .source-tag { font-size:9px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .source-tag { font-size:9px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
         #task-edit-modal { position:fixed; inset:0; z-index:14100; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
         #task-edit-modal.open { display:flex; }
@@ -178,9 +181,9 @@
         #task-edit-modal textarea { min-height:110px; resize:vertical; }
         #task-edit-modal input, #task-edit-modal select { margin-top:12px; }
         #task-edit-modal .task-edit-actions { display:flex; gap:10px; margin-top:14px; }
-        #task-edit-modal .task-edit-actions button { flex:1; border:none; border-radius:12px; padding:12px; font-size:14px; font-weight:700; cursor:pointer; font-family:inherit; }
+        #task-edit-modal .task-edit-actions button { flex:1; border:none; border-radius:12px; padding:12px; font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; }
         .crm-chart { display:flex; align-items:flex-end; gap:6px; height:88px; padding-top:8px; }
-        .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:700; padding:18px 12px; text-align:center; }
+        .samil-empty-column { border:1px dashed #cbd5e1; border-radius:12px; color:#94a3b8; font-size:11px; font-weight:600; padding:18px 12px; text-align:center; }
         .deal-drag-handle, .deal-drag-hint { display:none; color:#94a3b8; font-size:12px; user-select:none; }
         .stage-dot { border-radius:999px; display:inline-block; height:8px; width:8px; }
         .icon-action-btn {
@@ -189,7 +192,7 @@
         }
         .icon-action-btn svg { width:18px; height:18px; }
         .icon-action-btn.primary { background:#2481cc; border-color:#2481cc; color:#fff; }
-        .icon-action-btn.labeled { width:auto; padding:0 12px; gap:6px; font-size:12px; font-weight:700; white-space:nowrap; }
+        .icon-action-btn.labeled { width:auto; padding:0 12px; gap:6px; font-size:12px; font-weight:600; white-space:nowrap; }
         .search-icon-btn { width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .search-icon-btn svg { width:18px; height:18px; display:block; }
         .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
@@ -249,22 +252,22 @@
         }
         .deal-shell { width:min(1100px,96vw); height:min(92vh,900px); background:#fff; border-radius:16px; overflow:hidden; display:flex; flex-direction:column; box-shadow:0 18px 50px #0004; }
         .deal-shell-head { display:flex; align-items:center; gap:12px; padding:12px 14px; background:#1e293b; color:#fff; }
-        .deal-head-avatar { width:36px; height:36px; border-radius:50%; background:#334155; color:#e2e8f0; font-weight:800; font-size:13px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
+        .deal-head-avatar { width:36px; height:36px; border-radius:50%; background:#334155; color:#e2e8f0; font-weight:600; font-size:13px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
         .deal-head-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
         .deal-shell-head .meta { min-width:0; flex:1; }
-        .deal-shell-head .name, .deal-head-name { font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .deal-shell-head .name, .deal-head-name { font-size:16px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .deal-shell-head .sub { font-size:11px; opacity:.95; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
         .deal-head-name, .deal-head-phone { width:100%; background:transparent; border:0; color:#fff; padding:0; outline:none; font-family:inherit; }
-        .deal-head-phone { font-size:14px; font-weight:700; opacity:1; width:auto; min-width:0; flex:none; }
+        .deal-head-phone { font-size:14px; font-weight:600; opacity:1; width:auto; min-width:0; flex:none; }
         .deal-head-phone-row { display:inline-flex; align-items:center; gap:4px; }
         .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:transparent; flex:none; }
         .deal-head-wa svg { width:16px; height:16px; display:block; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
-        .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:800; text-decoration:none; color:#fff; letter-spacing:.02em; }
+        .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:600; text-decoration:none; color:#fff; letter-spacing:.02em; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
         .deal-side { overflow:auto; padding:14px; background:#fff; border-right:1px solid #e5e7eb; min-height:0; }
-        .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-        .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:700; }
+        .deal-side h3 { margin:16px 0 8px; font-size:11px; font-weight:600; color:#64748b; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+        .deal-mini-plus { width:22px; height:22px; border:0; border-radius:6px; background:#e2e8f0; color:#0f172a; font-size:16px; line-height:1; font-weight:600; }
         .deal-note-row { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:0 0 8px; position:relative; }
         .deal-task-row { padding:10px; border:1px solid #bfdbfe; background:#eff6ff; border-radius:10px; margin:0 0 8px; position:relative; }
         .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:8px; top:8px; width:10px; height:10px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
@@ -286,7 +289,7 @@
         .deal-stage-row.admin-pipelines select { width:100%; }
         .deal-stage-spin { width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; flex:none; }
         .deal-note-body[contenteditable="true"] { outline:1px solid #93c5fd; border-radius:6px; padding:4px 6px; background:#f8fafc; }
-        .deal-ai-btn { border:0; border-radius:8px; background:#dbeafe; color:#1d4ed8; font-size:10px; font-weight:800; padding:0; width:28px; height:28px; position:absolute; right:40px; top:50%; transform:translateY(-50%); z-index:2; }
+        .deal-ai-btn { border:0; border-radius:8px; background:#dbeafe; color:#1d4ed8; font-size:10px; font-weight:600; padding:0; width:28px; height:28px; position:absolute; right:40px; top:50%; transform:translateY(-50%); z-index:2; }
         .deal-ai-btn .deal-ai-spin { display:none; position:absolute; inset:7px; border:2px solid #93c5fd; border-top-color:#1d4ed8; border-radius:50%; animation:spin .8s linear infinite; }
         .deal-ai-btn.loading { pointer-events:none; }
         .deal-ai-btn.loading .deal-ai-label { visibility:hidden; }
@@ -296,19 +299,19 @@
         .deal-sum-btn.loading { color:transparent; pointer-events:none; position:relative; }
         .deal-sum-btn.loading svg { visibility:hidden; }
         .deal-sum-btn.loading::after { content:''; position:absolute; inset:8px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
-        .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:700; padding:0; }
+        .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:600; padding:0; }
         .wa-composer-field.sending textarea { color:transparent; }
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
         .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
         .audio-wait .audio-spin { position:absolute; left:8px; top:50%; width:12px; height:12px; margin-top:-6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; pointer-events:none; }
         .audio-wait.ready .audio-spin { display:none; }
-        .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:800; color:#2563eb; text-decoration:underline; }
+        .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
-        .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:700; font-size:12px; }
+        .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
         .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#fff; overflow:auto; flex:none; border-bottom:1px solid #e8ecf0; }
-        .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
+        .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
         .wa-chip.on { background:#1e293b; color:#fff; border-color:#1e293b; }
         .wa-chip-text { display:flex; flex-direction:column; align-items:flex-start; line-height:1.15; min-width:0; }
         .wa-chip-phone { font-size:9px; font-weight:600; opacity:.78; letter-spacing:.01em; }
@@ -320,30 +323,30 @@
         .deal-chat-wrap { display:flex; align-items:center; gap:4px; max-width:86%; margin:8px 0; }
         .deal-chat-wrap.in { margin-right:auto; }
         .deal-chat-wrap.out { margin-left:auto; flex-direction:row-reverse; }
-        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:0; max-width:100%; font-size:13px; line-height:1.45; box-shadow:none; position:relative; flex:1; min-width:0; }
+        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:0; max-width:100%; font-size:13px; font-weight:400; line-height:1.45; box-shadow:none; position:relative; flex:1; min-width:0; }
         .deal-chat-row.wa-pop { animation:waPop .2s cubic-bezier(.2,.8,.2,1); }
         @keyframes waPop { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
         .deal-chat-row.in { background:#fff; margin-right:0; border:1px solid #e8ecf0; }
         .deal-chat-row.out { background:#ffe8c4; margin-left:0; }
-        .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
+        .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:600; color:#64748b; margin-bottom:3px; }
         .chat-msg-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:#e2e8f0; }
         .deal-chat-row.avatar-only { background:transparent; box-shadow:none; padding:2px 0; max-width:none; }
         .deal-chat-row.avatar-only .chat-row-head { margin:0; }
         .chat-quote-in { border-left:3px solid #53bdeb; background:rgba(255,255,255,.42); padding:4px 8px; margin:2px 0 4px; border-radius:6px; cursor:pointer; }
         .deal-chat-row.in .chat-quote-in { border-left-color:#06cf9c; background:#f0f2f5; }
         .deal-chat-row.out .chat-quote-in { border-left-color:#93c5fd; }
-        .chat-quote-who { font-size:11px; font-weight:700; color:#1d6fbf; line-height:1.2; }
+        .chat-quote-who { font-size:11px; font-weight:600; color:#1d6fbf; line-height:1.2; }
         .deal-chat-row.in .chat-quote-who { color:#02735e; }
         .chat-quote-txt { font-size:11px; color:#64748b; max-height:34px; overflow:hidden; }
         .deal-chat-row .wa-time { display:flex; align-items:center; justify-content:flex-end; gap:5px; font-size:10px; color:#667781; margin-top:4px; flex-wrap:wrap; }
         .wa-when { white-space:nowrap; }
-        .wa-sign { font-weight:700; color:#54656f; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .wa-ticks { letter-spacing:-1.5px; font-size:12px; line-height:1; color:#8696a0; font-weight:700; }
+        .wa-sign { font-weight:600; color:#54656f; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .wa-ticks { letter-spacing:-1.5px; font-size:12px; line-height:1; color:#8696a0; font-weight:600; }
         .wa-ticks.read { color:#53bdeb; }
         .wa-ticks.failed { color:#dc2626; letter-spacing:0; }
         .wa-state { font-size:9px; font-weight:600; color:#9aa7b0; letter-spacing:.01em; }
         .wa-state.failed { color:#dc2626; }
-        .chat-reply-btn { flex:none; border:0; background:transparent; color:#8696a0; font-size:15px; font-weight:700; line-height:1; padding:4px; cursor:pointer; opacity:.55; }
+        .chat-reply-btn { flex:none; border:0; background:transparent; color:#8696a0; font-size:15px; font-weight:600; line-height:1; padding:4px; cursor:pointer; opacity:.55; }
         .deal-chat-wrap:hover .chat-reply-btn, .deal-chat-wrap:focus-within .chat-reply-btn { opacity:1; color:#54656f; }
         .chat-pin-mark { display:none; color:#8696a0; line-height:1; }
         .deal-chat-row.pinned .chat-pin-mark { display:inline-flex; align-items:center; }
@@ -356,16 +359,16 @@
         .wa-composer-wrap { flex:none; background:#fff; border-top:1px solid #e8ecf0; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
         .chat-quote-bar[hidden] { display:none !important; }
-        .chat-quote-label { font-size:10px; font-weight:800; color:#2563eb; text-transform:uppercase; }
+        .chat-quote-label { font-size:10px; font-weight:600; color:#2563eb; text-transform:uppercase; }
         .chat-quote-body { font-size:12px; color:#334155; max-height:40px; overflow:hidden; }
         .chat-quote-bar button { border:0; background:transparent; font-size:18px; line-height:1; color:#64748b; }
         .wa-attachment { display:flex; gap:8px; align-items:center; margin:8px 8px 0; padding:8px 10px; background:#fff; border:1px solid #e2e8f0; border-radius:10px; }
         .wa-attachment[hidden] { display:none !important; }
         .wa-attachment-body { flex:1; min-width:0; font-size:12px; color:#334155; }
         .wa-attachment-body audio { width:100%; height:30px; }
-        .wa-attachment-body .name { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .wa-attachment-body .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .wa-attachment button { border:0; background:transparent; font-size:18px; line-height:1; color:#64748b; }
-        .audio-speed { flex:0 0 auto; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; font-size:10px; font-weight:800; padding:3px 6px; line-height:1; }
+        .audio-speed { flex:0 0 auto; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; font-size:10px; font-weight:600; padding:3px 6px; line-height:1; }
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
@@ -375,11 +378,11 @@
         .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
         .wa-composer-field.has-voice textarea { display:none; }
         .deal-chat-row.comment { display:none; }
-        .chat-day-pill { display:table; margin:14px auto 10px; background:#e8ecf0; color:#6b7280; font-size:11px; font-weight:700; line-height:1; border-radius:999px; padding:6px 12px; }
+        .chat-day-pill { display:table; margin:14px auto 10px; background:#e8ecf0; color:#6b7280; font-size:11px; font-weight:600; line-height:1; border-radius:999px; padding:6px 12px; }
         .deal-chat-system { display:table; margin:10px auto; max-width:86%; text-align:center; font-size:11px; line-height:1.4; color:#6b7280; background:#e8ecf0; border-radius:999px; padding:6px 12px; box-shadow:none; }
-        .deal-chat-system a { color:#2563eb; font-weight:800; text-decoration:underline; }
-        .deal-chat-note { padding:10px 12px; border:0; background:#ffe8c4; border-radius:12px; margin:8px auto 8px 0; max-width:78%; box-shadow:none; font-size:13px; line-height:1.45; }
-        .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:700; margin-bottom:4px; }
+        .deal-chat-system a { color:#2563eb; font-weight:600; text-decoration:underline; }
+        .deal-chat-note { padding:10px 12px; border:0; background:#ffe8c4; border-radius:12px; margin:8px auto 8px 0; max-width:78%; box-shadow:none; font-size:13px; font-weight:400; line-height:1.45; }
+        .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:600; margin-bottom:4px; }
         img.deal-zoom { cursor:zoom-in; }
         .wa-thread img.deal-zoom, .deal-chat-row img.deal-zoom {
             display:block; max-width:168px; max-height:168px; width:auto; height:auto;
@@ -388,9 +391,9 @@
         #deal-photo-zoom { position:fixed; inset:0; z-index:12000; background:#000c; display:flex; align-items:center; justify-content:center; padding:16px; }
         #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
-        .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:700; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 108px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; background:#fff; }
-        .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:700; }
+        .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:600; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 108px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; font-weight:400; background:#fff; }
+        .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:600; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
         #deal-view-modal { z-index:12000; }
@@ -403,7 +406,7 @@
             .deal-side { max-height:none; border-right:0; border-bottom:0; }
             .wa-pane { min-height:0; }
             .deal-tabs { display:flex; gap:6px; padding:6px 8px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
-            .deal-tabs button { flex:1; padding:8px; border:0; border-radius:10px; background:#fff; color:#475569; font-size:12px; font-weight:800; }
+            .deal-tabs button { flex:1; padding:8px; border:0; border-radius:10px; background:#fff; color:#475569; font-size:12px; font-weight:600; }
             .deal-tabs button.on { background:#008069; color:#fff; }
             .deal-shell-body.show-chat .deal-side { display:none; }
             .deal-shell-body.show-info .wa-pane { display:none; }
@@ -432,7 +435,7 @@
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
         .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:#2b8cff; }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
-        .chats-toolbar-title { font-size:16px; font-weight:800; color:#fff; display:inline-flex; align-items:baseline; gap:8px; }
+        .chats-toolbar-title { font-size:16px; font-weight:600; color:#fff; display:inline-flex; align-items:baseline; gap:8px; }
         .chats-unread-label { font-size:11px; font-weight:500; color:#dbeafe; letter-spacing:.01em; }
         .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
         .chats-toolbar .search-icon-btn.on { background:#fff; color:#2b8cff; border-color:#fff; }
@@ -444,9 +447,9 @@
         .chats-search-hit b { display:block; font-size:13px; color:#0f172a; }
         .chats-search-hit span { display:block; font-size:11px; color:#64748b; margin-top:2px; }
         .chats-search-empty { padding:12px; font-size:12px; color:#94a3b8; }
-        .chats-line { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:800; color:#0f172a; }
-        .chats-line label { flex:none; color:#64748b; font-weight:700; }
-        .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:700; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
+        .chats-line { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:#0f172a; }
+        .chats-line label { flex:none; color:#64748b; font-weight:600; }
+        .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:600; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
         .chats-search { width:100%; margin-top:0; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; font-size:12px; background:#f8fafc; outline:none; font-family:inherit; }
         .chats-rows { flex:1; min-height:0; overflow:auto; }
         .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .12s ease; }
@@ -456,14 +459,14 @@
         .chats-row.pin { background:#fffbeb; }
         .chats-row.pin.on { background:#eef5ff; }
         .chats-pin { color:#ca8a04; font-size:11px; margin-right:4px; }
-        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
+        .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:600; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
         .chats-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
         .chats-avatar.ch-whatsapp { background:#dcf8c6; color:#128c7e; }
         .chats-avatar.ch-instagram { background:#fce7f3; color:#db2777; }
         .chats-avatar.ch-facebook { background:#dbeafe; color:#1877F2; }
         .chats-avatar.ch-tiktok { background:#111; color:#fff; }
         .chats-avatar.ch-telegram { background:#dbeafe; color:#0288d1; }
-        .chats-source { display:inline-flex; align-items:center; gap:4px; flex:none; font-size:10px; font-weight:800; line-height:1; padding:3px 7px; border-radius:999px; }
+        .chats-source { display:inline-flex; align-items:center; gap:4px; flex:none; font-size:10px; font-weight:600; line-height:1; padding:3px 7px; border-radius:999px; }
         .chats-source svg { width:12px; height:12px; display:block; }
         .chats-source-whatsapp { background:#dcfce7; color:#15803d; }
         .chats-source-instagram { background:#fce7f3; color:#be185d; }
@@ -483,34 +486,34 @@
             flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px;
             padding:12px 14px; background:#fff; color:#111827; border-bottom:1px solid #e8ecf0;
         }
-        #deal-info-drawer .deal-info-head h3 { margin:0; font-size:14px; font-weight:800; }
-        #deal-info-drawer .deal-info-head button { border:0; background:#f3f4f6; color:#374151; border-radius:8px; padding:7px 10px; font-weight:700; font-size:12px; }
+        #deal-info-drawer .deal-info-head h3 { margin:0; font-size:14px; font-weight:600; }
+        #deal-info-drawer .deal-info-head button { border:0; background:#f3f4f6; color:#374151; border-radius:8px; padding:7px 10px; font-weight:600; font-size:12px; }
         #deal-info-drawer .deal-info-body { flex:1; min-height:0; overflow:auto; padding:14px; border-right:0; }
         .chats-row-main { min-width:0; flex:1; }
         .chats-row-top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
-        .chats-row-name { font-weight:800; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .chats-row.unread .chats-row-name { font-weight:800; color:#111b21; }
+        .chats-row-name { font-weight:600; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chats-row.unread .chats-row-name { font-weight:600; color:#111b21; }
         .chats-row.unread .chats-row-preview { color:#111b21; font-weight:600; }
         .chats-row-time { font-size:11px; color:#64748b; flex:none; }
         .chats-row-bottom { display:flex; align-items:center; gap:8px; margin-top:2px; }
-        .chats-row-preview { flex:1; min-width:0; font-size:12px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .chats-unread { min-width:18px; height:18px; border-radius:9px; background:#25d366; color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; flex:none; }
+        .chats-row-preview { flex:1; min-width:0; font-size:12px; font-weight:400; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chats-unread { min-width:18px; height:18px; border-radius:9px; background:#25d366; color:#fff; font-size:10px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; flex:none; }
         .chats-row-preview.draft { color:#00a884; font-style:italic; }
         .chats-ctx { position:fixed; z-index:15000; min-width:210px; background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(15,23,42,.2); overflow:hidden; }
-        .chats-ctx button { display:block; width:100%; text-align:left; border:0; background:#fff; padding:12px 14px; font-size:13px; font-weight:700; color:#111b21; font-family:inherit; cursor:pointer; touch-action:manipulation; }
+        .chats-ctx button { display:block; width:100%; text-align:left; border:0; background:#fff; padding:12px 14px; font-size:13px; font-weight:600; color:#111b21; font-family:inherit; cursor:pointer; touch-action:manipulation; }
         .chats-ctx button:hover { background:#f0f2f5; }
         .chats-ctx .chat-react-row { display:flex; gap:2px; padding:8px 8px 4px; justify-content:space-between; }
         .chats-ctx .chat-react-row button { width:auto; flex:1; text-align:center; padding:6px 0; font-size:20px; line-height:1; }
         .chat-pin-bar { display:flex; align-items:center; gap:8px; flex:none; padding:7px 10px; background:#fff; border-bottom:1px solid #e5e7eb; }
         .chat-pin-bar[hidden] { display:none !important; }
         .chat-pin-jump { flex:1; min-width:0; border:0; background:transparent; text-align:left; padding:0; font-family:inherit; cursor:pointer; }
-        .chat-pin-label { font-size:10px; font-weight:800; color:#128c7e; }
+        .chat-pin-label { font-size:10px; font-weight:600; color:#128c7e; }
         .chat-pin-text { font-size:12px; color:#334155; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .chat-pin-clear { border:0; background:transparent; color:#64748b; font-size:18px; line-height:1; padding:0 2px; }
         .deal-chat-row.pin-flash { outline:2px solid #25d366; outline-offset:1px; }
         #tab-chats { position:relative; }
         #chats-menu-badge {
-            position:absolute; top:2px; right:12px; background:#ef4444; color:#fff; font-size:9px; font-weight:700;
+            position:absolute; top:2px; right:12px; background:#ef4444; color:#fff; font-size:9px; font-weight:600;
             min-width:16px; height:16px; border-radius:8px; display:none; align-items:center; justify-content:center; padding:0 4px;
         }
         #tab-more.on { color:#2481cc; }
@@ -524,15 +527,15 @@
         #tab-more-list { display:flex; flex-direction:column; gap:4px; }
         #tab-more-list button {
             width:100%; text-align:left; border:0; background:#f8fafc; color:#0f172a; border-radius:12px;
-            padding:12px 14px; font-size:13px; font-weight:800; font-family:inherit;
+            padding:12px 14px; font-size:13px; font-weight:600; font-family:inherit;
         }
         #tab-more-list button.on { background:#dbeafe; color:#1d4ed8; }
         .chats-hide { flex:none; width:22px; height:22px; border:0; border-radius:50%; background:transparent; color:#94a3b8; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
         .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
-        .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:700; }
+        .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:600; }
         .chats-pane { min-width:0; min-height:0; background:#f4f6f8; display:flex; flex-direction:column; }
         .chats-empty { margin:auto; text-align:center; color:#6b7280; }
-        .chats-empty-title { font-size:18px; font-weight:800; }
+        .chats-empty-title { font-size:18px; font-weight:600; }
         .chats-empty-sub { font-size:13px; margin-top:6px; opacity:.8; }
         #chats-pane .deal-shell { width:100%; height:100%; max-height:none; border-radius:0; box-shadow:none; }
         #chats-pane .deal-tabs { display:none !important; }
@@ -556,11 +559,11 @@
         .chats-deal-link svg { width:18px; height:18px; display:block; }
         .deal-info-fields { display:grid; gap:8px; }
         .deal-info-field { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:#111827; }
-        .deal-info-field span { color:#9ca3af; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.03em; flex:none; }
-        .deal-info-field b { font-weight:700; text-align:right; word-break:break-word; }
-        .deal-side-input { width:100%; min-width:0; text-align:right; border:0; border-bottom:1px solid #e5e7eb; background:transparent; color:#111827; font:inherit; font-weight:700; padding:2px 0; outline:none; }
+        .deal-info-field span { color:#9ca3af; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; flex:none; }
+        .deal-info-field b { font-weight:600; text-align:right; word-break:break-word; }
+        .deal-side-input { width:100%; min-width:0; text-align:right; border:0; border-bottom:1px solid #e5e7eb; background:transparent; color:#111827; font:inherit; font-weight:600; padding:2px 0; outline:none; }
         .deal-side-input:focus { border-bottom-color:#2b8cff; }
-        .deal-task-create { display:inline-flex; align-items:center; gap:6px; width:auto; margin:0 0 10px; padding:8px 12px; border:0; border-radius:10px; background:#2481cc; color:#fff; font-size:12px; font-weight:800; font-family:inherit; }
+        .deal-task-create { display:inline-flex; align-items:center; gap:6px; width:auto; margin:0 0 10px; padding:8px 12px; border:0; border-radius:10px; background:#2481cc; color:#fff; font-size:12px; font-weight:600; font-family:inherit; }
         .deal-task-create svg { width:14px; height:14px; display:block; }
         .chats-back { display:none; width:34px; height:34px; border:0; background:#f3f4f6; color:#374151; border-radius:8px; font-size:18px; line-height:1; flex:none; }
         @media (max-width: 1023px) {
@@ -629,7 +632,7 @@
 <!-- Success Screen -->
 <div id="screen-success" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:#f8f9fa; z-index:1500; flex-direction:column; align-items:center; justify-content:center; padding:24px; text-align:center;">
     <div style="font-size:64px; color:#10b981; margin-bottom:16px;">✓</div>
-    <div style="font-size:22px; font-weight:700; margin-bottom:8px;">Uğurla yaradıldı!</div>
+    <div style="font-size:22px; font-weight:600; margin-bottom:8px;">Uğurla yaradıldı!</div>
     <div id="success-msg" style="font-size:14px; color:#64748b; margin-bottom:32px;"></div>
     <div style="display:flex; flex-direction:column; gap:12px; width:100%; max-width:300px;">
         <button onclick="resumeEdit()" class="w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-sm">✏️ Redaktə et</button>
@@ -1087,7 +1090,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
     </button>
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
@@ -1451,7 +1454,7 @@ function partnerSelectHtml(selected) {
 function partnerFieldHtml(selectId, selected) {
     return `<div style="display:flex;gap:8px;align-items:center">
         <select id="${selectId}" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" style="flex:1">${partnerSelectHtml(selected)}</select>
-        <button type="button" onclick="addPartnerOption('${selectId}')" aria-label="Partner əlavə et" style="width:42px;height:42px;border:0;border-radius:12px;background:#7c3aed;color:#fff;font-size:22px;font-weight:800;line-height:1">+</button>
+        <button type="button" onclick="addPartnerOption('${selectId}')" aria-label="Partner əlavə et" style="width:42px;height:42px;border:0;border-radius:12px;background:#7c3aed;color:#fff;font-size:22px;font-weight:600;line-height:1">+</button>
     </div>`;
 }
 async function addPartnerOption(selectId) {
@@ -1877,7 +1880,7 @@ function debounceContactSearch(val, resultsId, phoneId, nameId) {
                 box.innerHTML = d.contacts.map(c => 
                     `<div onclick="selectContact('${String(c.phone||'').replace(/'/g,"\\'")}','${(c.name||'').replace(/'/g,"\\'")}','${resultsId || 'contact-search-results'}','${phoneId || 'search-phone'}','${nameId || 'task-client-name'}')"
                      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:12px;">
-                     <div style="font-weight:700;color:#1e293b;">${c.name || 'Adsız'}</div>
+                     <div style="font-weight:600;color:#1e293b;">${c.name || 'Adsız'}</div>
                      <div style="color:#64748b;margin-top:2px;">${c.phone}</div>
                     </div>`
                 ).join('');
@@ -2068,10 +2071,10 @@ function showEditNoteModal(taskId) {
     if(existing) existing.remove();
     const html = `<div id="edit-note-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0;" onclick="this.remove(); nav('screen-notifications');">
       <div style="background:#fff;border-radius:20px 20px 0 0;padding:24px;width:100%;max-width:500px;" onclick="event.stopPropagation()" id="edit-note-modal-inner">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;color:#374151;">Sövdələşmə qeydi:</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;color:#374151;">Sövdələşmə qeydi:</h3>
         <textarea id="edit-note-modal-text" placeholder="Qeyd yazın..." style="width:100%;min-height:150px;padding:12px;font-size:14px;line-height:1.6;border:1px solid #e5e7eb;border-radius:12px;outline:none;resize:vertical;background:#f9fafb;"></textarea>
         <div style="display:flex;gap:10px;margin-top:12px;">
-          <button onclick="submitEditNote()" style="flex:1;background:#2563eb;color:#fff;padding:12px;border-radius:12px;font-size:13px;font-weight:700;border:none;">Göndər</button>
+          <button onclick="submitEditNote()" style="flex:1;background:#2563eb;color:#fff;padding:12px;border-radius:12px;font-size:13px;font-weight:600;border:none;">Göndər</button>
           <button onclick="document.getElementById('edit-note-modal').remove(); nav('screen-notifications');" style="background:#f3f4f6;color:#555;padding:12px 20px;border-radius:12px;font-size:13px;font-weight:600;border:none;">Keç</button>
         </div>
       </div></div>`;
@@ -2228,7 +2231,7 @@ function openCreateDealModal() {
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     modal.onclick = (event) => { if(event.target === modal) closeCreateDealModal(); };
     modal.innerHTML = `<div style="background:#fff;border-radius:20px;padding:18px;width:min(420px,100%);box-shadow:0 18px 50px rgba(15,23,42,.18);max-height:92vh;overflow:auto" onclick="event.stopPropagation()">
-        <div style="font-size:16px;font-weight:800;margin-bottom:12px">Yeni sifariş</div>
+        <div style="font-size:16px;font-weight:600;margin-bottom:12px">Yeni sifariş</div>
         <label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı</label>
         <input id="create-deal-name" type="text" placeholder="Ad Soyad" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none mb-2">
         <label class="text-xs font-bold text-gray-400 block mb-1">Telefon</label>
@@ -2243,8 +2246,8 @@ function openCreateDealModal() {
         <label class="text-xs font-bold text-gray-400 block mb-1">${isAdmin ? 'Huni / mərhələ' : 'Mərhələ'}</label>
         <select id="create-deal-stage" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none">${stageOptions}</select>
         <div style="display:flex;gap:8px;margin-top:14px">
-            <button type="button" onclick="closeCreateDealModal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:700">Ləğv et</button>
-            <button type="button" id="create-deal-save" onclick="submitCreateDeal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yarat</button>
+            <button type="button" onclick="closeCreateDealModal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9;font-weight:600">Ləğv et</button>
+            <button type="button" id="create-deal-save" onclick="submitCreateDeal()" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:600">Yarat</button>
         </div>
     </div>`;
     document.body.appendChild(modal);
@@ -2545,12 +2548,12 @@ function showPendingConfirmPanel(action) {
     overlay.innerHTML = `
       <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-width:480px;padding:20px 20px 28px;box-shadow:0 -8px 30px rgba(0,0,0,0.2);">
         <div style="width:40px;height:4px;background:#d1d5db;border-radius:2px;margin:0 auto 16px;"></div>
-        <div style="font-size:15px;font-weight:800;color:#1e293b;margin-bottom:4px;">Təsdiq et</div>
+        <div style="font-size:15px;font-weight:600;color:#1e293b;margin-bottom:4px;">Təsdiq et</div>
         <div style="font-size:12px;color:#64748b;margin-bottom:14px;">👤 ${(data.contact_name || data.client_name || '—')} · ${(data.sender_name ? '👷 ' + data.sender_name : '')}</div>
-        <label style="font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:4px;display:block;">Məbləğ (AZN) — istəyə bağlı, boş buraxmaq olar:</label>
-        <input id="pcp-amount" type="number" min="0" step="0.01" placeholder="0.00 — pulsuz" style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:12px;font-size:16px;font-weight:700;margin-bottom:14px;box-sizing:border-box;">
-        <button id="pcp-confirm" style="width:100%;background:#10b981;color:#fff;font-weight:800;padding:14px;border:none;border-radius:14px;font-size:14px;cursor:pointer;">✅ Təsdiq et</button>
-        <button id="pcp-cancel" style="width:100%;background:#f1f5f9;color:#64748b;font-weight:700;padding:12px;border:none;border-radius:14px;font-size:12px;margin-top:8px;cursor:pointer;">Ləğv et</button>
+        <label style="font-size:11px;font-weight:600;color:#94a3b8;margin-bottom:4px;display:block;">Məbləğ (AZN) — istəyə bağlı, boş buraxmaq olar:</label>
+        <input id="pcp-amount" type="number" min="0" step="0.01" placeholder="0.00 — pulsuz" style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:12px;font-size:16px;font-weight:600;margin-bottom:14px;box-sizing:border-box;">
+        <button id="pcp-confirm" style="width:100%;background:#10b981;color:#fff;font-weight:600;padding:14px;border:none;border-radius:14px;font-size:14px;cursor:pointer;">✅ Təsdiq et</button>
+        <button id="pcp-cancel" style="width:100%;background:#f1f5f9;color:#64748b;font-weight:600;padding:12px;border:none;border-radius:14px;font-size:12px;margin-top:8px;cursor:pointer;">Ləğv et</button>
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', (e) => { if(e.target === overlay) overlay.remove(); });
@@ -2682,7 +2685,7 @@ function openSubtaskFromPending(action) {
     const desc = '';
     const html = `<div id="subtask-modal" data-lead-id="${leadId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Əlavə tapşırıq</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Əlavə tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Müştəri:</label>
         <input value="${contactName}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
@@ -2697,12 +2700,12 @@ function openSubtaskFromPending(action) {
         <input type="datetime-local" id="sub-deadline" required style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Səs yazısı:</label>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:700;">🎙 Yaz</button>
+            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:600;">🎙 Yaz</button>
             <span id="sub-voice-status" style="font-size:11px;color:#888;"></span>
-            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:700;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
+            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:600;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
         </div>
         <audio id="sub-voice-preview" style="display:none;width:100%;margin-bottom:8px;" controls></audio>
-        <div style="display:flex;gap:8px;"><button id="sub-submit-btn" onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <div style="display:flex;gap:8px;"><button id="sub-submit-btn" onclick="submitSubtaskFromPending('${action.id}')" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove();loadPendingActions();" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
@@ -3306,7 +3309,7 @@ function dealMediaBlock(item, token) {
     if(isCall || type === 'voice' || type === 'audio' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
         return audioWaitHtml(src);
     }
-    return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:700">${escapeHtml(fileName || 'Fayl')}</a>`;
+    return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
     whatsapp: {label:'WhatsApp', svg:'<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="#25D366" d="M12 2a10 10 0 0 0-8.7 15L2 22l5.2-1.3A10 10 0 1 0 12 2z"/><path fill="#fff" d="M16.6 14.4c-.2-.1-1.3-.6-1.5-.7s-.3-.1-.5.1-.6.7-.7.9-.3.2-.5.1a6 6 0 0 1-1.8-1.1 6.6 6.6 0 0 1-1.2-1.5c-.1-.2 0-.4.1-.5l.4-.4.1-.3-.1-.5-.7-1.6c-.2-.4-.4-.4-.5-.4h-.4c-.2 0-.4.1-.6.3s-.8.8-.8 1.9.8 2.2.9 2.3a8.8 8.8 0 0 0 3.4 2.7c1.3.5 1.8.4 2.4.3s1.3-.5 1.5-1 .2-.9.1-1z"/></svg>'},
@@ -4822,7 +4825,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
-                <div style="font-size:16px;font-weight:800">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
+                <div style="font-size:16px;font-weight:600">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
                 <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
@@ -4831,13 +4834,13 @@ function dealDetailSectionsHtml(deal, token, opts) {
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
-                ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700">🔗 Kommo-da aç</a></div>` : ''}
+                ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : ''}
             </div>
-            <div style="margin-top:14px;font-size:12px;font-weight:800">Tapşırıqlar</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:600">Tapşırıqlar</div>
             <div>${tasksHtml}</div>
-            <div style="margin-top:14px;font-size:12px;font-weight:800">Qeydlər</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:600">Qeydlər</div>
             <div>${notesHtml}</div>
-            <div style="margin-top:14px;font-size:12px;font-weight:800">WhatsApp</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:600">WhatsApp</div>
             <div id="deal-chat-thread" class="deal-chat-thread">${chatHtml}</div>
             ${composer}
         </div>`;
@@ -4926,7 +4929,7 @@ function dealInfoBodyHtml(deal, readonly) {
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
             ${sourceUrlsHtml(deal)}
             ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
-            ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:700;text-decoration:underline">Kommo-da aç</a></div>` : ''}
+            ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline">Kommo-da aç</a></div>` : ''}
         </div>
         ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
         <h3>Tapşırıq</h3>
@@ -5348,7 +5351,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
             </div>
             ${readonly ? '' : '<button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et" aria-label="Xülasə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></button>'}
             ${readonly && !isAdmin ? '' : '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'}
-            <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:700;font-size:12px">Bağla</button>
+            <button type="button" id="deal-view-close" style="border:0;background:#ffffff22;color:#fff;border-radius:8px;padding:7px 10px;font-weight:600;font-size:12px">Bağla</button>
         </div>
         <div class="deal-tabs" id="deal-tabs">
             <button type="button" data-tab="chat" class="on">Söhbət</button>
@@ -5789,7 +5792,7 @@ function showDealModal(deal, mode) {
             body += `<select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">${assigneeOptions}</select>`;
         }
     }
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003;max-height:92vh;overflow:auto"><div style="font-size:16px;font-weight:800;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button type="button" id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button type="button" id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:700">Yadda saxla</button></div></div>`;
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003;max-height:92vh;overflow:auto"><div style="font-size:16px;font-weight:600;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button type="button" id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button type="button" id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:600">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal);
     if(mode === 'edit' && isAdmin) {
         ensureAdminPipelines().then(() => {
@@ -6101,9 +6104,40 @@ function playIncomingChatSound() {
         setTimeout(() => { try { ctx.close(); } catch(_err) {} }, 700);
     } catch(_err) {}
 }
-function showIncomingChatNotice(deal) {
+function isGenericChatNotice(text) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    return !clean || /^(yeni mesaj|çat|mesaj)$/i.test(clean);
+}
+function chatNoticeText(raw) {
+    const clean = String(raw || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+    return isGenericChatNotice(clean) ? '' : clean;
+}
+async function incomingNoticeBody(deal) {
+    const direct = chatNoticeText(dealLastClientMessage(deal));
+    if(direct) return direct;
+    if(!deal || !deal.id || !CURRENT_USER_ID) return 'Yeni mesaj';
+    try {
+        const q = new URLSearchParams({lead_id: String(deal.id), limit: '12', _ts: String(Date.now())});
+        const channel = chatsSourceKey(deal);
+        if(channel) q.set('channel', channel);
+        const r = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
+        const data = await r.json().catch(() => ({}));
+        const rows = Array.isArray(data.chat) ? data.chat : [];
+        for(let i = rows.length - 1; i >= 0; i -= 1) {
+            const item = rows[i];
+            if(!item || !item.incoming || item.is_comment) continue;
+            const text = chatNoticeText(item.text);
+            if(text) return text;
+        }
+    } catch(_err) {}
+    return 'Yeni mesaj';
+}
+async function showIncomingChatNotice(deal) {
     const title = dealClientName(deal) || 'Çat';
-    const body = dealLastClientMessage(deal) || 'Yeni mesaj';
+    const body = await incomingNoticeBody(deal);
     const url = '#chat-' + deal.id;
     if(navigator.serviceWorker) {
         navigator.serviceWorker.ready.then(reg => {
@@ -6746,10 +6780,10 @@ function showPostponeReasonModal() {
     if(existing) existing.remove();
     const html = `<div id="postpone-reason-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;" onclick="this.remove()">
       <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:320px;" onclick="event.stopPropagation()">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:16px;text-align:center;">Səbəb seçin</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;text-align:center;">Səbəb seçin</h3>
         <div style="display:flex;gap:10px;">
-          <button onclick="submitPostponeReason('Müştəri istədi')" style="flex:1;background:#2563eb;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:700;border:none;">Müştəri istədi</button>
-          <button onclick="submitPostponeReason('Çatdıra bilmirəm')" style="flex:1;background:#dc2626;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:700;border:none;">Çatdıra bilmirəm</button>
+          <button onclick="submitPostponeReason('Müştəri istədi')" style="flex:1;background:#2563eb;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:600;border:none;">Müştəri istədi</button>
+          <button onclick="submitPostponeReason('Çatdıra bilmirəm')" style="flex:1;background:#dc2626;color:#fff;padding:12px 8px;border-radius:12px;font-size:12px;font-weight:600;border:none;">Çatdıra bilmirəm</button>
         </div>
         <button onclick="document.getElementById('postpone-reason-modal').remove()" style="width:100%;margin-top:10px;background:#f3f4f6;color:#555;padding:10px;border-radius:12px;font-size:12px;font-weight:600;border:none;">Ləğv et</button>
       </div></div>`;
@@ -7174,7 +7208,7 @@ function openSubtask(taskId) {
     const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Əlavə tapşırıq</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Əlavə tapşırıq</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Telefon:</label>
         <input id="sub-phone" value="${phone}" disabled style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;background:#f3f4f6;font-size:12px;color:#333;">
         <label style="font-size:11px;color:#888;font-weight:600;">Tapşırıq növü:</label>
@@ -7187,12 +7221,12 @@ function openSubtask(taskId) {
         <input type="datetime-local" id="sub-deadline" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Səs yazısı:</label>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:700;">🎙 Yaz</button>
+            <button type="button" id="sub-voice-btn" onclick="toggleSubVoice()" style="background:#f3f4f6;border:1px solid #e5e7eb;color:#333;padding:8px 12px;border-radius:10px;font-size:11px;font-weight:600;">🎙 Yaz</button>
             <span id="sub-voice-status" style="font-size:11px;color:#888;"></span>
-            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:700;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
+            <button type="button" id="sub-voice-del" style="display:none;color:#ef4444;font-size:11px;font-weight:600;background:none;border:none;" onclick="deleteSubVoice()">❌</button>
         </div>
         <audio id="sub-voice-preview" style="display:none;width:100%;margin-bottom:8px;" controls></audio>
-        <div style="display:flex;gap:8px;"><button onclick="submitSubtask(${taskId})" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <div style="display:flex;gap:8px;"><button onclick="submitSubtask(${taskId})" style="flex:1;background:#2481cc;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Yarat</button><button onclick="document.getElementById('subtask-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
@@ -7354,14 +7388,14 @@ function openMedaxil() {
     const existing = document.getElementById('medaxil-modal'); if(existing) existing.remove();
     const html = `<div id="medaxil-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Mədaxil</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Mədaxil</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
         <select id="med-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
         <input type="number" min="0.01" step="0.01" id="med-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Açıqlama:</label>
         <input type="text" maxlength="500" id="med-description" placeholder="Mədaxil açıqlaması" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
-        <div style="display:flex;gap:8px;"><button id="med-submit" onclick="submitMedaxil()" style="flex:1;background:#10b981;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Əlavə et</button><button onclick="document.getElementById('medaxil-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <div style="display:flex;gap:8px;"><button id="med-submit" onclick="submitMedaxil()" style="flex:1;background:#10b981;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Əlavə et</button><button onclick="document.getElementById('medaxil-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
@@ -7397,14 +7431,14 @@ function openMexaric() {
     const existing = document.getElementById('mexaric-modal'); if(existing) existing.remove();
     const html = `<div id="mexaric-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
-        <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;">Məxaric (Ödəniş)</h3>
+        <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Məxaric (Ödəniş)</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
         <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
         <input type="number" min="0.01" step="0.01" id="mex-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Qeyd:</label>
         <input type="text" id="mex-note" placeholder="Aylıq ödəniş" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;font-size:12px;">
-        <div style="display:flex;gap:8px;"><button id="mex-submit" onclick="submitMexaric()" style="flex:1;background:#ef4444;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ödə</button><button onclick="document.getElementById('mexaric-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:700;border:none;">Ləğv</button></div>
+        <div style="display:flex;gap:8px;"><button id="mex-submit" onclick="submitMexaric()" style="flex:1;background:#ef4444;color:#fff;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Ödə</button><button onclick="document.getElementById('mexaric-modal').remove()" style="flex:1;background:#f3f4f6;color:#333;padding:10px;border-radius:10px;font-size:12px;font-weight:600;border:none;">Ləğv</button></div>
       </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
 }
@@ -7474,7 +7508,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=248');
+    const reg = await navigator.serviceWorker.register('sw.js?v=249');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
@@ -7558,7 +7592,7 @@ function showPendingSelectModal(title, items, callback) {
         const dot = _isStg ? `<span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:${_stgClr[i]||'#ccc'};margin-right:14px;flex-shrink:0;"></span>` : '';
         return `<button onclick="document.getElementById('pending-select-modal')._cb('${i}')" style="width:100%;text-align:left;padding:14px 16px;border:none;background:none;font-size:15px;font-weight:500;color:#1e293b;border-bottom:1px solid #f1f5f9;cursor:pointer;display:flex;align-items:center;">${dot}${i}</button>`;
     }).join('');
-    modal.innerHTML = `<div style="background:#fff;border-radius:16px;min-width:280px;max-width:90vw;max-height:75vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2);"><div style="padding:14px 16px;font-size:15px;font-weight:700;border-bottom:1px solid #e2e8f0;">${title}</div>${btns}<button onclick="document.getElementById('pending-select-modal').remove()" style="width:100%;padding:12px;border:none;background:#f8fafc;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-radius:0 0 16px 16px;">Ləğv et</button></div>`;
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;min-width:280px;max-width:90vw;max-height:75vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2);"><div style="padding:14px 16px;font-size:15px;font-weight:600;border-bottom:1px solid #e2e8f0;">${title}</div>${btns}<button onclick="document.getElementById('pending-select-modal').remove()" style="width:100%;padding:12px;border:none;background:#f8fafc;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;border-radius:0 0 16px 16px;">Ləğv et</button></div>`;
     modal._cb = (val) => { modal.remove(); callback(val); };
     document.body.appendChild(modal);
 }
