@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="218">
+    <meta name="pwa-build" content="219">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -470,6 +470,8 @@
         .chats-row-main { min-width:0; flex:1; }
         .chats-row-top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
         .chats-row-name { font-weight:800; font-size:13px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .chats-row.unread .chats-row-name { font-weight:800; color:#111b21; }
+        .chats-row.unread .chats-row-preview { color:#111b21; font-weight:600; }
         .chats-row-time { font-size:11px; color:#64748b; flex:none; }
         .chats-row-bottom { display:flex; align-items:center; gap:8px; margin-top:2px; }
         .chats-row-preview { flex:1; min-width:0; font-size:12px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -5659,14 +5661,16 @@ function markChatsUnread(leadId) {
     seen[id] = Math.max(0, incoming - 1);
     seen['unread_' + id] = 1;
     saveChatsSeen(seen);
+    const openHere = _dealInboxMode && _dealViewState && String(_dealViewState.id) === id;
+    if(openHere) closeInboxChat();
     renderChatsList();
     paintChatsUnreadBadge();
 }
 function chatsIsUnread(deal, seen) {
     if(!deal || !deal.id) return false;
-    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) return false;
     const store = seen || getChatsSeen();
     if(store['unread_' + String(deal.id)]) return true;
+    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) return false;
     const incomingAt = chatsIncomingAt(deal);
     const lastSeen = Number(store[String(deal.id)] || 0);
     if(incomingAt && incomingAt > lastSeen) return true;
@@ -6056,7 +6060,7 @@ function renderChatsList() {
             const on = openId && openId === String(deal.id);
             const pinned = isChatPinned(deal.id);
             const chip = chatsSourceChip(deal);
-            return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
+            return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}${unread ? ' unread' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
@@ -7101,7 +7105,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=235');
+    const reg = await navigator.serviceWorker.register('sw.js?v=236');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
