@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="255">
+    <meta name="pwa-build" content="256">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -393,7 +393,7 @@
         .chat-day-pill { display:table; margin:14px auto 10px; background:#e8ecf0; color:#6b7280; font-size:11px; font-weight:600; line-height:1; border-radius:999px; padding:6px 12px; }
         .deal-chat-system { display:table; margin:10px auto; max-width:86%; text-align:center; font-size:11px; line-height:1.4; color:#6b7280; background:#e8ecf0; border-radius:999px; padding:6px 12px; box-shadow:none; }
         .deal-chat-system a { color:#2563eb; font-weight:600; text-decoration:underline; }
-        .deal-chat-note { padding:10px 12px; border:0; background:#ffe8c4; border-radius:12px; margin:8px auto 8px 0; max-width:78%; box-shadow:none; font-size:13px; font-weight:400; line-height:1.45; }
+        .deal-chat-note { padding:10px 12px; border:1px solid #e8ecf0; border-left:3px solid #f5c16c; background:#fff; border-radius:12px; margin:8px auto 8px 0; max-width:78%; box-shadow:none; font-size:13px; font-weight:400; line-height:1.45; color:#111827; }
         .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:600; margin-bottom:4px; }
         img.deal-zoom { cursor:zoom-in; }
         .wa-thread img.deal-zoom, .deal-chat-row img.deal-zoom {
@@ -7828,7 +7828,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=272');
+    const reg = await navigator.serviceWorker.register('sw.js?v=273');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
