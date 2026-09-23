@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="263">
+    <meta name="pwa-build" content="264">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -288,6 +288,24 @@
         .wa-attach-in svg { display:block; width:22px; height:22px; }
         .wa-mic-in { position:absolute; right:72px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
         .wa-mic-in.rec { background:#dc2626; color:#fff; }
+        .wa-tpl-in { position:absolute; right:104px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; padding:0; display:inline-flex; align-items:center; justify-content:center; }
+        .wa-tpl-in svg { width:18px; height:18px; display:block; }
+        .chats-new-btn { width:36px; height:36px; border:0; border-radius:10px; background:#ffffff22; color:#fff; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
+        .chats-new-btn svg { width:18px; height:18px; display:block; }
+        #wa-tpl-modal { position:fixed; inset:0; z-index:14200; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
+        #wa-tpl-modal .wa-tpl-card { background:#fff; border-radius:18px; width:min(440px,100%); max-height:88vh; overflow:auto; box-shadow:0 18px 50px rgba(15,23,42,.2); }
+        #wa-tpl-modal .wa-tpl-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px 6px; }
+        #wa-tpl-modal .wa-tpl-head h3 { margin:0; font-size:15px; font-weight:600; color:#0f172a; }
+        #wa-tpl-modal .wa-tpl-head button { border:0; background:#f3f4f6; color:#374151; border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; }
+        #wa-tpl-modal .wa-tpl-body { padding:6px 16px 16px; display:grid; gap:10px; }
+        #wa-tpl-modal label { font-size:10px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.03em; display:block; margin-bottom:3px; }
+        #wa-tpl-modal input, #wa-tpl-modal select { width:100%; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:10px; padding:9px 11px; font-size:13px; font-weight:400; color:#0f172a; background:#f8fafc; outline:none; font-family:inherit; }
+        #wa-tpl-modal input:focus, #wa-tpl-modal select:focus { border-color:#2b8cff; background:#fff; }
+        .wa-tpl-vars { display:grid; gap:8px; }
+        .wa-tpl-preview { border:1px solid #e5e7eb; border-left:3px solid #25d366; background:#f8fafc; border-radius:12px; padding:10px 12px; font-size:13px; font-weight:400; line-height:1.45; color:#111827; white-space:pre-wrap; word-break:break-word; min-height:44px; }
+        .wa-tpl-note { font-size:11px; color:#64748b; line-height:1.4; }
+        .wa-tpl-send { border:0; border-radius:12px; background:#25d366; color:#fff; font-size:13px; font-weight:600; padding:11px; font-family:inherit; }
+        .wa-tpl-send[disabled] { background:#cbd5e1; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
@@ -384,7 +402,7 @@
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
-        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 108px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 140px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
         .wa-voice-preview[hidden] { display:none !important; }
         .wa-voice-preview audio { flex:1; min-width:0; height:30px; }
         .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
@@ -404,7 +422,7 @@
         #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:600; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 108px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; font-weight:400; background:#fff; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 140px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; font-weight:400; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:600; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
@@ -787,7 +805,10 @@
                 <div class="chats-toolbar">
                     <div class="chats-toolbar-bar">
                         <span class="chats-toolbar-title">Çatlar <button type="button" id="chats-unread-label" class="chats-unread-label" hidden></button></span>
-                        <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
+                        <span class="flex items-center gap-2">
+                            <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
+                            <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
+                        </span>
         </div>
                     <div id="chats-search-wrap" class="search-expand">
                         <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
@@ -5231,6 +5252,157 @@ async function requestDealSummary() {
     } catch(err) { toast(err.message || 'Xülasə alınmadı', true); }
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
 }
+let _waTemplates = null, _waTemplatesAt = 0, _waTplSending = false;
+async function loadWaTemplates(force) {
+    if(!CURRENT_USER_ID) return [];
+    if(!force && Array.isArray(_waTemplates) && Date.now() - _waTemplatesAt < 300000) return _waTemplates;
+    const r = await fetch(API_BASE + '/api/whatsapp/templates' + (force ? '?refresh=1' : ''), {
+        cache: 'no-store',
+        headers: {'X-TG-User-ID': CURRENT_USER_ID}
+    });
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok || !d.success) throw new Error(d.error || 'Şablonlar yüklənmədi');
+    _waTemplates = Array.isArray(d.templates) ? d.templates : [];
+    _waTemplatesAt = Date.now();
+    if(!_waTemplates.length && d.error) throw new Error(d.error);
+    return _waTemplates;
+}
+function waTplFill(text, values) {
+    return String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (match, num) => {
+        const value = values[Number(num) - 1];
+        return value ? value : match;
+    });
+}
+function waTplSelected() {
+    const select = document.getElementById('wa-tpl-select');
+    if(!select || !Array.isArray(_waTemplates)) return null;
+    return _waTemplates[Number(select.value)] || null;
+}
+function waTplValues(prefix, count) {
+    const values = [];
+    for(let i = 1; i <= count; i++) {
+        const el = document.getElementById(prefix + i);
+        values.push(String(el && el.value || '').trim());
+    }
+    return values;
+}
+function paintWaTplForm() {
+    const tpl = waTplSelected();
+    const varsBox = document.getElementById('wa-tpl-vars');
+    const preview = document.getElementById('wa-tpl-preview');
+    if(!varsBox || !preview) return;
+    if(!tpl) { varsBox.innerHTML = ''; preview.textContent = ''; return; }
+    const total = Number(tpl.header_vars || 0) + Number(tpl.body_vars || 0);
+    if(!varsBox.dataset.for || varsBox.dataset.for !== (tpl.name + '|' + tpl.language)) {
+        varsBox.dataset.for = tpl.name + '|' + tpl.language;
+        let html = '';
+        for(let i = 1; i <= Number(tpl.header_vars || 0); i++) {
+            html += `<div><label>Başlıq ${i}</label><input type="text" id="wa-tpl-h${i}" autocomplete="off"></div>`;
+        }
+        for(let i = 1; i <= Number(tpl.body_vars || 0); i++) {
+            html += `<div><label>Dəyişən ${i}</label><input type="text" id="wa-tpl-b${i}" autocomplete="off"></div>`;
+        }
+        varsBox.innerHTML = html;
+        varsBox.querySelectorAll('input').forEach(input => { input.oninput = paintWaTplPreview; });
+    }
+    if(!total) varsBox.innerHTML = '';
+    paintWaTplPreview();
+}
+function paintWaTplPreview() {
+    const tpl = waTplSelected();
+    const preview = document.getElementById('wa-tpl-preview');
+    if(!preview) return;
+    if(!tpl) { preview.textContent = ''; return; }
+    const head = waTplFill(tpl.header, waTplValues('wa-tpl-h', Number(tpl.header_vars || 0)));
+    const body = waTplFill(tpl.body, waTplValues('wa-tpl-b', Number(tpl.body_vars || 0)));
+    preview.textContent = [head, body].filter(Boolean).join('\n\n');
+}
+function closeWaTemplateModal() {
+    document.getElementById('wa-tpl-modal')?.remove();
+}
+async function openWaTemplateModal(opts) {
+    const options = opts || {};
+    closeWaTemplateModal();
+    const needsPhone = !options.leadId;
+    const modal = document.createElement('div');
+    modal.id = 'wa-tpl-modal';
+    modal.innerHTML = `<div class="wa-tpl-card">
+        <div class="wa-tpl-head">
+            <h3>${needsPhone ? 'Yeni mesaj' : 'Şablon göndər'}</h3>
+            <button type="button" id="wa-tpl-close">Bağla</button>
+        </div>
+        <div class="wa-tpl-body">
+            ${needsPhone ? '<div><label>Nömrə</label><input type="tel" id="wa-tpl-phone" placeholder="994501234567" autocomplete="off"></div>' : `<div class="wa-tpl-note">Alıcı: ${escapeHtml(options.title || '')}</div>`}
+            <div><label>Şablon</label><select id="wa-tpl-select"><option value="">Yüklənir...</option></select></div>
+            <div class="wa-tpl-vars" id="wa-tpl-vars"></div>
+            <div><label>Önizləmə</label><div class="wa-tpl-preview" id="wa-tpl-preview"></div></div>
+            <div class="wa-tpl-note">İlk mesaj yalnız təsdiqlənmiş şablonla göndərilir.</div>
+            <button type="button" class="wa-tpl-send" id="wa-tpl-send" disabled>Göndər</button>
+        </div>
+    </div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeWaTemplateModal(); });
+    document.body.appendChild(modal);
+    document.getElementById('wa-tpl-close').onclick = closeWaTemplateModal;
+    const select = document.getElementById('wa-tpl-select');
+    const sendBtn = document.getElementById('wa-tpl-send');
+    try {
+        const rows = await loadWaTemplates(false);
+        if(!document.getElementById('wa-tpl-modal')) return;
+        if(!rows.length) {
+            select.innerHTML = '<option value="">Təsdiqlənmiş şablon yoxdur</option>';
+            return;
+        }
+        select.innerHTML = rows.map((row, index) => `<option value="${index}">${escapeHtml(row.name)} (${escapeHtml(row.language)})</option>`).join('');
+        select.onchange = paintWaTplForm;
+        sendBtn.disabled = false;
+        paintWaTplForm();
+    } catch(err) {
+        select.innerHTML = '<option value="">Şablonlar yüklənmədi</option>';
+        toast(err.message || 'Şablonlar yüklənmədi', true);
+        return;
+    }
+    sendBtn.onclick = () => sendWaTemplate(options);
+}
+async function sendWaTemplate(options) {
+    if(_waTplSending) return;
+    const tpl = waTplSelected();
+    if(!tpl) { toast('Şablon seçin', true); return; }
+    const phoneInput = document.getElementById('wa-tpl-phone');
+    const phone = phoneInput ? String(phoneInput.value || '').replace(/\D/g, '') : '';
+    if(phoneInput && phone.length < 9) { toast('Nömrəni yazın', true); return; }
+    const headerParams = waTplValues('wa-tpl-h', Number(tpl.header_vars || 0));
+    const bodyParams = waTplValues('wa-tpl-b', Number(tpl.body_vars || 0));
+    if([...headerParams, ...bodyParams].some(value => !value)) { toast('Dəyişənləri doldurun', true); return; }
+    const preview = document.getElementById('wa-tpl-preview');
+    const sendBtn = document.getElementById('wa-tpl-send');
+    _waTplSending = true;
+    if(sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Göndərilir...'; }
+    try {
+        const r = await fetch(API_BASE + '/api/deal/chat/template', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({
+                lead_id: options.leadId || 0,
+                phone,
+                template: tpl.name,
+                language: tpl.language,
+                params: bodyParams,
+                header_params: headerParams,
+                preview: preview ? preview.textContent : ''
+            })
+        });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok || !d.success) throw new Error(d.error || 'Şablon göndərilmədi');
+        closeWaTemplateModal();
+        toast('Şablon göndərildi');
+        if(options.leadId && _dealViewState && String(_dealViewState.id) === String(options.leadId)) pollDealChat();
+    } catch(err) {
+        toast(err.message || 'Şablon göndərilmədi', true);
+        if(sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Göndər'; }
+    } finally {
+        _waTplSending = false;
+    }
+}
 let _dealVoiceRec = null, _dealVoiceChunks = [], _dealVoiceTimer = null, _dealVoiceStart = 0, _dealVoiceCancelled = false;
 let _dealPendingFile = null, _dealPendingUrl = '', _dealPendingSeconds = 0;
 function clearDealPendingFile() {
@@ -5547,6 +5719,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                     <button type="button" id="deal-voice-drop" title="Səs yazısını sil">🗑</button>
                 </div>
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
+                <button type="button" class="wa-tpl-in" id="deal-chat-template" title="Şablon" aria-label="Şablon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h10M7 13h6"/></svg></button>
                 <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab"><span class="deal-ai-label">AI</span><span class="deal-ai-spin" aria-hidden="true"></span></button>
                 <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
@@ -5729,6 +5902,13 @@ function paintDealViewModal(deal, readonly, opts) {
             const file = fileInput.files && fileInput.files[0];
             fileInput.value = '';
             if(file) setDealPendingFile(file);
+        };
+    }
+    const tplBtn = document.getElementById('deal-chat-template');
+    if(tplBtn) {
+        tplBtn.onclick = () => {
+            const live = (_dealViewState && _dealViewState.deal) || deal;
+            openWaTemplateModal({leadId: live.id, title: dealClientName(live) || dealWaSenderPhone() || ''});
         };
     }
     const micBtn = document.getElementById('deal-chat-mic');
@@ -6964,6 +7144,11 @@ async function openChats() {
     } else {
         renderChatsList();
     }
+    const newMsgBtn = document.getElementById('chats-new-msg');
+    if(newMsgBtn && !newMsgBtn.dataset.bound) {
+        newMsgBtn.dataset.bound = '1';
+        newMsgBtn.onclick = () => openWaTemplateModal({});
+    }
     if(_dealInboxMode && _dealViewState && !_dealChatPollTimer) startDealChatPolling();
     startChatsPolling();
     loadSamilWorkspace(false);
@@ -7858,7 +8043,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=280');
+    const reg = await navigator.serviceWorker.register('sw.js?v=281');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

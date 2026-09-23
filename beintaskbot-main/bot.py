@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v244 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v245 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9952,6 +9952,108 @@ def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool
     return _wa_cloud_post(body)
 
 
+_WA_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
+_WA_TEMPLATES_CACHE: dict = {"at": 0.0, "rows": []}
+_WA_TEMPLATES_TTL = 300.0
+
+
+def _wa_template_var_count(text: str) -> int:
+    numbers = [int(value) for value in _WA_TEMPLATE_VAR_RE.findall(str(text or ""))]
+    return max(numbers) if numbers else 0
+
+
+def _wa_template_rows(force: bool = False) -> list[dict]:
+    """Approved WABA templates, shaped for the app picker."""
+    now = _time_module.monotonic()
+    cached = _WA_TEMPLATES_CACHE.get("rows") or []
+    if cached and not force and now - float(_WA_TEMPLATES_CACHE.get("at") or 0) < _WA_TEMPLATES_TTL:
+        return list(cached)
+    waba = str(WA_WABA_ID or "").strip()
+    if not waba:
+        return []
+    payload = _wa_graph_get(
+        f"{waba}/message_templates",
+        {"limit": 200, "fields": "name,language,status,category,components"},
+    )
+    rows: list[dict] = []
+    for item in (payload or {}).get("data") or []:
+        if not isinstance(item, dict) or str(item.get("status") or "").upper() != "APPROVED":
+            continue
+        body_text = ""
+        header_text = ""
+        for component in item.get("components") or []:
+            if not isinstance(component, dict):
+                continue
+            kind = str(component.get("type") or "").upper()
+            if kind == "BODY":
+                body_text = str(component.get("text") or "")
+            elif kind == "HEADER" and str(component.get("format") or "TEXT").upper() == "TEXT":
+                header_text = str(component.get("text") or "")
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        rows.append({
+            "name": name,
+            "language": str(item.get("language") or ""),
+            "category": str(item.get("category") or ""),
+            "header": header_text,
+            "body": body_text,
+            "header_vars": _wa_template_var_count(header_text),
+            "body_vars": _wa_template_var_count(body_text),
+        })
+    rows.sort(key=lambda row: (row.get("name") or "", row.get("language") or ""))
+    if rows:
+        _WA_TEMPLATES_CACHE["rows"] = rows
+        _WA_TEMPLATES_CACHE["at"] = now
+    return list(rows)
+
+
+def _wa_template_components(body_params=None, header_params=None) -> list[dict]:
+    components: list[dict] = []
+    header = [str(value) for value in (header_params or [])]
+    if header:
+        components.append({
+            "type": "header",
+            "parameters": [{"type": "text", "text": value[:200]} for value in header],
+        })
+    body = [str(value) for value in (body_params or [])]
+    if body:
+        components.append({
+            "type": "body",
+            "parameters": [{"type": "text", "text": value[:900]} for value in body],
+        })
+    return components
+
+
+def _wa_cloud_send_template(
+    phone: str,
+    name: str,
+    lang_code: str = "az",
+    body_params=None,
+    header_params=None,
+) -> tuple[bool, str, str]:
+    """Send an approved template; the only way to open a chat outside 24 hours."""
+    to = _normalize_wa_number(phone)
+    if len(to) < 8:
+        return False, "WhatsApp nömrəsi tapılmadı.", ""
+    template_name = str(name or "").strip()
+    if not template_name:
+        return False, "Şablon seçilməyib.", ""
+    template: dict = {
+        "name": template_name,
+        "language": {"code": str(lang_code or "az").strip() or "az"},
+    }
+    components = _wa_template_components(body_params, header_params)
+    if components:
+        template["components"] = components
+    return _wa_cloud_post({
+        "recipient_type": "individual",
+        "to": to,
+        "type": "template",
+        "template": template,
+    })
+
+
 def _wa_cloud_send_media(
     phone: str,
     kind: str,
@@ -12664,6 +12766,94 @@ def _deliver_via_cloud(
     return False, last_error or "WhatsApp mesajı göndərilmədi.", "", kind
 
 
+async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    if not _wa_cloud_configured():
+        return web.json_response({
+            "success": True,
+            "templates": [],
+            "error": "WhatsApp Cloud API konfiqurasiya olunmayıb.",
+        })
+    force = str(request.rel_url.query.get("refresh") or "") == "1"
+    rows = await asyncio.to_thread(_wa_template_rows, force)
+    return web.json_response({"success": True, "templates": rows})
+
+
+async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    if not _wa_cloud_configured():
+        return web.json_response({"success": False, "error": "WhatsApp Cloud API konfiqurasiya olunmayıb."}, status=400)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    name = str(data.get("template") or "").strip()
+    if not name:
+        return web.json_response({"success": False, "error": "Şablon seçilməyib."}, status=400)
+    language = str(data.get("language") or "az").strip() or "az"
+    body_params = [str(value).strip() for value in (data.get("params") or [])]
+    header_params = [str(value).strip() for value in (data.get("header_params") or [])]
+    if any(not value for value in body_params + header_params):
+        return web.json_response({"success": False, "error": "Şablon dəyişənlərini doldurun."}, status=400)
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    phone = str(data.get("phone") or "").strip()
+    lead = None
+    if lead_id:
+        lead, err = _authorized_deal_lead(chat_id, lead_id)
+        if err:
+            return err
+        if not phone:
+            _ids, phones = _contact_ids_and_phones(lead)
+            phone = phones[0] if phones else ""
+    if not _normalize_wa_number(phone):
+        return web.json_response({"success": False, "error": "Nömrə tapılmadı."}, status=400)
+    ok, error, wamid = await asyncio.to_thread(
+        _wa_cloud_send_template,
+        phone,
+        name,
+        language,
+        body_params,
+        header_params,
+    )
+    if not ok:
+        return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
+    preview = str(data.get("preview") or "").strip() or name
+    if lead:
+        lid = int(lead.get("id") or lead_id)
+        author = employee_name_for_lead(lead)
+        _remember_sent_message(lid, _sent_message_item(wamid=wamid, text=preview, author=author))
+        _append_chat_tail(lid, {
+            "id": f"sent-{wamid or uuid.uuid4().hex}",
+            "external_id": str(wamid or ""),
+            "incoming": False,
+            "direction": "outgoing",
+            "text": preview,
+            "created_at": int(_time_module.time()),
+            "message_type": "text",
+            "channel": "whatsapp",
+            "author": author,
+            "delivery_status": "sent",
+        })
+    return web.json_response({
+        "success": True,
+        "wamid": wamid,
+        "phone": _wa_display_number(_normalize_wa_number(phone)),
+    })
+
+
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -14446,6 +14636,10 @@ async def start_webhook_server():
     app_web.router.add_get("/api/deal/chat", handle_api_deal_chat)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/template', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/template", handle_api_deal_chat_template)
+    app_web.router.add_route('OPTIONS', '/api/whatsapp/templates', lambda r: web.Response())
+    app_web.router.add_get("/api/whatsapp/templates", handle_api_whatsapp_templates)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/react', lambda r: web.Response())
