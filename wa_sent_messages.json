@@ -337,7 +337,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790195605,
+    "at": 1790196017,
     "fields": [
       "messages"
     ]
@@ -764,6 +764,30 @@
       "file_uuid": "",
       "file_name": "",
       "delivery_status": "",
+      "via_cloud": true
+    }
+  ],
+  "58657872": [
+    {
+      "id": "wa-wamid.HBgLMTQxNTkxNDE0MDMVAgARGBIxRDAyREE0NzQzNzhEMDJFQzcA",
+      "external_id": "wamid.HBgLMTQxNTkxNDE0MDMVAgARGBIxRDAyREE0NzQzNzhEMDJFQzcA",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "Proqramımızın aylıq istifadə haqqı *50 azn* təşkil edir. Bu qiymətə satışların və anbarın idarə olunması, məhsul qalıqlarına nəzarət, minimum qalıq səviyyəsinə çatdıqda *təchizatçılar üçün sifarişlərin avtomatik formalaşdırılması*, borcların izlənməsi, mənfəət və satış hesabatları, müştərilər, əməkdaşlar və partnyorlar üçün *bonus və loyallıq sistemi*, mobil telefondan sistemə giriş, ani bildirişlər, fiskal kassalarla inteqrasiya, daimi texniki dəstək, proqramın mütəmadi yenilənməsi və məlumatların hər gün avtomatik ehtiyat nüsxəsinin (backup) yaradılması daxildir. \nQuraşdırılma, ilkin sazlama və əməkdaşların təlimi isə *250–300 AZN* təşkil edir (birdəfəlik).\n\nSifariş edirəm\n\nGörüş edək",
+      "message_type": "text",
+      "created_at": 1790196014,
+      "created": "24.09.2026 00:40",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "failed",
       "via_cloud": true
     }
   ]
