@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="235">
+    <meta name="pwa-build" content="236">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=235">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=235">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=236">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=236">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -315,8 +315,9 @@
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
         .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#fff; overflow:auto; flex:none; border-bottom:1px solid #e8ecf0; }
-        .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
-        .wa-chip.on { background:#1e293b; color:#fff; border-color:#1e293b; }
+        .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+        .wa-chip[data-channel] { width:32px; height:32px; padding:0; }
+        .wa-chip.on { border-color:#1e293b; box-shadow:0 0 0 1px #1e293b; }
         .wa-chip-text { display:flex; flex-direction:column; align-items:flex-start; line-height:1.15; min-width:0; }
         .wa-chip-phone { font-size:9px; font-weight:600; opacity:.78; letter-spacing:.01em; }
         .wa-chip svg, .chat-ch svg { display:block; flex:none; }
@@ -4197,7 +4198,8 @@ function paintDealChannels(channels, active) {
     }
     bar.innerHTML = rows.map(row => {
         const meta = chatChannelMeta(row.key);
-        return `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}">${meta.svg}<span class="wa-chip-text"><span>${escapeHtml(row.label || meta.label)}</span></span></button>`;
+        const label = row.label || meta.label;
+        return `<button type="button" class="wa-chip ${row.key===active?'on':''}" data-channel="${escapeHtml(row.key)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${meta.svg}</button>`;
     }).join('');
     bar.querySelectorAll('[data-channel]').forEach(btn => {
         btn.onclick = () => switchDealChatChannel(btn.getAttribute('data-channel'));
@@ -4930,7 +4932,7 @@ function dealInfoBodyHtml(deal, readonly) {
         </div>
         <h3>Sövdələşmə</h3>
         <div class="text-[13px] text-gray-700 space-y-1">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
+            ${dealCardTitle(deal) ? `<div><b>${escapeHtml(dealCardTitle(deal))}</b></div>` : ''}
             ${sourceUrlsHtml(deal)}
             ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
             ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline">Kommo-da aç</a></div>` : ''}
@@ -7520,7 +7522,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=252');
+    const reg = await navigator.serviceWorker.register('sw.js?v=253');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
