@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="219">
+    <meta name="pwa-build" content="220">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -340,7 +340,7 @@
         .chat-reply-btn { border:0; background:transparent; color:#64748b; font-size:13px; font-weight:700; padding:0 2px; cursor:pointer; }
         .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
         .deal-chat-row.in[data-react-id] { cursor:pointer; }
-        .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); }
+        .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
         .chat-react-pop { position:fixed; z-index:120; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
         .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; }
         .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
@@ -3372,6 +3372,11 @@ function dealDecryptNoticeHtml(when) {
     const link = url ? ` <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkLabel)}</a>` : '';
     return `<div class="deal-chat-system">${escapeHtml(dealDecryptNoticeText())}${link}${when ? `<div class="wa-when" style="margin-top:3px">${escapeHtml(when)}</div>` : ''}</div>`;
 }
+function chatReactKey(item) {
+    const wamid = String((item && item.external_id) || '').trim();
+    if(wamid.toLowerCase().startsWith('wamid')) return wamid;
+    return String((item && (item.id || item.msgid || item.external_id)) || '').trim();
+}
 function dealChatItemHtml(item, token, readonly) {
     const isComment = !!(item && item.is_comment);
     const when = dealChatWhen(item);
@@ -3391,15 +3396,15 @@ function dealChatItemHtml(item, token, readonly) {
     const avatar = chatAvatarHtml(item, token);
     const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">↩</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
-    const wamid = String(item.external_id || '');
-    const canReact = !readonly && !!item.incoming && wamid.toLowerCase().startsWith('wamid');
-    const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(wamid)}" title="Reaksiya">☺</button>` : '';
-    const reaction = item.my_reaction ? `<span class="chat-reaction">${escapeHtml(item.my_reaction)}</span>` : '';
+    const reactKey = chatReactKey(item);
+    const canReact = !readonly && !!reactKey;
+    const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(reactKey)}" title="Reaksiya">☺</button>` : '';
+    const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(item.text || '').trim()) ? '' : linkifyText(item.text || '');
     if(profile && !text && !quote) {
         return `<div class="deal-chat-row ${cls} avatar-only" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar || ''}${meta.svg}${headName}</div><div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span></div></div>`;
     }
-    const reactAttr = canReact ? ` data-react-id="${escapeHtml(wamid)}"` : '';
+    const reactAttr = canReact ? ` data-react-id="${escapeHtml(reactKey)}"` : '';
     const msgId = String(item.id || '');
     const msgAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
     return `<div class="deal-chat-row ${cls}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
@@ -3570,7 +3575,7 @@ function bindDealChatMedia(thread) {
             if(item) setDealChatReply(item);
         };
     });
-    thread.querySelectorAll('.chat-react-btn').forEach(btn => {
+    thread.querySelectorAll('.chat-react-btn, .chat-reaction[data-react-id]').forEach(btn => {
         btn.onclick = event => {
             event.stopPropagation();
             openChatReactionPicker(btn, btn.getAttribute('data-react-id'));
@@ -3650,6 +3655,7 @@ function showChatMsgMenu(x, y, item) {
     pop.id = 'chat-msg-ctx';
     pop.className = 'chats-ctx';
     pop.innerHTML = `<button type="button" data-act="reply">Cavab</button>
+        <button type="button" data-act="react">Reaksiya</button>
         <button type="button" data-act="pin">${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
     const left = Math.max(8, Math.min(x, window.innerWidth - pop.offsetWidth - 8));
@@ -3661,6 +3667,13 @@ function showChatMsgMenu(x, y, item) {
         event.stopPropagation();
         hideChatMsgMenu();
         setDealChatReply(item);
+    };
+    pop.querySelector('[data-act="react"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChatMsgMenu();
+        const row = document.querySelector('.deal-chat-row[data-msg-id="' + String(item.id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]');
+        openChatReactionPicker(row || event.target, chatReactKey(item));
     };
     pop.querySelector('[data-act="pin"]').onclick = event => {
         event.preventDefault();
@@ -3738,10 +3751,16 @@ function bindDealMessageMenu(thread) {
     });
 }
 const CHAT_REACTION_EMOJI = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-function openChatReactionPicker(anchor, wamid) {
+function findChatReactItem(reactId) {
+    const key = String(reactId || '');
+    return ((_dealViewState && _dealViewState.messages) || []).find(item => {
+        return chatReactKey(item) === key || String(item.external_id || '') === key || String(item.id || '') === key;
+    }) || null;
+}
+function openChatReactionPicker(anchor, reactId) {
     document.getElementById('chat-react-pop')?.remove();
-    if(!anchor || !wamid) return;
-    const current = ((_dealViewState && _dealViewState.messages) || []).find(item => String(item.external_id || '') === String(wamid));
+    if(!anchor || !reactId) return;
+    const current = findChatReactItem(reactId);
     const pop = document.createElement('div');
     pop.id = 'chat-react-pop';
     pop.className = 'chat-react-pop';
@@ -3754,7 +3773,7 @@ function openChatReactionPicker(anchor, wamid) {
         btn.onclick = event => {
             event.stopPropagation();
             close();
-            sendChatReaction(wamid, btn.getAttribute('data-emoji') || '');
+            sendChatReaction(reactId, btn.getAttribute('data-emoji') || '');
         };
     });
     document.body.appendChild(pop);
@@ -3764,18 +3783,19 @@ function openChatReactionPicker(anchor, wamid) {
     pop.style.top = Math.max(8, box.top - (pop.offsetHeight || 40) - 6) + 'px';
     setTimeout(() => document.addEventListener('click', onAway, true), 0);
 }
-async function sendChatReaction(wamid, emoji) {
+async function sendChatReaction(reactId, emoji) {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return;
     const leadId = _dealViewState.id;
     const seq = _dealViewState.seq;
-    const target = (_dealViewState.messages || []).find(item => String(item.external_id || '') === String(wamid));
+    const target = findChatReactItem(reactId);
     const previous = target ? target.my_reaction : '';
-    if(target) { target.my_reaction = emoji; paintDealChatThread({stickBottom: false, force: true}); }
+    const next = previous && previous === emoji ? '' : emoji;
+    if(target) { target.my_reaction = next; paintDealChatThread({stickBottom: false, force: true}); }
     try {
         const r = await fetch(API_BASE + '/api/deal/chat/react', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({lead_id: leadId, external_id: wamid, emoji, sender_phone: dealWaSenderPhone()})
+            body: JSON.stringify({lead_id: leadId, external_id: reactId, message_id: target && target.id || '', emoji: next, sender_phone: dealWaSenderPhone()})
         });
         const d = await r.json().catch(() => ({}));
         if(!d.success) throw new Error(d.error || 'Reaksiya göndərilmədi.');
@@ -7105,7 +7125,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=236');
+    const reg = await navigator.serviceWorker.register('sw.js?v=237');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

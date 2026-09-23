@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v216 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v217 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11772,26 +11772,35 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         lead_id = 0
     wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    message_id = str(data.get("message_id") or "").strip()
+    react_id = wamid or message_id
     emoji = str(data.get("emoji") or "").strip()[:8]
-    if not lead_id or not wamid:
+    if not lead_id or not react_id:
         return web.json_response({"success": False, "error": "lead_id və mesaj id lazımdır"}, status=400)
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
-    if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
-        return web.json_response({"success": False, "error": "Reaksiya yalnız rəsmi WhatsApp nömrəsində işləyir."}, status=400)
-    _ids, phones = _contact_ids_and_phones(lead)
-    if not phones:
-        return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+    lid = int(lead.get("id") or lead_id)
+    use_cloud = _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone")))
     last_error = ""
-    for phone in phones:
-        ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, wamid, emoji)
-        if ok:
-            _remember_reaction(int(lead.get("id") or lead_id), wamid, emoji)
-            return web.json_response({"success": True, "emoji": emoji})
-        if error:
-            last_error = error
-    return web.json_response({"success": False, "error": last_error or "Reaksiya göndərilmədi."}, status=400)
+    if use_cloud and wamid.lower().startswith("wamid"):
+        _ids, phones = _contact_ids_and_phones(lead)
+        if not phones:
+            return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+        for phone in phones:
+            ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, wamid, emoji)
+            if ok:
+                _remember_reaction(lid, wamid, emoji)
+                if message_id and message_id != wamid:
+                    _remember_reaction(lid, message_id, emoji)
+                return web.json_response({"success": True, "emoji": emoji})
+            if error:
+                last_error = error
+        return web.json_response({"success": False, "error": last_error or "Reaksiya göndərilmədi."}, status=400)
+    _remember_reaction(lid, react_id, emoji)
+    if message_id and message_id != react_id:
+        _remember_reaction(lid, message_id, emoji)
+    return web.json_response({"success": True, "emoji": emoji, "local": True})
 
 
 async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
