@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="223">
+    <meta name="pwa-build" content="224">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -3188,13 +3188,13 @@ function dealAudioHtml(deal) {
 }
 function dealLastClientMessage(deal) {
     const direct = String((deal && deal.last_client_message) || '').trim();
-    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct)) return direct.replace(/\s+/g, ' ').slice(0, 140);
+    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(direct)) return direct.replace(/\s+/g, ' ').slice(0, 140);
     const chat = Array.isArray(deal && deal.chat) ? deal.chat : [];
     for(let i = chat.length - 1; i >= 0; i -= 1) {
         const item = chat[i];
         if(!item || !item.incoming || item.is_comment) continue;
         const text = String(item.text || '').trim();
-        if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text)) continue;
+        if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text) || isDealMissedCall(item)) continue;
         return text.replace(/\s+/g, ' ').slice(0, 140);
     }
     return '';
@@ -3395,6 +3395,19 @@ function dealSystemNoticeHtml(text, when) {
 function dealDecryptNoticeHtml(when) {
     return dealSystemNoticeHtml(dealDecryptNoticeText(), when);
 }
+function dealPlainSystemHtml(text, when) {
+    return `<div class="deal-chat-system">${escapeHtml(text)}${when ? `<div class="wa-when" style="margin-top:3px">${escapeHtml(when)}</div>` : ''}</div>`;
+}
+function isDealMissedCall(item) {
+    const type = String((item && (item.message_type || item.type)) || '').toLowerCase();
+    if(type === 'call_missed' || type === 'missed_call') return true;
+    const text = String((item && item.text) || '');
+    if(/buraxılmış zəng|пропущен|missed (voice )?call|cavabsız zəng/i.test(text)) return true;
+    const status = String((item && (item.call_status || item.status)) || '').toLowerCase();
+    if((type === 'call_in' || type === 'call_out' || type === 'call') && /missed|no_?answer|unanswered|cancel|busy/.test(status)) return true;
+    if((type === 'call_in' || type === 'call_out' || type === 'call') && Number(item && item.duration) === 0 && item && item.duration !== '' && item.duration != null) return true;
+    return false;
+}
 function chatReactKey(item) {
     const wamid = String((item && item.external_id) || '').trim();
     if(wamid.toLowerCase().startsWith('wamid')) return wamid;
@@ -3406,6 +3419,9 @@ function dealChatItemHtml(item, token, readonly) {
     if(isComment) {
         const who = String(item.author || '').trim();
         return `<div class="deal-chat-note"><div class="meta"><b>Qeyd</b>${who ? ' · ' + escapeHtml(who) : ''} · ${escapeHtml(when)}</div><div>${linkifyText(item.text || '')}</div></div>`;
+    }
+    if(isDealMissedCall(item)) {
+        return dealPlainSystemHtml('Buraxılmış zəng', when);
     }
     if(isDealEditedContextNotice(item && item.text)) {
         return dealSystemNoticeHtml(dealEditedNoticeText(), when);
@@ -3947,12 +3963,32 @@ async function sendChatReaction(reactId, emoji) {
                 wamid,
                 message_id: target && target.id || '',
                 emoji: next,
-                sender_phone: dealWaSenderPhone()
+                sender_phone: dealWaSenderPhone(),
+                reply_to_message_id: target && target.id || '',
+                reply_to_text: target ? dealChatReplyPreview(target) : '',
+                reply_to_author: target ? (dealChatActor(target) || target.author || '') : '',
+                channel: (_dealViewState && _dealViewState.channel) || 'whatsapp',
+                talk_id: Number(((_dealViewState.channels || []).find(row => row.key === ((_dealViewState && _dealViewState.channel) || 'whatsapp')) || {}).talk_id || 0)
             })
         });
         const d = await r.json().catch(() => ({}));
         if(!d.success) throw new Error(d.error || 'Reaksiya göndərilmədi.');
-        if(next) toast(d.local ? 'Reaksiya əlavə olundu' : 'Reaksiya göndərildi');
+        if(d.sent && next && target) {
+            const sent = {
+                id: 'react-' + Date.now(),
+                incoming: false,
+                text: next,
+                reply_to_message_id: target.id || '',
+                reply_to_text: dealChatReplyPreview(target),
+                reply_to_author: dealChatActor(target) || target.author || '',
+                created_at: Math.floor(Date.now() / 1000),
+                channel: _dealViewState.channel || 'whatsapp',
+                delivery_status: 'sent'
+            };
+            _dealViewState.messages = mergeDealChat(_dealViewState.messages, [sent], false);
+            paintDealChatThread({stickBottom: true, force: true});
+        }
+        if(next) toast(d.sent ? 'Reaksiya göndərildi' : (d.local ? 'Reaksiya əlavə olundu' : 'Reaksiya göndərildi'));
         else toast('Reaksiya silindi');
     } catch(err) {
         toast(String(err && err.message || 'Reaksiya göndərilmədi.'), true);
@@ -7292,7 +7328,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=240');
+    const reg = await navigator.serviceWorker.register('sw.js?v=241');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

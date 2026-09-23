@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v220 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v221 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8426,10 +8426,32 @@ def _deal_fmt_ts(ts) -> str:
     return datetime.fromtimestamp(value, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
 
 
+def _call_is_missed(blob: dict | None, text: str = "") -> bool:
+    params = blob if isinstance(blob, dict) else {}
+    status = " ".join(
+        str(params.get(key) or "")
+        for key in ("call_status", "status", "result", "state", "outcome")
+    ).lower()
+    folded = f"{status} {text}".lower()
+    if any(token in folded for token in (
+        "missed", "no_answer", "noanswer", "unanswered", "cancel", "busy",
+        "пропущ", "buraxılmış", "cavabsız",
+    )):
+        return True
+    if "duration" not in params and "duration_sec" not in params:
+        return False
+    raw = params.get("duration", params.get("duration_sec"))
+    try:
+        seconds = int(raw or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    return seconds <= 0
+
+
 def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = "") -> bool:
     ntype = str(note_type or "").casefold()
     combined = f"{ntype} {file_name} {message_type}".casefold()
-    if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba", "call_in", "call_out"}:
+    if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba", "call_in", "call_out", "call_missed"}:
         return True
     if ntype in {"attachment", "file"}:
         return _looks_audio_name(file_name) or message_type in {"voice", "audio", "picture", "video"}
@@ -8460,7 +8482,11 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         text = f"{label} {phone}".strip()
         if duration:
             text += f" ({duration}s)"
-        message_type = "audio"
+        if _call_is_missed(params, text):
+            text = "Buraxılmış zəng"
+            message_type = "call_missed"
+        else:
+            message_type = "audio"
     elif ntype in {"attachment", "file"}:
         text = _extract_nested_text(params) or file_name or "Fayl"
         message_type = "audio" if _looks_audio_name(file_name) else "file"
@@ -10996,8 +11022,12 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
     if message_type in {"incoming", "outgoing"}:
         message_type = str(nested.get("type") or "text")
-    if message_type in {"call", "call_in", "call_out"}:
-        message_type = "audio" if media or file_uuid else message_type
+    if message_type in {"call", "call_in", "call_out"} or "call" in message_type:
+        if _call_is_missed(nested, text) or _call_is_missed(message, text) or _call_is_missed(attachment, text):
+            text = "Buraxılmış zəng"
+            message_type = "call_missed"
+        else:
+            message_type = "audio" if media or file_uuid else message_type
     text = str(nested.get("text") or message.get("text") or "").strip()
     folded = text.casefold()
     if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
@@ -11083,7 +11113,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 params={
                     "filter[entity]": entity_type,
                     "filter[entity_id]": entity_id,
-                    "filter[type]": "incoming_chat_message,outgoing_chat_message,incoming_sms,outgoing_sms",
+                    "filter[type]": "incoming_chat_message,outgoing_chat_message,incoming_sms,outgoing_sms,incoming_call,outgoing_call",
                     "limit": 100,
                 },
                 timeout=12,
@@ -11105,6 +11135,9 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             text = _extract_nested_text(message)
             media = str(message.get("media") or message.get("link") or "").strip() if isinstance(message, dict) else ""
             file_uuid = _extract_file_uuid(message) if isinstance(message, dict) else ""
+            call_event = "call" in etype
+            if call_event and (not text or _call_is_missed(message if isinstance(message, dict) else {}, text) or _call_is_missed(payload, text)):
+                text = "Buraxılmış zəng"
             if not text and not media and not file_uuid:
                 skipped = True
                 continue
@@ -11122,7 +11155,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "incoming": incoming,
                 "author": KOMMO_USERS.get(event.get("created_by") or event.get("created_by_id"), "") or "",
                 "text": text,
-                "message_type": "audio" if _looks_audio_name(text) else "text",
+                "message_type": "call_missed" if call_event or str(text).startswith("Buraxılmış") else ("audio" if _looks_audio_name(text) else "text"),
                 "created_at": created,
                 "created": _deal_fmt_ts(created),
                 "origin": etype,
@@ -11842,6 +11875,27 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     })
 
 
+def _send_gray_emoji_reply(chat_id: int, lead: dict, data: dict, emoji: str) -> tuple[bool, str]:
+    """Gray WhatsApp cannot react; send the emoji as a quiet quoted reply."""
+    channel = str(data.get("channel") or "whatsapp").strip().lower() or "whatsapp"
+    if channel != "whatsapp":
+        return False, ""
+    try:
+        hinted_talk = int(data.get("talk_id") or 0)
+    except (TypeError, ValueError):
+        hinted_talk = 0
+    sender_digits = _hinted_wa_sender_digits(chat_id, data.get("sender_phone"))
+    reply_talk_id, _chat = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
+    if not reply_talk_id:
+        return False, ""
+    preview = str(data.get("reply_to_text") or "").strip()
+    text = _with_quiet_quote(str(emoji or "").strip(), preview)
+    if not text:
+        return False, ""
+    ok, error, _status = _send_kommo_talk_message(reply_talk_id, text)
+    return bool(ok), str(error or "")
+
+
 async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -11891,7 +11945,13 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     _remember_reaction(lid, react_id, emoji)
     if message_id and message_id != react_id:
         _remember_reaction(lid, message_id, emoji)
-    return web.json_response({"success": True, "emoji": emoji, "local": True})
+    if emoji:
+        sent, send_error = _send_gray_emoji_reply(chat_id, lead, data, emoji)
+        if sent:
+            return web.json_response({"success": True, "emoji": emoji, "sent": True})
+        if send_error:
+            last_error = send_error
+    return web.json_response({"success": True, "emoji": emoji, "local": True, "warning": last_error})
 
 
 async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
