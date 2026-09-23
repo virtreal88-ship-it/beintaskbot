@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="249">
+    <meta name="pwa-build" content="250">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=249">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=249">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=250">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=250">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -6801,6 +6801,57 @@ let _chatsPollTimer = null;
 function stopChatsPolling() {
     if(_chatsPollTimer) { clearInterval(_chatsPollTimer); _chatsPollTimer = null; }
 }
+let _inboxPulseRev = 0;
+let _inboxFullAt = Date.now();
+async function pollInboxPulse() {
+    if(!HAS_CHATS || !CURRENT_USER_ID) return;
+    if(document.getElementById('screen-chats')?.classList.contains('active') && Date.now() - _inboxFullAt > 180000) {
+        _inboxFullAt = Date.now();
+        loadSamilWorkspace(false, null, true);
+        return;
+    }
+    try {
+        const response = await fetch(API_BASE + '/api/chats/pulse?rev=' + encodeURIComponent(String(_inboxPulseRev)) + '&_ts=' + Date.now(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success) return;
+        const rev = Number(payload.rev || 0);
+        if(rev < _inboxPulseRev) {
+            _inboxPulseRev = rev;
+            if(Date.now() - _inboxFullAt > 60000) {
+                _inboxFullAt = Date.now();
+                loadSamilWorkspace(false, null, true);
+            }
+            return;
+        }
+        _inboxPulseRev = rev;
+        const rows = Array.isArray(payload.chats) ? payload.chats : [];
+        if(payload.refresh && Date.now() - _inboxFullAt > 60000) {
+            _inboxFullAt = Date.now();
+            loadSamilWorkspace(false, null, true);
+            return;
+        }
+        if(!rows.length) return;
+        let changed = false;
+        rows.forEach(row => {
+            const deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
+            if(!deal) return;
+            if(row.last_client_message) deal.last_client_message = row.last_client_message;
+            if(row.last_incoming_at) deal.last_incoming_at = Number(row.last_incoming_at) || deal.last_incoming_at;
+            if(row.chat_at) deal.chat_at = Number(row.chat_at) || deal.chat_at;
+            if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
+            changed = true;
+        });
+        if(!changed) return;
+        persistLocalSamilWorkspace();
+        if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
+        watchIncomingChats();
+        const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
+        if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
+    } catch(_err) {}
+}
 function startChatsPolling() {
     stopChatsPolling();
     _chatsPollTimer = setInterval(() => {
@@ -6808,8 +6859,8 @@ function startChatsPolling() {
             stopChatsPolling();
             return;
         }
-        loadSamilWorkspace(false, null, false);
-    }, 15000);
+        pollInboxPulse();
+    }, 8000);
 }
 async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
@@ -7728,7 +7779,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=266');
+    const reg = await navigator.serviceWorker.register('sw.js?v=267');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

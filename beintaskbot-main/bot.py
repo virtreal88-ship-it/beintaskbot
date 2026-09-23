@@ -5532,12 +5532,183 @@ async def _handle_kommo_task_webhook(data: dict):
             except:
                 pass
 
+_inbox_pulse_rev = 0
+_inbox_pulse_events: list[dict] = []
+_inbox_pulse_lock = threading.Lock()
+
+
+def _kommo_form_message_rows(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    message = data.get("message")
+    if isinstance(message, dict) and isinstance(message.get("add"), list):
+        return [row for row in message["add"] if isinstance(row, dict)]
+    grouped: dict[int, dict] = {}
+    for key, value in data.items():
+        match = re.match(r"^message\[add\]\[(\d+)\]\[(.+)\]$", str(key))
+        if not match:
+            continue
+        grouped.setdefault(int(match.group(1)), {})[match.group(2)] = value
+    return [grouped[idx] for idx in sorted(grouped)]
+
+
+def _incoming_message_preview(text: str, message_type: str) -> str:
+    clean = " ".join(str(text or "").split())[:140]
+    if clean:
+        return clean
+    kind = str(message_type or "").strip().lower()
+    if kind in {"picture", "image", "sticker"}:
+        return "Şəkil"
+    if kind in {"voice", "audio", "ptt"}:
+        return "Səs mesajı"
+    if kind == "video":
+        return "Video"
+    if kind in {"file", "document"}:
+        return "Fayl"
+    return "Yeni mesaj"
+
+
+def _apply_inbox_incoming(lead_id: int, preview: str, created_at: int, origin: str) -> None:
+    """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
+    global _inbox_pulse_rev
+    channel = _origin_channel_key(origin)
+    found = False
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if not isinstance(deal, dict):
+                continue
+            try:
+                current_id = int(deal.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if current_id != int(lead_id):
+                continue
+            deal["last_client_message"] = preview
+            deal["last_incoming_at"] = int(created_at or 0)
+            try:
+                chat_at = int(deal.get("chat_at") or 0)
+            except (TypeError, ValueError):
+                chat_at = 0
+            deal["chat_at"] = max(chat_at, int(created_at or 0))
+            if channel and not str(deal.get("chat_channel") or "").strip():
+                deal["chat_channel"] = channel
+            found = True
+    with _inbox_pulse_lock:
+        _inbox_pulse_rev += 1
+        _inbox_pulse_events.append({
+            "rev": _inbox_pulse_rev,
+            "lead_id": int(lead_id),
+            "last_client_message": preview,
+            "last_incoming_at": int(created_at or 0),
+            "chat_channel": channel,
+            "missing": not found,
+        })
+        if len(_inbox_pulse_events) > 80:
+            del _inbox_pulse_events[:-80]
+    try:
+        _invalidate_deal_chat_cache(int(lead_id))
+    except Exception:
+        pass
+
+
+def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
+    owner = get_funnel_owner(chat_id) or {}
+    try:
+        pipeline_id = int(owner.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        pipeline_id = 0
+    overview = _personal_overview_cache.get(pipeline_id) or {}
+    visible: dict[int, dict] = {}
+    for deal in overview.get("deals") or []:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lid = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lid:
+            visible[lid] = deal
+    with _inbox_pulse_lock:
+        rev = int(_inbox_pulse_rev)
+        fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
+    chats = []
+    refresh = False
+    seen: set[int] = set()
+    for row in fresh:
+        try:
+            lid = int(row.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not lid or lid in seen:
+            continue
+        seen.add(lid)
+        deal = visible.get(lid)
+        if not deal:
+            if row.get("missing"):
+                refresh = True
+            continue
+        chats.append({
+            "id": lid,
+            "last_client_message": deal.get("last_client_message") or row.get("last_client_message") or "",
+            "last_incoming_at": int(deal.get("last_incoming_at") or row.get("last_incoming_at") or 0),
+            "chat_at": int(deal.get("chat_at") or 0),
+            "chat_channel": deal.get("chat_channel") or row.get("chat_channel") or "",
+        })
+    return {"success": True, "rev": rev, "chats": chats, "refresh": refresh}
+
+
+async def handle_api_chats_pulse(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    try:
+        since_rev = int(request.rel_url.query.get("rev") or 0)
+    except (TypeError, ValueError):
+        since_rev = 0
+    return web.json_response(_inbox_pulse_payload(chat_id, since_rev))
+
+
 async def handle_kommo_webhook(request: web.Request) -> web.Response:
     """Handle incoming Kommo webhooks."""
     try:
-        data = await request.post()
-        data = dict(data)
+        data = {}
+        if "json" in str(request.content_type or ""):
+            try:
+                parsed = await request.json()
+                data = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                data = {}
+        if not data:
+            data = dict(await request.post())
         logger.info(f"Webhook received: {list(data.keys())[:10]}")
+        incoming_rows = [
+            row for row in _kommo_form_message_rows(data)
+            if str(row.get("type") or "incoming").strip().lower() != "outgoing"
+        ]
+        if incoming_rows:
+            for row in incoming_rows:
+                entity_type = str(row.get("entity_type") or "lead").strip().lower()
+                if entity_type and entity_type not in {"lead", "2", "leads"}:
+                    continue
+                try:
+                    lead_id = int(row.get("entity_id") or row.get("element_id") or 0)
+                except (TypeError, ValueError):
+                    lead_id = 0
+                if not lead_id:
+                    continue
+                try:
+                    created_at = int(row.get("created_at") or 0)
+                except (TypeError, ValueError):
+                    created_at = 0
+                if not created_at:
+                    created_at = int(_time_module.time())
+                preview = _incoming_message_preview(str(row.get("text") or ""), str(row.get("message_type") or ""))
+                _apply_inbox_incoming(lead_id, preview, created_at, str(row.get("origin") or ""))
+            return web.Response(status=200, text="OK")
         # Detect event type
         is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
         if is_task_event:
@@ -5720,7 +5891,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v232 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v233 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -13566,6 +13737,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/api/action", handle_api_action)
