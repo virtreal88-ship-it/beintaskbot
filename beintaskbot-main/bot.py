@@ -12,6 +12,7 @@ Telegram Bot with Kommo CRM Integration — AI Function Calling Architecture
 """
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import hmac
@@ -5719,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v226 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v227 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11449,6 +11450,7 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
 _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
 _deal_chat_cache_lock = threading.Lock()
 _DEAL_CHAT_CACHE_TTL = 25.0
+_chat_collect_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deal-chat")
 
 
 def _invalidate_deal_chat_cache(lead_id: int = 0) -> None:
@@ -11538,14 +11540,18 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         cached = _deal_chat_cache.get(cache_key)
     if cached and now - cached[0] < _DEAL_CHAT_CACHE_TTL:
         return web.json_response(cached[1])
-    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
-        int(lead.get("id") or lead_id),
-        contact_ids,
-        limit=limit,
-        before=before,
-        channel=channel,
-        sender_digits=sender_digits,
-        employee_name=employee_name_for_lead(lead),
+    employee_name = employee_name_for_lead(lead)
+    chat, chat_blocked, reply_talk_id, has_more, channels, channel = await asyncio.get_running_loop().run_in_executor(
+        _chat_collect_executor,
+        lambda: _collect_deal_chat(
+            int(lead.get("id") or lead_id),
+            contact_ids,
+            limit=limit,
+            before=before,
+            channel=channel,
+            sender_digits=sender_digits,
+            employee_name=employee_name,
+        ),
     )
     cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
     payload = {

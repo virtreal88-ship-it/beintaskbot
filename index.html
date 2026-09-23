@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="242">
+    <meta name="pwa-build" content="243">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=242">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=242">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=243">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=243">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -25,6 +25,7 @@
         .custom-scroll::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
         @keyframes spin { to { transform:rotate(360deg); } }
         .sync-spinner { width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; display:inline-block; animation:spin 0.8s linear infinite; }
+        .yt-spin { width:14px; height:14px; border:2px solid #e5e7eb; border-top-color:#111827; border-radius:3px; display:inline-block; animation:spin .7s linear infinite; vertical-align:middle; }
         .sync-meter { position:relative; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; }
         .sync-meter .sync-spinner { position:absolute; inset:0; width:28px; height:28px; margin:0; }
         .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:600; color:#64748b; line-height:1; }
@@ -3603,7 +3604,7 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
     const deal = _dealViewState && _dealViewState.deal;
     const rows = dealTimelineMessages(chat, deal);
     if(loading && !(Array.isArray(chat) && chat.length)) {
-        return '<div class="wa-preloader"><div class="sync-spinner" style="width:28px;height:28px;border-width:3px"></div><div>Çat yüklənir...</div></div>';
+        return '<div class="wa-preloader"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>';
     }
     if(rows.length) {
         let lastDay = '';
@@ -4253,12 +4254,29 @@ async function fetchDealChatPage(before) {
     if(!requestMatchesDeal(seq, leadId)) return {stale:true};
     return d;
 }
+const _openedChatCache = {};
+function openedChatCacheKey(leadId, channel) {
+    return String(leadId || '') + '|' + String(channel || '');
+}
+function rememberOpenedChat(leadId, channel, messages) {
+    const rows = Array.isArray(messages) ? messages.slice() : [];
+    if(!leadId || !rows.length) return;
+    _openedChatCache[openedChatCacheKey(leadId, channel)] = rows;
+    _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
+}
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
     const seq = _dealViewState.seq;
-    _dealViewState.loading = true;
-    _dealViewState.messages = [];
-    paintDealChatThread({stickBottom: true});
+    const remembered = _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')];
+    if(Array.isArray(remembered) && remembered.length) {
+        _dealViewState.messages = remembered.slice();
+        _dealViewState.loading = false;
+        paintDealChatThread({stickBottom: true, force: true});
+    } else {
+        _dealViewState.loading = true;
+        _dealViewState.messages = [];
+        paintDealChatThread({stickBottom: true});
+    }
     try {
         const d = await fetchDealChatPage(0);
         if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
@@ -4266,6 +4284,7 @@ async function loadDealChatLatest() {
         _dealViewState.blocked = !!d.chat_blocked;
         _dealViewState.loading = false;
         _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
+        rememberOpenedChat(_dealViewState.id, d.channel || _dealViewState.channel, _dealViewState.messages);
         _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 20;
         applyDealChannels(d.channels || _dealViewState.channels);
         rememberDealAvatar(_dealViewState.deal, _dealViewState.messages);
@@ -6144,6 +6163,16 @@ async function incomingNoticeBody(deal) {
     const direct = chatNoticeText(dealLastClientMessage(deal));
     if(direct) return direct;
     if(!deal || !deal.id || !CURRENT_USER_ID) return 'Yeni mesaj';
+    if(_dealViewState && _dealViewState.loading) return 'Yeni mesaj';
+    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) {
+        const rows = Array.isArray(_dealViewState.messages) ? _dealViewState.messages : [];
+        for(let i = rows.length - 1; i >= 0; i -= 1) {
+            const item = rows[i];
+            if(!item || !item.incoming || item.is_comment) continue;
+            const text = chatNoticeText(item.text);
+            if(text) return text;
+        }
+    }
     try {
         const q = new URLSearchParams({lead_id: String(deal.id), limit: '12', _ts: String(Date.now())});
         const channel = chatsSourceKey(deal);
@@ -6494,7 +6523,9 @@ function renderChatsList() {
     }
     const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     if(!deals.length) {
-        box.innerHTML = `<div class="chats-empty-list">${samilDeals.length ? 'Çat tapılmadı' : 'Çat yüklənir...'}</div>`;
+        box.innerHTML = samilDeals.length
+            ? '<div class="chats-empty-list">Çat tapılmadı</div>'
+            : '<div class="chats-empty-list"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>';
     } else {
         box.innerHTML = deals.map(deal => {
             const name = dealClientName(deal) || String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || 'Müştəri');
@@ -6650,7 +6681,7 @@ async function openChats() {
         if(restored) renderChatsList();
         else {
             const box = document.getElementById('chats-rows');
-            if(box) box.innerHTML = '<div class="chats-empty-list">Çat yüklənir...</div>';
+            if(box) box.innerHTML = '<div class="chats-empty-list"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>';
         }
     } else {
         renderChatsList();
@@ -7549,7 +7580,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=259');
+    const reg = await navigator.serviceWorker.register('sw.js?v=260');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
