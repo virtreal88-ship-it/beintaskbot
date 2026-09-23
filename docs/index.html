@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="247">
+    <meta name="pwa-build" content="248">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=247">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=247">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=248">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=248">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -261,7 +261,7 @@
         .deal-head-name, .deal-head-phone { width:100%; background:transparent; border:0; color:#fff; padding:0; outline:none; font-family:inherit; }
         .deal-head-phone { font-size:14px; font-weight:600; opacity:1; width:auto; min-width:0; flex:none; }
         .deal-head-phone-row { display:inline-flex; align-items:center; gap:4px; }
-        .deal-head-wa { display:inline-flex; align-items:center; flex:none; font-size:12px; font-weight:600; color:#93c5fd; text-decoration:underline; white-space:nowrap; }
+        .deal-head-wa { display:inline-flex; align-items:center; justify-content:center; flex:none; width:22px; height:22px; color:#93c5fd; text-decoration:none; }
         .deal-share-btn { width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; padding:0; }
         .deal-kommo-btn { width:auto; padding:0 10px; font-size:11px; font-weight:600; text-decoration:none; color:#fff; letter-spacing:.02em; }
         .deal-shell-body { flex:1; min-height:0; overflow:hidden; display:grid; grid-template-columns:320px minmax(0,1fr); }
@@ -3179,6 +3179,8 @@ function setSamilStageFilter(stageKey) {
 }
 
 function dealMediaSrc(raw, token, uuid, extra) {
+    const direct = String(raw || '');
+    if(direct.startsWith('blob:') || direct.startsWith('data:')) return direct;
     const meta = extra || {};
     const noteId = String(meta.noteId || '').replace(/^note-/, '');
     const q = new URLSearchParams();
@@ -3370,6 +3372,12 @@ function dealEmployeeName(deal) {
 }
 function dealManagerName() {
     return dealEmployeeName(_dealViewState && _dealViewState.deal);
+}
+function waShareIconSvg() {
+    return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+}
+function isDealAudioFile(file) {
+    return !!(file && (String(file.type || '').startsWith('audio/') || /\.(ogg|oga|opus|mp3|m4a|wav|webm)$/i.test(file.name || '')));
 }
 function waMeUrl(phone) {
     let digits = String(phone || '').replace(/\D/g, '');
@@ -3684,6 +3692,66 @@ function hydrateDealQuotes(rows) {
 }
 function chatMessageKey(item) {
     return [item && item.id, item && item.text, item && item.created_at, item && item.file_uuid].join('|');
+}
+function deliveryRank(status) {
+    const st = String(status || '').toLowerCase();
+    if(st === 'error' || st === 'failed' || st === 'undelivered' || st === '4' || st === '-1') return 4;
+    if(st === 'read' || st === 'seen' || st === '3') return 3;
+    if(st === 'delivered' || st === '1' || st === '2') return 2;
+    if(st === 'sent' || st === '0' || st === 'sending') return 1;
+    return 0;
+}
+function sameChatMessage(a, b) {
+    if(!a || !b) return false;
+    const idA = String(a.id || '');
+    const idB = String(b.id || '');
+    if(idA && idA === idB) return true;
+    const extA = String(a.external_id || '');
+    const extB = String(b.external_id || '');
+    if(extA && extA === extB) return true;
+    return chatMessageKey(a) === chatMessageKey(b);
+}
+function applyChatDelivery(existing, incoming) {
+    const rows = Array.isArray(existing) ? existing : [];
+    let changed = false;
+    (incoming || []).forEach(item => {
+        if(!item || item.incoming || item.local) return;
+        const next = String(item.delivery_status || item.status || '');
+        if(!next) return;
+        const match = rows.find(row => row && !row.local && !row.incoming && sameChatMessage(row, item));
+        if(!match) return;
+        if(deliveryRank(next) <= deliveryRank(match.delivery_status)) return;
+        match.delivery_status = next === 'failed' ? 'error' : next;
+        changed = true;
+    });
+    return changed;
+}
+function serverHasFreshVoice(rows, created) {
+    return (rows || []).some(item => {
+        if(!item || item.incoming || item.local) return false;
+        const kind = String(item.message_type || item.type || '').toLowerCase();
+        const name = String(item.file_name || '');
+        const audio = kind === 'audio' || kind === 'voice' || kind === 'ptt' || /ogg|opus|mp3|m4a|wav|webm|voice|audio/i.test(kind + name);
+        if(!audio) return false;
+        const ts = Number(item.created_at || 0);
+        return !!ts && !!created && Math.abs(ts - created) <= 45;
+    });
+}
+function dropLocalChatMessage(localId) {
+    if(!_dealViewState || !localId) return;
+    const rows = _dealViewState.messages || [];
+    const found = rows.find(row => row && String(row.id) === String(localId));
+    const url = String(found && found.media_url || '');
+    if(url.startsWith('blob:') && url !== _dealPendingUrl) {
+        try { URL.revokeObjectURL(url); } catch(_err) {}
+    }
+    _dealViewState.messages = rows.filter(row => !row || String(row.id) !== String(localId));
+}
+function dropMatchedLocalVoices(incoming) {
+    const locals = (_dealViewState && _dealViewState.messages || []).filter(row => row && row.local);
+    locals.forEach(local => {
+        if(serverHasFreshVoice(incoming, Number(local.created_at || 0))) dropLocalChatMessage(local.id);
+    });
 }
 function mergeDealChat(existing, incoming, atStart) {
     const have = new Set((existing || []).map(chatMessageKey));
@@ -4358,6 +4426,8 @@ async function pollDealChat() {
         const d = await fetchDealChatPage(0);
         if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
         _dealViewState.blocked = !!d.chat_blocked;
+        applyChatDelivery(_dealViewState.messages, d.chat);
+        dropMatchedLocalVoices(d.chat);
         _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
         applyDealChannels(d.channels || _dealViewState.channels);
         const thread = document.getElementById('deal-chat-thread');
@@ -5276,6 +5346,28 @@ async function sendDealChatMessage(fileArg) {
     if(field) field.classList.add('sending');
     if(input) input.disabled = true;
     if(btn) btn.disabled = true;
+    const voiceNow = isDealAudioFile(file);
+    const localId = voiceNow ? ('local-voice-' + Date.now()) : '';
+    if(voiceNow && requestMatchesDeal(seq, leadId)) {
+        if(!_dealPendingUrl) _dealPendingUrl = URL.createObjectURL(file);
+        _dealViewState.messages = (_dealViewState.messages || []).concat([{
+            id: localId,
+            local: true,
+            incoming: false,
+            text: text || '🎤 Səs mesajı',
+            message_type: 'audio',
+            file_name: file.name || 'voice.ogg',
+            media_url: _dealPendingUrl,
+            created_at: Math.floor(Date.now() / 1000),
+            delivery_status: 'sent',
+            channel: channel
+        }]);
+        paintDealChatThread({stickBottom: true, force: true});
+        const voiceBox = document.getElementById('deal-voice-preview');
+        if(voiceBox) voiceBox.hidden = true;
+        if(field) field.classList.remove('has-voice');
+        if(input) input.value = '';
+    }
     try {
         let r;
         if(file) {
@@ -5311,8 +5403,19 @@ async function sendDealChatMessage(fileArg) {
         }
         if(input) input.value = '';
         setChatDraft(leadId, '');
-        clearDealPendingFile();
-        _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
+        const serverChat = Array.isArray(d.chat) ? d.chat : [];
+        if(localId && serverHasFreshVoice(serverChat, Math.floor(Date.now() / 1000))) {
+            dropLocalChatMessage(localId);
+            clearDealPendingFile();
+        } else if(localId) {
+            _dealPendingUrl = '';
+            _dealPendingFile = null;
+        } else {
+            clearDealPendingFile();
+        }
+        applyChatDelivery(_dealViewState.messages, serverChat);
+        dropMatchedLocalVoices(serverChat);
+        _dealViewState.messages = mergeDealChat(_dealViewState.messages, serverChat, false);
         if(replyId || replyText) {
             const outgoing = [..._dealViewState.messages].reverse().filter(item => item && !item.incoming && !item.is_comment);
             const sent = outgoing.find(item => String(item.text || '').trim() === text) || outgoing[0];
@@ -5329,7 +5432,20 @@ async function sendDealChatMessage(fileArg) {
         applyDealChannels(d.channels || _dealViewState.channels);
         paintDealChatThread({stickBottom: true, force: true});
     } catch(err) {
-        if(requestMatchesDeal(seq, leadId)) toast(err.message || 'Göndərilmədi', true);
+        if(requestMatchesDeal(seq, leadId)) {
+            if(localId) {
+                dropLocalChatMessage(localId);
+                paintDealChatThread({stickBottom: true, force: true});
+                const voiceBox = document.getElementById('deal-voice-preview');
+                const player = voiceBox && voiceBox.querySelector('audio');
+                if(voiceBox && player && _dealPendingFile && _dealPendingUrl) {
+                    player.src = _dealPendingUrl;
+                    voiceBox.hidden = false;
+                    document.querySelector('.wa-composer-field')?.classList.add('has-voice');
+                }
+            }
+            toast(err.message || 'Göndərilmədi', true);
+        }
     } finally {
         _dealChatSending = false;
         if(field) field.classList.remove('sending');
@@ -5351,7 +5467,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
     const phoneHtml = readonly
         ? escapeHtml(phoneVal || '—')
         : `<input id="deal-head-phone" class="deal-head-phone" value="${escapeHtml(phoneVal)}" placeholder="Telefon">`;
-    const waHtml = `<a id="deal-head-wa" class="deal-head-wa" href="${escapeHtml(waUrl || '#')}" target="_blank" rel="noopener noreferrer" ${waUrl ? '' : 'hidden'}>WhatsApp-da aç</a>`;
+    const waHtml = `<a id="deal-head-wa" class="deal-head-wa" href="${escapeHtml(waUrl || '#')}" target="_blank" rel="noopener noreferrer" title="WhatsApp-da aç" aria-label="WhatsApp-da aç" ${waUrl ? '' : 'hidden'}>${waShareIconSvg()}</a>`;
     const composer = readonly ? '' : `<div class="wa-composer-wrap">
             <div id="deal-chat-quote" class="chat-quote-bar" hidden>
                 <div style="flex:1;min-width:0">
@@ -7608,7 +7724,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=264');
+    const reg = await navigator.serviceWorker.register('sw.js?v=265');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

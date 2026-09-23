@@ -5720,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v231 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v232 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10461,6 +10461,7 @@ def _update_cloud_status(wamid: str, status: str) -> None:
         return
     store = _load_sent_messages()
     changed = False
+    touched_leads: list[int] = []
     with _wa_sent_lock:
         for key, rows in list(store.items()):
             if key in {_WA_REACTIONS_KEY, _WA_PHONE_LEADS_KEY} or not isinstance(rows, list):
@@ -10469,11 +10470,17 @@ def _update_cloud_status(wamid: str, status: str) -> None:
                 if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
                     row["delivery_status"] = mapped
                     changed = True
+                    try:
+                        touched_leads.append(int(key))
+                    except (TypeError, ValueError):
+                        pass
                     break
             if changed:
                 break
     if changed:
         _schedule_sent_messages_save()
+        for lid in touched_leads:
+            _invalidate_deal_chat_cache(lid)
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
@@ -10823,6 +10830,7 @@ def _collect_deal_chat(
         page = chat[-limit:] if chat else []
         has_more = talk_has_more or len(chat) > limit
     _apply_saved_replies(page)
+    _overlay_sent_delivery(page, lid)
     reactions = _reactions_for_lead(lid)
     if reactions:
         for item in page:
@@ -10830,6 +10838,72 @@ def _collect_deal_chat(
             if emoji:
                 item["my_reaction"] = emoji
     return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
+
+
+def _delivery_rank(status: str) -> int:
+    text = str(status or "").strip().lower()
+    if text in {"error", "failed", "undelivered", "4", "-1"}:
+        return 4
+    if text in {"read", "seen", "viewed", "3"}:
+        return 3
+    if text in {"delivered", "1", "2"}:
+        return 2
+    if text in {"sent", "sending", "0"}:
+        return 1
+    return 0
+
+
+def _message_is_voice(item: dict) -> bool:
+    kind = str((item or {}).get("message_type") or "").strip().lower()
+    name = str((item or {}).get("file_name") or "")
+    return kind in {"audio", "voice", "ptt"} or _looks_audio_name(name)
+
+
+def _overlay_sent_delivery(items: list, lead_id: int) -> None:
+    sent = [
+        row for row in _sent_messages_for_lead(lead_id)
+        if isinstance(row, dict) and not row.get("incoming") and str(row.get("delivery_status") or "").strip()
+    ]
+    if not sent or not items:
+        return
+    for item in items:
+        if not isinstance(item, dict) or item.get("incoming"):
+            continue
+        ext = str(item.get("external_id") or "")
+        matched = None
+        if ext:
+            for row in sent:
+                if str(row.get("external_id") or "") == ext:
+                    matched = row
+                    break
+        if matched is None:
+            try:
+                created = int(item.get("created_at") or 0)
+            except (TypeError, ValueError):
+                created = 0
+            text = str(item.get("text") or "")
+            voice = _message_is_voice(item)
+            candidates = []
+            for row in sent:
+                try:
+                    row_created = int(row.get("created_at") or 0)
+                except (TypeError, ValueError):
+                    row_created = 0
+                if not created or not row_created or abs(created - row_created) > 180:
+                    continue
+                if voice and _message_is_voice(row):
+                    candidates.append(row)
+                elif text and text == str(row.get("text") or ""):
+                    candidates.append(row)
+            if len(candidates) == 1:
+                matched = candidates[0]
+        if not matched:
+            continue
+        nxt = str(matched.get("delivery_status") or "")
+        if nxt == "failed":
+            nxt = "error"
+        if _delivery_rank(nxt) > _delivery_rank(str(item.get("delivery_status") or "")):
+            item["delivery_status"] = nxt
 
 
 def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
