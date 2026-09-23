@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="230">
+    <meta name="pwa-build" content="231">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=230">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=230">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=231">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=231">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -317,11 +317,14 @@
         .wa-thread::-webkit-scrollbar { width:8px; }
         .wa-thread::-webkit-scrollbar-thumb { background:#c5cdd6; border-radius:8px; }
         .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; color:#667781; font-size:12px; }
-        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:8px 0; max-width:78%; font-size:13px; line-height:1.45; box-shadow:none; position:relative; }
+        .deal-chat-wrap { display:flex; align-items:center; gap:4px; max-width:86%; margin:8px 0; }
+        .deal-chat-wrap.in { margin-right:auto; }
+        .deal-chat-wrap.out { margin-left:auto; flex-direction:row-reverse; }
+        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:0; max-width:100%; font-size:13px; line-height:1.45; box-shadow:none; position:relative; flex:1; min-width:0; }
         .deal-chat-row.wa-pop { animation:waPop .2s cubic-bezier(.2,.8,.2,1); }
         @keyframes waPop { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
-        .deal-chat-row.in { background:#fff; margin-right:auto; border:1px solid #e8ecf0; }
-        .deal-chat-row.out { background:#ffe8c4; margin-left:auto; }
+        .deal-chat-row.in { background:#fff; margin-right:0; border:1px solid #e8ecf0; }
+        .deal-chat-row.out { background:#ffe8c4; margin-left:0; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
         .chat-msg-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:#e2e8f0; }
         .deal-chat-row.avatar-only { background:transparent; box-shadow:none; padding:2px 0; max-width:none; }
@@ -340,14 +343,11 @@
         .wa-ticks.failed { color:#dc2626; letter-spacing:0; }
         .wa-state { font-size:9px; font-weight:600; color:#9aa7b0; letter-spacing:.01em; }
         .wa-state.failed { color:#dc2626; }
-        .chat-reply-btn { position:absolute; top:4px; right:5px; z-index:1; border:0; background:transparent; color:#64748b; font-size:13px; font-weight:700; line-height:1; padding:0; cursor:pointer; }
-        .deal-chat-row.out .chat-reply-btn { right:auto; left:5px; }
-        .deal-chat-row.in { padding-right:22px; }
-        .deal-chat-row.out { padding-left:22px; }
-        .chat-pin-mark { display:none; position:absolute; top:5px; left:6px; color:#64748b; line-height:1; }
-        .deal-chat-row.out .chat-pin-mark { left:auto; right:6px; }
-        .deal-chat-row.pinned .chat-pin-mark { display:inline-flex; }
-        .chat-pin-mark svg { width:12px; height:12px; display:block; }
+        .chat-reply-btn { flex:none; border:0; background:transparent; color:#8696a0; font-size:15px; font-weight:700; line-height:1; padding:4px; cursor:pointer; opacity:.55; }
+        .deal-chat-wrap:hover .chat-reply-btn, .deal-chat-wrap:focus-within .chat-reply-btn { opacity:1; color:#54656f; }
+        .chat-pin-mark { display:none; color:#8696a0; line-height:1; }
+        .deal-chat-row.pinned .chat-pin-mark { display:inline-flex; align-items:center; }
+        .chat-pin-mark svg { width:11px; height:11px; display:block; }
         .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
         .deal-chat-row.in[data-react-id] { cursor:pointer; }
         .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
@@ -408,6 +408,9 @@
             .deal-shell-body.show-chat .deal-side { display:none; }
             .deal-shell-body.show-info .wa-pane { display:none; }
         }
+        body.chats-screen #sync-indicator,
+        body.chats-screen #sidebar-sync,
+        body.chats-screen #preloader { display:none !important; }
         body.chats-screen #content-area { padding:0; overflow:hidden; }
         body.chats-screen #screen-chats.screen.active {
             display:flex !important; flex-direction:column; height:100%; margin:0;
@@ -1609,6 +1612,7 @@ function setSyncPercent(pct) {
     document.querySelectorAll('.sync-pct').forEach(el => { el.textContent = Math.max(0, Math.min(100, Math.round(pct))) + '%'; });
 }
 function showSyncIndicator() {
+    if(document.body.classList.contains('chats-screen')) return;
     const s = document.getElementById('sync-indicator');
     if(s) { s.style.display = 'flex'; s.style.opacity = '1'; }
     const d = document.getElementById('sidebar-sync');
@@ -3492,14 +3496,14 @@ function dealChatItemHtml(item, token, readonly) {
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(item.text || '').trim()) ? '' : linkifyText(item.text || '');
     const pinned = isChatItemPinned(item);
-    const pinMark = `<span class="chat-pin-mark" title="Sabitlənmiş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></span>`;
+    const pinMark = `<span class="chat-pin-mark" title="Sabitlənmiş"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.2 1.6l4.2 4.2-1.1 1.1-1.7-.3-3.8 3.8v1.6L6.6 13 5 11.4 2.4 14 1.3 12.9 4 10.2 2.4 8.6h1.6l3.8-3.8-.3-1.7 1.1-1.1z"/></svg></span>`;
     if(profile && !text && !quote) {
         return `<div class="deal-chat-row ${cls} avatar-only" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar || ''}${meta.svg}${headName}</div><div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span></div></div>`;
     }
     const reactAttr = canReact ? ` data-react-id="${escapeHtml(reactKey)}"` : '';
     const msgId = String(item.id || '');
     const msgAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
-    return `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}">${pinMark}${replyBtn}<div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
+    return `<div class="deal-chat-wrap ${cls}"><div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>${replyBtn}</div>`;
 }
 function isChatItemPinned(item) {
     const pinned = getPinnedChatMessage(_dealViewState && _dealViewState.id);
@@ -7470,7 +7474,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=247');
+    const reg = await navigator.serviceWorker.register('sw.js?v=248');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
