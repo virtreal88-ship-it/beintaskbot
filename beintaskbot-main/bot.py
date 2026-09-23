@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v209 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v210 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11757,6 +11757,135 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
     return web.json_response({"success": bool(ok)})
 
 
+KOMMO_AI_AGENT_NAME = "Anar Vəliyev"
+
+
+def _fold_az_name(value: str) -> str:
+    table = str.maketrans("əıöüçşğƏİÖÜÇŞĞ", "eioucsgEIOUCSG")
+    return " ".join(str(value or "").translate(table).casefold().split())
+
+
+def _kommo_name_matches(left: str, right: str) -> bool:
+    a = _fold_az_name(left)
+    b = _fold_az_name(right)
+    return bool(a and b and (a == b or a in b or b in a))
+
+
+def _list_kommo_users() -> list[dict]:
+    rows: list[dict] = []
+    page = 1
+    while page <= 5:
+        try:
+            resp = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/users",
+                headers=HEADERS,
+                params={"limit": 250, "page": page},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Kommo users failed: %s", exc)
+            break
+        if resp.status_code != 200:
+            break
+        batch = (resp.json().get("_embedded") or {}).get("users") or []
+        rows.extend(item for item in batch if isinstance(item, dict))
+        if len(batch) < 250:
+            break
+        page += 1
+    return rows
+
+
+def _list_kommo_bots() -> list[dict]:
+    rows: list[dict] = []
+    for url in (f"{KOMMO_BASE_URL}/api/v4/bots", f"{KOMMO_BASE_URL}/ajax/v4/bots"):
+        try:
+            resp = _http.get(url, headers=HEADERS, params={"limit": 250}, timeout=12)
+        except Exception as exc:
+            logger.warning("Kommo bots failed: %s", exc)
+            continue
+        if resp.status_code != 200:
+            continue
+        try:
+            payload = resp.json()
+        except Exception:
+            continue
+        batch = (payload.get("_embedded") or {}).get("bots") or payload.get("bots") or []
+        if isinstance(batch, list):
+            rows.extend(item for item in batch if isinstance(item, dict))
+        if rows:
+            break
+    return rows
+
+
+def _find_named_kommo_user(name: str) -> dict | None:
+    wanted = str(name or "").strip()
+    if not wanted:
+        return None
+    for user in _list_kommo_users():
+        label = " ".join(str(part or "") for part in (user.get("name"), user.get("full_name"), user.get("first_name"), user.get("last_name")))
+        if _kommo_name_matches(wanted, label):
+            return user
+    return None
+
+
+def _find_named_kommo_bot(name: str) -> dict | None:
+    wanted = str(name or "").strip()
+    if not wanted:
+        return None
+    for bot in _list_kommo_bots():
+        label = str(bot.get("name") or bot.get("title") or "")
+        if _kommo_name_matches(wanted, label):
+            return bot
+    return None
+
+
+def _handoff_summary_to_anar(lead_id: int, summary: str) -> dict:
+    note_text = f"AI kontekst — {KOMMO_AI_AGENT_NAME}\n\n{summary}".strip()
+    note_ok = bool(add_note(int(lead_id), note_text, "leads"))
+    user = _find_named_kommo_user(KOMMO_AI_AGENT_NAME)
+    bot = None if user else _find_named_kommo_bot(KOMMO_AI_AGENT_NAME)
+    handed = False
+    if user and user.get("id"):
+        try:
+            uid = int(user.get("id"))
+        except (TypeError, ValueError):
+            uid = 0
+        if uid:
+            till = int(_time_module.time()) + 3600
+            handed = bool(create_task(int(lead_id), note_text[:500], till, uid, "leads", 1, KOMMO_AI_AGENT_NAME))
+    if bot and bot.get("id") and not handed:
+        try:
+            bid = int(bot.get("id"))
+        except (TypeError, ValueError):
+            bid = 0
+        if bid:
+            try:
+                resp = _http.post(
+                    f"{KOMMO_BASE_URL}/api/v4/bots/{bid}/run",
+                    headers=HEADERS,
+                    json={"entity_id": int(lead_id), "entity_type": "leads"},
+                    timeout=12,
+                )
+                handed = resp.status_code in {200, 202}
+            except Exception as exc:
+                logger.warning("AI bot run failed: %s", exc)
+    if note_ok:
+        invalidate_rufat_overview_cache()
+    return {
+        "note_ok": note_ok,
+        "handed": handed,
+        "agent": (user or bot or {}).get("name") or KOMMO_AI_AGENT_NAME,
+    }
+
+
+def _fallback_chat_summary(history: str) -> str:
+    lines = [row.strip() for row in str(history or "").splitlines() if row.strip()]
+    tail = lines[-8:] if lines else []
+    if not tail:
+        return "Yazışma yoxdur."
+    return "Son dialoq:\n" + "\n".join(tail)
+
+
 async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -11781,8 +11910,22 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     if contacts and isinstance(contacts[0], dict):
         contact_name = str(contacts[0].get("name") or "")
     history_rows = data.get("messages") if isinstance(data.get("messages"), list) else []
+    if not history_rows:
+        try:
+            chat, *_rest = _collect_deal_chat(
+                int(lead.get("id") or lead_id),
+                _lead_contact_ids(lead),
+                limit=30,
+                channel=str(data.get("channel") or "whatsapp"),
+                sender_digits=_hinted_wa_sender_digits(chat_id, str(data.get("sender_phone") or "")),
+                employee_name=employee_name_for_lead(lead),
+            )
+            history_rows = chat
+        except Exception as exc:
+            logger.warning("AI history load failed: %s", exc)
+            history_rows = []
     lines = []
-    for item in history_rows[-15:]:
+    for item in history_rows[-30:]:
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
@@ -11793,8 +11936,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     history = "\n".join(lines) or "Yazışma yoxdur."
     draft = str(data.get("draft") or "").strip()
     system = (
-        "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp/Instagram cavabı yaz. "
-        "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
+        "Sən CRM köməkçisisən. Dialoqu Azərbaycan dilində qısa xülasə et: məqsəd, razılaşma, "
+        "açıq suallar və növbəti addım. 5-8 cümlə. Yalnız xülasəni yaz."
     )
     user = (
         f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
@@ -11803,23 +11946,37 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     )
     if draft:
         user += f"\nMenecerin qeydi: {draft}\n"
-    user += "\nNövbəti cavabı yaz."
+    user += "\nXülasəni yaz."
+
     def _ask() -> str:
         resp = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.4,
-            max_tokens=400,
+            temperature=0.2,
+            max_tokens=500,
         )
         return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
+
+    summary = ""
     try:
-        suggestion = await asyncio.to_thread(_ask)
+        summary = await asyncio.to_thread(_ask)
     except Exception as exc:
-        logger.error("Deal AI suggest failed: %s", exc)
-        return web.json_response({"success": False, "error": "AI cavab alınmadı."}, status=502)
-    if not suggestion:
-        return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
-    return web.json_response({"success": True, "text": suggestion})
+        logger.error("Deal AI summary failed: %s", exc)
+    if not summary:
+        summary = _fallback_chat_summary(history)
+    try:
+        handoff = await asyncio.to_thread(_handoff_summary_to_anar, int(lead.get("id") or lead_id), summary)
+    except Exception as exc:
+        logger.error("AI handoff failed: %s", exc)
+        return web.json_response({"success": False, "error": "Xülasə Kommo-ya göndərilmədi."}, status=502)
+    if not handoff.get("note_ok"):
+        return web.json_response({"success": False, "error": "Xülasə Kommo-ya yazılmadı."}, status=502)
+    return web.json_response({
+        "success": True,
+        "summary": summary,
+        "agent": handoff.get("agent") or KOMMO_AI_AGENT_NAME,
+        "handed": bool(handoff.get("handed")),
+    })
 
 
 async def handle_api_deal_public(request: web.Request) -> web.Response:
