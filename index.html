@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="234">
+    <meta name="pwa-build" content="235">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=234">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=234">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=235">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=235">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -6139,9 +6139,17 @@ async function incomingNoticeBody(deal) {
     } catch(_err) {}
     return 'Yeni mesaj';
 }
+function dealNoticePhone(deal) {
+    const raw = String((Array.isArray(deal && deal.phones) && deal.phones[0]) || (deal && deal.phone) || '').trim();
+    const digits = raw.replace(/\D/g, '');
+    if(digits.length >= 8) return '+' + digits;
+    return raw;
+}
 async function showIncomingChatNotice(deal) {
-    const title = dealClientName(deal) || 'Çat';
-    const body = await incomingNoticeBody(deal);
+    const phone = dealNoticePhone(deal);
+    const title = dealClientName(deal) || phone || 'Çat';
+    const message = await incomingNoticeBody(deal);
+    const body = phone && phone !== title ? (phone + '\n' + message) : message;
     const url = '#chat-' + deal.id;
     if(navigator.serviceWorker) {
         navigator.serviceWorker.ready.then(reg => {
@@ -7512,7 +7520,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=251');
+    const reg = await navigator.serviceWorker.register('sw.js?v=252');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

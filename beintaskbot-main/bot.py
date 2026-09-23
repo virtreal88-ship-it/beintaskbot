@@ -5719,7 +5719,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v225 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v226 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10517,7 +10517,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
-        _notify_cloud_chat_incoming(lead_id, name, preview)
+        _notify_cloud_chat_incoming(lead_id, name, preview, phone)
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
         _WA_LAST_HOOK["lead"] = int(lead_id)
@@ -13236,19 +13236,27 @@ async def handle_push_subscribe(request):
         logger.info(f"Push subscription saved for user {user_id}")
     return web.json_response({'success': True})
 
-def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str) -> None:
+def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: str = "") -> None:
     title = str(name or "").strip()
-    if not title:
-        overview = _personal_overview_cache.get(int(RUFAT_PIPELINE_ID)) or {}
-        for deal in overview.get("deals") or []:
-            try:
-                if int(deal.get("id") or 0) == int(lead_id):
-                    title = str(deal.get("contact_name") or "").strip()
-                    break
-            except (TypeError, ValueError):
+    notice_phone = _wa_display_number(phone)
+    overview = _personal_overview_cache.get(int(RUFAT_PIPELINE_ID)) or {}
+    for deal in overview.get("deals") or []:
+        try:
+            if int(deal.get("id") or 0) != int(lead_id):
                 continue
-    title = (title or "WhatsApp")[:80]
+        except (TypeError, ValueError):
+            continue
+        if not title:
+            title = str(deal.get("contact_name") or "").strip()
+        if not notice_phone:
+            phones = deal.get("phones") if isinstance(deal.get("phones"), list) else []
+            raw = next((str(item or "").strip() for item in phones if str(item or "").strip()), "")
+            notice_phone = _wa_display_number(raw or deal.get("phone") or "")
+        break
+    title = (title or notice_phone or "WhatsApp")[:80]
     body = " ".join(str(preview or "Yeni mesaj").split())[:140] or "Yeni mesaj"
+    if notice_phone and notice_phone != title:
+        body = f"{notice_phone}\n{body}"
     url = f"#chat-{int(lead_id)}"
     for uid in {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}:
         send_push_notification(uid, title, body, url, lead_id=int(lead_id))
