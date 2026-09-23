@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="232">
+    <meta name="pwa-build" content="233">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=232">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=232">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=233">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=233">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -466,7 +466,7 @@
         .chats-avatar.ch-facebook { background:#dbeafe; color:#1877F2; }
         .chats-avatar.ch-tiktok { background:#111; color:#fff; }
         .chats-avatar.ch-telegram { background:#dbeafe; color:#0288d1; }
-        .chats-source { display:inline-flex; align-items:center; gap:4px; flex:none; font-size:10px; font-weight:600; line-height:1; padding:3px 7px; border-radius:999px; }
+        .chats-source { display:inline-flex; align-items:center; justify-content:center; flex:none; line-height:1; width:18px; height:18px; border-radius:999px; }
         .chats-source svg { width:12px; height:12px; display:block; }
         .chats-source-whatsapp { background:#dcfce7; color:#15803d; }
         .chats-source-instagram { background:#fce7f3; color:#be185d; }
@@ -6258,7 +6258,7 @@ function chatsSourceChip(deal) {
     const key = chatsSourceKey(deal);
     if(!key) return '';
     const meta = chatChannelMeta(key);
-    return `<span class="chats-source chats-source-${key}">${meta.svg}<span>${escapeHtml(meta.label)}</span></span>`;
+    return `<span class="chats-source chats-source-${key}" title="${escapeHtml(meta.label)}" aria-label="${escapeHtml(meta.label)}">${meta.svg}</span>`;
 }
 function chatsIsClosedDeal(deal) {
     const key = String((deal && deal.stage_key) || '').toLowerCase();
@@ -7508,7 +7508,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=249');
+    const reg = await navigator.serviceWorker.register('sw.js?v=250');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
