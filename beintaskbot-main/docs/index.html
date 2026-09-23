@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="214">
+    <meta name="pwa-build" content="215">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -1452,7 +1452,7 @@ function applySamilWorkspace(payload) {
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
-        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || '', last_incoming_at: deal.last_incoming_at || prevIncoming[String(deal.id)] || 0};
+        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || '', last_incoming_at: Math.max(Number(deal.last_incoming_at || 0), Number(prevIncoming[String(deal.id)] || 0))};
     };
     if(payload.pipeline_id) CURRENT_PIPELINE_ID = Number(payload.pipeline_id) || CURRENT_PIPELINE_ID;
     if(Array.isArray(payload.pipelines) && payload.pipelines.length) KOMMO_PIPELINES = payload.pipelines;
@@ -5376,7 +5376,7 @@ function pruneChatsHidden(deals) {
         const storedText = stored && typeof stored === 'object' ? String(stored.text || '') : String(stored || '');
         const incomingAt = chatsIncomingAt(deal);
         const text = dealLastClientMessage(deal) || '';
-        if((incomingAt && incomingAt > storedAt) || (text && text !== storedText)) {
+        if((incomingAt && incomingAt > storedAt) || (text && text !== storedText) || (Number(deal.updated_at || 0) > storedAt)) {
             delete hidden[id];
             changed = true;
         }
@@ -5407,7 +5407,9 @@ function seedChatsSeen(deals) {
     const seen = getChatsSeen();
     if(seen.__seeded) return seen;
     (deals || []).forEach(deal => {
-        if(deal && deal.id) seen[String(deal.id)] = chatsIncomingAt(deal);
+        if(!deal || !deal.id) return;
+        seen[String(deal.id)] = chatsIncomingAt(deal) || Number(deal.updated_at || 0);
+        seen['p_' + String(deal.id)] = dealLastClientMessage(deal) || '';
     });
     seen.__seeded = 1;
     saveChatsSeen(seen);
@@ -5416,6 +5418,8 @@ function seedChatsSeen(deals) {
 function markChatsSeen(leadId) {
     const seen = getChatsSeen();
     seen[String(leadId)] = Math.floor(Date.now() / 1000);
+    const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
+    seen['p_' + String(leadId)] = dealLastClientMessage(deal) || '';
     delete seen['unread_' + String(leadId)];
     saveChatsSeen(seen);
 }
@@ -5437,9 +5441,12 @@ function chatsIsUnread(deal, seen) {
     const store = seen || getChatsSeen();
     if(store['unread_' + String(deal.id)]) return true;
     const incomingAt = chatsIncomingAt(deal);
-    if(!incomingAt) return false;
     const lastSeen = Number(store[String(deal.id)] || 0);
-    return incomingAt > lastSeen;
+    if(incomingAt && incomingAt > lastSeen) return true;
+    const text = dealLastClientMessage(deal) || '';
+    const prev = store['p_' + String(deal.id)];
+    if(text && prev !== undefined && text !== prev && text !== 'Çat') return true;
+    return false;
 }
 function paintChatsUnreadBadge() {
     const count = HAS_CHATS
@@ -5526,15 +5533,25 @@ function watchIncomingChats() {
     chatsInboxDeals().forEach(deal => {
         const id = String(deal.id);
         const preview = dealLastClientMessage(deal) || '';
-        next[id] = preview;
-        if(_chatAlertSeeded && preview && preview !== _chatAlertMap[id]) fresh.push(deal);
+        const stamp = Number(chatsIncomingAt(deal) || 0);
+        const key = preview + '|' + stamp;
+        next[id] = key;
+        if(!_chatAlertSeeded) return;
+        const prevKey = _chatAlertMap[id] || '';
+        const prevPreview = prevKey.includes('|') ? prevKey.slice(0, prevKey.lastIndexOf('|')) : prevKey;
+        const prevStamp = Number(prevKey.includes('|') ? prevKey.slice(prevKey.lastIndexOf('|') + 1) : 0);
+        if((preview && preview !== prevPreview) || (stamp > prevStamp)) fresh.push(deal);
     });
     _chatAlertMap = next;
     if(!_chatAlertSeeded) {
         _chatAlertSeeded = true;
         return;
     }
-    fresh.forEach(deal => alertIncomingDeal(deal, false));
+    fresh.forEach(deal => {
+        if(!isViewingDealChat(deal.id)) markChatsUnread(deal.id);
+        alertIncomingDeal(deal, false);
+    });
+    if(fresh.length) paintChatsUnreadBadge();
 }
 function chatsDayKey(value) {
     const d = value instanceof Date ? value : new Date(value);
@@ -5613,11 +5630,7 @@ function chatsIsClosedDeal(deal) {
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
-    const seen = getChatsSeen();
-    const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     return (samilDeals || []).filter(deal => {
-        const isOpen = openId && openId === String(deal.id);
-        if(chatsIsClosedDeal(deal) && !isOpen && !chatsIsUnread(deal, seen) && !deal.inbox_only) return false;
         if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
@@ -6842,7 +6855,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=231');
+    const reg = await navigator.serviceWorker.register('sw.js?v=232');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

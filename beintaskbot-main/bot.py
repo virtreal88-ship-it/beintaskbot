@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v212 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v213 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7416,6 +7416,12 @@ def _apply_talk_to_inbox(
     except (TypeError, ValueError):
         updated = 0
     unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+    try:
+        unread_n = int(talk.get("unread_messages_count") or talk.get("unread") or 0)
+    except (TypeError, ValueError):
+        unread_n = 0
+    if unread_n > 0:
+        unread = True
     preview = "Yeni mesaj" if unread else "Çat"
     avatar = _first_avatar_url(talk)
     for lid in lids:
@@ -10028,6 +10034,12 @@ def _inject_outside_funnel_talk_deals(
         if channel not in CHAT_CHANNEL_LABELS:
             continue
         unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+        try:
+            unread_n = int(talk.get("unread_messages_count") or talk.get("unread") or 0)
+        except (TypeError, ValueError):
+            unread_n = 0
+        if unread_n > 0:
+            unread = True
         incoming_at = updated if unread else int(incoming_at_by_lead.get(lid) or 0)
         preview = client_by_lead.get(lid) or ("Yeni mesaj" if unread else "Çat")
         row = _overview_deal_from_any_lead(lead, preview, updated, channel, incoming_at)
