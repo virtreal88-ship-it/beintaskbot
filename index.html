@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="208">
+    <meta name="pwa-build" content="209">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -332,6 +332,7 @@
         .wa-state.failed { color:#dc2626; }
         .chat-reply-btn { border:0; background:transparent; color:#64748b; font-size:13px; font-weight:700; padding:0 2px; cursor:pointer; }
         .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
+        .deal-chat-row.in[data-react-id] { cursor:pointer; }
         .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); }
         .chat-react-pop { position:fixed; z-index:120; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
         .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; }
@@ -1205,6 +1206,7 @@ function syncSamilStagesFromPayload(payload) {
 function groupSamilDealsByStage(deals) {
     const grouped = Object.fromEntries(SAMIL_ALL_STAGES.map(([key]) => [key, []]));
     (Array.isArray(deals) ? deals : []).forEach(deal => {
+        if(deal && deal.inbox_only) return;
         if(!grouped[deal.stage_key]) grouped[deal.stage_key] = [];
         grouped[deal.stage_key].push(deal);
     });
@@ -1455,10 +1457,11 @@ function applySamilWorkspace(payload) {
     }
     samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
     samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
-        ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal) : []]))
+        ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal).filter(deal => !deal.inbox_only) : []]))
         : groupSamilDealsByStage(samilDeals);
     SAMIL_UI_STAGES.forEach(([key]) => {
-        if(!Array.isArray(samilDealsByStage[key])) samilDealsByStage[key] = samilDeals.filter(deal => deal.stage_key === key);
+        if(!Array.isArray(samilDealsByStage[key])) samilDealsByStage[key] = samilDeals.filter(deal => deal.stage_key === key && !deal.inbox_only);
+        else samilDealsByStage[key] = samilDealsByStage[key].filter(deal => !deal.inbox_only);
     });
     samilStageCounts = payload.stage_counts || {};
     SAMIL_UI_STAGES.forEach(([key]) => {
@@ -3371,7 +3374,8 @@ function dealChatItemHtml(item, token, readonly) {
     if(profile && !text && !quote) {
         return `<div class="deal-chat-row ${cls} avatar-only" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar || ''}${meta.svg}${headName}</div><div class="wa-time"><span class="wa-when">${escapeHtml(when)}</span></div></div>`;
     }
-    return `<div class="deal-chat-row ${cls}" data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
+    const reactAttr = canReact ? ` data-react-id="${escapeHtml(wamid)}"` : '';
+    return `<div class="deal-chat-row ${cls}"${reactAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}${replyBtn}</div></div>`;
 }
 function dealChatQuoteHtml(item) {
     const text = String(item && item.reply_to_text || '').trim();
@@ -3544,6 +3548,12 @@ function bindDealChatMedia(thread) {
             event.stopPropagation();
             openChatReactionPicker(btn, btn.getAttribute('data-react-id'));
         };
+    });
+    thread.querySelectorAll('.deal-chat-row[data-react-id]').forEach(row => {
+        row.addEventListener('click', event => {
+            if(event.target.closest('.chat-reply-btn, .chat-react-btn, a, button, audio, video, img')) return;
+            openChatReactionPicker(row, row.getAttribute('data-react-id'));
+        });
     });
     thread.querySelectorAll('img.deal-zoom').forEach(img => {
         img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
@@ -5486,7 +5496,7 @@ function chatsInboxDeals() {
     const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     return (samilDeals || []).filter(deal => {
         const isOpen = openId && openId === String(deal.id);
-        if(chatsIsClosedDeal(deal) && !isOpen && !chatsIsUnread(deal, seen)) return false;
+        if(chatsIsClosedDeal(deal) && !isOpen && !chatsIsUnread(deal, seen) && !deal.inbox_only) return false;
         if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
@@ -5547,14 +5557,18 @@ async function fetchChatsContactHits(query) {
     const d = await r.json().catch(() => ({}));
     return (d && d.success && Array.isArray(d.contacts)) ? d.contacts : [];
 }
+function isPhoneChatQuery(query) {
+    return String(query || '').replace(/\D/g, '').length >= 7;
+}
 function scheduleChatsSearch() {
     const search = document.getElementById('chats-search');
     const query = String(search && search.value || '').trim();
     clearTimeout(_chatsSearchTimer);
     if(!query) { hideChatsSearchHits(); return; }
+    const phoneQ = isPhoneChatQuery(query);
     const localHits = !usesKommoChatSearch() && chatsInboxDeals().length;
-    if(!usesKommoChatSearch() && localHits) { hideChatsSearchHits(); return; }
-    if(query.length < 2 && query.replace(/\D/g, '').length < 7) { hideChatsSearchHits(); return; }
+    if(!usesKommoChatSearch() && localHits && !phoneQ) { hideChatsSearchHits(); return; }
+    if(query.length < 2 && !phoneQ) { hideChatsSearchHits(); return; }
     _chatsSearchTimer = setTimeout(async () => {
         try {
             const rows = await fetchChatsContactHits(query);
@@ -6629,7 +6643,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=225');
+    const reg = await navigator.serviceWorker.register('sw.js?v=226');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

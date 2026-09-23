@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v206 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v208 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7360,6 +7360,25 @@ def _talk_inbox_lead_ids(talk: dict, lead_ids: set[int], contact_to_lead: dict[i
     return list(dict.fromkeys(lid for lid in lids if lid in lead_ids))
 
 
+def _talk_any_lead_ids(talk: dict) -> list[int]:
+    lids: list[int] = []
+    entity_type = str(talk.get("entity_type") or "").lower()
+    try:
+        entity_id = int(talk.get("entity_id") or 0)
+    except (TypeError, ValueError):
+        entity_id = 0
+    if entity_id and entity_type in {"", "lead", "leads"}:
+        lids.append(entity_id)
+    for lead in ((talk.get("_embedded") or {}).get("leads") or []):
+        if not isinstance(lead, dict):
+            continue
+        try:
+            lids.append(int(lead.get("id") or 0))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys(lid for lid in lids if lid))
+
+
 def _apply_talk_to_inbox(
     talk: dict,
     lead_ids: set[int],
@@ -7369,9 +7388,25 @@ def _apply_talk_to_inbox(
     contact_to_lead: dict[int, int] | None = None,
     avatar_by_lead: dict[int, str] | None = None,
     incoming_at_by_lead: dict[int, int] | None = None,
+    outside_by_lead: dict[int, dict] | None = None,
 ) -> None:
     lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
     if not lids:
+        if outside_by_lead is not None:
+            try:
+                updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+            except (TypeError, ValueError):
+                updated = 0
+            for lid in _talk_any_lead_ids(talk):
+                if lid in lead_ids:
+                    continue
+                prev = outside_by_lead.get(lid)
+                try:
+                    prev_ts = int((prev or {}).get("updated_at") or (prev or {}).get("created_at") or 0)
+                except (TypeError, ValueError):
+                    prev_ts = 0
+                if not prev or updated >= prev_ts:
+                    outside_by_lead[lid] = talk
         return
     channel = _talk_channel_key(talk)
     if channel not in {"whatsapp", "instagram", "facebook", "tiktok", "telegram"}:
@@ -7398,15 +7433,16 @@ def _apply_talk_to_inbox(
 async def _load_kommo_talks_inbox(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int], dict[int, dict]]:
     """Existing WhatsApp/Instagram deals still live in Kommo talks; Cloud inbound is extra."""
     client_by_lead: dict[int, str] = {}
     channel_by_lead: dict[int, str] = {}
     updated_by_lead: dict[int, int] = {}
     avatar_by_lead: dict[int, str] = {}
     incoming_at_by_lead: dict[int, int] = {}
+    outside_by_lead: dict[int, dict] = {}
     if not lead_ids:
-        return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead
+        return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead, outside_by_lead
     for page in range(1, 7):
         try:
             response = await _kommo_get_async(
@@ -7436,20 +7472,21 @@ async def _load_kommo_talks_inbox(
                     contact_to_lead,
                     avatar_by_lead,
                     incoming_at_by_lead,
+                    outside_by_lead,
                 )
         if len(talks) < 250:
             break
-    return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead
+    return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead, outside_by_lead
 
 
 async def _load_rufat_latest_notes(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int], dict[int, dict]]:
     """Common notes plus Kommo talk channels so existing chats stay in Çatlar."""
     latest: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return {}, {}, {}, {}, {}, {}
+        return {}, {}, {}, {}, {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7490,7 +7527,7 @@ async def _load_rufat_latest_notes(
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    client_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
+    client_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead, outside_by_lead = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
     return (
         {lead: value[1] for lead, value in latest.items()},
         client_by_lead,
@@ -7498,6 +7535,7 @@ async def _load_rufat_latest_notes(
         talk_updated,
         avatar_by_lead,
         incoming_at_by_lead,
+        outside_by_lead,
     )
 
 
@@ -7813,7 +7851,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead, outside_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -7845,6 +7883,16 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
     _apply_cloud_inbox_to_deals(deals, pipeline_id)
+    if pipeline_id == int(NIZAMI_PIPELINE_ID):
+        _inject_outside_funnel_talk_deals(
+            deals,
+            outside_by_lead or {},
+            incoming_at_by_lead or {},
+            client_message_by_lead or {},
+            channel_by_lead or {},
+            avatar_by_lead or {},
+            talk_updated or {},
+        )
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
@@ -9840,6 +9888,123 @@ def _rehome_orphaned_cloud_inbox() -> None:
             if int(_WA_LAST_HOOK.get("lead") or 0) == src_id:
                 _WA_LAST_HOOK["lead"] = int(target)
             logger.info("WhatsApp inbox rehomed lead=%s -> %s", src_id, target)
+
+
+def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str = "", incoming_at: int = 0) -> dict:
+    pipe = _lead_pipeline_id(lead)
+    owner = None
+    for cid in (RUFAT_CHAT_ID, ADMIN_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID):
+        candidate = get_funnel_owner(cid)
+        if candidate and int(candidate.get("pipeline_id") or 0) == int(pipe or 0):
+            owner = candidate
+            break
+    stages = (owner or {}).get("stages") or {}
+    names = (owner or {}).get("stage_names") or {}
+    status_to_key = {}
+    for key, status_id in stages.items():
+        try:
+            status_to_key[int(status_id)] = key
+        except (TypeError, ValueError):
+            continue
+    try:
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    try:
+        lid = int(lead.get("id") or 0)
+    except (TypeError, ValueError):
+        lid = 0
+    _ids, phones = _contact_ids_and_phones(lead)
+    contact = get_contact_details(_ids[0]) if _ids else {}
+    if not isinstance(contact, dict):
+        contact = {}
+    contact_name = str(contact.get("name") or lead.get("name") or "").strip() or (phones[0] if phones else "Müştəri")
+    try:
+        created = int(lead.get("created_at") or 0)
+    except (TypeError, ValueError):
+        created = 0
+    try:
+        updated = int(lead.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated = 0
+    unread = incoming_at > 0
+    return {
+        "id": lid,
+        "pipeline_id": pipe,
+        "stage_key": status_to_key.get(status_id, ""),
+        "stage_name": names.get(status_id, ""),
+        "contact_name": contact_name,
+        "phone": phones[0] if phones else "",
+        "phones": phones,
+        "contacts": [{"id": _ids[0], "name": contact_name, "phones": phones}] if _ids else [],
+        "source": "",
+        "menbe": "",
+        "created_at": created,
+        "updated_at": max(updated, int(ts or 0)),
+        "last_note": "",
+        "last_client_message": str(preview or ("Yeni mesaj" if unread else "Çat"))[:140],
+        "last_incoming_at": int(incoming_at or 0),
+        "chat_channel": channel or "whatsapp",
+        "contact_avatar": _first_avatar_url(lead, contact),
+        "task_desc": "",
+        "deadline": "",
+        "deadline_ts": 0,
+        "voice_url": f"/api/voice/{lid}" if lid and str(lid) in _voice_urls else "",
+        "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
+        "tasks": [],
+        "inbox_only": True,
+    }
+
+
+def _inject_outside_funnel_talk_deals(
+    deals: list,
+    outside_by_lead: dict[int, dict],
+    incoming_at_by_lead: dict[int, int],
+    client_by_lead: dict[int, str],
+    channel_by_lead: dict[int, str],
+    avatar_by_lead: dict[int, str],
+    talk_updated: dict[int, int],
+) -> None:
+    """Incoming Kommo chats must appear even if the deal lives in another funnel."""
+    if not isinstance(deals, list) or not outside_by_lead:
+        return
+    seen = set()
+    for deal in deals:
+        try:
+            seen.add(int(deal.get("id") or 0))
+        except (TypeError, ValueError):
+            continue
+    ranked = []
+    for lid, talk in outside_by_lead.items():
+        try:
+            lid_int = int(lid)
+        except (TypeError, ValueError):
+            continue
+        if not lid_int or lid_int in seen:
+            continue
+        try:
+            updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        ranked.append((updated, lid_int, talk))
+    ranked.sort(reverse=True)
+    for updated, lid, talk in ranked[:40]:
+        if lid in seen:
+            continue
+        lead = get_lead_details(lid)
+        if not lead:
+            continue
+        channel = _talk_channel_key(talk)
+        if channel not in CHAT_CHANNEL_LABELS:
+            continue
+        unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
+        incoming_at = updated if unread else int(incoming_at_by_lead.get(lid) or 0)
+        preview = client_by_lead.get(lid) or ("Yeni mesaj" if unread else "Çat")
+        row = _overview_deal_from_any_lead(lead, preview, updated, channel, incoming_at)
+        if avatar_by_lead.get(lid):
+            row["contact_avatar"] = avatar_by_lead[lid]
+        deals.append(row)
+        seen.add(lid)
 
 
 def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
