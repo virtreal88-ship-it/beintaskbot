@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="264">
+    <meta name="pwa-build" content="265">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5267,11 +5267,24 @@ async function loadWaTemplates(force) {
     if(!_waTemplates.length && d.error) throw new Error(d.error);
     return _waTemplates;
 }
-function waTplFill(text, values) {
-    return String(text || '').replace(/\{\{\s*(\d+)\s*\}\}/g, (match, num) => {
+function waTplFill(text, values, names) {
+    let out = String(text || '');
+    if(Array.isArray(names) && names.length) {
+        names.forEach((name, index) => {
+            const value = values[index];
+            out = out.replace(new RegExp('\\{\\{\\s*' + String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\}\\}', 'g'), value || ('{{' + name + '}}'));
+        });
+        return out;
+    }
+    return out.replace(/\{\{\s*(\d+)\s*\}\}/g, (match, num) => {
         const value = values[Number(num) - 1];
         return value ? value : match;
     });
+}
+function waTplVarCount(tpl, kind) {
+    const names = tpl && tpl[kind + '_names'];
+    if(Array.isArray(names) && names.length) return names.length;
+    return Number(tpl && tpl[kind + '_vars'] || 0);
 }
 function waTplSelected() {
     const select = document.getElementById('wa-tpl-select');
@@ -5292,20 +5305,35 @@ function paintWaTplForm() {
     const preview = document.getElementById('wa-tpl-preview');
     if(!varsBox || !preview) return;
     if(!tpl) { varsBox.innerHTML = ''; preview.textContent = ''; return; }
-    const total = Number(tpl.header_vars || 0) + Number(tpl.body_vars || 0);
     if(!varsBox.dataset.for || varsBox.dataset.for !== (tpl.name + '|' + tpl.language)) {
         varsBox.dataset.for = tpl.name + '|' + tpl.language;
+        const format = String(tpl.header_format || '').toUpperCase();
+        const mediaLabel = format === 'IMAGE' ? 'Şəkil linki' : (format === 'VIDEO' ? 'Video linki' : 'Sənəd linki');
         let html = '';
-        for(let i = 1; i <= Number(tpl.header_vars || 0); i++) {
-            html += `<div><label>Başlıq ${i}</label><input type="text" id="wa-tpl-h${i}" autocomplete="off"></div>`;
+        if(format === 'LOCATION') html += '<div class="wa-tpl-note">Bu şablon ünvan başlığı tələb edir.</div>';
+        else if(format === 'IMAGE' || format === 'VIDEO' || format === 'DOCUMENT') {
+            html += `<div><label>${mediaLabel}</label><input type="url" id="wa-tpl-media" placeholder="https://" autocomplete="off"></div>`;
         }
-        for(let i = 1; i <= Number(tpl.body_vars || 0); i++) {
-            html += `<div><label>Dəyişən ${i}</label><input type="text" id="wa-tpl-b${i}" autocomplete="off"></div>`;
+        const headerNames = Array.isArray(tpl.header_names) ? tpl.header_names : [];
+        const headerCount = waTplVarCount(tpl, 'header');
+        for(let i = 1; i <= headerCount; i++) {
+            const label = headerNames[i - 1] || ('Başlıq ' + i);
+            html += `<div><label>${escapeHtml(label)}</label><input type="text" id="wa-tpl-h${i}" autocomplete="off"></div>`;
         }
+        const bodyNames = Array.isArray(tpl.body_names) ? tpl.body_names : [];
+        const bodyCount = waTplVarCount(tpl, 'body');
+        for(let i = 1; i <= bodyCount; i++) {
+            const label = bodyNames[i - 1] || ('Dəyişən ' + i);
+            html += `<div><label>${escapeHtml(label)}</label><input type="text" id="wa-tpl-b${i}" autocomplete="off"></div>`;
+        }
+        (Array.isArray(tpl.buttons) ? tpl.buttons : []).forEach(btn => {
+            if(!btn || !btn.needs_value) return;
+            const label = String(btn.type || '').toUpperCase() === 'COPY_CODE' ? 'Kupon kodu' : ('Düymə: ' + (btn.text || ''));
+            html += `<div><label>${escapeHtml(label)}</label><input type="text" id="wa-tpl-btn-${Number(btn.index) || 0}" autocomplete="off"></div>`;
+        });
         varsBox.innerHTML = html;
         varsBox.querySelectorAll('input').forEach(input => { input.oninput = paintWaTplPreview; });
     }
-    if(!total) varsBox.innerHTML = '';
     paintWaTplPreview();
 }
 function paintWaTplPreview() {
@@ -5313,9 +5341,20 @@ function paintWaTplPreview() {
     const preview = document.getElementById('wa-tpl-preview');
     if(!preview) return;
     if(!tpl) { preview.textContent = ''; return; }
-    const head = waTplFill(tpl.header, waTplValues('wa-tpl-h', Number(tpl.header_vars || 0)));
-    const body = waTplFill(tpl.body, waTplValues('wa-tpl-b', Number(tpl.body_vars || 0)));
-    preview.textContent = [head, body].filter(Boolean).join('\n\n');
+    const lines = [];
+    const media = document.getElementById('wa-tpl-media');
+    if(media && String(media.value || '').trim()) lines.push(String(media.value).trim());
+    const head = waTplFill(tpl.header, waTplValues('wa-tpl-h', waTplVarCount(tpl, 'header')), tpl.header_names);
+    const body = waTplFill(tpl.body, waTplValues('wa-tpl-b', waTplVarCount(tpl, 'body')), tpl.body_names);
+    if(head) lines.push(head);
+    if(body) lines.push(body);
+    (Array.isArray(tpl.buttons) ? tpl.buttons : []).forEach(btn => {
+        if(!btn) return;
+        const field = document.getElementById('wa-tpl-btn-' + (Number(btn.index) || 0));
+        const value = field ? String(field.value || '').trim() : '';
+        lines.push((btn.text || 'Düymə') + (value ? ': ' + value : ''));
+    });
+    preview.textContent = lines.join('\n\n');
 }
 function closeWaTemplateModal() {
     document.getElementById('wa-tpl-modal')?.remove();
@@ -5370,8 +5409,21 @@ async function sendWaTemplate(options) {
     const phoneInput = document.getElementById('wa-tpl-phone');
     const phone = phoneInput ? String(phoneInput.value || '').replace(/\D/g, '') : '';
     if(phoneInput && phone.length < 9) { toast('Nömrəni yazın', true); return; }
-    const headerParams = waTplValues('wa-tpl-h', Number(tpl.header_vars || 0));
-    const bodyParams = waTplValues('wa-tpl-b', Number(tpl.body_vars || 0));
+    const format = String(tpl.header_format || '').toUpperCase();
+    if(format === 'LOCATION') { toast('Bu şablon ünvan başlığı tələb edir', true); return; }
+    const media = document.getElementById('wa-tpl-media');
+    const headerMedia = media ? String(media.value || '').trim() : '';
+    if(media && !headerMedia.startsWith('https://')) { toast('Linki https:// ilə yazın', true); return; }
+    const headerParams = waTplValues('wa-tpl-h', waTplVarCount(tpl, 'header'));
+    const bodyParams = waTplValues('wa-tpl-b', waTplVarCount(tpl, 'body'));
+    const buttonParams = [];
+    for(const btn of (Array.isArray(tpl.buttons) ? tpl.buttons : [])) {
+        if(!btn || !btn.needs_value) continue;
+        const field = document.getElementById('wa-tpl-btn-' + (Number(btn.index) || 0));
+        const value = field ? String(field.value || '').trim() : '';
+        if(!value) { toast('Düymə dəyərini yazın', true); return; }
+        buttonParams.push({index: Number(btn.index) || 0, value, type: btn.type || ''});
+    }
     if([...headerParams, ...bodyParams].some(value => !value)) { toast('Dəyişənləri doldurun', true); return; }
     const preview = document.getElementById('wa-tpl-preview');
     const sendBtn = document.getElementById('wa-tpl-send');
@@ -5388,6 +5440,8 @@ async function sendWaTemplate(options) {
                 language: tpl.language,
                 params: bodyParams,
                 header_params: headerParams,
+                header_media: headerMedia,
+                buttons: buttonParams,
                 preview: preview ? preview.textContent : ''
             })
         });
@@ -8043,7 +8097,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=281');
+    const reg = await navigator.serviceWorker.register('sw.js?v=282');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

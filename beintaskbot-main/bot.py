@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v245 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v246 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9953,13 +9953,20 @@ def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool
 
 
 _WA_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
+_WA_TEMPLATE_NAME_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 _WA_TEMPLATES_CACHE: dict = {"at": 0.0, "rows": []}
 _WA_TEMPLATES_TTL = 300.0
+_WA_HEADER_MEDIA = {"IMAGE": "image", "VIDEO": "video", "DOCUMENT": "document"}
 
 
-def _wa_template_var_count(text: str) -> int:
-    numbers = [int(value) for value in _WA_TEMPLATE_VAR_RE.findall(str(text or ""))]
-    return max(numbers) if numbers else 0
+def _wa_template_placeholders(text: str) -> tuple[int, list[str]]:
+    raw = str(text or "")
+    numbers = [int(value) for value in _WA_TEMPLATE_VAR_RE.findall(raw)]
+    names: list[str] = []
+    for name in _WA_TEMPLATE_NAME_RE.findall(raw):
+        if name not in names:
+            names.append(name)
+    return (max(numbers) if numbers else 0), names
 
 
 def _wa_template_rows(force: bool = False) -> list[dict]:
@@ -9971,35 +9978,68 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
     waba = str(WA_WABA_ID or "").strip()
     if not waba:
         return []
-    payload = _wa_graph_get(
-        f"{waba}/message_templates",
-        {"limit": 200, "fields": "name,language,status,category,components"},
-    )
+    fields = "name,language,status,category,parameter_format,components"
+    payload = _wa_graph_get(f"{waba}/message_templates", {"limit": 200, "fields": fields})
+    if isinstance(payload, dict) and payload.get("error"):
+        payload = _wa_graph_get(
+            f"{waba}/message_templates",
+            {"limit": 200, "fields": "name,language,status,category,components"},
+        )
     rows: list[dict] = []
     for item in (payload or {}).get("data") or []:
         if not isinstance(item, dict) or str(item.get("status") or "").upper() != "APPROVED":
             continue
-        body_text = ""
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
         header_text = ""
+        header_format = ""
+        body_text = ""
+        buttons: list[dict] = []
         for component in item.get("components") or []:
             if not isinstance(component, dict):
                 continue
             kind = str(component.get("type") or "").upper()
-            if kind == "BODY":
+            if kind == "HEADER":
+                header_format = str(component.get("format") or "TEXT").upper()
+                if header_format == "TEXT":
+                    header_text = str(component.get("text") or "")
+            elif kind == "BODY":
                 body_text = str(component.get("text") or "")
-            elif kind == "HEADER" and str(component.get("format") or "TEXT").upper() == "TEXT":
-                header_text = str(component.get("text") or "")
-        name = str(item.get("name") or "").strip()
-        if not name:
-            continue
+            elif kind == "BUTTONS":
+                for index, button in enumerate(component.get("buttons") or []):
+                    if not isinstance(button, dict):
+                        continue
+                    button_type = str(button.get("type") or "").upper()
+                    button_url = str(button.get("url") or "")
+                    url_count, url_names = _wa_template_placeholders(button_url)
+                    needs_value = button_type == "COPY_CODE" or url_count > 0 or bool(url_names)
+                    buttons.append({
+                        "index": index,
+                        "type": button_type,
+                        "text": str(button.get("text") or ""),
+                        "vars": 1 if button_type == "COPY_CODE" else url_count,
+                        "names": url_names,
+                        "needs_value": needs_value,
+                    })
+        header_vars, header_names = _wa_template_placeholders(header_text)
+        body_vars, body_names = _wa_template_placeholders(body_text)
+        parameter_format = str(item.get("parameter_format") or "").upper()
+        if parameter_format not in {"NAMED", "POSITIONAL"}:
+            parameter_format = "NAMED" if (header_names or body_names or any(btn.get("names") for btn in buttons)) else "POSITIONAL"
         rows.append({
             "name": name,
             "language": str(item.get("language") or ""),
             "category": str(item.get("category") or ""),
+            "parameter_format": parameter_format,
+            "header_format": header_format,
             "header": header_text,
+            "header_vars": header_vars,
+            "header_names": header_names,
             "body": body_text,
-            "header_vars": _wa_template_var_count(header_text),
-            "body_vars": _wa_template_var_count(body_text),
+            "body_vars": body_vars,
+            "body_names": body_names,
+            "buttons": buttons,
         })
     rows.sort(key=lambda row: (row.get("name") or "", row.get("language") or ""))
     if rows:
@@ -10008,44 +10048,118 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
     return list(rows)
 
 
-def _wa_template_components(body_params=None, header_params=None) -> list[dict]:
+def _wa_template_find(name: str, language: str) -> dict | None:
+    wanted = str(name or "").strip()
+    lang = str(language or "").strip()
+    for row in _wa_template_rows(False):
+        if row.get("name") != wanted:
+            continue
+        if lang and row.get("language") and row.get("language") != lang:
+            continue
+        return row
+    return None
+
+
+def _wa_text_parameters(values: list[str], names: list[str], limit: int) -> list[dict]:
+    params: list[dict] = []
+    if names:
+        for index, param_name in enumerate(names):
+            text = values[index] if index < len(values) else ""
+            params.append({"type": "text", "parameter_name": param_name, "text": text[:limit]})
+        return params
+    for value in values:
+        params.append({"type": "text", "text": str(value)[:limit]})
+    return params
+
+
+def _wa_template_components(spec: dict, values: dict) -> tuple[list[dict], str]:
+    """Build Meta components that match the approved template."""
     components: list[dict] = []
-    header = [str(value) for value in (header_params or [])]
-    if header:
+    header_format = str(spec.get("header_format") or "").upper()
+    if header_format == "LOCATION":
+        return [], "Bu şablon ünvan başlığı tələb edir."
+    media_key = _WA_HEADER_MEDIA.get(header_format)
+    if media_key:
+        link = str(values.get("header_media") or "").strip()
+        if not link.startswith("https://"):
+            label = {"image": "Şəkil", "video": "Video", "document": "Sənəd"}.get(media_key, "Fayl")
+            return [], f"{label} linkini https:// ilə yazın."
+        media = {"link": link[:1000]}
+        if media_key == "document":
+            filename = link.rsplit("/", 1)[-1].split("?", 1)[0][:80] or "file"
+            media["filename"] = filename
+        components.append({"type": "header", "parameters": [{"type": media_key, media_key: media}]})
+    elif header_format == "TEXT":
+        names = list(spec.get("header_names") or [])
+        count = len(names) or int(spec.get("header_vars") or 0)
+        header_values = [str(value).strip() for value in (values.get("header_params") or [])][:count]
+        if count and (len(header_values) < count or any(not value for value in header_values)):
+            return [], "Şablon dəyişənlərini doldurun."
+        if count:
+            components.append({"type": "header", "parameters": _wa_text_parameters(header_values, names, 200)})
+    names = list(spec.get("body_names") or [])
+    count = len(names) or int(spec.get("body_vars") or 0)
+    body_values = [str(value).strip() for value in (values.get("body_params") or [])][:count]
+    if count and (len(body_values) < count or any(not value for value in body_values)):
+        return [], "Şablon dəyişənlərini doldurun."
+    if count:
+        components.append({"type": "body", "parameters": _wa_text_parameters(body_values, names, 900)})
+    supplied = values.get("buttons") if isinstance(values.get("buttons"), dict) else {}
+    for button in spec.get("buttons") or []:
+        if not isinstance(button, dict) or not button.get("needs_value"):
+            continue
+        try:
+            index = int(button.get("index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        text = str(supplied.get(index) or "").strip()
+        if not text:
+            return [], "Düymə dəyərini yazın."
+        button_type = str(button.get("type") or "").upper()
+        if button_type == "COPY_CODE":
+            if len(text) > 15:
+                return [], "Kupon kodu 15 simvoldan uzun ola bilməz."
+            parameter = {"type": "coupon_code", "coupon_code": text}
+            sub_type = "copy_code"
+        else:
+            parameter = {"type": "text", "text": text[:200]}
+            button_names = list(button.get("names") or [])
+            if button_names:
+                parameter["parameter_name"] = button_names[0]
+            sub_type = "url"
         components.append({
-            "type": "header",
-            "parameters": [{"type": "text", "text": value[:200]} for value in header],
+            "type": "button",
+            "sub_type": sub_type,
+            "index": str(index),
+            "parameters": [parameter],
         })
-    body = [str(value) for value in (body_params or [])]
-    if body:
-        components.append({
-            "type": "body",
-            "parameters": [{"type": "text", "text": value[:900]} for value in body],
-        })
-    return components
+    return components, ""
 
 
-def _wa_cloud_send_template(
-    phone: str,
-    name: str,
-    lang_code: str = "az",
-    body_params=None,
-    header_params=None,
-) -> tuple[bool, str, str]:
+def _wa_cloud_send_template(phone: str, spec: dict, values: dict) -> tuple[bool, str, str]:
     """Send an approved template; the only way to open a chat outside 24 hours."""
     to = _normalize_wa_number(phone)
     if len(to) < 8:
         return False, "WhatsApp nömrəsi tapılmadı.", ""
-    template_name = str(name or "").strip()
+    template_name = str((spec or {}).get("name") or "").strip()
     if not template_name:
         return False, "Şablon seçilməyib.", ""
+    components, error = _wa_template_components(spec, values or {})
+    if error:
+        return False, error, ""
     template: dict = {
         "name": template_name,
-        "language": {"code": str(lang_code or "az").strip() or "az"},
+        "language": {"code": str(spec.get("language") or "az").strip() or "az"},
     }
-    components = _wa_template_components(body_params, header_params)
     if components:
         template["components"] = components
+    logger.info(
+        "WA template send name=%s lang=%s header=%s parts=%s",
+        template_name,
+        template["language"]["code"],
+        spec.get("header_format") or "-",
+        ",".join(str(part.get("type") or "") for part in components) or "-",
+    )
     return _wa_cloud_post({
         "recipient_type": "individual",
         "to": to,
@@ -12801,10 +12915,21 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     if not name:
         return web.json_response({"success": False, "error": "Şablon seçilməyib."}, status=400)
     language = str(data.get("language") or "az").strip() or "az"
+    spec = await asyncio.to_thread(_wa_template_find, name, language)
+    if not spec:
+        return web.json_response({"success": False, "error": "Şablon tapılmadı."}, status=400)
     body_params = [str(value).strip() for value in (data.get("params") or [])]
     header_params = [str(value).strip() for value in (data.get("header_params") or [])]
-    if any(not value for value in body_params + header_params):
-        return web.json_response({"success": False, "error": "Şablon dəyişənlərini doldurun."}, status=400)
+    header_media = str(data.get("header_media") or "").strip()
+    button_values: dict[int, str] = {}
+    for item in data.get("buttons") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        button_values[index] = str(item.get("value") or "").strip()
     try:
         lead_id = int(data.get("lead_id") or 0)
     except (TypeError, ValueError):
@@ -12823,10 +12948,13 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     ok, error, wamid = await asyncio.to_thread(
         _wa_cloud_send_template,
         phone,
-        name,
-        language,
-        body_params,
-        header_params,
+        spec,
+        {
+            "body_params": body_params,
+            "header_params": header_params,
+            "header_media": header_media,
+            "buttons": button_values,
+        },
     )
     if not ok:
         return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
