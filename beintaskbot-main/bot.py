@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v211 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v212 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11933,6 +11933,42 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         lines.append(f"{who}: {text[:400]}")
     history = "\n".join(lines) or "Yazışma yoxdur."
     draft = str(data.get("draft") or "").strip()
+    mode = str(data.get("mode") or "reply").strip().lower()
+    if mode not in {"reply", "summary"}:
+        mode = "reply"
+    if mode == "reply":
+        system = (
+            "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp cavabı yaz. "
+            "Məqsəd: söhbəti irəli aparmaq, etirazı yumşaq bağlamaq, növbəti addımı təklif etmək. "
+            "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
+        )
+        user = (
+            f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
+            f"Sövdələşmə: {lead.get('name') or '—'}\n"
+            f"Son yazışma:\n{history}\n"
+        )
+        if draft:
+            user += f"\nMenecerin qeydi: {draft}\n"
+        user += "\nNövbəti cavabı yaz."
+
+        def _ask_reply() -> str:
+            resp = llm_client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=0.45,
+                max_tokens=350,
+            )
+            return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
+
+        try:
+            suggestion = await asyncio.to_thread(_ask_reply)
+        except Exception as exc:
+            logger.error("Deal AI reply failed: %s", exc)
+            return web.json_response({"success": False, "error": "AI cavab alınmadı."}, status=502)
+        if not suggestion:
+            return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
+        return web.json_response({"success": True, "mode": "reply", "text": suggestion})
+
     system = (
         "Sən CRM köməkçisisən. Dialoqu Azərbaycan dilində qısa xülasə et: məqsəd, razılaşma, "
         "açıq suallar və növbəti addım. 5-8 cümlə. Yalnız xülasəni yaz."
@@ -11946,7 +11982,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         user += f"\nMenecerin qeydi: {draft}\n"
     user += "\nXülasəni yaz."
 
-    def _ask() -> str:
+    def _ask_summary() -> str:
         resp = llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -11957,7 +11993,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
     summary = ""
     try:
-        summary = await asyncio.to_thread(_ask)
+        summary = await asyncio.to_thread(_ask_summary)
     except Exception as exc:
         logger.error("Deal AI summary failed: %s", exc)
     if not summary:
@@ -11971,6 +12007,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Xülasə Kommo-ya yazılmadı."}, status=502)
     return web.json_response({
         "success": True,
+        "mode": "summary",
         "summary": summary,
         "agent": handoff.get("agent") or KOMMO_AI_AGENT_NAME,
         "handed": bool(handoff.get("handed")),
