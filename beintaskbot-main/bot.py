@@ -5720,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v228 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v229 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10765,7 +10765,7 @@ def _collect_deal_chat(
             row["sender_phone"] = _wa_display_number(sender_digits)
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     pages = page_count
-    page_limit = 20
+    page_limit = max(1, min(int(limit or 20), 50))
     talk_has_more = False
     target_rows = [row for row in channels if str(row.get("key") or "") == wanted]
     if not target_rows and channels:
@@ -10776,15 +10776,6 @@ def _collect_deal_chat(
             continue
         channel_key = str(row.get("key") or wanted)
         messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
-        if not messages and blocked:
-            chat_ref = str(row.get("chat_id") or "")
-            if not chat_ref:
-                source_talk = next((item for item in talks if _talk_id_of(item) == talk_id), {})
-                chat_ref = str((source_talk or {}).get("chat_id") or "")
-            if chat_ref:
-                messages = _fetch_chat_history_by_chat_id(chat_ref)
-                if messages:
-                    blocked = False
         talk_has_more = talk_has_more or maybe_more
         chat_blocked = chat_blocked or blocked
         for message in messages:
@@ -10797,14 +10788,6 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
             _add_chat(formatted)
-    if not chat:
-        try:
-            for item in _load_kommo_chat_fallback(lid, contact_ids, employee_name):
-                _add_chat(item)
-            if chat:
-                chat_blocked = False
-        except Exception as exc:
-            logger.warning("Kommo chat fallback failed lead=%s: %s", lid, exc)
     # Cloud API sends are not returned by Kommo talks, so replay our own log and
     # drop the copies Kommo did mirror back.
     known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}

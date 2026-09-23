@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="244">
+    <meta name="pwa-build" content="245">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=244">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=244">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=245">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=245">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -4241,7 +4241,7 @@ async function fetchDealChatPage(before) {
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
     const channel = _dealViewState.channel || '';
-    const q = new URLSearchParams({lead_id: String(leadId), limit: '20', _ts: String(Date.now())});
+    const q = new URLSearchParams({lead_id: String(leadId), limit: before ? '20' : '10', _ts: String(Date.now())});
     if(channel) q.set('channel', channel);
     const sender = dealWaSenderPhone();
     if(sender) q.set('sender_phone', sender);
@@ -4285,7 +4285,7 @@ async function loadDealChatLatest() {
         _dealViewState.loading = false;
         _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
         rememberOpenedChat(_dealViewState.id, d.channel || _dealViewState.channel, _dealViewState.messages);
-        _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 20;
+        _dealViewState.has_more = !!d.has_more || _dealViewState.messages.length >= 10;
         applyDealChannels(d.channels || _dealViewState.channels);
         rememberDealAvatar(_dealViewState.deal, _dealViewState.messages);
         paintDealChatThread({stickBottom: true, force: true});
@@ -4771,7 +4771,7 @@ function startDealNoteInlineEdit(deal, btn) {
 }
 function startDealChatPolling() {
     stopDealChatPolling();
-    _dealChatPollTimer = setInterval(pollDealChat, 8000);
+    _dealChatPollTimer = setInterval(pollDealChat, 15000);
 }
 function bindDealChatThread() {
     const thread = document.getElementById('deal-chat-thread');
@@ -6644,7 +6644,7 @@ function startChatsPolling() {
             return;
         }
         loadSamilWorkspace(false, null, false);
-    }, 5000);
+    }, 15000);
 }
 async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
@@ -7563,7 +7563,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=261');
+    const reg = await navigator.serviceWorker.register('sw.js?v=262');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
