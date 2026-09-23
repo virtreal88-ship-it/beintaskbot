@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="225">
+    <meta name="pwa-build" content="226">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -294,7 +294,7 @@
         .deal-sum-btn { border:0; background:#ffffff22; color:#fff; border-radius:8px; padding:7px 10px; font-weight:800; font-size:11px; font-family:inherit; }
         .deal-sum-btn.loading { color:transparent; pointer-events:none; position:relative; }
         .deal-sum-btn.loading::after { content:''; position:absolute; inset:7px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
-        .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#1e293b; color:#fff; font-size:13px; font-weight:700; padding:0; }
+        .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:700; padding:0; }
         .wa-composer-field.sending textarea { color:transparent; }
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
@@ -304,8 +304,8 @@
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:800; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:700; font-size:12px; }
-        .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#eef1f4; }
-        .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#f7f8fa; overflow:auto; flex:none; border-bottom:1px solid #e5e7eb; }
+        .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
+        .wa-channels { display:flex; gap:6px; padding:8px 10px; background:#fff; overflow:auto; flex:none; border-bottom:1px solid #e8ecf0; }
         .wa-chip { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:14px; padding:6px 10px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
         .wa-chip.on { background:#1e293b; color:#fff; border-color:#1e293b; }
         .wa-chip-text { display:flex; flex-direction:column; align-items:flex-start; line-height:1.15; min-width:0; }
@@ -315,11 +315,11 @@
         .wa-thread::-webkit-scrollbar { width:8px; }
         .wa-thread::-webkit-scrollbar-thumb { background:#c5cdd6; border-radius:8px; }
         .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; color:#667781; font-size:12px; }
-        .deal-chat-row { border-radius:8px; padding:7px 9px 4px; margin:6px 0; max-width:78%; font-size:13px; line-height:1.35; box-shadow:0 1px 0 #0001; position:relative; }
+        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:8px 0; max-width:78%; font-size:13px; line-height:1.45; box-shadow:none; position:relative; }
         .deal-chat-row.wa-pop { animation:waPop .2s cubic-bezier(.2,.8,.2,1); }
         @keyframes waPop { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
-        .deal-chat-row.in { background:#fff; margin-right:auto; }
-        .deal-chat-row.out { background:#dbeafe; margin-left:auto; }
+        .deal-chat-row.in { background:#fff; margin-right:auto; border:1px solid #e8ecf0; }
+        .deal-chat-row.out { background:#ffe8c4; margin-left:auto; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
         .chat-msg-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:#e2e8f0; }
         .deal-chat-row.avatar-only { background:transparent; box-shadow:none; padding:2px 0; max-width:none; }
@@ -344,7 +344,7 @@
         .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
         .chat-react-pop { position:fixed; z-index:15100; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
         .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; touch-action:manipulation; }
-        .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
+        .wa-composer-wrap { flex:none; background:#fff; border-top:1px solid #e8ecf0; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
         .chat-quote-bar[hidden] { display:none !important; }
         .chat-quote-label { font-size:10px; font-weight:800; color:#2563eb; text-transform:uppercase; }
@@ -366,9 +366,10 @@
         .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
         .wa-composer-field.has-voice textarea { display:none; }
         .deal-chat-row.comment { display:none; }
-        .deal-chat-system { display:block; margin:10px auto; max-width:86%; text-align:center; font-size:11px; line-height:1.4; color:#667781; background:#dbe4ea; border-radius:8px; padding:6px 10px; box-shadow:none; }
-        .deal-chat-system a { color:#02735e; font-weight:800; text-decoration:underline; }
-        .deal-chat-note { padding:8px 10px; border:1px solid #fde68a; background:#fffbeb; border-radius:10px; margin:8px auto; max-width:92%; box-shadow:none; font-size:13px; line-height:1.35; }
+        .chat-day-pill { display:table; margin:14px auto 10px; background:#e8ecf0; color:#6b7280; font-size:11px; font-weight:700; line-height:1; border-radius:999px; padding:6px 12px; }
+        .deal-chat-system { display:table; margin:10px auto; max-width:86%; text-align:center; font-size:11px; line-height:1.4; color:#6b7280; background:#e8ecf0; border-radius:999px; padding:6px 12px; box-shadow:none; }
+        .deal-chat-system a { color:#2563eb; font-weight:800; text-decoration:underline; }
+        .deal-chat-note { padding:10px 12px; border:0; background:#ffe8c4; border-radius:12px; margin:8px auto 8px 0; max-width:78%; box-shadow:none; font-size:13px; line-height:1.45; }
         .deal-chat-note .meta { font-size:11px; color:#b45309; font-weight:700; margin-bottom:4px; }
         img.deal-zoom { cursor:zoom-in; }
         .wa-thread img.deal-zoom, .deal-chat-row img.deal-zoom {
@@ -411,13 +412,18 @@
         }
         .chats-app {
             flex:1; min-height:0; display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr);
-            background:#fff; overflow:hidden; border-top:1px solid #e6e8eb;
+            background:#fff; overflow:hidden; border-top:0;
+        }
+        @media (min-width: 1024px) {
+            .chats-app.chat-open { grid-template-columns:280px minmax(0,1fr); }
         }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
-        .chats-toolbar { padding:10px 12px; border-bottom:1px solid #f1f5f9; flex:none; position:relative; }
+        .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:#2b8cff; }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
-        .chats-toolbar-title { font-size:16px; font-weight:800; color:#0f172a; display:inline-flex; align-items:baseline; gap:8px; }
-        .chats-unread-label { font-size:11px; font-weight:500; color:#94a3b8; letter-spacing:.01em; }
+        .chats-toolbar-title { font-size:16px; font-weight:800; color:#fff; display:inline-flex; align-items:baseline; gap:8px; }
+        .chats-unread-label { font-size:11px; font-weight:500; color:#dbeafe; letter-spacing:.01em; }
+        .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
+        .chats-toolbar .search-icon-btn.on { background:#fff; color:#2b8cff; border-color:#fff; }
         .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
         .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
@@ -434,9 +440,9 @@
         .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .12s ease; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row:active { background:#e9edef; }
-        .chats-row.on { background:#e8f5e9; }
+        .chats-row.on { background:#eef5ff; }
         .chats-row.pin { background:#fffbeb; }
-        .chats-row.pin.on { background:#ecfdf3; }
+        .chats-row.pin.on { background:#eef5ff; }
         .chats-pin { color:#ca8a04; font-size:11px; margin-right:4px; }
         .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
         .chats-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -463,10 +469,10 @@
         #deal-info-drawer.open .deal-info-panel { transform:translateX(0); }
         #deal-info-drawer .deal-info-head {
             flex:none; display:flex; align-items:center; justify-content:space-between; gap:10px;
-            padding:12px 14px; background:#0f172a; color:#fff;
+            padding:12px 14px; background:#fff; color:#111827; border-bottom:1px solid #e8ecf0;
         }
         #deal-info-drawer .deal-info-head h3 { margin:0; font-size:14px; font-weight:800; }
-        #deal-info-drawer .deal-info-head button { border:0; background:#ffffff22; color:#fff; border-radius:8px; padding:7px 10px; font-weight:700; font-size:12px; }
+        #deal-info-drawer .deal-info-head button { border:0; background:#f3f4f6; color:#374151; border-radius:8px; padding:7px 10px; font-weight:700; font-size:12px; }
         #deal-info-drawer .deal-info-body { flex:1; min-height:0; overflow:auto; padding:14px; border-right:0; }
         .chats-row-main { min-width:0; flex:1; }
         .chats-row-top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
@@ -512,15 +518,34 @@
         .chats-hide { flex:none; width:22px; height:22px; border:0; border-radius:50%; background:transparent; color:#94a3b8; font-size:16px; line-height:1; cursor:pointer; font-family:inherit; }
         .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
         .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:700; }
-        .chats-pane { min-width:0; min-height:0; background:#ece5dd; display:flex; flex-direction:column; }
-        .chats-empty { margin:auto; text-align:center; color:#667781; }
+        .chats-pane { min-width:0; min-height:0; background:#f4f6f8; display:flex; flex-direction:column; }
+        .chats-empty { margin:auto; text-align:center; color:#6b7280; }
         .chats-empty-title { font-size:18px; font-weight:800; }
         .chats-empty-sub { font-size:13px; margin-top:6px; opacity:.8; }
         #chats-pane .deal-shell { width:100%; height:100%; max-height:none; border-radius:0; box-shadow:none; }
-        #chats-pane .deal-tabs, #chats-pane .deal-side { display:none !important; }
-        #chats-pane .deal-shell-body { grid-template-columns:1fr; }
-        .chats-back { display:none; width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; font-size:18px; line-height:1; flex:none; }
-        .chats-deal-link { width:auto; height:34px; padding:0 10px; border:0; background:#ffffff22; color:#fff; border-radius:8px; font-size:11px; font-weight:800; font-family:inherit; }
+        #chats-pane .deal-tabs { display:none !important; }
+        #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
+        #chats-pane .deal-side {
+            display:block; border-right:0; border-left:1px solid #e8ecf0; background:#fff; padding:16px 16px 20px;
+        }
+        #chats-pane .deal-shell-body.hide-info { grid-template-columns:1fr; }
+        #chats-pane .deal-shell-body.hide-info .deal-side { display:none; }
+        .inbox-shell .deal-shell-head {
+            background:#fff; color:#111827; border-bottom:1px solid #e8ecf0;
+        }
+        .inbox-shell .deal-head-name, .inbox-shell .deal-head-phone { color:#111827; }
+        .inbox-shell .deal-head-avatar { background:#e5e7eb; color:#374151; }
+        .inbox-shell .deal-head-wa { color:#25d366; }
+        .inbox-shell .deal-sum-btn, .inbox-shell .chats-deal-link, .inbox-shell .chats-back {
+            background:#f3f4f6; color:#374151;
+        }
+        .inbox-shell .chats-deal-link.on { background:#2b8cff; color:#fff; }
+        .deal-info-fields { display:grid; gap:8px; }
+        .deal-info-field { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; font-size:13px; color:#111827; }
+        .deal-info-field span { color:#9ca3af; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.03em; flex:none; }
+        .deal-info-field b { font-weight:700; text-align:right; word-break:break-word; }
+        .chats-back { display:none; width:34px; height:34px; border:0; background:#f3f4f6; color:#374151; border-radius:8px; font-size:18px; line-height:1; flex:none; }
+        .chats-deal-link { width:auto; height:34px; padding:0 10px; border:0; background:#f3f4f6; color:#374151; border-radius:8px; font-size:11px; font-weight:800; font-family:inherit; }
         @media (max-width: 1023px) {
             .chats-app { display:block; position:relative; grid-template-columns:none; }
             .chats-list, .chats-pane {
@@ -533,6 +558,8 @@
             .chats-app.chat-open .chats-list { transform:translateX(-22%); }
             .chats-app.chat-open .chats-pane { transform:translateX(0); }
             .chats-back { display:inline-flex; align-items:center; justify-content:center; }
+            #chats-pane .deal-shell-body { grid-template-columns:1fr; }
+            #chats-pane .deal-side { display:none !important; }
             body.chats-screen:has(.chats-app.chat-open) #tab-bar,
             body.chats-screen:has(.chats-app.chat-open) #tab-more-sheet { display:none !important; }
             body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0; }
@@ -3333,25 +3360,32 @@ function dealChatActor(item) {
     if(chatChannelKey(item) === 'whatsapp' || isGenericChatLabel(author)) return employee;
     return author || employee;
 }
+function dealChatDayKey(item) {
+    const ts = Number(item && item.created_at || 0);
+    const d = ts > 0 ? new Date(ts > 1e12 ? ts : ts * 1000) : null;
+    if(!d || isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baku', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+function dealChatDayLabel(key) {
+    if(!key) return '';
+    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baku', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const now = new Date();
+    const today = dayFmt.format(now);
+    const yest = dayFmt.format(new Date(now.getTime() - 86400000));
+    if(key === today) return 'Bugün';
+    if(key === yest) return 'Dünən';
+    const parts = String(key).split('-');
+    return parts[2] && parts[1] && parts[0] ? (parts[2] + '.' + parts[1] + '.' + parts[0]) : key;
+}
 function dealChatWhen(item) {
     const ts = Number(item && item.created_at || 0);
     const d = ts > 0 ? new Date(ts > 1e12 ? ts : ts * 1000) : null;
     const clockFmt = new Intl.DateTimeFormat('az-AZ', { timeZone: 'Asia/Baku', hour: '2-digit', minute: '2-digit', hour12: false });
-    const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Baku', year: 'numeric', month: '2-digit', day: '2-digit' });
     if(!d || isNaN(d.getTime())) {
         const raw = String((item && item.created) || '').trim();
-        const clock = raw.split(' ').slice(-1)[0] || raw;
-        return clock ? ('Bugün ' + clock) : '';
+        return raw.split(' ').slice(-1)[0] || raw;
     }
-    const time = clockFmt.format(d);
-    const day = dayFmt.format(d);
-    const now = new Date();
-    const today = dayFmt.format(now);
-    const yest = dayFmt.format(new Date(now.getTime() - 86400000));
-    if(day === today) return 'Bugün ' + time;
-    if(day === yest) return 'Dünən ' + time;
-    const parts = day.split('-');
-    return (parts[2] && parts[1] ? (parts[2] + '.' + parts[1] + ' ') : '') + time;
+    return clockFmt.format(d);
 }
 function dealChatTicks(item) {
     if(!item || item.incoming || item.is_comment) return '';
@@ -3534,7 +3568,18 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
     if(loading && !(Array.isArray(chat) && chat.length)) {
         return '<div class="wa-preloader"><div class="sync-spinner" style="width:28px;height:28px;border-width:3px"></div><div>Çat yüklənir...</div></div>';
     }
-    if(rows.length) return rows.map(item => dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly)).join('');
+    if(rows.length) {
+        let lastDay = '';
+        return rows.map(item => {
+            const day = dealChatDayKey(item);
+            let pill = '';
+            if(day && day !== lastDay) {
+                lastDay = day;
+                pill = `<div class="chat-day-pill">${escapeHtml(dealChatDayLabel(day))}</div>`;
+            }
+            return pill + dealChatItemHtml(item, token, _dealViewState && _dealViewState.readonly);
+        }).join('');
+    }
     if(blocked) {
         return '<div style="font-size:12px;color:#b45309;line-height:1.45;padding:12px">Kommo çatın mətnini API-yə vermir. External chat history hüququ lazımdır.</div>';
     }
@@ -4382,7 +4427,7 @@ function applyDealSide(deal, readonly) {
         wa.hidden = !url;
     }
     bindDealSideActions(deal);
-    bindAudioWait(document.getElementById('deal-info-drawer') || document.getElementById('deal-view-modal'));
+    bindAudioWait(document.getElementById('deal-info-drawer') || document.getElementById('deal-view-modal') || document.getElementById('chats-pane'));
     paintDealHeadAvatar(deal);
 }
 function mergeDealSnapshot(prev, snap) {
@@ -4782,7 +4827,16 @@ function closeDealViewModal() {
 }
 function dealInfoBodyHtml(deal, readonly) {
     const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
-    return `<h3>Sövdələşmə</h3>
+    const name = dealClientName(deal);
+    const phones = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
+    const phone = phones[0] || '';
+    return `<h3>Müştəri</h3>
+        <div class="deal-info-fields">
+            <div class="deal-info-field"><span>ID</span><b>${escapeHtml(String(deal.id || '—'))}</b></div>
+            <div class="deal-info-field"><span>Ad</span><b>${escapeHtml(name || '—')}</b></div>
+            <div class="deal-info-field"><span>Telefon</span><b>${escapeHtml(phone || '—')}</b></div>
+        </div>
+        <h3>Sövdələşmə</h3>
         <div class="text-[13px] text-gray-700 space-y-1">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">${dealCardTitle(deal) ? `<b>${escapeHtml(dealCardTitle(deal))}</b>` : '<span></span>'}${sourceTagHtml(deal)}</div>
             ${sourceUrlsHtml(deal)}
@@ -5181,7 +5235,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 <div class="sub"><span class="deal-head-phone-row">${waHtml}${phoneHtml}</span></div>
             </div>
             <button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et">Xülasə</button>
-            <button type="button" id="chats-open-deal" class="chats-deal-link">Sövdələşmə</button>
+            <button type="button" id="chats-open-deal" class="chats-deal-link on">Sövdələşmə</button>
         </div>
         <div class="deal-shell-body show-chat" id="deal-shell-body">
             <section class="wa-pane">
@@ -5197,6 +5251,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
                 ${composer}
             </section>
+            <aside class="deal-side" id="deal-info-side">${dealInfoBodyHtml(deal, readonly)}</aside>
         </div>
     </div>`;
     }
@@ -5280,7 +5335,14 @@ function paintDealViewModal(deal, readonly, opts) {
         const dealBtn = document.getElementById('chats-open-deal');
         if(dealBtn) dealBtn.onclick = () => {
             const live = (_dealViewState && _dealViewState.deal) || deal;
-            openDealInfoDrawer(live, readonly);
+            if(window.matchMedia('(max-width: 1023px)').matches) {
+                openDealInfoDrawer(live, readonly);
+                return;
+            }
+            const body = document.getElementById('deal-shell-body');
+            if(!body) return;
+            const hidden = body.classList.toggle('hide-info');
+            dealBtn.classList.toggle('on', !hidden);
         };
     } else {
         const modal = document.createElement('div');
@@ -7328,7 +7390,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=242');
+    const reg = await navigator.serviceWorker.register('sw.js?v=243');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
