@@ -396,7 +396,14 @@
             background:#fff; overflow:hidden; border-top:1px solid #e6e8eb;
         }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
-        .chats-toolbar { padding:12px 12px 10px; border-bottom:1px solid #f1f5f9; flex:none; }
+        .chats-toolbar { padding:12px 12px 10px; border-bottom:1px solid #f1f5f9; flex:none; position:relative; }
+        .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
+        .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
+        .chats-search-hit:last-child { border-bottom:0; }
+        .chats-search-hit:hover { background:#f8fafc; }
+        .chats-search-hit b { display:block; font-size:13px; color:#0f172a; }
+        .chats-search-hit span { display:block; font-size:11px; color:#64748b; margin-top:2px; }
+        .chats-search-empty { padding:12px; font-size:12px; color:#94a3b8; }
         .chats-line { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:800; color:#0f172a; }
         .chats-line label { flex:none; color:#64748b; font-weight:700; }
         .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:700; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
@@ -662,7 +669,8 @@
         <div id="chats-app" class="chats-app">
             <aside class="chats-list">
                 <div class="chats-toolbar">
-                    <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar">
+                    <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
+                    <div id="chats-search-results" class="chats-search-results" hidden></div>
                 </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
@@ -1394,10 +1402,11 @@ function applySamilWorkspace(payload) {
     applyPendingTaskMoves(mockTasks, gozlemeItems);
     if(Array.isArray(payload.partners)) employeePartners = payload.partners.map(name => String(name || '').trim()).filter(Boolean);
     const prevAvatars = Object.fromEntries((samilDeals || []).filter(item => item && item.id && item.contact_avatar).map(item => [String(item.id), item.contact_avatar]));
+    const prevIncoming = Object.fromEntries((samilDeals || []).filter(item => item && item.id && item.last_incoming_at).map(item => [String(item.id), item.last_incoming_at]));
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
-        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || ''};
+        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || '', last_incoming_at: deal.last_incoming_at || prevIncoming[String(deal.id)] || 0};
     };
     if(payload.pipeline_id) CURRENT_PIPELINE_ID = Number(payload.pipeline_id) || CURRENT_PIPELINE_ID;
     if(Array.isArray(payload.pipelines) && payload.pipelines.length) KOMMO_PIPELINES = payload.pipelines;
@@ -3916,6 +3925,7 @@ function mergeDealSnapshot(prev, snap) {
     if((prev && Array.isArray(prev.notes) && prev.notes.length) && !(snap && Array.isArray(snap.notes) && snap.notes.length)) next.notes = prev.notes;
     if((prev && Array.isArray(prev.tasks) && prev.tasks.length) && !(snap && Array.isArray(snap.tasks) && snap.tasks.length)) next.tasks = prev.tasks;
     if(prev && prev.contact_avatar && !next.contact_avatar) next.contact_avatar = prev.contact_avatar;
+    if(prev && prev.last_incoming_at && !next.last_incoming_at) next.last_incoming_at = prev.last_incoming_at;
     return next;
 }
 async function refreshDealSnapshot(deal) {
@@ -4158,13 +4168,24 @@ function switchDealChatChannel(channel) {
     _dealViewState.channel = channel;
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
 }
+function chatQuoteId(item) {
+    const msgid = String((item && item.msgid) || '').trim();
+    const ext = String((item && item.external_id) || '').trim();
+    const id = String((item && item.id) || '').trim();
+    const skip = val => !val || /^note-/i.test(val);
+    if(!skip(msgid)) return msgid;
+    if(!skip(ext) && (!/^\d+$/.test(ext) || ext.toLowerCase().startsWith('wamid'))) return ext;
+    if(!skip(id) && !/^\d+$/.test(id)) return id;
+    return ext || msgid || id;
+}
 function setDealChatReply(item) {
     if(!_dealViewState || _dealViewState.readonly || !item || item.is_comment) return;
+    const quoteId = chatQuoteId(item);
     _dealViewState.replyTo = {
-        id: item.id || item.msgid || item.external_id || '',
+        id: quoteId,
         text: dealChatReplyPreview(item),
         author: dealChatActor(item) || item.author || '',
-        externalId: item.external_id || item.msgid || item.id || '',
+        externalId: quoteId,
         channel: chatChannelKey(item),
         talkId: item.talk_id || 0
     };
@@ -4573,6 +4594,7 @@ async function sendDealChatMessage(fileArg) {
             }
         }
         clearDealChatReply();
+        markChatsSeen(leadId);
         _dealViewState.blocked = !!d.chat_blocked;
         applyDealChannels(d.channels || _dealViewState.channels);
         paintDealChatThread({stickBottom: true, force: true});
@@ -5176,6 +5198,9 @@ function getChatsHidden() {
 function saveChatsHidden(data) {
     try { localStorage.setItem(chatsHiddenKey(), JSON.stringify(data || {})); } catch(_err) {}
 }
+function chatsIncomingAt(deal) {
+    return Number((deal && deal.last_incoming_at) || 0);
+}
 function pruneChatsHidden(deals) {
     const hidden = getChatsHidden();
     let changed = false;
@@ -5183,7 +5208,12 @@ function pruneChatsHidden(deals) {
         if(!deal || !deal.id) return;
         const id = String(deal.id);
         if(!Object.prototype.hasOwnProperty.call(hidden, id)) return;
-        if((dealLastClientMessage(deal) || '') !== String(hidden[id] || '')) {
+        const stored = hidden[id];
+        const storedAt = stored && typeof stored === 'object' ? Number(stored.at || 0) : 0;
+        const storedText = stored && typeof stored === 'object' ? String(stored.text || '') : String(stored || '');
+        const incomingAt = chatsIncomingAt(deal);
+        const text = dealLastClientMessage(deal) || '';
+        if((incomingAt && incomingAt > storedAt) || (text && text !== storedText)) {
             delete hidden[id];
             changed = true;
         }
@@ -5196,7 +5226,7 @@ function hideInboxChat(leadId) {
     if(!id) return;
     const deal = (samilDeals || []).find(item => String(item.id) === id);
     const hidden = getChatsHidden();
-    hidden[id] = dealLastClientMessage(deal) || '';
+    hidden[id] = {at: chatsIncomingAt(deal), text: dealLastClientMessage(deal) || ''};
     saveChatsHidden(hidden);
     if(_dealInboxMode && _dealViewState && String(_dealViewState.id) === id) {
         closeInboxChat();
@@ -5214,7 +5244,7 @@ function seedChatsSeen(deals) {
     const seen = getChatsSeen();
     if(seen.__seeded) return seen;
     (deals || []).forEach(deal => {
-        if(deal && deal.id) seen[String(deal.id)] = Number(deal.updated_at || 0);
+        if(deal && deal.id) seen[String(deal.id)] = chatsIncomingAt(deal);
     });
     seen.__seeded = 1;
     saveChatsSeen(seen);
@@ -5228,9 +5258,10 @@ function markChatsSeen(leadId) {
 function chatsIsUnread(deal, seen) {
     if(!deal || !deal.id) return false;
     if(_dealViewState && String(_dealViewState.id) === String(deal.id)) return false;
-    if(!dealLastClientMessage(deal)) return false;
+    const incomingAt = chatsIncomingAt(deal);
+    if(!incomingAt) return false;
     const lastSeen = Number((seen || getChatsSeen())[String(deal.id)] || 0);
-    return Number(deal.updated_at || 0) > lastSeen;
+    return incomingAt > lastSeen;
 }
 function paintChatsUnreadBadge() {
     const count = HAS_CHATS
@@ -5404,24 +5435,119 @@ function chatsIsClosedDeal(deal) {
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
+    const seen = getChatsSeen();
+    const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     return (samilDeals || []).filter(deal => {
-        if(chatsIsClosedDeal(deal)) return false;
+        const isOpen = openId && openId === String(deal.id);
+        if(chatsIsClosedDeal(deal) && !isOpen && !chatsIsUnread(deal, seen)) return false;
         if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
-        if(!(preview || ['whatsapp','instagram','tiktok','facebook','telegram'].includes(channel))) return false;
-        if(!q) return true;
+        if(!(preview || chatsIncomingAt(deal) || ['whatsapp','instagram','tiktok','facebook','telegram'].includes(channel))) return false;
+        if(!q || usesKommoChatSearch()) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
         return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q);
-    }).sort((a, b) => Number(b.updated_at || 0) - Number(a.updated_at || 0));
+    }).sort((a, b) => Number(b.last_incoming_at || b.updated_at || 0) - Number(a.last_incoming_at || a.updated_at || 0));
+}
+function usesKommoChatSearch() {
+    return HAS_CHATS && !IS_RUFAT;
+}
+let _chatsSearchTimer = null;
+function chatsSearchHitsBox() {
+    return document.getElementById('chats-search-results');
+}
+function hideChatsSearchHits() {
+    const box = chatsSearchHitsBox();
+    if(box) { box.hidden = true; box.innerHTML = ''; }
+}
+function paintChatsSearchHits(rows, emptyText) {
+    const box = chatsSearchHitsBox();
+    if(!box) return;
+    if(!rows || !rows.length) {
+        if(emptyText) {
+            box.innerHTML = `<div class="chats-search-empty">${escapeHtml(emptyText)}</div>`;
+            box.hidden = false;
+        } else hideChatsSearchHits();
+        return;
+    }
+    box.innerHTML = rows.map(row => {
+        const leadId = Number(row.lead_id || (row.leads && row.leads[0] && row.leads[0].id) || 0);
+        const name = row.name || row.lead_name || 'Müştəri';
+        const phone = row.phone || '';
+        return `<button type="button" class="chats-search-hit" data-lead="${escapeHtml(String(leadId))}" ${leadId ? '' : 'disabled'}>
+            <b>${escapeHtml(name)}</b>
+            <span>${escapeHtml(phone || (leadId ? ('Sövdələşmə #' + leadId) : 'Sövdələşmə tapılmadı'))}</span>
+        </button>`;
+    }).join('');
+    box.hidden = false;
+    box.onclick = (event) => {
+        const btn = event.target.closest('[data-lead]');
+        if(!btn || btn.disabled) return;
+        const leadId = btn.getAttribute('data-lead');
+        hideChatsSearchHits();
+        const search = document.getElementById('chats-search');
+        if(search) search.value = '';
+        openSearchedChat(leadId);
+    };
+}
+async function fetchChatsContactHits(query) {
+    const r = await fetch(API_BASE + '/api/search_contacts', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+        body: JSON.stringify({query})
+    });
+    const d = await r.json().catch(() => ({}));
+    return (d && d.success && Array.isArray(d.contacts)) ? d.contacts : [];
+}
+function scheduleChatsSearch() {
+    const search = document.getElementById('chats-search');
+    const query = String(search && search.value || '').trim();
+    clearTimeout(_chatsSearchTimer);
+    if(!query) { hideChatsSearchHits(); return; }
+    const localHits = !usesKommoChatSearch() && chatsInboxDeals().length;
+    if(!usesKommoChatSearch() && localHits) { hideChatsSearchHits(); return; }
+    if(query.length < 2 && query.replace(/\D/g, '').length < 7) { hideChatsSearchHits(); return; }
+    _chatsSearchTimer = setTimeout(async () => {
+        try {
+            const rows = await fetchChatsContactHits(query);
+            paintChatsSearchHits(rows, rows.length ? '' : 'Kontakt tapılmadı');
+        } catch(_err) {
+            paintChatsSearchHits([], 'Axtarış alınmadı');
+        }
+    }, 450);
 }
 function fillChatsLineSelect() {
     const search = document.getElementById('chats-search');
     if(search && !search.dataset.bound) {
         search.dataset.bound = '1';
-        search.addEventListener('input', renderChatsList);
+        search.placeholder = usesKommoChatSearch() ? 'Kommo-da axtar...' : 'Axtar...';
+        search.addEventListener('input', () => {
+            renderChatsList();
+            scheduleChatsSearch();
+        });
+        document.addEventListener('click', (event) => {
+            if(!event.target.closest('.chats-toolbar')) hideChatsSearchHits();
+        });
     }
+}
+async function openSearchedChat(leadId) {
+    const id = String(leadId || '');
+    if(!id || id === '0') { toast('Sövdələşmə tapılmadı', true); return; }
+    let deal = (samilDeals || []).find(item => String(item.id) === id);
+    if(!deal) {
+        try {
+            deal = await loadDealSnapshot({id});
+        } catch(err) {
+            toast(err.message || 'Sövdələşmə tapılmadı', true);
+            return;
+        }
+        if(deal && deal.id && !(samilDeals || []).some(item => String(item.id) === String(deal.id))) {
+            samilDeals.unshift(deal);
+            persistLocalSamilWorkspace();
+        }
+    }
+    await openInboxChat(deal.id);
 }
 function renderChatsList() {
     const box = document.getElementById('chats-rows');
@@ -6406,7 +6532,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=223');
+    const reg = await navigator.serviceWorker.register('sw.js?v=224');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

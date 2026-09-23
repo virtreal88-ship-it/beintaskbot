@@ -1329,6 +1329,79 @@ def search_contact_by_phone(phone: str) -> list:
             logger.error(f"Search contact error ({variant}): {e}")
     return all_contacts
 
+
+def search_contacts_by_query(query: str) -> list:
+    q = str(query or "").strip()
+    digits = re.sub(r"[^\d]", "", q)
+    if len(digits) >= 7:
+        return search_contact_by_phone(q)
+    if len(q) < 2:
+        return []
+    try:
+        resp = _http.get(
+            f"{KOMMO_BASE_URL}/api/v4/contacts",
+            headers=HEADERS,
+            params={"query": q, "limit": 10, "with": "leads"},
+            timeout=8,
+        )
+        if resp.status_code != 200:
+            return []
+        return [item for item in (resp.json().get("_embedded") or {}).get("contacts") or [] if isinstance(item, dict)]
+    except Exception as exc:
+        logger.error("Search contacts query error: %s", exc)
+        return []
+
+
+def _contact_phone_value(contact: dict) -> str:
+    for field in (contact or {}).get("custom_fields_values") or []:
+        if not isinstance(field, dict) or field.get("field_code") != "PHONE":
+            continue
+        values = field.get("values") or []
+        if values and isinstance(values[0], dict):
+            return str(values[0].get("value") or "").strip()
+    return ""
+
+
+def _pick_search_lead(contact: dict, chat_id: int) -> dict:
+    lead_ids = _lead_ids_from_contact(contact)
+    if not lead_ids:
+        full = get_contact_details(int(contact.get("id") or 0)) if str(contact.get("id") or "").isdigit() else {}
+        lead_ids = _lead_ids_from_contact(full or {})
+    owner = get_funnel_owner(chat_id) if chat_id else None
+    try:
+        wanted_pipe = int((owner or {}).get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        wanted_pipe = 0
+    ranked: list[tuple] = []
+    for lid in lead_ids[:8]:
+        lead = get_lead_details(lid) or {}
+        if not lead:
+            continue
+        pipe = _lead_pipeline_id(lead)
+        try:
+            status = int(lead.get("status_id") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        closed = status in {142, 143}
+        same = bool(wanted_pipe and pipe == wanted_pipe)
+        allowed = True
+        if chat_id and not is_admin(chat_id):
+            allowed = lead_allowed_for_chat(lid, chat_id) or same
+        if not allowed:
+            continue
+        ranked.append((0 if same and not closed else 1 if same else 2, closed, lid, lead))
+    if not ranked:
+        return {}
+    ranked.sort()
+    lid, lead = ranked[0][2], ranked[0][3]
+    return {
+        "lead_id": int(lid),
+        "lead_name": str(lead.get("name") or "").strip(),
+        "pipeline_id": _lead_pipeline_id(lead),
+        "status_id": lead.get("status_id") or 0,
+    }
+
+
 def get_contact_details(contact_id: int) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}"
     try:
@@ -5644,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v205 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v206 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7295,6 +7368,7 @@ def _apply_talk_to_inbox(
     updated_by_lead: dict[int, int],
     contact_to_lead: dict[int, int] | None = None,
     avatar_by_lead: dict[int, str] | None = None,
+    incoming_at_by_lead: dict[int, int] | None = None,
 ) -> None:
     lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
     if not lids:
@@ -7315,6 +7389,8 @@ def _apply_talk_to_inbox(
             updated_by_lead[lid] = updated
             channel_by_lead[lid] = channel
             client_by_lead[lid] = preview
+        if unread and incoming_at_by_lead is not None and updated > incoming_at_by_lead.get(lid, 0):
+            incoming_at_by_lead[lid] = updated
         if avatar and avatar_by_lead is not None:
             avatar_by_lead[lid] = avatar
 
@@ -7322,14 +7398,15 @@ def _apply_talk_to_inbox(
 async def _load_kommo_talks_inbox(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, int], dict[int, str]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int]]:
     """Existing WhatsApp/Instagram deals still live in Kommo talks; Cloud inbound is extra."""
     client_by_lead: dict[int, str] = {}
     channel_by_lead: dict[int, str] = {}
     updated_by_lead: dict[int, int] = {}
     avatar_by_lead: dict[int, str] = {}
+    incoming_at_by_lead: dict[int, int] = {}
     if not lead_ids:
-        return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead
+        return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead
     for page in range(1, 7):
         try:
             response = await _kommo_get_async(
@@ -7358,20 +7435,21 @@ async def _load_kommo_talks_inbox(
                     updated_by_lead,
                     contact_to_lead,
                     avatar_by_lead,
+                    incoming_at_by_lead,
                 )
         if len(talks) < 250:
             break
-    return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead
+    return client_by_lead, channel_by_lead, updated_by_lead, avatar_by_lead, incoming_at_by_lead
 
 
 async def _load_rufat_latest_notes(
     lead_ids: set[int],
     contact_to_lead: dict[int, int] | None = None,
-) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int], dict[int, str]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[int, int], dict[int, str], dict[int, int]]:
     """Common notes plus Kommo talk channels so existing chats stay in Çatlar."""
     latest: dict[int, tuple[int, str]] = {}
     if not lead_ids:
-        return {}, {}, {}, {}, {}
+        return {}, {}, {}, {}, {}, {}
     page = 1
     max_pages = 4
     while page <= max_pages:
@@ -7412,13 +7490,14 @@ async def _load_rufat_latest_notes(
         if len(notes) < 250 and not payload.get("_links", {}).get("next"):
             break
         page += 1
-    client_by_lead, channel_by_lead, talk_updated, avatar_by_lead = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
+    client_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead = await _load_kommo_talks_inbox(lead_ids, contact_to_lead)
     return (
         {lead: value[1] for lead, value in latest.items()},
         client_by_lead,
         channel_by_lead,
         talk_updated,
         avatar_by_lead,
+        incoming_at_by_lead,
     )
 
 
@@ -7700,7 +7779,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "contacts": contact_rows,
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
-            "last_note": "", "last_client_message": "", "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "", "last_client_message": "", "last_incoming_at": 0, "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
@@ -7734,7 +7813,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             task_by_lead.setdefault(related_id, []).append(task)
     for related_tasks in task_by_lead.values():
         related_tasks.sort(key=lambda task: (int(task.get("complete_till", 0) or 0) == 0, int(task.get("complete_till", 0) or 0), -int(task.get("created_at", 0) or 0)))
-    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated, avatar_by_lead = await notes_request
+    note_by_lead, client_message_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead = await notes_request
     for deal in deals:
         lead_id = int(deal["id"])
         related_tasks = task_by_lead.get(lead_id, [])
@@ -7742,6 +7821,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deadline_ts = int(task.get("complete_till", 0) or 0)
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
+        deal["last_incoming_at"] = int((incoming_at_by_lead or {}).get(lead_id) or 0)
         deal["chat_channel"] = channel_by_lead.get(lead_id, "")
         deal["contact_avatar"] = (avatar_by_lead or {}).get(lead_id, "") or deal.get("contact_avatar") or ""
         try:
@@ -8651,11 +8731,31 @@ def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dic
             "key": key,
             "label": CHAT_CHANNEL_LABELS[key],
             "talk_id": _talk_id_of(talk),
-            "chat_id": str(talk.get("chat_id") or ""),
+            "chat_id": _talk_chat_id(talk),
             "open": _talk_is_open(talk),
             "sender_phone": _wa_display_number(sender_digits) if key == "whatsapp" else "",
         })
     return rows
+
+
+def _talk_chat_id(talk: dict) -> str:
+    if not isinstance(talk, dict):
+        return ""
+    for key in ("chat_id", "conversation_id"):
+        val = str(talk.get(key) or "").strip()
+        if val:
+            return val
+    origin = talk.get("origin")
+    if isinstance(origin, dict):
+        val = str(origin.get("chat_id") or origin.get("id") or "").strip()
+        if val:
+            return val
+    chat = talk.get("chat")
+    if isinstance(chat, dict):
+        val = str(chat.get("id") or chat.get("chat_id") or "").strip()
+        if val:
+            return val
+    return ""
 
 
 def _talk_id_of(talk: dict) -> int:
@@ -8752,12 +8852,27 @@ def _chat_message_ids(message: dict, nested: dict) -> tuple[str, str, str]:
     return msg_id, msgid, external
 
 
+def _kommo_quote_ids(*values) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        val = str(raw or "").strip()
+        if not val or val in seen:
+            continue
+        if val.lower().startswith("note-"):
+            continue
+        seen.add(val)
+        rows.append(val)
+    rows.sort(key=lambda item: (item.isdigit(), len(item) < 12, item.startswith("wamid") is False, item))
+    return rows
+
+
 def _kommo_quote_bodies(payload: dict, reply_id: str, reply_text: str = "") -> list[dict]:
     quote_id = str(reply_id or "").strip()
     preview = str(reply_text or "").strip()[:200]
     if not quote_id:
         return [payload]
-    nested = {"id": quote_id}
+    nested = {"id": quote_id, "msgid": quote_id}
     if preview:
         nested["type"] = "text"
         nested["text"] = preview
@@ -8800,18 +8915,18 @@ def _send_kommo_talk_message(
     if reply_id:
         quote_bodies = _kommo_quote_bodies(payload, reply_id, reply_text)
         if chat_id:
-            amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id}}}
+            amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
             if attachment:
                 amojo_body["attachment"] = attachment
             if reply_text:
                 amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
             ajax = {"X-Requested-With": "XMLHttpRequest"}
             attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
-            attempts.append((f"https://amojo.kommo.com/v1/chats/{chat_id}", amojo_body, {}))
             attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", quote_bodies[0], ajax))
-        for body in quote_bodies:
-            attempts.append((talk_messages, body, {}))
-            attempts.append((talk_send, body, {}))
+        attempts.append((talk_messages, quote_bodies[0], {}))
+        attempts.append((talk_messages, {**payload, "reply_to": {"message": {"msgid": reply_id}}}, {}))
+        attempts.append((talk_send, {**payload, "reply_to": {"message": {"msgid": reply_id}}}, {}))
+        attempts.append((talk_send, quote_bodies[0], {}))
     if plain_fallback or not reply_id:
         attempts.append((talk_send, payload, {}))
     last_detail = ""
@@ -9542,25 +9657,33 @@ def _lead_ids_from_contact(contact: dict) -> list[int]:
     return rows
 
 
-def _lead_open_in_rufat_chats(lead: dict | None) -> bool:
-    """Cloud inbound for Rüfət's number must land on an open personal-funnel deal."""
+def _lead_in_rufat_chats(lead: dict | None) -> bool:
+    """Any Rüfət-funnel deal, including uğurlu/imtina — incoming must still land here."""
     if not isinstance(lead, dict) or not lead:
-        return False
-    try:
-        status_id = int(lead.get("status_id") or 0)
-    except (TypeError, ValueError):
-        status_id = 0
-    if status_id in {142, 143}:
         return False
     return _lead_pipeline_id(lead) == int(RUFAT_PIPELINE_ID)
 
 
+def _lead_open_in_rufat_chats(lead: dict | None) -> bool:
+    """Cloud inbound prefers an open personal-funnel deal."""
+    if not _lead_in_rufat_chats(lead):
+        return False
+    try:
+        status_id = int((lead or {}).get("status_id") or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    return status_id not in {142, 143}
+
+
 def _pick_existing_lead(lead_ids: list[int]) -> int:
+    fallback = 0
     for lid in lead_ids:
         details = get_lead_details(lid) or {}
         if _lead_open_in_rufat_chats(details):
             return int(lid)
-    return 0
+        if not fallback and _lead_in_rufat_chats(details):
+            fallback = int(lid)
+    return fallback
 
 
 def _search_lead_ids_by_phone(phone: str) -> list[int]:
@@ -9704,7 +9827,7 @@ def _rehome_orphaned_cloud_inbox() -> None:
         if not any(row.get("incoming") for row in rows):
             continue
         lead = get_lead_details(src_id)
-        if _lead_open_in_rufat_chats(lead):
+        if _lead_in_rufat_chats(lead):
             continue
         target = 0
         name = str((lead or {}).get("name") or "").strip()
@@ -9766,6 +9889,7 @@ def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
         "updated_at": max(updated, int(ts or 0)),
         "last_note": "",
         "last_client_message": str(preview or "")[:140],
+        "last_incoming_at": int(ts or 0),
         "chat_channel": "whatsapp",
         "task_desc": "",
         "deadline": "",
@@ -9790,6 +9914,12 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         text = str(last_in.get("text") or "").strip()
         if text:
             deal["last_client_message"] = text[:140]
+        try:
+            incoming_at = int(last_in.get("created_at") or 0)
+        except (TypeError, ValueError):
+            incoming_at = 0
+        if incoming_at > int(deal.get("last_incoming_at") or 0):
+            deal["last_incoming_at"] = incoming_at
     elif preview and not str(deal.get("last_client_message") or "").strip():
         deal["last_client_message"] = preview[:140]
     if not str(deal.get("chat_channel") or "").strip():
@@ -9847,7 +9977,7 @@ def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
                 continue
             try:
                 lead = get_lead_details(lid)
-                if not _lead_open_in_rufat_chats(lead):
+                if not _lead_in_rufat_chats(lead):
                     continue
                 preview, ts, _has = _cloud_last_for_lead(lid)
                 row = _overview_deal_from_cloud_lead(lead, preview, ts)
@@ -9898,7 +10028,7 @@ def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = Tru
         stored = _lead_id_for_stored_phone(phone)
         if stored:
             lead = get_lead_details(stored)
-            if _lead_open_in_rufat_chats(lead):
+            if _lead_in_rufat_chats(lead):
                 return stored
     lead_ids: list[int] = []
     contacts = search_contact_by_phone(phone)
@@ -11288,9 +11418,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
             # Kommo rejects an empty text even when a file is attached.
             kommo_text = VOICE_CAPTION_TEXT
-        quote_id = reply_to_message_id or reply_external
+        quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
         social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
-        if quote_id:
+        for quote_id in quote_ids[:2]:
             kommo_ok, kommo_error, _status = _send_kommo_talk_message(
                 reply_talk_id,
                 kommo_text,
@@ -11304,7 +11434,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 ok = True
                 last_error = ""
                 sent_text = kommo_text
-            elif kommo_error and not last_error:
+                break
+            if kommo_error and not last_error:
                 last_error = kommo_error
         if not ok:
             fallback_text = kommo_text
@@ -12267,25 +12398,30 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
 async def handle_search_contacts(request: web.Request) -> web.Response:
     try:
         data = await request.json()
-        phone = data.get("phone", "").strip()
-        if not phone or len(re.sub(r"[^\d]", "", phone)) < 7:
-            return web.json_response({"success": False, "error": "Telefon nömrəsi qısadır"}, status=400)
-        contacts = search_contact_by_phone(phone)
+        query = str(data.get("query") or data.get("phone") or data.get("q") or "").strip()
+        digits = re.sub(r"[^\d]", "", query)
+        if len(digits) < 7 and len(query) < 2:
+            return web.json_response({"success": False, "error": "Axtarış çox qısadır"}, status=400)
+        chat_id = _deal_request_user(request) or 0
+        contacts = search_contacts_by_query(query)
         results = []
-        for c in contacts:
-            name = c.get("name", "")
-            phone_val = ""
-            for cf in c.get("custom_fields_values", []) or []:
-                if cf.get("field_code") == "PHONE":
-                    vals = cf.get("values", [])
-                    if vals:
-                        phone_val = vals[0].get("value", "")
-                    break
+        for contact in contacts:
+            name = str(contact.get("name") or "").strip()
+            phone_val = _contact_phone_value(contact)
+            picked = _pick_search_lead(contact, chat_id)
             leads = []
-            if c.get("_embedded", {}).get("leads"):
-                for ld in c["_embedded"]["leads"]:
-                    leads.append({"id": ld.get("id")})
-            results.append({"id": c["id"], "name": name, "phone": phone_val, "leads": leads})
+            if contact.get("_embedded", {}).get("leads"):
+                for linked in contact["_embedded"]["leads"]:
+                    if isinstance(linked, dict) and linked.get("id"):
+                        leads.append({"id": linked.get("id")})
+            results.append({
+                "id": contact.get("id"),
+                "name": name,
+                "phone": phone_val,
+                "lead_id": picked.get("lead_id") or 0,
+                "lead_name": picked.get("lead_name") or "",
+                "leads": leads,
+            })
         return web.json_response({"success": True, "contacts": results})
     except Exception as e:
         logger.error(f"Search contacts API error: {e}")
@@ -12370,8 +12506,6 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str) -> None:
         for deal in overview.get("deals") or []:
             try:
                 if int(deal.get("id") or 0) == int(lead_id):
-                    if str(deal.get("stage_key") or "").lower() in {"ugurlu", "imtina"}:
-                        return
                     title = str(deal.get("contact_name") or "").strip()
                     break
             except (TypeError, ValueError):
