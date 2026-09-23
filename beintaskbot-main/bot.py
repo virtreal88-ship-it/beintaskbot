@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v240 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v241 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -12206,10 +12206,6 @@ def _load_deal_side(lead_id: int) -> None:
 
 
 def _warm_one_chat_tail(lead_id: int) -> None:
-    try:
-        _load_deal_side(int(lead_id))
-    except Exception as exc:
-        logger.warning("Deal side warm failed lead=%s: %s", lead_id, exc)
     page, blocked, _talk, _more, _channels, _channel = _collect_deal_chat(
         int(lead_id),
         _contact_ids_from_cached_deal(lead_id),
@@ -12218,31 +12214,19 @@ def _warm_one_chat_tail(lead_id: int) -> None:
     if page:
         _store_chat_tail(lead_id, page)
         _chat_tail_warmed.add(int(lead_id))
-        return
-    if not blocked:
+    elif not blocked:
         _chat_tail_warmed.add(int(lead_id))
-
-
-_CHAT_TAIL_WARM_WORKERS = 3
+    try:
+        _load_deal_side(int(lead_id))
+    except Exception as exc:
+        logger.warning("Deal side warm failed lead=%s: %s", lead_id, exc)
 
 
 async def _warm_chat_tail_loop() -> None:
-    async def _run(lead_id: int) -> None:
-        try:
-            if _chat_open_preview.get(lead_id) and lead_id in _chat_tail_warmed:
-                await asyncio.to_thread(_load_deal_side, lead_id)
-            else:
-                await asyncio.to_thread(_warm_one_chat_tail, lead_id)
-        except Exception as exc:
-            logger.warning("Chat tail warm failed lead=%s: %s", lead_id, exc)
-        finally:
-            _chat_tail_inflight.discard(lead_id)
-
-    pending: set[asyncio.Task] = set()
     while True:
-        batch: list[int] = []
+        lead_id = 0
         with _chat_tail_warm_lock:
-            while _chat_tail_queue and len(pending) + len(batch) < _CHAT_TAIL_WARM_WORKERS:
+            while _chat_tail_queue:
                 candidate = _chat_tail_queue.pop(0)
                 _chat_tail_queued.discard(candidate)
                 if candidate in _chat_tail_inflight:
@@ -12254,22 +12238,28 @@ async def _warm_chat_tail_loop() -> None:
                 ):
                     continue
                 _chat_tail_inflight.add(candidate)
-                batch.append(candidate)
-            idle = not _chat_tail_queue and not pending and not batch
-        for lead_id in batch:
-            pending.add(asyncio.create_task(_run(lead_id)))
-        if idle:
-            return
-        if not pending:
-            await asyncio.sleep(0.2)
+                lead_id = candidate
+                break
+            if not lead_id and not _chat_tail_queue:
+                return
+        if not lead_id:
+            await asyncio.sleep(0.3)
             continue
-        _done, pending = await asyncio.wait(pending, timeout=0.35, return_when=asyncio.FIRST_COMPLETED)
-        pending = set(pending)
-        await asyncio.sleep(0.05)
+        try:
+            if _chat_open_preview.get(lead_id) and lead_id in _chat_tail_warmed:
+                await asyncio.to_thread(_load_deal_side, lead_id)
+            else:
+                await asyncio.to_thread(_warm_one_chat_tail, lead_id)
+        except Exception as exc:
+            logger.warning("Chat tail warm failed lead=%s: %s", lead_id, exc)
+        finally:
+            _chat_tail_inflight.discard(lead_id)
+        await asyncio.sleep(2.0)
 
 
 def _priority_chat_tail(lead_id: int) -> None:
-    """Fetch one open chat before the background warm of the rest of the list."""
+    """Move one opened chat to the front of the single warm queue."""
+    global _chat_tail_warm_task
     try:
         lid = int(lead_id)
     except (TypeError, ValueError):
@@ -12278,6 +12268,8 @@ def _priority_chat_tail(lead_id: int) -> None:
     has_side = lid in _deal_side_cache
     if not lid or (has_tail and has_side):
         return
+    if lid in _chat_tail_warmed and has_side and not has_tail:
+        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -12285,24 +12277,11 @@ def _priority_chat_tail(lead_id: int) -> None:
     with _chat_tail_warm_lock:
         if lid in _chat_tail_inflight:
             return
-        _chat_tail_inflight.add(lid)
-        if lid in _chat_tail_queued:
-            _chat_tail_queue[:] = [item for item in _chat_tail_queue if item != lid]
-            _chat_tail_queued.discard(lid)
-        _chat_tail_warmed.discard(lid)
-
-    async def _run() -> None:
-        try:
-            if not _chat_open_preview.get(lid):
-                await asyncio.to_thread(_warm_one_chat_tail, lid)
-            elif lid not in _deal_side_cache:
-                await asyncio.to_thread(_load_deal_side, lid)
-        except Exception as exc:
-            logger.warning("Priority chat tail failed lead=%s: %s", lid, exc)
-        finally:
-            _chat_tail_inflight.discard(lid)
-
-    loop.create_task(_run())
+        _chat_tail_queue[:] = [item for item in _chat_tail_queue if item != lid]
+        _chat_tail_queue.insert(0, lid)
+        _chat_tail_queued.add(lid)
+        if _chat_tail_warm_task is None or _chat_tail_warm_task.done():
+            _chat_tail_warm_task = loop.create_task(_warm_chat_tail_loop())
 
 
 def _schedule_chat_tail_warm(deals_or_ids) -> None:
