@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v249 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v250 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9852,6 +9852,50 @@ def _wa_cloud_upload_media(content: bytes, filename: str, mime: str) -> tuple[st
     return "", detail or "Fayl WhatsApp-a yüklənmədi."
 
 
+_WA_UPLOADED_MEDIA: dict[str, tuple[float, str]] = {}
+_WA_UPLOADED_MEDIA_TTL = 6 * 24 * 3600.0
+
+
+def _wa_media_id_for_link(link: str, kind: str) -> tuple[str, str]:
+    """Download a template image and upload it, so WhatsApp can attach the file."""
+    key = str(link or "").strip()
+    now = _time_module.time()
+    cached = _WA_UPLOADED_MEDIA.get(key)
+    if cached and now - cached[0] < _WA_UPLOADED_MEDIA_TTL and cached[1]:
+        return cached[1], ""
+    try:
+        resp = requests.get(key, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+    except Exception as exc:
+        logger.warning("WhatsApp media download failed: %s", exc)
+        return "", "Şəkil yüklənmədi."
+    raw = resp.content or b""
+    if resp.status_code != 200 or not raw:
+        logger.warning("WhatsApp media download status %s", resp.status_code)
+        return "", "Şəkil yüklənmədi."
+    if len(raw) > 5 * 1024 * 1024:
+        return "", "Şəkil 5MB-dan böyükdür."
+    mime = str(resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if kind == "video":
+        if not mime.startswith("video/"):
+            mime = "video/mp4"
+        ext = "mp4"
+    else:
+        if raw[:3] == b"\xff\xd8\xff":
+            mime = "image/jpeg"
+        elif raw[:8] == b"\x89PNG\r\n\x1a\n":
+            mime = "image/png"
+        elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+            mime = "image/webp"
+        elif not mime.startswith("image/"):
+            mime = "image/jpeg"
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(mime, "jpg")
+    media_id, error = _wa_cloud_upload_media(raw, f"card.{ext}", mime)
+    if not media_id:
+        return "", error or "Şəkil WhatsApp-a yüklənmədi."
+    _WA_UPLOADED_MEDIA[key] = (now, media_id)
+    return media_id, ""
+
+
 def _is_ogg_bytes(raw: bytes) -> bool:
     return bool(raw) and raw[:4] == b"OggS"
 
@@ -10269,8 +10313,13 @@ def _wa_carousel_component(cards: list, supplied_cards: list) -> tuple[dict | No
             link = str(supplied.get("header_media") or card.get("header_link") or card.get("header_media") or "").strip()
             if not link.startswith("https://"):
                 return None, f"Kart {index + 1}: linki https:// ilə yazın."
-            media = {"link": link[:1000]}
-            card_components.append({"type": "header", "parameters": [{"type": media_key, media_key: media}]})
+            media_id, media_error = _wa_media_id_for_link(link, media_key)
+            if not media_id:
+                return None, f"Kart {index + 1}: {media_error}"
+            card_components.append({
+                "type": "header",
+                "parameters": [{"type": media_key, media_key: {"id": media_id}}],
+            })
         names = list(card.get("body_names") or [])
         count = len(names) or int(card.get("body_vars") or 0)
         body_values = [str(value).strip() for value in (supplied.get("body_params") or [])][:count]
