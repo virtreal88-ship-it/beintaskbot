@@ -5720,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v229 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v230 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11431,6 +11431,7 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
 
 
 _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
+_chat_open_preview: dict[int, list] = {}
 _deal_chat_cache_lock = threading.Lock()
 _DEAL_CHAT_CACHE_TTL = 25.0
 _chat_collect_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deal-chat")
@@ -11517,6 +11518,27 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         before = 0
     channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
     sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
+    if str(request.rel_url.query.get("preview") or "") == "1":
+        remembered: list = []
+        with _deal_chat_cache_lock:
+            for key, cached in _deal_chat_cache.items():
+                if not key or key[0] != int(lead.get("id") or lead_id):
+                    continue
+                rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
+                if rows:
+                    remembered = list(rows)[-2:]
+                    break
+            if not remembered:
+                remembered = list(_chat_open_preview.get(int(lead.get("id") or lead_id)) or [])[-2:]
+        return web.json_response({
+            "success": True,
+            "preview": True,
+            "chat": remembered,
+            "has_more": True,
+            "chat_blocked": False,
+            "channel": channel,
+            "channels": [],
+        })
     cache_key = (int(lead.get("id") or lead_id), channel, int(before or 0), str(sender_digits or ""), int(limit))
     now = _time_module.monotonic()
     with _deal_chat_cache_lock:
@@ -11551,6 +11573,8 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     }
     with _deal_chat_cache_lock:
         _deal_chat_cache[cache_key] = (now, payload)
+        if chat:
+            _chat_open_preview[int(lead.get("id") or lead_id)] = list(chat[-2:])
     return web.json_response(payload)
 
 

@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="245">
+    <meta name="pwa-build" content="246">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=245">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=245">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=246">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=246">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -329,6 +329,7 @@
         .wa-thread::-webkit-scrollbar { width:8px; }
         .wa-thread::-webkit-scrollbar-thumb { background:#c5cdd6; border-radius:8px; }
         .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; color:#667781; font-size:12px; }
+        .wa-preloader-more { min-height:0; padding:8px 0 4px; }
         .deal-chat-wrap { display:flex; align-items:center; gap:4px; max-width:86%; margin:8px 0; }
         .deal-chat-wrap.in { margin-right:auto; }
         .deal-chat-wrap.out { margin-left:auto; flex-direction:row-reverse; }
@@ -3501,10 +3502,10 @@ function dealChatItemHtml(item, token, readonly) {
     const quote = dealChatQuoteHtml(item);
     const profile = isChatProfilePhoto(item);
     const avatar = chatAvatarHtml(item, token);
-    const replyBtn = readonly ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">${item.incoming ? '↩' : '↪'}</button>`;
+    const replyBtn = readonly || item.preview ? '' : `<button type="button" class="chat-reply-btn" data-reply-id="${escapeHtml(String(item.id || ''))}" title="Cavab">${item.incoming ? '↩' : '↪'}</button>`;
     const headName = who ? `<span>${escapeHtml(who)}</span>` : '';
     const reactKey = chatReactKey(item);
-    const canReact = !readonly && !!reactKey;
+    const canReact = !readonly && !item.preview && !!reactKey;
     const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(reactKey)}" title="Reaksiya">☺</button>` : '';
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(item.text || '').trim()) ? '' : linkifyText(item.text || '');
@@ -3608,7 +3609,8 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
     }
     if(rows.length) {
         let lastDay = '';
-        return rows.map(item => {
+        const spin = loading ? '<div class="wa-preloader wa-preloader-more"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>' : '';
+        return spin + rows.map(item => {
             const day = dealChatDayKey(item);
             let pill = '';
             if(day && day !== lastDay) {
@@ -4264,23 +4266,49 @@ function rememberOpenedChat(leadId, channel, messages) {
     _openedChatCache[openedChatCacheKey(leadId, channel)] = rows;
     _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
 }
+function instantChatRows(deal, remembered) {
+    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-2);
+    const text = chatNoticeText(dealLastClientMessage(deal));
+    if(!text || !deal) return [];
+    return [{
+        id: 'preview-' + deal.id,
+        incoming: true,
+        text,
+        created_at: Number(chatsIncomingAt(deal) || 0),
+        preview: true
+    }];
+}
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
     const seq = _dealViewState.seq;
+    const deal = _dealViewState.deal;
     const remembered = _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')];
-    if(Array.isArray(remembered) && remembered.length) {
-        _dealViewState.messages = remembered.slice();
-        _dealViewState.loading = false;
-        paintDealChatThread({stickBottom: true, force: true});
-    } else {
-        _dealViewState.loading = true;
-        _dealViewState.messages = [];
-        paintDealChatThread({stickBottom: true});
+    const instant = instantChatRows(deal, remembered);
+    _dealViewState.fullReady = false;
+    _dealViewState.loading = true;
+    _dealViewState.messages = instant;
+    paintDealChatThread({stickBottom: true, force: true});
+    if(instant.length < 2 && deal && deal.id && CURRENT_USER_ID) {
+        const q = new URLSearchParams({lead_id: String(deal.id), preview: '1', _ts: String(Date.now())});
+        const channel = _dealViewState.channel || '';
+        if(channel) q.set('channel', channel);
+        fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        }).then(r => r.json()).then(d => {
+            if(!d || !d.success || !requestMatchesDeal(seq, deal.id) || _dealViewState.fullReady) return;
+            const rows = Array.isArray(d.chat) ? d.chat.slice(-2) : [];
+            if(!rows.length) return;
+            _dealViewState.messages = rows;
+            _dealViewState.loading = true;
+            paintDealChatThread({stickBottom: true, force: true});
+        }).catch(() => {});
     }
     try {
         const d = await fetchDealChatPage(0);
         if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
-        if(!d.success) { _dealViewState.loading = false; paintDealChatThread({stickBottom: true, force: true}); return; }
+        if(!d.success) { _dealViewState.fullReady = true; _dealViewState.loading = false; paintDealChatThread({stickBottom: true, force: true}); return; }
+        _dealViewState.fullReady = true;
         _dealViewState.blocked = !!d.chat_blocked;
         _dealViewState.loading = false;
         _dealViewState.messages = Array.isArray(d.chat) ? d.chat : [];
@@ -4292,6 +4320,7 @@ async function loadDealChatLatest() {
         markDealChatRead(false);
     } catch(_err) {
         if(requestMatchesDeal(seq, _dealViewState && _dealViewState.id)) {
+            _dealViewState.fullReady = true;
             _dealViewState.loading = false;
             paintDealChatThread({stickBottom: true, force: true});
         }
@@ -6163,7 +6192,6 @@ async function incomingNoticeBody(deal) {
     const direct = chatNoticeText(dealLastClientMessage(deal));
     if(direct) return direct;
     if(!deal || !deal.id || !CURRENT_USER_ID) return 'Yeni mesaj';
-    if(_dealViewState && _dealViewState.loading) return 'Yeni mesaj';
     if(_dealViewState && String(_dealViewState.id) === String(deal.id)) {
         const rows = Array.isArray(_dealViewState.messages) ? _dealViewState.messages : [];
         for(let i = rows.length - 1; i >= 0; i -= 1) {
@@ -7563,7 +7591,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=262');
+    const reg = await navigator.serviceWorker.register('sw.js?v=263');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
