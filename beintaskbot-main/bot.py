@@ -6151,7 +6151,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v239 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v240 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -12223,22 +12223,49 @@ def _warm_one_chat_tail(lead_id: int) -> None:
         _chat_tail_warmed.add(int(lead_id))
 
 
+_CHAT_TAIL_WARM_WORKERS = 3
+
+
 async def _warm_chat_tail_loop() -> None:
-    while True:
-        with _chat_tail_warm_lock:
-            if not _chat_tail_queue:
-                return
-            lead_id = _chat_tail_queue.pop(0)
-            _chat_tail_queued.discard(lead_id)
-        if lead_id in _chat_tail_inflight:
-            continue
-        if lead_id in _chat_tail_warmed and _chat_open_preview.get(lead_id):
-            continue
+    async def _run(lead_id: int) -> None:
         try:
-            await asyncio.to_thread(_warm_one_chat_tail, lead_id)
+            if _chat_open_preview.get(lead_id) and lead_id in _chat_tail_warmed:
+                await asyncio.to_thread(_load_deal_side, lead_id)
+            else:
+                await asyncio.to_thread(_warm_one_chat_tail, lead_id)
         except Exception as exc:
             logger.warning("Chat tail warm failed lead=%s: %s", lead_id, exc)
-        await asyncio.sleep(0.45)
+        finally:
+            _chat_tail_inflight.discard(lead_id)
+
+    pending: set[asyncio.Task] = set()
+    while True:
+        batch: list[int] = []
+        with _chat_tail_warm_lock:
+            while _chat_tail_queue and len(pending) + len(batch) < _CHAT_TAIL_WARM_WORKERS:
+                candidate = _chat_tail_queue.pop(0)
+                _chat_tail_queued.discard(candidate)
+                if candidate in _chat_tail_inflight:
+                    continue
+                if (
+                    candidate in _chat_tail_warmed
+                    and _chat_open_preview.get(candidate)
+                    and candidate in _deal_side_cache
+                ):
+                    continue
+                _chat_tail_inflight.add(candidate)
+                batch.append(candidate)
+            idle = not _chat_tail_queue and not pending and not batch
+        for lead_id in batch:
+            pending.add(asyncio.create_task(_run(lead_id)))
+        if idle:
+            return
+        if not pending:
+            await asyncio.sleep(0.2)
+            continue
+        _done, pending = await asyncio.wait(pending, timeout=0.35, return_when=asyncio.FIRST_COMPLETED)
+        pending = set(pending)
+        await asyncio.sleep(0.05)
 
 
 def _priority_chat_tail(lead_id: int) -> None:

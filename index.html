@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="258">
+    <meta name="pwa-build" content="259">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4444,14 +4444,15 @@ async function loadDealChatLatest() {
     _dealViewState.fullReady = true;
     paintDealChatThread({stickBottom: true, force: true});
 }
-async function loadOlderDealChat() {
+async function loadOlderDealChat(quiet) {
     if(!_dealViewState || _dealViewState.loadingOlder || !_dealViewState.has_more || _dealViewState.loading) return;
-    const first = (_dealViewState.messages || [])[0];
+    const first = (_dealViewState.messages || []).find(row => row && !row.preview && !row.is_comment);
     const before = Number(first && first.created_at) || 0;
     if(!before) { _dealViewState.has_more = false; return; }
     const seq = _dealViewState.seq;
     _dealViewState.loadingOlder = true;
-    paintDealChatThread({stickBottom: false, force: true});
+    if(quiet) paintDealOlderBar();
+    else paintDealChatThread({stickBottom: false, force: true});
     try {
         const d = await fetchDealChatPage(before);
         if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
@@ -5770,7 +5771,9 @@ function paintDealViewModal(deal, readonly, opts) {
         });
     }
     if(!readonly) {
-        loadDealChatLatest().then(() => refreshDealSnapshot(deal).catch(() => {}));
+        loadDealChatLatest()
+            .then(() => refreshDealSnapshot(deal).catch(() => {}))
+            .then(() => loadOlderDealChat(true));
         startDealChatPolling();
     }
     const shareBtn = root.querySelector('#deal-view-share');
@@ -7856,7 +7859,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=275');
+    const reg = await navigator.serviceWorker.register('sw.js?v=276');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
