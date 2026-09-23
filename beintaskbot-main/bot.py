@@ -5709,6 +5709,8 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
             continue
         deals.append(row)
         placed = True
+    if placed:
+        _schedule_chat_tail_warm([lid])
     return placed
 
 
@@ -5755,7 +5757,14 @@ def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict) -> bool:
     return bool(event_pipe and event_pipe == int(user_pipeline))
 
 
-async def _hydrate_inbox_lead(lead_id: int, preview: str, created_at: int, origin: str) -> None:
+async def _hydrate_inbox_lead(
+    lead_id: int,
+    preview: str,
+    created_at: int,
+    origin: str,
+    talk_id: int = 0,
+    message_id: str = "",
+) -> None:
     try:
         lead = await asyncio.to_thread(get_lead_details, int(lead_id))
     except Exception as exc:
@@ -5778,12 +5787,23 @@ async def _hydrate_inbox_lead(lead_id: int, preview: str, created_at: int, origi
         int(lead_id), preview, created_at, origin,
         pipeline_id=pipe, contact_name=name, phone=phone,
     )
+    _capture_incoming_tail(
+        int(lead_id), preview, created_at, origin,
+        talk_id=talk_id, message_id=message_id,
+    )
 
 
-async def _hydrate_inbox_contact(contact_id: int, preview: str, created_at: int, origin: str) -> None:
+async def _hydrate_inbox_contact(
+    contact_id: int,
+    preview: str,
+    created_at: int,
+    origin: str,
+    talk_id: int = 0,
+    message_id: str = "",
+) -> None:
     cached = _cached_lead_id_for_contact(int(contact_id))
     if cached:
-        await _hydrate_inbox_lead(cached, preview, created_at, origin)
+        await _hydrate_inbox_lead(cached, preview, created_at, origin, talk_id, message_id)
         return
     try:
         leads = await asyncio.to_thread(_leads_linked_to_contact, int(contact_id))
@@ -5799,7 +5819,7 @@ async def _hydrate_inbox_contact(contact_id: int, preview: str, created_at: int,
         if lead_id:
             break
     if lead_id:
-        await _hydrate_inbox_lead(lead_id, preview, created_at, origin)
+        await _hydrate_inbox_lead(lead_id, preview, created_at, origin, talk_id, message_id)
 
 
 def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
@@ -5893,16 +5913,37 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     created_at = int(_time_module.time())
                 preview = _incoming_message_preview(str(row.get("text") or ""), str(row.get("message_type") or ""))
                 origin = str(row.get("origin") or "")
+                try:
+                    talk_id = int(row.get("talk_id") or 0)
+                except (TypeError, ValueError):
+                    talk_id = 0
+                message_id = str(row.get("id") or row.get("msgid") or row.get("message_id") or "").strip()
                 if entity_type in {"contact", "contacts", "1"}:
                     mapped = _cached_lead_id_for_contact(entity_id)
-                    if mapped and _apply_inbox_incoming(mapped, preview, created_at, origin):
+                    if mapped:
+                        _capture_incoming_tail(
+                            mapped, preview, created_at, origin,
+                            talk_id=talk_id, message_id=message_id,
+                        )
+                        if not _apply_inbox_incoming(mapped, preview, created_at, origin):
+                            asyncio.create_task(_hydrate_inbox_lead(
+                                mapped, preview, created_at, origin, talk_id, message_id,
+                            ))
                         continue
-                    asyncio.create_task(_hydrate_inbox_contact(entity_id, preview, created_at, origin))
+                    asyncio.create_task(_hydrate_inbox_contact(
+                        entity_id, preview, created_at, origin, talk_id, message_id,
+                    ))
                     continue
                 if entity_type and entity_type not in {"lead", "2", "leads"}:
                     continue
+                _capture_incoming_tail(
+                    entity_id, preview, created_at, origin,
+                    talk_id=talk_id, message_id=message_id,
+                )
                 if not _apply_inbox_incoming(entity_id, preview, created_at, origin):
-                    asyncio.create_task(_hydrate_inbox_lead(entity_id, preview, created_at, origin))
+                    asyncio.create_task(_hydrate_inbox_lead(
+                        entity_id, preview, created_at, origin, talk_id, message_id,
+                    ))
             return web.Response(status=200, text="OK")
         # Detect event type
         is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
@@ -6086,7 +6127,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v235 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v236 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8481,12 +8522,14 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
         if cached is not None:
             _apply_cloud_inbox_to_deals(cached.get("deals") or [], pipeline_id)
+            _schedule_chat_tail_warm(cached.get("deals") or [])
             if not force or now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
                 return _overview_with_partners(cached, owner)
         try:
             overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
             _personal_overview_cache[pipeline_id] = overview
             _personal_overview_cache_at[pipeline_id] = now
+            _schedule_chat_tail_warm(overview.get("deals") or [])
             return _overview_with_partners(overview, owner)
         except Exception as exc:
             logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
@@ -10847,6 +10890,7 @@ def _update_cloud_status(wamid: str, status: str) -> None:
         _schedule_sent_messages_save()
         for lid in touched_leads:
             _invalidate_deal_chat_cache(lid)
+            _overlay_tail_delivery(lid)
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
@@ -11895,6 +11939,292 @@ def _invalidate_deal_chat_cache(lead_id: int = 0) -> None:
             _deal_chat_cache.pop(key, None)
 
 
+_CHAT_TAIL_KEEP = 8
+_chat_tail_warmed: set[int] = set()
+_chat_tail_queue: list[int] = []
+_chat_tail_queued: set[int] = set()
+_chat_tail_warm_lock = threading.Lock()
+_chat_tail_warm_task: asyncio.Task | None = None
+_tail_refresh_pending: set[int] = set()
+
+
+def _tail_identity(item: dict) -> tuple:
+    external = str(item.get("external_id") or "").strip()
+    if external:
+        return ("ext", external)
+    mid = str(item.get("id") or "").strip()
+    if mid and not mid.startswith(("hook-", "sent-", "preview-", "local-")):
+        return ("id", mid)
+    try:
+        created = int(item.get("created_at") or 0)
+    except (TypeError, ValueError):
+        created = 0
+    return ("soft", bool(item.get("incoming")), str(item.get("text") or ""), created // 3)
+
+
+def _merge_tail_rows(existing: list, extra: list) -> list:
+    merged: list[dict] = []
+    index: dict[tuple, int] = {}
+    for item in list(existing or []) + list(extra or []):
+        if not isinstance(item, dict):
+            continue
+        key = _tail_identity(item)
+        slot = index.get(key)
+        if slot is not None:
+            merged[slot] = item
+            continue
+        replaced = False
+        if key[0] != "soft":
+            text = str(item.get("text") or "")
+            try:
+                created = int(item.get("created_at") or 0)
+            except (TypeError, ValueError):
+                created = 0
+            incoming = bool(item.get("incoming"))
+            for pos, old in enumerate(merged):
+                old_id = str(old.get("id") or "")
+                if not old_id.startswith(("hook-", "sent-")):
+                    continue
+                if bool(old.get("incoming")) != incoming or str(old.get("text") or "") != text:
+                    continue
+                try:
+                    old_created = int(old.get("created_at") or 0)
+                except (TypeError, ValueError):
+                    old_created = 0
+                if abs(old_created - created) > 20:
+                    continue
+                merged[pos] = item
+                index[key] = pos
+                replaced = True
+                break
+        if replaced:
+            continue
+        index[key] = len(merged)
+        merged.append(item)
+    merged.sort(key=lambda row: int(row.get("created_at") or 0))
+    return merged[-_CHAT_TAIL_KEEP:]
+
+
+def _store_chat_tail(lead_id: int, rows: list) -> None:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not lid:
+        return
+    with _deal_chat_cache_lock:
+        current = list(_chat_open_preview.get(lid) or [])
+        _chat_open_preview[lid] = _merge_tail_rows(current, rows)
+
+
+def _append_chat_tail(lead_id: int, item: dict) -> None:
+    if not isinstance(item, dict):
+        return
+    _store_chat_tail(lead_id, [item])
+
+
+def _overlay_tail_delivery(lead_id: int) -> None:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    with _deal_chat_cache_lock:
+        rows = _chat_open_preview.get(lid)
+    if rows:
+        _overlay_sent_delivery(rows, lid)
+
+
+def _capture_incoming_tail(
+    lead_id: int,
+    preview: str,
+    created_at: int,
+    origin: str,
+    *,
+    talk_id: int = 0,
+    message_id: str = "",
+) -> None:
+    try:
+        lid = int(lead_id)
+        created = int(created_at or 0)
+        talk = int(talk_id or 0)
+    except (TypeError, ValueError):
+        return
+    if not lid:
+        return
+    channel = _origin_channel_key(origin) or "whatsapp"
+    mid = str(message_id or "").strip() or f"hook-{lid}-{created}"
+    _append_chat_tail(lid, {
+        "id": mid,
+        "incoming": True,
+        "direction": "incoming",
+        "text": preview,
+        "created_at": created or int(_time_module.time()),
+        "message_type": "text",
+        "channel": channel,
+        "origin": origin,
+        "talk_id": talk,
+        "author": "",
+    })
+    if talk:
+        _schedule_talk_tail_refresh(lid, talk, origin)
+
+
+def _chat_tail_ids(deals: list) -> list[int]:
+    ranked: list[tuple[int, int]] = []
+    for deal in deals or []:
+        if not isinstance(deal, dict):
+            continue
+        if not (
+            deal.get("last_client_message")
+            or deal.get("chat_channel")
+            or deal.get("last_incoming_at")
+            or deal.get("chat_at")
+            or deal.get("inbox_only")
+        ):
+            continue
+        try:
+            lid = int(deal.get("id") or 0)
+            stamp = int(deal.get("chat_at") or deal.get("last_incoming_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lid:
+            ranked.append((stamp, lid))
+    ranked.sort(reverse=True)
+    seen: set[int] = set()
+    ids: list[int] = []
+    for _stamp, lid in ranked:
+        if lid in seen:
+            continue
+        seen.add(lid)
+        ids.append(lid)
+        if len(ids) >= 150:
+            break
+    return ids
+
+
+def _contact_ids_from_cached_deal(lead_id: int) -> list[int]:
+    ids: list[int] = []
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if not isinstance(deal, dict) or int(deal.get("id") or 0) != int(lead_id):
+                continue
+            for contact in deal.get("contacts") or []:
+                if not isinstance(contact, dict):
+                    continue
+                try:
+                    cid = int(contact.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if cid and cid not in ids:
+                    ids.append(cid)
+    return ids
+
+
+def _warm_one_chat_tail(lead_id: int) -> None:
+    page, blocked, _talk, _more, _channels, _channel = _collect_deal_chat(
+        int(lead_id),
+        _contact_ids_from_cached_deal(lead_id),
+        limit=_CHAT_TAIL_KEEP,
+    )
+    if page:
+        _store_chat_tail(lead_id, page)
+        _chat_tail_warmed.add(int(lead_id))
+        return
+    if not blocked:
+        _chat_tail_warmed.add(int(lead_id))
+
+
+async def _warm_chat_tail_loop() -> None:
+    while True:
+        with _chat_tail_warm_lock:
+            if not _chat_tail_queue:
+                return
+            lead_id = _chat_tail_queue.pop(0)
+            _chat_tail_queued.discard(lead_id)
+        if lead_id in _chat_tail_warmed and _chat_open_preview.get(lead_id):
+            continue
+        try:
+            await asyncio.to_thread(_warm_one_chat_tail, lead_id)
+        except Exception as exc:
+            logger.warning("Chat tail warm failed lead=%s: %s", lead_id, exc)
+        await asyncio.sleep(0.45)
+
+
+def _schedule_chat_tail_warm(deals_or_ids) -> None:
+    global _chat_tail_warm_task
+    if deals_or_ids and isinstance(deals_or_ids[0], dict):
+        lead_ids = _chat_tail_ids(deals_or_ids)
+    else:
+        lead_ids = []
+        for item in deals_or_ids or []:
+            try:
+                lid = int(item)
+            except (TypeError, ValueError):
+                continue
+            if lid:
+                lead_ids.append(lid)
+    if not lead_ids:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    start = False
+    with _chat_tail_warm_lock:
+        for lid in lead_ids:
+            if lid in _chat_tail_warmed or lid in _chat_tail_queued:
+                continue
+            _chat_tail_queued.add(lid)
+            _chat_tail_queue.append(lid)
+            start = True
+        if start and (_chat_tail_warm_task is None or _chat_tail_warm_task.done()):
+            _chat_tail_warm_task = loop.create_task(_warm_chat_tail_loop())
+
+
+async def _refresh_one_talk_tail(lead_id: int, talk_id: int, origin: str) -> None:
+    channel = _origin_channel_key(origin) or "whatsapp"
+
+    def _load() -> list:
+        messages, _blocked, _more = _fetch_talk_messages(int(talk_id), pages=1, page_limit=_CHAT_TAIL_KEEP)
+        rows = []
+        for message in messages:
+            formatted = _format_chat_message(message, channel)
+            if not formatted:
+                continue
+            formatted["channel"] = channel
+            formatted["talk_id"] = int(talk_id)
+            rows.append(formatted)
+        rows.sort(key=lambda item: int(item.get("created_at") or 0))
+        return rows[-_CHAT_TAIL_KEEP:]
+
+    try:
+        rows = await asyncio.to_thread(_load)
+        if rows:
+            _store_chat_tail(lead_id, rows)
+    except Exception as exc:
+        logger.warning("Talk tail refresh failed lead=%s talk=%s: %s", lead_id, talk_id, exc)
+    finally:
+        _tail_refresh_pending.discard(int(lead_id))
+
+
+def _schedule_talk_tail_refresh(lead_id: int, talk_id: int, origin: str) -> None:
+    try:
+        lid = int(lead_id)
+        talk = int(talk_id)
+    except (TypeError, ValueError):
+        return
+    if not lid or not talk or lid in _tail_refresh_pending:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _tail_refresh_pending.add(lid)
+    loop.create_task(_refresh_one_talk_tail(lid, talk, origin))
+
+
 def _lead_phones_fast(lead: dict) -> tuple[list[int], list[str]]:
     contact_ids = _lead_contact_ids(lead)
     phones: list[str] = []
@@ -11965,16 +12295,17 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
     if str(request.rel_url.query.get("preview") or "") == "1":
         remembered: list = []
+        lid = int(lead.get("id") or lead_id)
         with _deal_chat_cache_lock:
-            for key, cached in _deal_chat_cache.items():
-                if not key or key[0] != int(lead.get("id") or lead_id):
-                    continue
-                rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
-                if rows:
-                    remembered = list(rows)[-2:]
-                    break
+            remembered = list(_chat_open_preview.get(lid) or [])[-_CHAT_TAIL_KEEP:]
             if not remembered:
-                remembered = list(_chat_open_preview.get(int(lead.get("id") or lead_id)) or [])[-2:]
+                for key, cached in _deal_chat_cache.items():
+                    if not key or key[0] != lid:
+                        continue
+                    rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
+                    if rows:
+                        remembered = list(rows)[-_CHAT_TAIL_KEEP:]
+                        break
         return web.json_response({
             "success": True,
             "preview": True,
@@ -12018,8 +12349,11 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     }
     with _deal_chat_cache_lock:
         _deal_chat_cache[cache_key] = (now, payload)
-        if chat:
-            _chat_open_preview[int(lead.get("id") or lead_id)] = list(chat[-2:])
+        if not before and chat:
+            _chat_open_preview[int(lead.get("id") or lead_id)] = _merge_tail_rows(
+                list(_chat_open_preview.get(int(lead.get("id") or lead_id)) or []),
+                list(chat[-_CHAT_TAIL_KEEP:]),
+            )
     return web.json_response(payload)
 
 
@@ -12370,6 +12704,20 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             reply_text=reply_preview,
             reply_author=reply_author,
         ))
+    _append_chat_tail(int(lead.get("id") or lead_id), {
+        "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
+        "external_id": str(sent_wamid or ""),
+        "incoming": False,
+        "direction": "outgoing",
+        "text": sent_text or (VOICE_CAPTION_TEXT if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name or text),
+        "created_at": int(_time_module.time()),
+        "message_type": "audio" if upload_raw and _looks_voice_upload(upload_name, upload_type) else "text",
+        "channel": channel,
+        "author": employee_name_for_lead(lead),
+        "delivery_status": "sent",
+        "file_name": "" if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name,
+        "file_uuid": drive_uuid,
+    })
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
@@ -12380,6 +12728,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         employee_name=employee_name_for_lead(lead),
     )
     _apply_saved_replies(chat)
+    _store_chat_tail(int(lead.get("id") or lead_id), chat)
     if reply_to_message_id:
         _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
     return web.json_response({

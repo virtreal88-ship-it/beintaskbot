@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="253">
+    <meta name="pwa-build" content="254">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3772,6 +3772,18 @@ function mergeDealChat(existing, incoming, atStart) {
     });
     return atStart ? extra.concat(existing || []) : (existing || []).concat(extra);
 }
+function dropTailStubs(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const real = list.filter(row => {
+        const id = String(row && row.id || '');
+        return row && !id.startsWith('hook-') && !id.startsWith('sent-');
+    });
+    return list.filter(row => {
+        const id = String(row && row.id || '');
+        if(!id.startsWith('hook-') && !id.startsWith('sent-')) return true;
+        return !real.some(item => String(item.text || '') === String(row.text || '') && !!item.incoming === !!row.incoming && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 20);
+    });
+}
 function requestMatchesDeal(seq, leadId) {
     return _dealViewState && _dealViewState.seq === seq && String(_dealViewState.id) === String(leadId);
 }
@@ -4342,7 +4354,7 @@ function rememberOpenedChat(leadId, channel, messages) {
     _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
 }
 function instantChatRows(deal, remembered) {
-    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-2);
+    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-8);
     const text = chatNoticeText(dealLastClientMessage(deal));
     if(!text || !deal) return [];
     return [{
@@ -4352,6 +4364,35 @@ function instantChatRows(deal, remembered) {
         created_at: Number(chatsIncomingAt(deal) || 0),
         preview: true
     }];
+}
+async function fetchDealChatTail() {
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
+    const seq = _dealViewState.seq;
+    const leadId = _dealViewState.id;
+    const q = new URLSearchParams({lead_id: String(leadId), preview: '1', _ts: String(Date.now())});
+    const channel = _dealViewState.channel || '';
+    if(channel) q.set('channel', channel);
+    const response = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
+        cache: 'no-store',
+        headers: {'X-TG-User-ID': CURRENT_USER_ID}
+    });
+    const payload = await response.json().catch(() => ({}));
+    if(!requestMatchesDeal(seq, leadId)) return {stale:true};
+    return payload;
+}
+function applyDealChatTail(seq, dealId, rows) {
+    if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
+    const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-8);
+    if(!stored.length) return false;
+    const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
+    _dealViewState.messages = dropTailStubs(mergeDealChat(local, stored, false));
+    _dealViewState.loading = false;
+    _dealViewState.fullReady = true;
+    _dealViewState.has_more = true;
+    rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
+    paintDealChatThread({stickBottom: true, force: true});
+    markDealChatRead(false);
+    return true;
 }
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
@@ -4363,22 +4404,9 @@ async function loadDealChatLatest() {
     _dealViewState.loading = true;
     _dealViewState.messages = instant;
     paintDealChatThread({stickBottom: true, force: true});
-    if(instant.length < 2 && deal && deal.id && CURRENT_USER_ID) {
-        const q = new URLSearchParams({lead_id: String(deal.id), preview: '1', _ts: String(Date.now())});
-        const channel = _dealViewState.channel || '';
-        if(channel) q.set('channel', channel);
-        fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
-            cache: 'no-store',
-            headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        }).then(r => r.json()).then(d => {
-            if(!d || !d.success || !requestMatchesDeal(seq, deal.id) || _dealViewState.fullReady) return;
-            const rows = Array.isArray(d.chat) ? d.chat.slice(-2) : [];
-            if(!rows.length) return;
-            _dealViewState.messages = rows;
-            _dealViewState.loading = true;
-            paintDealChatThread({stickBottom: true, force: true});
-        }).catch(() => {});
-    }
+    let tail = null;
+    try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
+    if(tail && tail.success && !tail.stale && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
     try {
         const d = await fetchDealChatPage(0);
         if(!d || d.stale || !requestMatchesDeal(seq, _dealViewState.id)) return;
@@ -4430,13 +4458,13 @@ async function pollDealChat() {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly || _dealViewState.loading) return;
     const seq = _dealViewState.seq;
     try {
-        const d = await fetchDealChatPage(0);
+        const d = await fetchDealChatTail();
         if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
         _dealViewState.blocked = !!d.chat_blocked;
         applyChatDelivery(_dealViewState.messages, d.chat);
         dropMatchedLocalVoices(d.chat);
-        _dealViewState.messages = mergeDealChat(_dealViewState.messages, d.chat, false);
-        applyDealChannels(d.channels || _dealViewState.channels);
+        _dealViewState.messages = dropTailStubs(mergeDealChat(_dealViewState.messages, d.chat, false));
+        if(Array.isArray(d.channels) && d.channels.length) applyDealChannels(d.channels);
         const thread = document.getElementById('deal-chat-thread');
         const nearBottom = thread ? (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80) : true;
         paintDealChatThread({stickBottom: nearBottom});
@@ -7808,7 +7836,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=270');
+    const reg = await navigator.serviceWorker.register('sw.js?v=271');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
