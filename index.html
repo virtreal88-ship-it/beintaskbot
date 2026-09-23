@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="222">
+    <meta name="pwa-build" content="223">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -342,8 +342,8 @@
         .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
         .deal-chat-row.in[data-react-id] { cursor:pointer; }
         .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
-        .chat-react-pop { position:fixed; z-index:15000; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
-        .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; }
+        .chat-react-pop { position:fixed; z-index:15100; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
+        .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; touch-action:manipulation; }
         .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
         .chat-quote-bar[hidden] { display:none !important; }
@@ -478,9 +478,11 @@
         .chats-row-preview { flex:1; min-width:0; font-size:12px; color:#64748b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .chats-unread { min-width:18px; height:18px; border-radius:9px; background:#25d366; color:#fff; font-size:10px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; padding:0 5px; flex:none; }
         .chats-row-preview.draft { color:#00a884; font-style:italic; }
-        .chats-ctx { position:fixed; z-index:14000; min-width:210px; background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(15,23,42,.2); overflow:hidden; }
-        .chats-ctx button { display:block; width:100%; text-align:left; border:0; background:#fff; padding:12px 14px; font-size:13px; font-weight:700; color:#111b21; font-family:inherit; cursor:pointer; }
+        .chats-ctx { position:fixed; z-index:15000; min-width:210px; background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(15,23,42,.2); overflow:hidden; }
+        .chats-ctx button { display:block; width:100%; text-align:left; border:0; background:#fff; padding:12px 14px; font-size:13px; font-weight:700; color:#111b21; font-family:inherit; cursor:pointer; touch-action:manipulation; }
         .chats-ctx button:hover { background:#f0f2f5; }
+        .chats-ctx .chat-react-row { display:flex; gap:2px; padding:8px 8px 4px; justify-content:space-between; }
+        .chats-ctx .chat-react-row button { width:auto; flex:1; text-align:center; padding:6px 0; font-size:20px; line-height:1; }
         .chat-pin-bar { display:flex; align-items:center; gap:8px; flex:none; padding:7px 10px; background:#fff; border-bottom:1px solid #e5e7eb; }
         .chat-pin-bar[hidden] { display:none !important; }
         .chat-pin-jump { flex:1; min-width:0; border:0; background:transparent; text-align:left; padding:0; font-family:inherit; cursor:pointer; }
@@ -3625,16 +3627,10 @@ function bindDealChatMedia(thread) {
     });
     thread.querySelectorAll('.chat-react-btn, .chat-reaction[data-react-id]').forEach(btn => {
         btn.onclick = event => {
+            event.preventDefault();
             event.stopPropagation();
             openChatReactionPicker(btn, btn.getAttribute('data-react-id'));
         };
-    });
-    thread.querySelectorAll('.deal-chat-row[data-react-id]').forEach(row => {
-        row.addEventListener('click', event => {
-            if(thread.dataset.skipClick) { delete thread.dataset.skipClick; return; }
-            if(event.target.closest('.chat-quote-in, .chat-reply-btn, .chat-react-btn, a, button, audio, video, img')) return;
-            openChatReactionPicker(row, row.getAttribute('data-react-id'));
-        });
     });
     thread.querySelectorAll('img.deal-zoom').forEach(img => {
         img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
@@ -3689,8 +3685,10 @@ async function loadChatPins() {
         }
     } catch(_err) {}
 }
-function hideChatMsgMenu() {
-    document.getElementById('chat-msg-ctx')?.remove();
+function hideChatMsgMenu(event) {
+    const pop = document.getElementById('chat-msg-ctx');
+    if(event && pop && pop.contains(event.target)) return;
+    pop?.remove();
     document.removeEventListener('click', hideChatMsgMenu, true);
 }
 function showChatMsgMenu(x, y, item) {
@@ -3702,9 +3700,11 @@ function showChatMsgMenu(x, y, item) {
     const pop = document.createElement('div');
     pop.id = 'chat-msg-ctx';
     pop.className = 'chats-ctx';
-    pop.innerHTML = `<button type="button" data-act="reply">Cavab</button>
+    const reactKey = chatReactKey(item);
+    const emojis = CHAT_REACTION_EMOJI.map(emoji => `<button type="button" data-emoji="${escapeHtml(emoji)}">${emoji}</button>`).join('');
+    pop.innerHTML = `<div class="chat-react-row">${emojis}</div>
+        <button type="button" data-act="reply">Cavab</button>
         <button type="button" data-act="copy">Kopyala</button>
-        <button type="button" data-act="react">Reaksiya</button>
         <button type="button" data-act="pin">${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
     const left = Math.max(8, Math.min(x, window.innerWidth - pop.offsetWidth - 8));
@@ -3723,13 +3723,14 @@ function showChatMsgMenu(x, y, item) {
         hideChatMsgMenu();
         copyChatMessage(item);
     };
-    pop.querySelector('[data-act="react"]').onclick = event => {
-        event.preventDefault();
-        event.stopPropagation();
-        hideChatMsgMenu();
-        const row = document.querySelector('.deal-chat-row[data-msg-id="' + String(item.id).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]');
-        openChatReactionPicker(row || event.target, chatReactKey(item));
-    };
+    pop.querySelectorAll('[data-emoji]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            hideChatMsgMenu();
+            sendChatReaction(reactKey, btn.getAttribute('data-emoji') || '');
+        };
+    });
     pop.querySelector('[data-act="pin"]').onclick = event => {
         event.preventDefault();
         event.stopPropagation();
@@ -3883,9 +3884,17 @@ function findChatReactItem(reactId) {
         return chatReactKey(item) === key || String(item.external_id || '') === key || String(item.id || '') === key || String(item.msgid || '') === key;
     }) || null;
 }
+function chatItemWamid(item, reactId) {
+    const keys = [item && item.external_id, item && item.msgid, reactId, item && item.id];
+    for(let i = 0; i < keys.length; i += 1) {
+        const val = String(keys[i] || '').trim();
+        if(val.toLowerCase().startsWith('wamid')) return val;
+    }
+    return '';
+}
 function openChatReactionPicker(anchor, reactId) {
     document.getElementById('chat-react-pop')?.remove();
-    if(!anchor || !reactId) return;
+    if(!reactId) return;
     const current = findChatReactItem(reactId);
     const pop = document.createElement('div');
     pop.id = 'chat-react-pop';
@@ -3893,12 +3902,12 @@ function openChatReactionPicker(anchor, reactId) {
     const buttons = CHAT_REACTION_EMOJI.map(emoji => `<button type="button" data-emoji="${escapeHtml(emoji)}">${emoji}</button>`).join('');
     const clear = current && current.my_reaction ? '<button type="button" data-emoji="" title="Sil">✕</button>' : '';
     pop.innerHTML = buttons + clear;
-    const close = () => { pop.remove(); document.removeEventListener('pointerdown', onAway, true); };
+    const close = () => { pop.remove(); document.removeEventListener('click', onAway, true); };
     const onAway = event => {
-        if(pop.contains(event.target) || (anchor && anchor.contains && anchor.contains(event.target))) return;
+        if(pop.contains(event.target)) return;
         close();
     };
-    pop.addEventListener('pointerdown', event => event.stopPropagation());
+    pop.addEventListener('click', event => event.stopPropagation());
     pop.querySelectorAll('[data-emoji]').forEach(btn => {
         btn.onclick = event => {
             event.preventDefault();
@@ -3908,19 +3917,23 @@ function openChatReactionPicker(anchor, reactId) {
         };
     });
     document.body.appendChild(pop);
-    const box = anchor.getBoundingClientRect();
+    const box = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect() : {left: 24, top: 80, width: 0, height: 0};
     const width = pop.offsetWidth || 220;
-    pop.style.left = Math.max(8, Math.min(box.left - width / 2, window.innerWidth - width - 8)) + 'px';
-    pop.style.top = Math.max(8, box.top - (pop.offsetHeight || 40) - 6) + 'px';
-    window.setTimeout(() => document.addEventListener('pointerdown', onAway, true), 280);
+    pop.style.left = Math.max(8, Math.min((box.left || 24) + (box.width || 0) / 2 - width / 2, window.innerWidth - width - 8)) + 'px';
+    pop.style.top = Math.max(8, (box.top || 80) - (pop.offsetHeight || 40) - 6) + 'px';
+    window.setTimeout(() => document.addEventListener('click', onAway, true), 400);
 }
 async function sendChatReaction(reactId, emoji) {
-    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return;
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) {
+        toast('Reaksiya göndərilmədi.', true);
+        return;
+    }
     const leadId = _dealViewState.id;
     const target = findChatReactItem(reactId);
     const previous = target ? target.my_reaction : '';
     const next = previous && previous === emoji ? '' : emoji;
-    const ids = [reactId, target && target.id, target && target.external_id, target && target.msgid].filter(Boolean);
+    const wamid = chatItemWamid(target, reactId);
+    const ids = [reactId, wamid, target && target.id, target && target.external_id, target && target.msgid].filter(Boolean);
     if(target) target.my_reaction = next;
     rememberChatReaction(leadId, ids, next);
     paintDealChatThread({stickBottom: false, force: true});
@@ -3928,12 +3941,21 @@ async function sendChatReaction(reactId, emoji) {
         const r = await fetch(API_BASE + '/api/deal/chat/react', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({lead_id: leadId, external_id: reactId, message_id: target && target.id || '', emoji: next, sender_phone: dealWaSenderPhone()})
+            body: JSON.stringify({
+                lead_id: leadId,
+                external_id: wamid || reactId,
+                wamid,
+                message_id: target && target.id || '',
+                emoji: next,
+                sender_phone: dealWaSenderPhone()
+            })
         });
         const d = await r.json().catch(() => ({}));
         if(!d.success) throw new Error(d.error || 'Reaksiya göndərilmədi.');
-    } catch(_err) {
-        // Local reaction stays even if WhatsApp / Cloud rejects it.
+        if(next) toast(d.local ? 'Reaksiya əlavə olundu' : 'Reaksiya göndərildi');
+        else toast('Reaksiya silindi');
+    } catch(err) {
+        toast(String(err && err.message || 'Reaksiya göndərilmədi.'), true);
     }
 }
 function lastIncomingWamid() {
@@ -7270,7 +7292,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=239');
+    const reg = await navigator.serviceWorker.register('sw.js?v=240');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

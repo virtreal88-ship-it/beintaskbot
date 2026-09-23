@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v219 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v220 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9614,6 +9614,25 @@ def _sent_messages_for_lead(lead_id: int) -> list[dict]:
 _WA_REACTIONS_KEY = "reactions"
 
 
+def _wamid_for_react(lead_id: int, *ids: str) -> str:
+    wanted = [str(item or "").strip() for item in ids if str(item or "").strip()]
+    for raw in wanted:
+        if raw.lower().startswith("wamid"):
+            return raw
+    for row in _sent_messages_for_lead(lead_id):
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or "").strip()
+        ext = str(row.get("external_id") or "").strip()
+        msgid = str(row.get("msgid") or "").strip()
+        if rid in wanted or ext in wanted or msgid in wanted:
+            if ext.lower().startswith("wamid"):
+                return ext
+            if msgid.lower().startswith("wamid"):
+                return msgid
+    return ""
+
+
 def _remember_reaction(lead_id: int, wamid: str, emoji: str) -> None:
     """Reactions we send are not echoed back, so keep them for the chat view."""
     key = str(int(lead_id or 0))
@@ -11837,7 +11856,7 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
         lead_id = int(data.get("lead_id") or 0)
     except (TypeError, ValueError):
         lead_id = 0
-    wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
+    wamid = str(data.get("wamid") or data.get("external_id") or "").strip()
     message_id = str(data.get("message_id") or "").strip()
     react_id = wamid or message_id
     emoji = str(data.get("emoji") or "").strip()[:8]
@@ -11847,23 +11866,26 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     if err:
         return err
     lid = int(lead.get("id") or lead_id)
-    use_cloud = _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone")))
+    resolved = _wamid_for_react(lid, wamid, message_id, react_id)
+    token, phone_id = _wa_cloud_credentials()
     last_error = ""
-    if use_cloud and wamid.lower().startswith("wamid"):
+    if token and phone_id and resolved.lower().startswith("wamid"):
         _ids, phones = _contact_ids_and_phones(lead)
         if not phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
         for phone in phones:
-            ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, wamid, emoji)
+            ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, resolved, emoji)
             if ok:
-                _remember_reaction(lid, wamid, emoji)
-                if message_id and message_id != wamid:
+                _remember_reaction(lid, resolved, emoji)
+                if message_id and message_id != resolved:
                     _remember_reaction(lid, message_id, emoji)
+                if react_id and react_id != resolved:
+                    _remember_reaction(lid, react_id, emoji)
                 return web.json_response({"success": True, "emoji": emoji})
             if error:
                 last_error = error
-        _remember_reaction(lid, wamid, emoji)
-        if message_id and message_id != wamid:
+        _remember_reaction(lid, resolved, emoji)
+        if message_id and message_id != resolved:
             _remember_reaction(lid, message_id, emoji)
         return web.json_response({"success": True, "emoji": emoji, "local": True, "warning": last_error})
     _remember_reaction(lid, react_id, emoji)
