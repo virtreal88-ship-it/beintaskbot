@@ -111,10 +111,8 @@ ADMIN_KOMMO_USER_ID = 10932455
 HUSEYN_CHAT_ID = 7329891614
 RASIM_CHAT_ID = 7920785774
 NIZAMI_PIPELINE_ID = 14243944
-# Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it,
-# except the stage NÖMRƏ ALINIB (danışıqlar Aparılır).
+# Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it, including NÖMRƏ ALINIB.
 SOVDELESMELER_PIPELINE_ID = 8329347
-NIZAMI_CHAT_SKIP_STATUS_ID = 108537924
 HUSEYN_PIPELINE_ID = 14358480
 RASIM_PIPELINE_ID = 14461812
 # Live Kommo snapshots. Nizami's pipeline is still the shared Gözləmə board.
@@ -5721,7 +5719,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v223 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v224 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -10111,7 +10109,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
 
 
 def _sovdelesmeler_chat_lead_ids() -> set[int]:
-    """Lead ids in Sövdələşmələr that Nizami's Çatlar may show."""
+    """Every lead in Sövdələşmələr, including NÖMRƏ ALINIB."""
     allowed: set[int] = set()
     page = 1
     while page <= 20:
@@ -10142,10 +10140,9 @@ def _sovdelesmeler_chat_lead_ids() -> set[int]:
                 continue
             try:
                 lid = int(lead.get("id") or 0)
-                status_id = int(lead.get("status_id") or 0)
             except (TypeError, ValueError):
                 continue
-            if lid and status_id != int(NIZAMI_CHAT_SKIP_STATUS_ID):
+            if lid:
                 allowed.add(lid)
         if len(batch) < 250:
             break
@@ -10162,7 +10159,7 @@ def _inject_outside_funnel_talk_deals(
     avatar_by_lead: dict[int, str],
     talk_updated: dict[int, int],
 ) -> None:
-    """Nizami also sees Sövdələşmələr talks, except NÖMRƏ ALINIB."""
+    """Nizami also sees every Sövdələşmələr talk and every gray WhatsApp talk."""
     if not isinstance(deals, list) or not outside_by_lead:
         return
     seen = set()
@@ -10188,22 +10185,14 @@ def _inject_outside_funnel_talk_deals(
     allowed = _sovdelesmeler_chat_lead_ids()
     added = 0
     for updated, lid, talk in ranked:
-        if added >= 40:
+        if added >= 80:
             break
-        if lid in seen or lid not in allowed:
+        channel = _talk_channel_key(talk)
+        if lid in seen or (lid not in allowed and channel != "whatsapp"):
             continue
         lead = get_lead_details(lid)
         if not lead:
             continue
-        if _lead_pipeline_id(lead) != int(SOVDELESMELER_PIPELINE_ID):
-            continue
-        try:
-            status_id = int(lead.get("status_id") or 0)
-        except (TypeError, ValueError):
-            status_id = 0
-        if status_id == int(NIZAMI_CHAT_SKIP_STATUS_ID):
-            continue
-        channel = _talk_channel_key(talk)
         if channel not in CHAT_CHANNEL_LABELS:
             continue
         unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
