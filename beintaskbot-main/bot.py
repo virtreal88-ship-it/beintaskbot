@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v217 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v218 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7379,6 +7379,60 @@ def _talk_any_lead_ids(talk: dict) -> list[int]:
     return list(dict.fromkeys(lid for lid in lids if lid))
 
 
+def _talk_last_looks_outgoing(talk: dict) -> bool:
+    """Kommo talks stay unread after a manager reply from the phone; do not treat that as inbound."""
+    if not isinstance(talk, dict):
+        return False
+    blobs: list[dict] = []
+    for key in ("last_message", "last_message_body", "message"):
+        val = talk.get(key)
+        if isinstance(val, dict):
+            blobs.append(val)
+    embedded = talk.get("_embedded") if isinstance(talk.get("_embedded"), dict) else {}
+    for key in ("messages", "last_messages"):
+        rows = embedded.get(key)
+        if isinstance(rows, list) and rows:
+            last = rows[-1]
+            if isinstance(last, dict):
+                blobs.append(last)
+    for blob in blobs:
+        if blob.get("outgoing") is True:
+            return True
+        if blob.get("incoming") is True:
+            return False
+        direction = str(blob.get("direction") or blob.get("type") or blob.get("origin") or "").lower()
+        if "outgoing" in direction or direction in {"out", "sent"}:
+            return True
+        if "incoming" in direction:
+            return False
+        author = blob.get("author") if isinstance(blob.get("author"), dict) else {}
+        atype = str(author.get("type") or "").lower()
+        if atype in {"user", "bot", "manager", "salesuser"}:
+            return True
+    return False
+
+
+def _cloud_outgoing_covers_talk(lead_id: int, updated: int) -> bool:
+    try:
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return False
+    if not lid:
+        return False
+    outgoing = [row for row in _sent_messages_for_lead(lid) if not row.get("incoming")]
+    if not outgoing:
+        return False
+    try:
+        last_out = max(int(row.get("created_at") or 0) for row in outgoing)
+    except (TypeError, ValueError):
+        return False
+    try:
+        stamp = int(updated or 0)
+    except (TypeError, ValueError):
+        stamp = 0
+    return last_out > 0 and stamp <= last_out + 20
+
+
 def _apply_talk_to_inbox(
     talk: dict,
     lead_ids: set[int],
@@ -7431,7 +7485,8 @@ def _apply_talk_to_inbox(
             channel_by_lead[lid] = channel
             client_by_lead[lid] = preview
         if unread and incoming_at_by_lead is not None and updated > incoming_at_by_lead.get(lid, 0):
-            incoming_at_by_lead[lid] = updated
+            if not _talk_last_looks_outgoing(talk) and not _cloud_outgoing_covers_talk(lid, updated):
+                incoming_at_by_lead[lid] = updated
         if avatar and avatar_by_lead is not None:
             avatar_by_lead[lid] = avatar
 
@@ -10046,7 +10101,7 @@ def _inject_outside_funnel_talk_deals(
             unread_n = 0
         if unread_n > 0:
             unread = True
-        incoming_at = updated if unread else int(incoming_at_by_lead.get(lid) or 0)
+        incoming_at = updated if unread and not _talk_last_looks_outgoing(talk) and not _cloud_outgoing_covers_talk(lid, updated) else int(incoming_at_by_lead.get(lid) or 0)
         preview = client_by_lead.get(lid) or ("Yeni mesaj" if unread else "Çat")
         row = _overview_deal_from_any_lead(lead, preview, updated, channel, incoming_at)
         if avatar_by_lead.get(lid):
@@ -10131,8 +10186,7 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
             incoming_at = int(last_in.get("created_at") or 0)
         except (TypeError, ValueError):
             incoming_at = 0
-        if incoming_at > int(deal.get("last_incoming_at") or 0):
-            deal["last_incoming_at"] = incoming_at
+        deal["last_incoming_at"] = incoming_at
     elif preview and not str(deal.get("last_client_message") or "").strip():
         deal["last_client_message"] = preview[:140]
     if not str(deal.get("chat_channel") or "").strip():
@@ -11796,7 +11850,10 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
                 return web.json_response({"success": True, "emoji": emoji})
             if error:
                 last_error = error
-        return web.json_response({"success": False, "error": last_error or "Reaksiya göndərilmədi."}, status=400)
+        _remember_reaction(lid, wamid, emoji)
+        if message_id and message_id != wamid:
+            _remember_reaction(lid, message_id, emoji)
+        return web.json_response({"success": True, "emoji": emoji, "local": True, "warning": last_error})
     _remember_reaction(lid, react_id, emoji)
     if message_id and message_id != react_id:
         _remember_reaction(lid, message_id, emoji)
