@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v215 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v216 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9017,10 +9017,6 @@ def _send_kommo_talk_message(
         attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", primary, ajax))
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
-        # WABA talks only accept official send_message; reply_to is best-effort.
-        attempts.append((talk_send, primary, {}))
-        attempts.append((talk_send, msgid_only, {}))
-        attempts.append((talk_send, {**payload, "reply_to_message_id": reply_id}, {}))
     if not reply_id:
         attempts.append((talk_send, payload, {}))
     last_detail = ""
@@ -11407,6 +11403,18 @@ def _with_visible_quote(text: str, quote: str) -> str:
     return f"{wrapped}\n{body}"
 
 
+def _with_quiet_quote(text: str, quote: str) -> str:
+    preview = " ".join(str(quote or "").split())[:120]
+    body = str(text or "").strip()
+    if not preview:
+        return body
+    if body.startswith(">") or preview in body:
+        return body
+    if not body:
+        return f"> {preview}"
+    return f"> {preview}\n{body}"
+
+
 def _looks_voice_upload(filename: str, content_type: str) -> bool:
     return str(content_type or "").startswith("audio/") or bool(
         re.search(r"\.(ogg|oga|opus|mp3|m4a|wav|webm)$", str(filename or "").lower())
@@ -11649,38 +11657,53 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             kommo_text = VOICE_CAPTION_TEXT
         quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
         social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
-        for quote_id in quote_ids[:2]:
+        if channel == "whatsapp":
+            if reply_preview:
+                kommo_text = _with_quiet_quote(kommo_text, reply_preview)
             kommo_ok, kommo_error, _status = _send_kommo_talk_message(
                 reply_talk_id,
                 kommo_text,
                 attachment,
-                reply_to=quote_id,
-                chat_id=reply_chat_id,
-                reply_text=reply_preview,
-                plain_fallback=False,
             )
             if kommo_ok:
                 ok = True
                 last_error = ""
                 sent_text = kommo_text
-                break
-            if kommo_error and not last_error:
+            elif kommo_error:
                 last_error = kommo_error
-        if not ok:
-            fallback_text = kommo_text
-            if social_quote and reply_preview:
-                fallback_text = _with_visible_quote(kommo_text, reply_preview)
-            kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                reply_talk_id,
-                fallback_text,
-                attachment,
-            )
-            if kommo_ok:
-                ok = True
-                last_error = ""
-                sent_text = fallback_text
-            elif kommo_error and not last_error:
-                last_error = kommo_error
+        else:
+            for quote_id in quote_ids[:2]:
+                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                    reply_talk_id,
+                    kommo_text,
+                    attachment,
+                    reply_to=quote_id,
+                    chat_id=reply_chat_id,
+                    reply_text=reply_preview,
+                    plain_fallback=False,
+                )
+                if kommo_ok:
+                    ok = True
+                    last_error = ""
+                    sent_text = kommo_text
+                    break
+                if kommo_error and not last_error:
+                    last_error = kommo_error
+            if not ok:
+                fallback_text = kommo_text
+                if social_quote and reply_preview:
+                    fallback_text = _with_visible_quote(kommo_text, reply_preview)
+                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                    reply_talk_id,
+                    fallback_text,
+                    attachment,
+                )
+                if kommo_ok:
+                    ok = True
+                    last_error = ""
+                    sent_text = fallback_text
+                elif kommo_error and not last_error:
+                    last_error = kommo_error
     if not ok and use_cloud:
         ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
             _deliver_via_cloud,
@@ -11796,6 +11819,66 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
         return web.json_response({"success": True, "skipped": True})
     ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
     return web.json_response({"success": bool(ok)})
+
+
+_CHAT_PINS_FILE = "chat_pins.json"
+_chat_pins_lock = threading.Lock()
+
+
+def _user_chat_pins(chat_id: int) -> dict:
+    data = read_json(_CHAT_PINS_FILE) or {}
+    row = data.get(str(chat_id)) if isinstance(data, dict) else {}
+    return row if isinstance(row, dict) else {}
+
+
+def _set_user_chat_pin(chat_id: int, lead_id: int, pin: dict | None) -> dict:
+    with _chat_pins_lock:
+        data = read_json(_CHAT_PINS_FILE) or {}
+        if not isinstance(data, dict):
+            data = {}
+        user = data.get(str(chat_id)) or {}
+        if not isinstance(user, dict):
+            user = {}
+        key = str(int(lead_id))
+        if pin and pin.get("id"):
+            user[key] = {
+                "id": str(pin.get("id") or ""),
+                "text": str(pin.get("text") or "")[:180],
+                "author": str(pin.get("author") or "")[:80],
+            }
+        else:
+            user.pop(key, None)
+        data[str(chat_id)] = user
+        write_json(_CHAT_PINS_FILE, data)
+        return user
+
+
+async def handle_api_deal_chat_pin(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if request.method == "GET":
+        return web.json_response({"success": True, "pins": _user_chat_pins(chat_id)})
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    pin = None
+    if data.get("id"):
+        pin = {"id": data.get("id"), "text": data.get("text") or "", "author": data.get("author") or ""}
+    pins = await asyncio.to_thread(_set_user_chat_pin, chat_id, lead_id, pin)
+    return web.json_response({"success": True, "pins": pins})
 
 
 KOMMO_AI_AGENT_NAME = "Anar Vəliyev"
@@ -13180,6 +13263,9 @@ async def start_webhook_server():
     app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/read", handle_api_deal_chat_read)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/pin', lambda r: web.Response())
+    app_web.router.add_get("/api/deal/chat/pin", handle_api_deal_chat_pin)
+    app_web.router.add_post("/api/deal/chat/pin", handle_api_deal_chat_pin)
     app_web.router.add_route('OPTIONS', '/api/deal/public', lambda r: web.Response())
     app_web.router.add_get("/api/deal/public", handle_api_deal_public)
     app_web.router.add_route('OPTIONS', '/api/deal/file', lambda r: web.Response())
