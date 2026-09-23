@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="210">
+    <meta name="pwa-build" content="211">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -4240,18 +4240,20 @@ function chatQuoteId(item) {
     const id = String((item && item.id) || '').trim();
     const skip = val => !val || /^note-/i.test(val);
     if(!skip(msgid)) return msgid;
-    if(!skip(ext) && (!/^\d+$/.test(ext) || ext.toLowerCase().startsWith('wamid'))) return ext;
-    if(!skip(id) && !/^\d+$/.test(id)) return id;
+    if(!skip(ext) && (ext.toLowerCase().startsWith('wamid') || !/^\d+$/.test(ext))) return ext;
+    if(!skip(id)) return id;
     return ext || msgid || id;
 }
 function setDealChatReply(item) {
     if(!_dealViewState || _dealViewState.readonly || !item || item.is_comment) return;
     const quoteId = chatQuoteId(item);
+    const msgid = String((item && item.msgid) || '').trim();
+    const ext = String((item && item.external_id) || '').trim();
     _dealViewState.replyTo = {
         id: quoteId,
         text: dealChatReplyPreview(item),
         author: dealChatActor(item) || item.author || '',
-        externalId: quoteId,
+        externalId: msgid || ext || quoteId,
         channel: chatChannelKey(item),
         talkId: item.talk_id || 0
     };
@@ -6652,7 +6654,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=227');
+    const reg = await navigator.serviceWorker.register('sw.js?v=228');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

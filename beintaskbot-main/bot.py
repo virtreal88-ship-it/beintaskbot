@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v208 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v209 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -8424,6 +8424,7 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         "incoming": _note_is_incoming(ntype),
         "channel": _note_channel_key(note) or "",
         "author": KOMMO_USERS.get(note.get("created_by") or note.get("responsible_user_id"), "") or "",
+        "msgid": _first_msgid(params, note),
     }
 
 
@@ -8879,22 +8880,35 @@ def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", 
 
 def _looks_chat_message_id(value: str) -> bool:
     text = str(value or "").strip()
-    if not text:
+    if not text or text.lower().startswith("note-"):
         return False
     if "wamid" in text.lower():
         return True
-    return bool(re.fullmatch(r"[0-9a-fA-F-]{16,}", text))
+    if re.fullmatch(r"[0-9a-fA-F-]{16,}", text):
+        return True
+    return not text.isdigit() or len(text) >= 6
+
+
+def _first_msgid(*blobs) -> str:
+    keys = ("msgid", "client_id", "amojo_msgid", "message_id")
+    for blob in blobs:
+        if not isinstance(blob, dict):
+            continue
+        for key in keys:
+            val = str(blob.get(key) or "").strip()
+            if val and not val.lower().startswith("note-"):
+                return val
+        nested = blob.get("message") if isinstance(blob.get("message"), dict) else {}
+        for key in keys:
+            val = str(nested.get(key) or "").strip()
+            if val and not val.lower().startswith("note-"):
+                return val
+    return ""
 
 
 def _chat_message_ids(message: dict, nested: dict) -> tuple[str, str, str]:
     msg_id = str(nested.get("id") or message.get("id") or "").strip()
-    msgid = str(
-        nested.get("msgid")
-        or nested.get("client_id")
-        or message.get("msgid")
-        or message.get("client_id")
-        or ""
-    ).strip()
+    msgid = _first_msgid(nested, message)
     wamid = _find_wamid(message)
     external = wamid or msgid or (msg_id if _looks_chat_message_id(msg_id) else "")
     return msg_id, msgid, external
@@ -8938,6 +8952,11 @@ def _post_kommo_json(url: str, body: dict, extra_headers: dict | None = None):
     return _http.post(url, headers=headers, json=body, timeout=20)
 
 
+def _is_official_talk_send(url: str) -> bool:
+    text = str(url or "")
+    return "/api/v4/talks/" in text and text.endswith("/send_message")
+
+
 def _send_kommo_talk_message(
     talk_id: int,
     text: str,
@@ -8947,8 +8966,8 @@ def _send_kommo_talk_message(
     reply_text: str = "",
     plain_fallback: bool = True,
 ) -> tuple[bool, str, int]:
-    # Official send_message is text/attachment only. Native quotes use the Chats
-    # API shape (reply_to.message.id) on the talk and amojo endpoints.
+    # Official send_message is text/attachment only and silently drops reply_to.
+    # Native quotes go through amojo / ajax / talks messages only.
     payload: dict = {}
     if text:
         payload["text"] = text
@@ -8959,23 +8978,31 @@ def _send_kommo_talk_message(
     reply_id = str(reply_to or "").strip()
     talk_send = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
     talk_messages = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages"
+    ajax_talk_send = f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/send_message"
+    ajax_talk_send_v2 = f"{KOMMO_BASE_URL}/ajax/v2/talks/{int(talk_id)}/send_message"
     attempts: list[tuple[str, dict, dict]] = []
     if reply_id:
         quote_bodies = _kommo_quote_bodies(payload, reply_id, reply_text)
+        primary = quote_bodies[0]
+        msgid_only = {**payload, "reply_to": {"message": {"msgid": reply_id}}}
+        id_only = {**payload, "reply_to": {"message": {"id": reply_id}}}
+        ajax = {"X-Requested-With": "XMLHttpRequest"}
         if chat_id:
             amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
             if attachment:
                 amojo_body["attachment"] = attachment
             if reply_text:
+                amojo_body["reply_to"]["message"]["type"] = "text"
                 amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
-            ajax = {"X-Requested-With": "XMLHttpRequest"}
             attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
-            attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", quote_bodies[0], ajax))
-        attempts.append((talk_messages, quote_bodies[0], {}))
-        attempts.append((talk_messages, {**payload, "reply_to": {"message": {"msgid": reply_id}}}, {}))
-        attempts.append((talk_send, {**payload, "reply_to": {"message": {"msgid": reply_id}}}, {}))
-        attempts.append((talk_send, quote_bodies[0], {}))
-    if plain_fallback or not reply_id:
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", primary, ajax))
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", primary, ajax))
+        attempts.append((talk_messages, primary, {}))
+        attempts.append((talk_messages, msgid_only, {}))
+        attempts.append((talk_messages, id_only, {}))
+        attempts.append((ajax_talk_send, primary, ajax))
+        attempts.append((ajax_talk_send_v2, primary, ajax))
+    if not reply_id:
         attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_status = 0
@@ -8989,6 +9016,9 @@ def _send_kommo_talk_message(
             continue
         last_status = resp.status_code
         if resp.status_code in {200, 202}:
+            if reply_id and _is_official_talk_send(url):
+                logger.warning("Official send_message ignored reply_to talk=%s", talk_id)
+                continue
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
         logger.warning("Talk send status %s %s: %s", resp.status_code, url, last_detail)
@@ -10443,9 +10473,11 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         author = "" if _is_generic_chat_author(author) else author
     elif channel == "whatsapp" or _is_generic_chat_author(author):
         author = employee_name or author
+    msgid = str(note.get("msgid") or "").strip()
     return {
         "id": note.get("id"),
-        "external_id": "",
+        "msgid": msgid,
+        "external_id": msgid,
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
         "author": author,
@@ -11602,7 +11634,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 break
             if kommo_error and not last_error:
                 last_error = kommo_error
-        if not ok:
+        if not ok and quote_ids and channel == "whatsapp":
+            last_error = last_error or "Cavab göndərilmədi."
+        elif not ok:
             fallback_text = kommo_text
             if social_quote and reply_preview:
                 fallback_text = _with_visible_quote(kommo_text, reply_preview)
