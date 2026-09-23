@@ -231,7 +231,7 @@
     "994517771090": 77997303,
     "994508669095": 65341498,
     "994502746736": 65341498,
-    "994503895088": 59315080,
+    "994503895088": 78031171,
     "994553783455": 77997467,
     "994502707220": 70993700,
     "994503749992": 70993700,
@@ -337,7 +337,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790196873,
+    "at": 1790196898,
     "fields": [
       "messages"
     ]
@@ -758,6 +758,28 @@
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "wamid.HBgMOTk0NTAzODk1MDg4FQIAERgSOEFDQzNFRjczNUU1MzRFNjVBAA==",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0NTAzODk1MDg4FQIAEhggQUM3NzkwOTJBQUQxNjgyQjEzQzFGRTk2NTYwQzI3OEYA",
+      "external_id": "wamid.HBgMOTk0NTAzODk1MDg4FQIAEhggQUM3NzkwOTJBQUQxNjgyQjEzQzFGRTk2NTYwQzI3OEYA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizam",
+      "phone": "994503895088",
+      "text": "Mağaza",
+      "message_type": "text",
+      "created_at": 1790196897,
+      "created": "24.09.2026 00:54",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0NTAzODk1MDg4FQIAERgSMzIwRjBEOEZFOTVDMUYzOEVDAA==",
       "reply_to_text": "",
       "reply_to_author": "",
       "media_url": "",
