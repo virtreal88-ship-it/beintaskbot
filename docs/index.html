@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="212">
+    <meta name="pwa-build" content="213">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -426,6 +426,9 @@
         .chats-row:hover { background:#f8fafc; }
         .chats-row:active { background:#e9edef; }
         .chats-row.on { background:#e8f5e9; }
+        .chats-row.pin { background:#fffbeb; }
+        .chats-row.pin.on { background:#ecfdf3; }
+        .chats-pin { color:#ca8a04; font-size:11px; margin-right:4px; }
         .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
         .chats-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
         .chats-avatar.ch-whatsapp { background:#dcf8c6; color:#128c7e; }
@@ -5271,6 +5274,25 @@ function chatsEmptyHtml() {
 }
 function chatsSeenKey() { return 'chats_seen_v1_' + CURRENT_USER_ID; }
 function chatsDraftsKey() { return 'chats_drafts_v1_' + CURRENT_USER_ID; }
+function chatsPinnedKey() { return 'chats_pinned_v1_' + CURRENT_USER_ID; }
+function getChatsPinned() {
+    try { return JSON.parse(localStorage.getItem(chatsPinnedKey()) || '{}'); } catch(_err) { return {}; }
+}
+function saveChatsPinned(data) {
+    try { localStorage.setItem(chatsPinnedKey(), JSON.stringify(data || {})); } catch(_err) {}
+}
+function isChatPinned(leadId) {
+    return !!getChatsPinned()[String(leadId || '')];
+}
+function toggleChatPinned(leadId) {
+    const id = String(leadId || '');
+    if(!id) return;
+    const data = getChatsPinned();
+    if(data[id]) delete data[id];
+    else data[id] = Date.now();
+    saveChatsPinned(data);
+    renderChatsList();
+}
 function getChatsDrafts() {
     try { return JSON.parse(localStorage.getItem(chatsDraftsKey()) || '{}'); } catch(_err) { return {}; }
 }
@@ -5572,7 +5594,12 @@ function chatsInboxDeals() {
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
         return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q);
-    }).sort((a, b) => Number(b.last_incoming_at || b.updated_at || 0) - Number(a.last_incoming_at || a.updated_at || 0));
+    }).sort((a, b) => {
+        const pinA = isChatPinned(a.id) ? 1 : 0;
+        const pinB = isChatPinned(b.id) ? 1 : 0;
+        if(pinA !== pinB) return pinB - pinA;
+        return Number(b.last_incoming_at || b.updated_at || 0) - Number(a.last_incoming_at || a.updated_at || 0);
+    });
 }
 function usesKommoChatSearch() {
     return HAS_CHATS && !IS_RUFAT;
@@ -5737,11 +5764,12 @@ function renderChatsList() {
             const preview = draft ? ('Qaralama: ' + draft) : (dealLastClientMessage(deal) || 'Çat');
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
+            const pinned = isChatPinned(deal.id);
             const chip = chatsSourceChip(deal);
-            return `<div class="chats-row${on ? ' on' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
+            return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
-                    <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
+                    <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
                     <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
                 </span>
                 <button type="button" class="chats-hide" data-hide-lead="${escapeHtml(String(deal.id))}" title="Gizlət" aria-label="Gizlət">×</button>
@@ -5777,7 +5805,9 @@ function showChatsMenu(x, y, leadId) {
     const pop = document.createElement('div');
     pop.id = 'chats-ctx';
     pop.className = 'chats-ctx';
-    pop.innerHTML = '<button type="button" data-act="unread">Oxunmamış kimi işarələ</button>';
+    const pinned = isChatPinned(leadId);
+    pop.innerHTML = `<button type="button" data-act="unread">Oxunmamış kimi işarələ</button>
+        <button type="button" data-act="pin">${pinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
     const left = Math.max(8, Math.min(x, window.innerWidth - pop.offsetWidth - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - pop.offsetHeight - 8));
@@ -5788,6 +5818,12 @@ function showChatsMenu(x, y, leadId) {
         event.stopPropagation();
         hideChatsMenu();
         markChatsUnread(leadId);
+    };
+    pop.querySelector('[data-act="pin"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChatsMenu();
+        toggleChatPinned(leadId);
     };
     window.setTimeout(() => document.addEventListener('click', hideChatsMenu, true), 0);
 }
@@ -6774,7 +6810,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=229');
+    const reg = await navigator.serviceWorker.register('sw.js?v=230');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

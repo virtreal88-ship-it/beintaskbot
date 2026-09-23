@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v210 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v211 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11634,9 +11634,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 break
             if kommo_error and not last_error:
                 last_error = kommo_error
-        if not ok and quote_ids and channel == "whatsapp":
-            last_error = last_error or "Cavab göndərilmədi."
-        elif not ok:
+        if not ok:
             fallback_text = kommo_text
             if social_quote and reply_preview:
                 fallback_text = _with_visible_quote(kommo_text, reply_preview)
