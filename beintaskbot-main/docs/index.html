@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="246">
+    <meta name="pwa-build" content="247">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=246">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=246">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=247">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=247">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -6029,6 +6029,16 @@ function saveChatsHidden(data) {
 function chatsIncomingAt(deal) {
     return Number((deal && deal.last_incoming_at) || 0);
 }
+function chatsHideText(deal) {
+    const text = dealLastClientMessage(deal) || '';
+    return isGenericChatNotice(text) ? '' : text;
+}
+function chatsListAt(deal) {
+    const incoming = Number((deal && deal.last_incoming_at) || 0);
+    const outgoing = Number((deal && deal.last_outgoing_at) || 0);
+    const chatAt = Number((deal && deal.chat_at) || 0);
+    return Math.max(incoming, outgoing, chatAt);
+}
 function chatsOutgoingAt(deal) {
     return Number((deal && deal.last_outgoing_at) || 0);
 }
@@ -6043,8 +6053,10 @@ function pruneChatsHidden(deals) {
         const storedAt = stored && typeof stored === 'object' ? Number(stored.at || 0) : 0;
         const storedText = stored && typeof stored === 'object' ? String(stored.text || '') : String(stored || '');
         const incomingAt = chatsIncomingAt(deal);
-        const text = dealLastClientMessage(deal) || '';
-        if((incomingAt && incomingAt > storedAt) || (text && text !== storedText) || (Number(deal.updated_at || 0) > storedAt)) {
+        const text = chatsHideText(deal);
+        const newerIncoming = incomingAt && incomingAt > storedAt;
+        const newerText = text && text !== storedText && (!storedAt || !incomingAt || incomingAt >= storedAt);
+        if(newerIncoming || newerText) {
             delete hidden[id];
             changed = true;
         }
@@ -6057,7 +6069,7 @@ function hideInboxChat(leadId) {
     if(!id) return;
     const deal = (samilDeals || []).find(item => String(item.id) === id);
     const hidden = getChatsHidden();
-    hidden[id] = {at: chatsIncomingAt(deal), text: dealLastClientMessage(deal) || ''};
+    hidden[id] = {at: chatsIncomingAt(deal), text: chatsHideText(deal)};
     saveChatsHidden(hidden);
     if(_dealInboxMode && _dealViewState && String(_dealViewState.id) === id) {
         closeInboxChat();
@@ -6358,7 +6370,7 @@ function chatsInboxDeals() {
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
-        return Number(b.last_incoming_at || b.updated_at || 0) - Number(a.last_incoming_at || a.updated_at || 0);
+        return chatsListAt(b) - chatsListAt(a);
     });
 }
 function usesKommoChatSearch() {
@@ -6549,7 +6561,7 @@ function renderChatsList() {
             return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}${unread ? ' unread' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
-                    <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(deal.updated_at))}</span></span>
+                    <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(chatsListAt(deal)))}</span></span>
                     <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
                 </span>
                 <button type="button" class="chats-hide" data-hide-lead="${escapeHtml(String(deal.id))}" title="Gizlət" aria-label="Gizlət">×</button>
@@ -6560,13 +6572,7 @@ function renderChatsList() {
                 box.dataset.skipClick = '';
                 return;
             }
-            const hideBtn = event.target.closest('[data-hide-lead]');
-            if(hideBtn) {
-                event.preventDefault();
-                event.stopPropagation();
-                hideInboxChat(hideBtn.getAttribute('data-hide-lead'));
-                return;
-            }
+            if(event.target.closest('[data-hide-lead]')) return;
             const row = event.target.closest('[data-lead]');
             if(row) openInboxChat(row.getAttribute('data-lead'));
         };
@@ -6610,6 +6616,17 @@ function showChatsMenu(x, y, leadId) {
 function bindChatsRowMenu(box) {
     if(!box || box.dataset.menuBound) return;
     box.dataset.menuBound = '1';
+    box.addEventListener('pointerdown', event => {
+        if(!event.target.closest('[data-hide-lead]')) return;
+        event.stopPropagation();
+    }, true);
+    box.addEventListener('click', event => {
+        const hideBtn = event.target.closest('[data-hide-lead]');
+        if(!hideBtn) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        hideInboxChat(hideBtn.getAttribute('data-hide-lead'));
+    }, true);
     let pressTimer = 0;
     let pressLead = '';
     box.addEventListener('contextmenu', event => {
@@ -7591,7 +7608,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=263');
+    const reg = await navigator.serviceWorker.register('sw.js?v=264');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

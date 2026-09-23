@@ -5720,7 +5720,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v230 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v231 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7941,6 +7941,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             current = int(deal.get("updated_at") or 0)
         except (TypeError, ValueError):
             current = 0
+        deal["chat_at"] = talk_ts
         if talk_ts > current:
             deal["updated_at"] = talk_ts
         deal["task_desc"] = task.get("text", "")
@@ -10093,6 +10094,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
         "menbe": "",
         "created_at": created,
         "updated_at": max(updated, int(ts or 0)),
+        "chat_at": int(ts or 0),
         "last_note": "",
         "last_client_message": str(preview or ("Yeni mesaj" if unread else "Çat"))[:140],
         "last_incoming_at": int(incoming_at or 0),
@@ -10258,6 +10260,7 @@ def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
         "menbe": "",
         "created_at": created,
         "updated_at": max(updated, int(ts or 0)),
+        "chat_at": int(ts or 0),
         "last_note": "",
         "last_client_message": str(preview or "")[:140],
         "last_incoming_at": int(ts or 0),
@@ -10298,6 +10301,8 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         deal["last_outgoing_at"] = outgoing_at
     if not str(deal.get("chat_channel") or "").strip():
         deal["chat_channel"] = "whatsapp"
+    stamps = [int(ts or 0), int(deal.get("last_incoming_at") or 0), int(deal.get("last_outgoing_at") or 0), int(deal.get("chat_at") or 0)]
+    deal["chat_at"] = max(stamps)
     try:
         current = int(deal.get("updated_at") or 0)
     except (TypeError, ValueError):
