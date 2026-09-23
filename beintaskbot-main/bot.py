@@ -5717,7 +5717,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v218 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v219 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -7412,25 +7412,31 @@ def _talk_last_looks_outgoing(talk: dict) -> bool:
     return False
 
 
-def _cloud_outgoing_covers_talk(lead_id: int, updated: int) -> bool:
+def _cloud_last_outgoing_at(lead_id: int) -> int:
     try:
         lid = int(lead_id or 0)
     except (TypeError, ValueError):
-        return False
+        return 0
     if not lid:
-        return False
+        return 0
     outgoing = [row for row in _sent_messages_for_lead(lid) if not row.get("incoming")]
     if not outgoing:
-        return False
+        return 0
     try:
-        last_out = max(int(row.get("created_at") or 0) for row in outgoing)
+        return max(int(row.get("created_at") or 0) for row in outgoing)
     except (TypeError, ValueError):
+        return 0
+
+
+def _cloud_outgoing_covers_talk(lead_id: int, updated: int) -> bool:
+    last_out = _cloud_last_outgoing_at(lead_id)
+    if not last_out:
         return False
     try:
         stamp = int(updated or 0)
     except (TypeError, ValueError):
         stamp = 0
-    return last_out > 0 and stamp <= last_out + 20
+    return stamp <= last_out + 20
 
 
 def _apply_talk_to_inbox(
@@ -7921,6 +7927,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deal["last_note"] = note_by_lead.get(lead_id, "")
         deal["last_client_message"] = client_message_by_lead.get(lead_id, "")
         deal["last_incoming_at"] = int((incoming_at_by_lead or {}).get(lead_id) or 0)
+        deal["last_outgoing_at"] = _cloud_last_outgoing_at(lead_id)
         deal["chat_channel"] = channel_by_lead.get(lead_id, "")
         deal["contact_avatar"] = (avatar_by_lead or {}).get(lead_id, "") or deal.get("contact_avatar") or ""
         try:
@@ -10041,6 +10048,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
         "last_note": "",
         "last_client_message": str(preview or ("Yeni mesaj" if unread else "Çat"))[:140],
         "last_incoming_at": int(incoming_at or 0),
+        "last_outgoing_at": _cloud_last_outgoing_at(lid),
         "chat_channel": channel or "whatsapp",
         "contact_avatar": _first_avatar_url(lead, contact),
         "task_desc": "",
@@ -10158,6 +10166,7 @@ def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
         "last_note": "",
         "last_client_message": str(preview or "")[:140],
         "last_incoming_at": int(ts or 0),
+        "last_outgoing_at": _cloud_last_outgoing_at(lid),
         "chat_channel": "whatsapp",
         "task_desc": "",
         "deadline": "",
@@ -10189,6 +10198,9 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         deal["last_incoming_at"] = incoming_at
     elif preview and not str(deal.get("last_client_message") or "").strip():
         deal["last_client_message"] = preview[:140]
+    outgoing_at = _cloud_last_outgoing_at(lid)
+    if outgoing_at:
+        deal["last_outgoing_at"] = outgoing_at
     if not str(deal.get("chat_channel") or "").strip():
         deal["chat_channel"] = "whatsapp"
     try:

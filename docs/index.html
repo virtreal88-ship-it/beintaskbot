@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="221">
+    <meta name="pwa-build" content="222">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -34,7 +34,7 @@
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
         #screen-create {
-            display:none; position:fixed; inset:0; z-index:11000; margin:0;
+            display:none; position:fixed; inset:0; z-index:14100; margin:0;
             background:rgba(15,23,42,.45); align-items:center; justify-content:center; padding:16px;
         }
         #screen-create.open { display:flex !important; }
@@ -171,7 +171,7 @@
         .source-badge[data-source="WhatsApp"] { background:#15803d; }
         .source-tag { font-size:9px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; max-width:130px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .crm-task-desc { font-size:14px; line-height:1.4; color:#334155; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
-        #task-edit-modal { position:fixed; inset:0; z-index:10050; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
+        #task-edit-modal { position:fixed; inset:0; z-index:14100; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.45); }
         #task-edit-modal.open { display:flex; }
         #task-edit-modal .task-edit-card { width:100%; max-width:420px; background:#fff; border-radius:20px; padding:18px; box-shadow:0 18px 50px rgba(15,23,42,.18); }
         #task-edit-modal textarea, #task-edit-modal input, #task-edit-modal select { width:100%; box-sizing:border-box; border:1px solid #e2e8f0; background:#f8fafc; border-radius:12px; padding:12px 14px; font-size:14px; color:#0f172a; outline:none; font-family:inherit; }
@@ -342,7 +342,7 @@
         .chat-react-btn { border:0; background:transparent; color:#64748b; font-size:13px; padding:0 2px; cursor:pointer; }
         .deal-chat-row.in[data-react-id] { cursor:pointer; }
         .chat-reaction { display:inline-flex; align-items:center; gap:2px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:1px 6px; font-size:12px; box-shadow:0 1px 2px rgba(15,23,42,.08); cursor:pointer; }
-        .chat-react-pop { position:fixed; z-index:120; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
+        .chat-react-pop { position:fixed; z-index:15000; display:flex; gap:4px; background:#fff; border:1px solid #e2e8f0; border-radius:20px; padding:5px 8px; box-shadow:0 8px 24px rgba(15,23,42,.18); }
         .chat-react-pop button { border:0; background:transparent; font-size:19px; line-height:1; cursor:pointer; padding:1px 2px; }
         .wa-composer-wrap { flex:none; background:#f7f8fa; border-top:1px solid #e5e7eb; }
         .chat-quote-bar { display:flex; gap:8px; align-items:flex-start; margin:8px 8px 0; padding:8px 10px; background:#fff; border-left:3px solid #2563eb; border-radius:8px; }
@@ -656,16 +656,16 @@
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-            <div>
+                <div>
                 <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
                 <div id="tasks-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
-            </div>
+                </div>
             <div class="flex items-center gap-2">
                 <button type="button" id="task-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary labeled" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq</span></button>
+                </div>
             </div>
-        </div>
         <div id="task-search-wrap" class="search-expand">
             <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
             <button type="button" class="search-close" aria-label="Bağla">×</button>
@@ -704,7 +704,7 @@
                 <button type="button" id="deal-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sifariş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sifariş</span></button>
-            </div>
+        </div>
         </div>
         <div id="deal-search-wrap" class="search-expand">
             <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
@@ -726,13 +726,13 @@
                     <div class="chats-toolbar-bar">
                         <span class="chats-toolbar-title">Çatlar <span id="chats-unread-label" class="chats-unread-label" hidden></span></span>
                         <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
-                    </div>
+        </div>
                     <div id="chats-search-wrap" class="search-expand">
                         <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
                         <button type="button" class="search-close" aria-label="Bağla">×</button>
-                    </div>
-                    <div id="chats-search-results" class="chats-search-results" hidden></div>
                 </div>
+                    <div id="chats-search-results" class="chats-search-results" hidden></div>
+            </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
             <section id="chats-pane" class="chats-pane"></section>
@@ -776,8 +776,8 @@
                     <div class="text-[10px] uppercase tracking-wider opacity-85 font-bold">KPI</div>
                     <div class="text-lg font-black mt-1" id="main-finance-stars">⭐ 0/5</div>
                     <div class="text-[10px] opacity-75" id="main-finance-tasks">0 tapşırıq</div>
-                </div>
             </div>
+        </div>
         </div>
         <div id="kpi-history-container" class="space-y-3"></div>
     </div>
@@ -932,7 +932,7 @@
             </div>
             <div class="flex items-center gap-2">
                 <button type="button" onclick="loadGozleme(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-            </div>
+        </div>
         </div>
         <select id="gozleme-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
         <div class="flex justify-between items-center">
@@ -1176,7 +1176,7 @@ function applySamilUi() {
     const dealStages = document.querySelector('#screen-deal-create .space-y-2');
     if(dealStages) dealStages.innerHTML = stageCards;
     if(!isAdmin) {
-        ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
+    ['filter-row','gozleme-filter-row'].forEach(id => { const el=document.getElementById(id); if(el) el.style.display='none'; });
     }
     const sideDeals = document.getElementById('side-tab-samil-deals');
     if(sideDeals) sideDeals.style.display = 'flex';
@@ -1701,10 +1701,14 @@ function setSidebarActive(tabId) {
     });
 }
 
-function applyHashRoute() {
+function applyHashRoute(opts) {
     if(window.location.hash === '#pending' && isAdmin) switchTab('tab-pending', false);
     const chatMatch = String(window.location.hash || '').match(/^#chat-(\d+)/);
     if(chatMatch && HAS_CHATS) {
+        if(opts && opts.skipChat) {
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+            return;
+        }
         switchTab('tab-chats', false);
         if(!(samilDeals || []).some(item => String(item.id) === chatMatch[1])) restoreSamilWorkspaceFromCache();
         openInboxChat(chatMatch[1]);
@@ -1736,7 +1740,7 @@ async function initApp() {
     applyDesktopSidebar();
     if(HAS_CHATS) await switchTab('tab-chats', false);
     else await openNotifications();
-    applyHashRoute();
+    applyHashRoute({skipChat: true});
     await maybeOpenSharedDeal();
 }
 
@@ -1823,7 +1827,7 @@ function debounceContactSearch(val, resultsId, phoneId, nameId) {
             });
             const d = await r.json();
             if(d.success && d.contacts && d.contacts.length > 0) {
-                box.innerHTML = d.contacts.map(c =>
+                box.innerHTML = d.contacts.map(c => 
                     `<div onclick="selectContact('${String(c.phone||'').replace(/'/g,"\\'")}','${(c.name||'').replace(/'/g,"\\'")}','${resultsId || 'contact-search-results'}','${phoneId || 'search-phone'}','${nameId || 'task-client-name'}')"
                      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f1f5f9;font-size:12px;">
                      <div style="font-weight:700;color:#1e293b;">${c.name || 'Adsız'}</div>
@@ -1926,7 +1930,7 @@ function resumeEdit() {
     if(currentEditScreen) nav(currentEditScreen);
 }
 
-        async function syncNotifications(showError = false) {
+async function syncNotifications(showError = false) {
     if(HAS_OWN_FUNNEL && !isAdmin) return loadSamilWorkspace(showError);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 18000);
@@ -2294,8 +2298,8 @@ async function openNotifications(forceRefresh = false) {
     try {
         await syncNotifications(!!forceRefresh || !cachedData);
     } finally {
-        hideLoader();
-        hideSyncIndicator();
+    hideLoader();
+    hideSyncIndicator();
     }
     loadBalance();
     loadKpi();
@@ -2867,15 +2871,15 @@ function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
         selectedTaskId = t.id;
         handleBarAction('edit');
     });
-    let longPressTimer = null;
-    card.addEventListener('touchstart', (e) => {
-        longPressTimer = setTimeout(() => {
-            e.preventDefault();
-            showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
-        }, 500);
-    }, {passive: false});
-    card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
-    card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+        let longPressTimer = null;
+        card.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => {
+                e.preventDefault();
+                showTaskContextMenu(t.id, e.touches[0].clientX, e.touches[0].clientY);
+            }, 500);
+        }, {passive: false});
+        card.addEventListener('touchend', () => { if(longPressTimer) clearTimeout(longPressTimer); });
+        card.addEventListener('touchmove', () => { if(longPressTimer) clearTimeout(longPressTimer); });
     card.addEventListener('dragstart', event => {
         taskKanbanDragState = { taskId: String(t.id), fromBucket: crmDateBucket(t) };
         card.classList.add('dragging');
@@ -3699,6 +3703,7 @@ function showChatMsgMenu(x, y, item) {
     pop.id = 'chat-msg-ctx';
     pop.className = 'chats-ctx';
     pop.innerHTML = `<button type="button" data-act="reply">Cavab</button>
+        <button type="button" data-act="copy">Kopyala</button>
         <button type="button" data-act="react">Reaksiya</button>
         <button type="button" data-act="pin">${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
@@ -3711,6 +3716,12 @@ function showChatMsgMenu(x, y, item) {
         event.stopPropagation();
         hideChatMsgMenu();
         setDealChatReply(item);
+    };
+    pop.querySelector('[data-act="copy"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        hideChatMsgMenu();
+        copyChatMessage(item);
     };
     pop.querySelector('[data-act="react"]').onclick = event => {
         event.preventDefault();
@@ -4664,6 +4675,17 @@ async function shareDealLink(url, title) {
     const ok = await copyText(url);
     return ok ? 'copied' : 'failed';
 }
+function chatCopyText(item) {
+    const text = String((item && item.text) || '').trim();
+    if(text && !isDealHiddenNotice(text) && !isDealSystemNoise(text)) return text;
+    return dealChatReplyPreview(item);
+}
+async function copyChatMessage(item) {
+    const text = chatCopyText(item);
+    if(!text) { toast('Mətn yoxdur', true); return; }
+    const ok = await copyText(text);
+    toast(ok ? 'Kopyalandı' : 'Kopyalanmadı', !ok);
+}
 async function copyText(value) {
     try {
         await navigator.clipboard.writeText(value);
@@ -5444,7 +5466,7 @@ function renderSamilDeals() {
     }
     if(nav) {
         const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
-        nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
     }
     if(stageSelect) {
         stageSelect.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${key}" ${key === samilStageFilter ? 'selected' : ''}>${escapeHtml(label)} (${stageTotal(key)})</option>`).join('');
@@ -5493,7 +5515,7 @@ function renderSamilDeals() {
                 </div>
                 <div class="space-y-1 text-[11px] text-gray-600">
                     <div class="flex items-center gap-2 flex-wrap min-w-0">
-                        <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
+                    <div class="truncate">👤 <b>Müştəri:</b> ${clientName}</div>
                     </div>
                     <div class="truncate">📞 <b>Telefon:</b> ${phone}</div>
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
@@ -5735,6 +5757,9 @@ function saveChatsHidden(data) {
 function chatsIncomingAt(deal) {
     return Number((deal && deal.last_incoming_at) || 0);
 }
+function chatsOutgoingAt(deal) {
+    return Number((deal && deal.last_outgoing_at) || 0);
+}
 function pruneChatsHidden(deals) {
     const hidden = getChatsHidden();
     let changed = false;
@@ -5814,6 +5839,8 @@ function chatsIsUnread(deal, seen) {
     if(store['unread_' + String(deal.id)]) return true;
     if(_dealViewState && String(_dealViewState.id) === String(deal.id)) return false;
     const incomingAt = chatsIncomingAt(deal);
+    const outgoingAt = chatsOutgoingAt(deal);
+    if(outgoingAt && incomingAt && outgoingAt >= incomingAt) return false;
     const lastSeen = Number(store[String(deal.id)] || 0);
     if(incomingAt && incomingAt > lastSeen) return true;
     return false;
@@ -5914,7 +5941,7 @@ function watchIncomingChats() {
         if(!_chatAlertSeeded) return;
         const prevKey = _chatAlertMap[id] || '';
         const prevStamp = Number(prevKey.includes('|') ? prevKey.slice(prevKey.lastIndexOf('|') + 1) : 0);
-        if(stamp > prevStamp) fresh.push(deal);
+        if(stamp > prevStamp && !(chatsOutgoingAt(deal) && chatsOutgoingAt(deal) >= stamp)) fresh.push(deal);
     });
     _chatAlertMap = next;
     if(!_chatAlertSeeded) {
@@ -6547,7 +6574,7 @@ function handleBarAction(actionType) {
 function openTaskEditModal(task) {
     if(!task) return;
     closeBottomBar();
-    editingTaskId = task.id;
+        editingTaskId = task.id;
     selectedTaskId = task.id;
     const rawDesc = task.desc || task.task_text || task.text || '';
     const markerMatch = rawDesc.match(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i);
@@ -7243,7 +7270,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=238');
+    const reg = await navigator.serviceWorker.register('sw.js?v=239');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
