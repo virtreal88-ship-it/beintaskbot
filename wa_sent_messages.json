@@ -336,7 +336,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790188698,
+    "at": 1790189047,
     "fields": [
       "messages"
     ]
@@ -715,6 +715,30 @@
       "file_uuid": "",
       "file_name": "",
       "delivery_status": "",
+      "via_cloud": true
+    }
+  ],
+  "78029303": [
+    {
+      "id": "wa-wamid.HBgMOTk0NzAyMDA2NTE5FQIAERgSMTlGN0MyNkRGQjE3OTRERjU3AA==",
+      "external_id": "wamid.HBgMOTk0NzAyMDA2NTE5FQIAERgSMTlGN0MyNkRGQjE3OTRERjU3AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "Salam! Əlbəttə, video roliki dərhal göndərirəm. Baxdıqdan sonra suallarınız olarsa, mən buradayam, danışmaq üçün əlaqə saxlayın. Sizinlə əməkdaşlıq etməyə şadam!",
+      "message_type": "text",
+      "created_at": 1790189044,
+      "created": "23.09.2026 22:44",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "failed",
       "via_cloud": true
     }
   ]
