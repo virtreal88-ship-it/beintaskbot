@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="207">
+    <meta name="pwa-build" content="208">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -190,6 +190,13 @@
         .icon-action-btn svg { width:18px; height:18px; }
         .icon-action-btn.primary { background:#2481cc; border-color:#2481cc; color:#fff; }
         .icon-action-btn.labeled { width:auto; padding:0 12px; gap:6px; font-size:12px; font-weight:700; white-space:nowrap; }
+        .search-icon-btn { width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
+        .search-icon-btn svg { width:18px; height:18px; display:block; }
+        .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
+        .search-expand { display:none; align-items:center; gap:8px; }
+        .search-expand.on { display:flex; }
+        .search-expand input { flex:1; min-width:0; }
+        .search-close { width:32px; height:32px; border:0; background:#f1f5f9; color:#64748b; border-radius:8px; font-size:18px; line-height:1; flex:none; }
         .page-user-name { color:#34d399 !important; }
         .nav-svg, .sidebar-item .sidebar-icon svg { width:20px; height:20px; display:block; }
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
@@ -302,6 +309,8 @@
         .wa-thread::-webkit-scrollbar-thumb { background:#c5cdd6; border-radius:8px; }
         .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; color:#667781; font-size:12px; }
         .deal-chat-row { border-radius:8px; padding:7px 9px 4px; margin:6px 0; max-width:78%; font-size:13px; line-height:1.35; box-shadow:0 1px 0 #0001; position:relative; }
+        .deal-chat-row.wa-pop { animation:waPop .2s cubic-bezier(.2,.8,.2,1); }
+        @keyframes waPop { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
         .deal-chat-row.in { background:#fff; margin-right:auto; }
         .deal-chat-row.out { background:#dbeafe; margin-left:auto; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:700; color:#64748b; margin-bottom:3px; }
@@ -396,7 +405,10 @@
             background:#fff; overflow:hidden; border-top:1px solid #e6e8eb;
         }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
-        .chats-toolbar { padding:12px 12px 10px; border-bottom:1px solid #f1f5f9; flex:none; position:relative; }
+        .chats-toolbar { padding:10px 12px; border-bottom:1px solid #f1f5f9; flex:none; position:relative; }
+        .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
+        .chats-toolbar-title { font-size:16px; font-weight:800; color:#0f172a; }
+        .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
         .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
         .chats-search-hit:last-child { border-bottom:0; }
@@ -409,8 +421,9 @@
         .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:700; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
         .chats-search { width:100%; margin-top:0; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; font-size:12px; background:#f8fafc; outline:none; font-family:inherit; }
         .chats-rows { flex:1; min-height:0; overflow:auto; }
-        .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
+        .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .12s ease; }
         .chats-row:hover { background:#f8fafc; }
+        .chats-row:active { background:#e9edef; }
         .chats-row.on { background:#e8f5e9; }
         .chats-avatar { width:42px; height:42px; border-radius:50%; background:#e2e8f0; color:#475569; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; flex:none; overflow:hidden; }
         .chats-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -481,9 +494,16 @@
         .chats-back { display:none; width:34px; height:34px; border:0; background:#ffffff22; color:#fff; border-radius:8px; font-size:18px; line-height:1; flex:none; }
         .chats-deal-link { width:auto; height:34px; padding:0 10px; border:0; background:#ffffff22; color:#fff; border-radius:8px; font-size:11px; font-weight:800; font-family:inherit; }
         @media (max-width: 1023px) {
-            .chats-app { grid-template-columns:1fr; }
-            .chats-app:not(.chat-open) .chats-pane { display:none; }
-            .chats-app.chat-open .chats-list { display:none; }
+            .chats-app { display:block; position:relative; grid-template-columns:none; }
+            .chats-list, .chats-pane {
+                position:absolute; inset:0; width:100%; height:100%;
+                transition:transform .28s cubic-bezier(.32,.72,0,1);
+                will-change:transform;
+            }
+            .chats-list { transform:translateX(0); z-index:1; border-right:0; }
+            .chats-pane { transform:translateX(100%); z-index:2; }
+            .chats-app.chat-open .chats-list { transform:translateX(-22%); }
+            .chats-app.chat-open .chats-pane { transform:translateX(0); }
             .chats-back { display:inline-flex; align-items:center; justify-content:center; }
             body.chats-screen:has(.chats-app.chat-open) #tab-bar,
             body.chats-screen:has(.chats-app.chat-open) #tab-more-sheet { display:none !important; }
@@ -615,9 +635,14 @@
                 <div id="tasks-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
+                <button type="button" id="task-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary labeled" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq</span></button>
             </div>
+        </div>
+        <div id="task-search-wrap" class="search-expand">
+            <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
+            <button type="button" class="search-close" aria-label="Bağla">×</button>
         </div>
         <select id="task-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
         <div class="flex justify-between items-center">
@@ -637,7 +662,6 @@
             </select>
             <button onclick="pinFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
         </div>
-        <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
         <div class="samil-kanban-wrap custom-scroll">
             <div id="notifications-container" class="samil-kanban-board"></div>
         </div>
@@ -651,12 +675,16 @@
                 <div id="deals-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
+                <button type="button" id="deal-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sifariş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sifariş</span></button>
             </div>
         </div>
+        <div id="deal-search-wrap" class="search-expand">
+            <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
+            <button type="button" class="search-close" aria-label="Bağla">×</button>
+        </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
-        <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
         <div class="samil-kanban-wrap custom-scroll">
@@ -669,7 +697,14 @@
         <div id="chats-app" class="chats-app">
             <aside class="chats-list">
                 <div class="chats-toolbar">
-                    <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
+                    <div class="chats-toolbar-bar">
+                        <span class="chats-toolbar-title">Çatlar</span>
+                        <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
+                    </div>
+                    <div id="chats-search-wrap" class="search-expand">
+                        <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
+                        <button type="button" class="search-close" aria-label="Bağla">×</button>
+                    </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
                 </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
@@ -1667,6 +1702,7 @@ async function initApp() {
     initSessionPersistence();
     restoreSessionForms();
     applySamilUi();
+    bindPageSearchToggles();
     setPendingTabVisible();
     applyDesktopSidebar();
     if(HAS_CHATS) await switchTab('tab-chats', false);
@@ -2202,8 +2238,12 @@ async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
     if(HAS_OWN_FUNNEL && !isAdmin) {
         const restored = restoreSamilWorkspaceFromCache();
-        if(restored) renderNotifications(); else showLoader();
-        await loadSamilWorkspace(!!forceRefresh || !restored);
+        if(restored || mockTasks.length) renderNotifications();
+        else if(forceRefresh || !restored) showLoader();
+        const stale = Date.now() - samilWorkspaceLoadedAt > 30000;
+        const pending = loadSamilWorkspace(!!forceRefresh, null, !!forceRefresh || stale);
+        if(forceRefresh) await pending;
+        else pending.then(() => hideLoader());
         loadBalance();
         loadKpi();
         return;
@@ -2215,9 +2255,12 @@ async function openNotifications(forceRefresh = false) {
     if(cachedData && !forceRefresh) {
         mockTasks = cachedData;
         renderNotifications();
-    } else if(mockTasks.length === 0) {
-        showLoader();
+        syncNotifications(false);
+        loadBalance();
+        loadKpi();
+        return;
     }
+    if(mockTasks.length === 0) showLoader();
     showSyncIndicator();
     try {
         await syncNotifications(!!forceRefresh || !cachedData);
@@ -3625,6 +3668,10 @@ function paintDealChatThread(opts) {
     thread.innerHTML = dealChatRowsHtml(_dealViewState.messages, _dealViewState.token, _dealViewState.blocked, _dealViewState.loading);
     bindDealChatMedia(thread);
     paintDealOlderBar();
+    if(stickBottom && opts && opts.force) {
+        const last = thread.querySelector('.deal-chat-row:last-child');
+        if(last) last.classList.add('wa-pop');
+    }
     if(stickBottom) thread.scrollTop = thread.scrollHeight;
     else thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
 }
@@ -5517,7 +5564,50 @@ function scheduleChatsSearch() {
         }
     }, 450);
 }
+function setSearchOpen(wrap, toggle, open) {
+    if(wrap) wrap.classList.toggle('on', !!open);
+    if(toggle) toggle.classList.toggle('on', !!open);
+}
+function bindSearchToggle(toggleId, wrapId, inputId, onClose) {
+    const toggle = document.getElementById(toggleId);
+    const wrap = document.getElementById(wrapId);
+    const input = document.getElementById(inputId);
+    if(!toggle || !wrap || !input || toggle.dataset.bound) return;
+    toggle.dataset.bound = '1';
+    const close = () => {
+        setSearchOpen(wrap, toggle, false);
+        hideChatsSearchHits();
+        if(input.value) {
+            input.value = '';
+            if(typeof onClose === 'function') onClose();
+        }
+    };
+    toggle.addEventListener('click', () => {
+        const open = !wrap.classList.contains('on');
+        if(open) {
+            setSearchOpen(wrap, toggle, true);
+            input.focus();
+        } else close();
+    });
+    wrap.querySelector('.search-close')?.addEventListener('click', close);
+    input.addEventListener('keydown', event => { if(event.key === 'Escape') close(); });
+}
+function bindPageSearchToggles() {
+    bindSearchToggle('task-search-toggle', 'task-search-wrap', 'task-list-search', () => {
+        taskListSearch = '';
+        renderNotifications();
+    });
+    bindSearchToggle('deal-search-toggle', 'deal-search-wrap', 'deal-list-search', () => {
+        dealListSearch = '';
+        renderSamilDeals();
+    });
+    bindSearchToggle('chats-search-toggle', 'chats-search-wrap', 'chats-search', () => {
+        renderChatsList();
+        hideChatsSearchHits();
+    });
+}
 function fillChatsLineSelect() {
+    bindPageSearchToggles();
     const search = document.getElementById('chats-search');
     if(search && !search.dataset.bound) {
         search.dataset.bound = '1';
@@ -5590,6 +5680,7 @@ function renderChatsList() {
     if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
     paintChatsUnreadBadge();
 }
+let _chatSlideSeq = 0;
 function closeInboxChat() {
     closeDealInfoDrawer();
     stopDealChatPolling();
@@ -5597,10 +5688,15 @@ function closeInboxChat() {
     clearDealPendingFile();
     _dealViewState = null;
     _dealInboxMode = false;
+    const app = document.getElementById('chats-app');
     const pane = document.getElementById('chats-pane');
-    if(pane) pane.innerHTML = chatsEmptyHtml();
-    document.getElementById('chats-app')?.classList.remove('chat-open');
-    renderChatsList();
+    app?.classList.remove('chat-open');
+    const seq = ++_chatSlideSeq;
+    window.setTimeout(() => {
+        if(seq !== _chatSlideSeq) return;
+        if(pane && !app?.classList.contains('chat-open')) pane.innerHTML = chatsEmptyHtml();
+        renderChatsList();
+    }, 280);
 }
 let _chatsPollTimer = null;
 function stopChatsPolling() {
@@ -5619,6 +5715,7 @@ function startChatsPolling() {
 async function openInboxChat(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
     if(!deal) return;
+    _chatSlideSeq += 1;
     markChatsSeen(deal.id);
     closeDealInfoDrawer();
     paintDealViewModal(deal, false, {inbox: true});
@@ -5640,7 +5737,7 @@ async function openChats() {
     }
     if(_dealInboxMode && _dealViewState && !_dealChatPollTimer) startDealChatPolling();
     startChatsPolling();
-    loadSamilWorkspace(false, null, true);
+    loadSamilWorkspace(false, null, Date.now() - samilWorkspaceLoadedAt > 30000);
 }
 
 function desktopCompleteTask(taskId) {
@@ -6532,7 +6629,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=224');
+    const reg = await navigator.serviceWorker.register('sw.js?v=225');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
