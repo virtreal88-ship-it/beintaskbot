@@ -551,5 +551,10 @@
       "delivery_status": "",
       "via_cloud": true
     }
-  ]
+  ],
+  "reactions": {
+    "74834175": {
+      "16a63ce2-9f6c-4ba2-a376-280a8ea12bec": "😢"
+    }
+  }
 }
