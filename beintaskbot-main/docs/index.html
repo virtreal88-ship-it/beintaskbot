@@ -6,11 +6,11 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="241">
+    <meta name="pwa-build" content="242">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=241">
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=241">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=242">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=242">
     <!-- Mini App removed -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -444,7 +444,8 @@
         .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:#2b8cff; }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
         .chats-toolbar-title { font-size:16px; font-weight:600; color:#fff; display:inline-flex; align-items:baseline; gap:8px; }
-        .chats-unread-label { font-size:11px; font-weight:500; color:#dbeafe; letter-spacing:.01em; }
+        .chats-unread-label { border:0; background:transparent; padding:0; margin:0; cursor:pointer; font-family:inherit; font-size:11px; font-weight:500; color:#dbeafe; letter-spacing:.01em; text-decoration:underline; }
+        .chats-unread-label.on { color:#fff; }
         .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
         .chats-toolbar .search-icon-btn.on { background:#fff; color:#2b8cff; border-color:#fff; }
         .chats-toolbar .search-expand { margin-top:8px; }
@@ -781,7 +782,7 @@
             <aside class="chats-list">
                 <div class="chats-toolbar">
                     <div class="chats-toolbar-bar">
-                        <span class="chats-toolbar-title">Çatlar <span id="chats-unread-label" class="chats-unread-label" hidden></span></span>
+                        <span class="chats-toolbar-title">Çatlar <button type="button" id="chats-unread-label" class="chats-unread-label" hidden></button></span>
                         <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
         </div>
                     <div id="chats-search-wrap" class="search-expand">
@@ -6086,10 +6087,21 @@ function paintChatsUnreadBadge() {
     }
     const label = document.getElementById('chats-unread-label');
     if(label) {
+        if(!show) _chatsUnreadOnly = false;
         label.textContent = show ? (text + ' oxunmamış') : '';
         label.hidden = !show;
+        label.classList.toggle('on', !!(_chatsUnreadOnly && show));
+        label.setAttribute('aria-pressed', _chatsUnreadOnly ? 'true' : 'false');
+        if(!label.dataset.bound) {
+            label.dataset.bound = '1';
+            label.onclick = () => {
+                _chatsUnreadOnly = !_chatsUnreadOnly;
+                renderChatsList();
+            };
+        }
     }
 }
+let _chatsUnreadOnly = false;
 let _chatAlertMap = {};
 let _chatAlertSeeded = false;
 const _chatAlertLock = {};
@@ -6473,8 +6485,13 @@ function renderChatsList() {
     const pane = document.getElementById('chats-pane');
     if(!box) return;
     fillChatsLineSelect();
-    const deals = chatsInboxDeals();
+    let deals = chatsInboxDeals();
     const seen = seedChatsSeen(deals);
+    if(_chatsUnreadOnly) {
+        const unreadDeals = deals.filter(deal => chatsIsUnread(deal, seen));
+        if(unreadDeals.length) deals = unreadDeals;
+        else _chatsUnreadOnly = false;
+    }
     const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     if(!deals.length) {
         box.innerHTML = `<div class="chats-empty-list">${samilDeals.length ? 'Çat tapılmadı' : 'Çat yüklənir...'}</div>`;
@@ -7532,7 +7549,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=258');
+    const reg = await navigator.serviceWorker.register('sw.js?v=259');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
