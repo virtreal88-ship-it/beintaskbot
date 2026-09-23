@@ -1,0 +1,10 @@
+{
+  "name": "BeinTaskBot",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "web server",
+      "command": "cd beintaskbot-main && source /workspace/.venv/bin/activate && PORT=8080 python run_local_server.py"
+    }
+  ]
+}
