@@ -1219,7 +1219,7 @@ const FUNNEL_OWNER_NAME = {
 const FUNNEL_STAGE_PRESETS = {
     '7329891614': [['sorgular','Yeni sorgu'],['icra_olunur','icra olunur'],['gorusler','görüş'],['qurashdirma','quraşdırma'],['gozleme','gözləmə'],['muzakire','müzakirə']],
     '7920785774': [['sorgular','Sorgular'],['yeni_sifaris','yeni sifariş'],['icra_olunur','icra olunur'],['gozleme','gözləmə'],['gorusler','görüş'],['qurashdirma','quraşdırma'],['muzakire','müzakirə']],
-    '1628569350': [['nizami','Nizami Qasımov (Admin)'],['soltan','Soltan abbasov'],['sermaye','Sərmayə Əhmədsoy'],['asya','Asya Agayeva'],['nurane','Nuranə Şirinova'],['gozleme','gözləmə'],['muzakire','Müzakirə']]
+    '1628569350': [['sorgular','yeni sorgu'],['danisiqlar','danışıqlar'],['telimat','təlimat'],['yeni_sifaris','yeni sifariş'],['gozleme','gözləmə'],['muzakire','Müzakirə']]
 };
 let SAMIL_UI_STAGES = [
     ['sorgular','Sorğular'],['danisiqlar','Danışıqlar'],['yeni_sifaris','Yeni sifariş'],['geri_donusler','Geri dönüşlər'],
@@ -1265,7 +1265,7 @@ const samilPendingTaskMoves = new Map();
 let samilDealDragState = null;
 let employeePartners = [];
 const SAMIL_STAGE_COLORS = {
-    nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', yeni_sifaris:'#8b5cf6',
+    nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', telimat:'#f59e0b', yeni_sifaris:'#8b5cf6',
     geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
     icra_olunur:'#0ea5e9', gozleme:'#64748b', nizami:'#2481cc', soltan:'#14b8a6', sermaye:'#f59e0b', asya:'#06b6d4', nurane:'#a855f7',
     qurashdirma:'#22c55e', muzakire:'#a855f7', ugurlu:'#10b981', imtina:'#ef4444'
@@ -2838,7 +2838,9 @@ function nizamiFunnelStageMatch(stage) {
     if(!s) return false;
     return s.includes('nizami') || s.includes('soltan') || s.includes('sərmayə') || s.includes('sermaye')
         || s.includes('asya') || s.includes('nuran') || s.includes('gözləmə') || s.includes('gozleme')
-        || s.includes('müzakirə') || s.includes('muzakire');
+        || s.includes('müzakirə') || s.includes('muzakire') || s.includes('sorgu') || s.includes('danışıq')
+        || s.includes('danisiq') || s.includes('təlimat') || s.includes('telimat') || s.includes('sifariş')
+        || s.includes('sifaris');
 }
 function taskMatchesPinnedAssignee(t) {
     if(currentFilter === 'all') return true;

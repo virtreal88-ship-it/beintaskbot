@@ -165,11 +165,10 @@ RASIM_STAGE_NAMES = {
 }
 NIZAMI_STAGES = {
     "nerazobrannoye": 109988180,
-    "nizami": 109988196,
-    "soltan": 109988188,
-    "sermaye": 109988204,
-    "asya": 109988208,
-    "nurane": 109988212,
+    "sorgular": 109988196,
+    "danisiqlar": 112086092,
+    "telimat": 112086096,
+    "yeni_sifaris": 112086100,
     "gozleme": 110774676,
     "muzakire": 110722180,
     "ugurlu": 142,
@@ -177,11 +176,10 @@ NIZAMI_STAGES = {
 }
 NIZAMI_STAGE_NAMES = {
     109988180: "Неразобранное",
-    109988196: "Nizami Qasımov (Admin)",
-    109988188: "Soltan abbasov",
-    109988204: "Sərmayə Əhmədsoy",
-    109988208: "Asya Agayeva",
-    109988212: "Nuranə Şirinova",
+    109988196: "yeni sorgu",
+    112086092: "danışıqlar",
+    112086096: "təlimat",
+    112086100: "yeni sifariş",
     110774676: "gözləmə",
     110722180: "Müzakirə",
     142: "Успешно реализовано",
@@ -1483,10 +1481,12 @@ def _stage_key_from_kommo(name: str, status_id: int) -> str:
     n = _fold_stage_name(name)
     needles = (
         ("nerazobrann", "nerazobrannoye"),
+        ("неразобран", "nerazobrannoye"),
         ("unparsed", "nerazobrannoye"),
         ("sorgular", "sorgular"),
         ("sorgu", "sorgular"),
         ("danisiq", "danisiqlar"),
+        ("telimat", "telimat"),
         ("yeni sifaris", "yeni_sifaris"),
         ("geri don", "geri_donusler"),
         ("soyuq zeng", "soyuq_zeng"),
