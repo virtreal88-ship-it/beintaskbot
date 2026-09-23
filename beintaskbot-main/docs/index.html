@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="267">
+    <meta name="pwa-build" content="268">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5492,11 +5492,7 @@ async function sendWaTemplate(options) {
         if(!r.ok || !d.success) throw new Error(d.error || 'Şablon göndərilmədi');
         closeWaTemplateModal();
         toast('Şablon göndərildi');
-        if(!options.leadId) {
-            rememberWaOutbox(d.phone || phone, preview ? preview.textContent : '');
-            renderChatsList();
-        }
-        if(options.leadId && _dealViewState && String(_dealViewState.id) === String(options.leadId)) pollDealChat();
+        showSentTemplate(options, d.phone || phone, preview ? preview.textContent : '', d.wamid || '');
     } catch(err) {
         toast(err.message || 'Şablon göndərilmədi', true);
         if(sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Göndər'; }
@@ -6823,6 +6819,39 @@ function saveWaOutbox(rows) {
 }
 function waPhoneDigits(value) {
     return String(value || '').replace(/\D/g, '');
+}
+function showSentTemplate(options, phone, text, wamid) {
+    const now = Math.floor(Date.now() / 1000);
+    const body = String(text || '').trim() || 'Şablon göndərildi';
+    const sent = {
+        id: 'tpl-' + (wamid || now),
+        external_id: String(wamid || ''),
+        incoming: false,
+        direction: 'outgoing',
+        text: body,
+        created_at: now,
+        message_type: 'text',
+        channel: 'whatsapp',
+        delivery_status: 'sent'
+    };
+    const leadId = options && options.leadId;
+    if(leadId && _dealViewState && String(_dealViewState.id) === String(leadId)) {
+        _dealViewState.loading = false;
+        _dealViewState.fullReady = true;
+        _dealViewState.messages = mergeDealChat(_dealViewState.messages || [], [sent], false);
+        paintDealChatThread({stickBottom: true, force: true});
+    }
+    const deal = leadId ? (samilDeals || []).find(item => String(item.id) === String(leadId)) : null;
+    if(deal) {
+        deal.last_client_message = body.slice(0, 140);
+        deal.chat_at = now;
+        deal.last_outgoing_at = now;
+        deal.chat_channel = deal.chat_channel || 'whatsapp';
+        renderChatsList();
+        return;
+    }
+    rememberWaOutbox(phone, body);
+    renderChatsList();
 }
 function rememberWaOutbox(phone, preview) {
     const digits = waPhoneDigits(phone);
@@ -8204,7 +8233,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=284');
+    const reg = await navigator.serviceWorker.register('sw.js?v=285');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
