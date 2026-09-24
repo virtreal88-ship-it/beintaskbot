@@ -12315,7 +12315,7 @@ def _find_click_media(lid: int, contact_ids: list[int], created_at: int, kind: s
         if not created_at or not cand_ts:
             continue
         diff = abs(created_at - cand_ts)
-        if diff > 1800:
+        if diff > 86400:
             continue
         type_rank = 0 if (want_audio or _candidate_is_image(cand)) else 1
         rank = (type_rank, diff)

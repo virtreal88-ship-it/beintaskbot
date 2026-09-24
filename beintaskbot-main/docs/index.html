@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="277">
+    <meta name="pwa-build" content="278">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -299,8 +299,8 @@
         .deal-ai-btn.loading { pointer-events:none; }
         .deal-ai-btn.loading .deal-ai-label { visibility:hidden; }
         .deal-ai-btn.loading .deal-ai-spin { display:block; }
-        .chats-new-btn { width:36px; height:36px; border:0; border-radius:10px; background:#ffffff22; color:#fff; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
-        .chats-new-btn svg { width:18px; height:18px; display:block; }
+        .chats-new-btn { width:28px; height:28px; border:0; border-radius:0; background:transparent; color:#fff; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
+        .chats-new-btn svg { width:20px; height:20px; display:block; }
         #wa-tpl-modal { position:fixed; inset:0; z-index:14200; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:12px; }
         #wa-tpl-modal .wa-tpl-card { background:#fff; border-radius:18px; width:min(780px,96vw); max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 50px rgba(15,23,42,.25); }
         #wa-tpl-modal .wa-tpl-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px 10px; border-bottom:1px solid #f1f5f9; flex:none; }
@@ -519,14 +519,15 @@
             .chats-app.chat-open { grid-template-columns:280px minmax(0,1fr); }
         }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
-        .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:linear-gradient(145deg,#1f3a34,#0f766e); }
-        .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
-        .chats-filter-tabs { display:flex; align-items:center; gap:6px; padding:6px 10px; background:#fff; border-bottom:1px solid #e9edef; overflow-x:auto; flex:none; }
-        .chats-filter-tab { border:0; background:#fff; color:#54656f; border-radius:14px; height:26px; padding:0 10px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; box-shadow:inset 0 0 0 1px #e9edef; }
-        .chats-filter-tab.on { background:#d9fdd3; color:#111b21; box-shadow:none; }
-        .chats-filter-count { font-size:13px; font-weight:600; }
-        .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
-        .chats-toolbar .search-icon-btn.on { background:#fff; color:#1f3a34; border-color:#fff; }
+        .chats-toolbar { padding:2px 8px 8px; border-bottom:0; flex:none; position:relative; background:linear-gradient(145deg,#1f3a34,#0f766e); }
+        .chats-toolbar-bar { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; min-height:0; }
+        .chats-head-icons { display:flex; align-items:flex-start; gap:0; flex:none; margin-top:-2px; }
+        .chats-filter-tabs { display:flex; align-items:center; gap:6px; padding:6px 0 0; background:transparent; border:0; overflow-x:auto; flex:1; min-width:0; }
+        .chats-filter-tab { border:0; background:rgba(255,255,255,.16); color:#fff; border-radius:14px; height:24px; padding:0 8px; font-family:inherit; font-size:12px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; box-shadow:none; }
+        .chats-filter-tab.on { background:#d9fdd3; color:#111b21; }
+        .chats-filter-count { font-size:12px; font-weight:600; }
+        .chats-toolbar .search-icon-btn { background:transparent; border-color:transparent; color:#fff; width:28px; height:28px; border-radius:0; }
+        .chats-toolbar .search-icon-btn.on { background:transparent; color:#fff; border-color:transparent; }
         .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
         .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
@@ -889,22 +890,22 @@
             <aside class="chats-list">
                 <div class="chats-toolbar">
                     <div class="chats-toolbar-bar">
-                        <span></span>
-                        <span class="flex items-center gap-2">
+                        <div class="chats-filter-tabs" role="tablist">
+                            <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-pressed="true">Hamısı</button>
+                            <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış <span id="chats-unread-count" class="chats-filter-count">0</span></button>
+                            <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
+                        </div>
+                        <span class="chats-head-icons">
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                         </span>
-        </div>
+                    </div>
                     <div id="chats-search-wrap" class="search-expand">
                         <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
                         <button type="button" class="search-close" aria-label="Bağla">×</button>
                 </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
             </div>
-                <div class="chats-filter-tabs" role="tablist">
-                    <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış <span id="chats-unread-count" class="chats-filter-count">0</span></button>
-                    <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
-                </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
             <section id="chats-pane" class="chats-pane"></section>
@@ -3553,6 +3554,14 @@ function showCachedPhoto(wrap) {
     wrap.classList.remove('failed', 'loading');
     return true;
 }
+async function fetchMediaBlob(url) {
+    const response = await fetch(url, {headers: authFetchHeaders()});
+    if(!response.ok) throw new Error('fail');
+    const blob = await response.blob();
+    const type = String(blob.type || '');
+    if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+    return blob;
+}
 async function loadMissingPhoto(wrap) {
     if(!wrap || wrap.dataset.loading === '1' || wrap.classList.contains('ready')) return;
     if(showCachedPhoto(wrap)) return;
@@ -3560,12 +3569,14 @@ async function loadMissingPhoto(wrap) {
     wrap.classList.add('loading');
     wrap.classList.remove('failed');
     try {
-        const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'picture');
-        const response = await fetch(src, {headers: authFetchHeaders()});
-        if(!response.ok) throw new Error('fail');
-        const blob = await response.blob();
-        const type = String(blob.type || '');
-        if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+        const direct = wrap.getAttribute('data-src') || '';
+        let blob = null;
+        try {
+            blob = await fetchMediaBlob(mediaLookupUrl(wrap, 'picture'));
+        } catch(_lookup) {
+            if(!direct) throw _lookup;
+            blob = await fetchMediaBlob(direct);
+        }
         const url = URL.createObjectURL(blob);
         _mediaBlobs.set(mediaCacheKey(wrap, 'picture'), url);
         let img = wrap.querySelector('img');
@@ -7570,12 +7581,22 @@ function paintChatsUnreadBadge() {
         tab.style.display = show ? 'flex' : 'none';
     }
     const unanswered = HAS_CHATS ? chatsInboxDeals().filter(chatsIsUnanswered).length : 0;
+    const allBtn = document.getElementById('chats-all-tab');
     const unreadBtn = document.getElementById('chats-unread-label');
     const unreadCount = document.getElementById('chats-unread-count');
     const waitBtn = document.getElementById('chats-unanswered-tab');
     const waitCount = document.getElementById('chats-unanswered-count');
     if(unreadCount) unreadCount.textContent = text;
     if(_chatsListFilter === 'unread' && !show) _chatsListFilter = '';
+    if(allBtn) {
+        const allOn = !_chatsListFilter;
+        allBtn.classList.toggle('on', allOn);
+        allBtn.setAttribute('aria-pressed', allOn ? 'true' : 'false');
+        if(!allBtn.dataset.bound) {
+            allBtn.dataset.bound = '1';
+            allBtn.onclick = () => setChatsListFilter('all');
+        }
+    }
     if(unreadBtn) {
         unreadBtn.classList.toggle('on', _chatsListFilter === 'unread');
         unreadBtn.setAttribute('aria-pressed', _chatsListFilter === 'unread' ? 'true' : 'false');
@@ -7601,7 +7622,7 @@ function chatsIsUnanswered(deal) {
     return !outgoing || incoming > outgoing;
 }
 function setChatsListFilter(next) {
-    _chatsListFilter = _chatsListFilter === next ? '' : next;
+    _chatsListFilter = next === 'all' ? '' : (_chatsListFilter === next ? '' : next);
     renderChatsList();
 }
 let _chatsListFilter = '';
