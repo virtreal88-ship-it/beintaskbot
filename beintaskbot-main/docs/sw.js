@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-24-083';
+const CACHE_NAME = 'beintaskbot-v2026-09-24-084';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -7,14 +7,38 @@ self.addEventListener('install', e => {
 self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME && k !== MEDIA_CACHE_NAME).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
+const MEDIA_CACHE_NAME = 'beintaskbot-media-v1';
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+  if (e.request.method !== 'GET') return;
+
+  // Cache media files (photos, audio notes, attachments)
+  if (url.pathname === '/api/deal/file') {
+    e.respondWith(
+      caches.open(MEDIA_CACHE_NAME).then(async cache => {
+        const cached = await cache.match(e.request);
+        if (cached) return cached;
+        try {
+          const networkRes = await fetch(e.request);
+          if (networkRes.ok && networkRes.status === 200) {
+            cache.put(e.request, networkRes.clone());
+          }
+          return networkRes;
+        } catch (_err) {
+          return cached || new Response('', { status: 408 });
+        }
+      })
+    );
+    return;
+  }
+
+  if (url.pathname.startsWith('/api/')) return;
   const isAppShell = e.request.destination === 'document' || url.pathname.endsWith('.html') || url.pathname.endsWith('/');
   if (isAppShell) {
     e.respondWith(fetch(e.request, { cache: 'no-store' }).catch(() => caches.match(e.request)));

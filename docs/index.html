@@ -363,8 +363,9 @@
         .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:600; padding:0; }
         .wa-composer-field.sending textarea { color:transparent; }
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
-        .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
-        .audio-wait audio { flex:1; min-width:0; width:100%; height:32px; }
+        .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; min-width:260px; max-width:100%; width:100%; }
+        .audio-wait audio { flex:1; min-width:200px; width:100%; height:32px; }
+        .deal-chat-row.has-audio { min-width:min(290px, 92vw); }
         .audio-hit { position:absolute; left:0; top:0; bottom:0; width:42px; z-index:3; border:0; padding:0; background:transparent; cursor:pointer; }
         .audio-wait.ready .audio-hit { display:none; }
         .audio-wait .audio-spin { display:none; position:absolute; left:12px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:4; pointer-events:none; background:#fff; }
@@ -483,8 +484,12 @@
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
         #deal-view-modal { z-index:12000; }
+        body.deal-modal-open #mobile-header,
         body.deal-modal-open #tab-bar,
-        body.deal-modal-open #bottom-action-bar { display:none !important; }
+        body.deal-modal-open #bottom-action-bar,
+        body.chat-open #mobile-header,
+        body.chat-open #tab-bar,
+        body.chat-open #bottom-action-bar { display:none !important; }
         @media (max-width:800px) {
             #deal-view-modal { padding:0 !important; align-items:stretch !important; justify-content:stretch !important; }
             .deal-shell { width:100%; height:100%; max-height:none; border-radius:0; padding-bottom:env(safe-area-inset-bottom, 0px); box-sizing:border-box; }
@@ -686,12 +691,21 @@
             .chats-pane { transform:translateX(100%); z-index:2; }
             .chats-app.chat-open .chats-list { transform:translateX(-22%); }
             .chats-app.chat-open .chats-pane { transform:translateX(0); }
-            .chats-back { display:none !important; }
+            .chats-back, #deal-view-modal .chats-back { display:none !important; }
+            .chat-reply-btn { display:none !important; }
             #chats-pane .deal-shell-body { grid-template-columns:1fr; }
             #chats-pane .deal-side { display:none !important; }
+            body.chat-open #mobile-header,
+            body.deal-modal-open #mobile-header,
+            body.chats-screen:has(.chats-app.chat-open) #mobile-header { display:none !important; }
+            body.chat-open #tab-bar,
+            body.chat-open #tab-more-sheet,
             body.chats-screen:has(.chats-app.chat-open) #tab-bar,
             body.chats-screen:has(.chats-app.chat-open) #tab-more-sheet { display:none !important; }
-            body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0; }
+            body.chat-open #content-area,
+            body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0 !important; height:100vh !important; }
+            body.chat-open,
+            body.chats-screen:has(.chats-app.chat-open) { overflow:hidden; }
         }
     </style>
 </head>
@@ -2071,6 +2085,7 @@ function closeCreateTaskModal() {
 function nav(id) {
     if(id !== 'screen-pending') stopPendingActionPolling();
     if(id !== 'screen-chats') {
+        document.body.classList.remove('chat-open');
         if(typeof stopChatsPolling === 'function') stopChatsPolling();
         if(typeof _dealInboxMode !== 'undefined' && _dealInboxMode) stopDealChatPolling();
     }
@@ -3151,7 +3166,19 @@ function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
         event.stopPropagation();
         const leadId = t.lead_id || t.entity_id;
         if(!leadId) { toast('Sövdələşmə tapılmadı', true); return; }
-        openDealViewModal({id: leadId});
+        const existing = (samilDeals || []).find(d => String(d.id) === String(leadId)) || {};
+        const phoneList = (Array.isArray(t.phones) && t.phones.length) ? t.phones : (t.phone ? [t.phone] : (existing.phones || (existing.phone ? [existing.phone] : [])));
+        const phoneVal = phoneList[0] || t.phone || existing.phone || '';
+        const clientName = t.client_name || t.contact_name || t.name || existing.contact_name || existing.name || '';
+        const dealObj = Object.assign({}, existing, {
+            id: leadId,
+            name: t.lead_name || existing.name || clientName || ('Sövdələşmə #' + leadId),
+            contact_name: clientName,
+            client_name: clientName,
+            phone: phoneVal,
+            phones: phoneList
+        });
+        openDealViewModal(dealObj);
     });
     card.addEventListener('click', event => {
         if(event.target.closest('a,button,audio')) return;
@@ -3518,11 +3545,20 @@ function mediaCacheKey(wrap, kind) {
     return parts.join('|');
 }
 function audioCanPlay(audio) {
-    return !!(audio && audio.getAttribute('src') && audio.readyState >= 2 && !audio.error);
+    return !!(audio && (audio.src || audio.getAttribute('src')) && !audio.error);
+}
+function stopAllOtherAudios(currentAudio) {
+    document.querySelectorAll('audio').forEach(other => {
+        if(other !== currentAudio && !other.paused) {
+            try { other.pause(); } catch(_e) {}
+        }
+    });
 }
 function audioWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><audio controls preload="none"></audio><button type="button" class="audio-hit" aria-label="Play"></button></span>`;
+    const audioSrc = src ? ` src="${escapeHtml(src)}"` : '';
+    const hitBtn = src ? '' : '<button type="button" class="audio-hit" aria-label="Play"></button>';
+    return `<span class="audio-wait${src ? ' ready' : ''}"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><audio controls preload="metadata"${audioSrc}></audio>${hitBtn}</span>`;
 }
 function isChatPhotoText(text) {
     const raw = String(text || '').trim();
@@ -3557,11 +3593,31 @@ function showCachedPhoto(wrap) {
     return true;
 }
 async function fetchMediaBlob(url) {
+    if('caches' in window) {
+        try {
+            const cache = await caches.open('beintaskbot-media-v1');
+            const cached = await cache.match(url);
+            if(cached) {
+                const b = await cached.blob();
+                if(b && b.size > 0 && !String(b.type || '').startsWith('text/')) {
+                    return b;
+                }
+            }
+        } catch(_e) {}
+    }
     const response = await fetch(url, {headers: authFetchHeaders()});
     if(!response.ok) throw new Error('fail');
     const blob = await response.blob();
     const type = String(blob.type || '');
     if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+    if('caches' in window) {
+        try {
+            const cache = await caches.open('beintaskbot-media-v1');
+            cache.put(url, new Response(blob.slice(), {
+                headers: {'Content-Type': blob.type || 'application/octet-stream', 'Cache-Control': 'public, max-age=86400'}
+            })).catch(() => {});
+        } catch(_e) {}
+    }
     return blob;
 }
 async function loadMissingPhoto(wrap) {
@@ -3654,57 +3710,36 @@ function dropAudioCache(wrap, audio) {
 }
 async function fetchAudioObjectUrl(wrap) {
     const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
-    const response = await fetch(src, {headers: authFetchHeaders()});
-    if(!response.ok) throw new Error('fail');
-    const blob = await response.blob();
-    const type = String(blob.type || '');
-    if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+    const blob = await fetchMediaBlob(src);
     return URL.createObjectURL(blob);
 }
 async function startAudioWait(wrap, audio) {
     if(!wrap || !audio || wrap.dataset.loading === '1') return;
-    if(audioCanPlay(audio)) { markAudioReady(wrap); return; }
+    if(audio.src && audio.src !== window.location.href && !audio.error && audio.readyState >= 1) {
+        markAudioReady(wrap);
+        stopAllOtherAudios(audio);
+        try { await audio.play(); } catch(_err) {}
+        return;
+    }
     wrap.dataset.loading = '1';
     wrap.dataset.ready = '';
     wrap.classList.remove('ready');
     wrap.classList.add('loading');
-    try { audio.pause(); } catch(_err) {}
+    stopAllOtherAudios(audio);
     const key = mediaCacheKey(wrap, 'audio');
     let url = _mediaBlobs.get(key) || '';
     try {
-        if(url) {
-            try {
-                await playAudioSource(audio, url);
-                markAudioReady(wrap);
-                return;
-            } catch(_err) {
-                _mediaBlobs.delete(key);
-                url = '';
-                try { audio.removeAttribute('src'); } catch(_drop) {}
-            }
+        if(!url) {
+            url = await fetchAudioObjectUrl(wrap);
+            _mediaBlobs.set(key, url);
         }
-        url = await fetchAudioObjectUrl(wrap);
-        _mediaBlobs.set(key, url);
-        await playAudioSource(audio, url);
+        if(audio.src !== url) audio.src = url;
+        audio.setAttribute('src', url);
         markAudioReady(wrap);
+        await audio.play();
     } catch(_err) {
         dropAudioCache(wrap, audio);
     }
-}
-function playAudioSource(audio, url) {
-    return new Promise((resolve, reject) => {
-        const done = () => { cleanup(); resolve(); };
-        const fail = () => { cleanup(); reject(new Error('fail')); };
-        const cleanup = () => {
-            audio.removeEventListener('playing', done);
-            audio.removeEventListener('error', fail);
-        };
-        audio.addEventListener('playing', done);
-        audio.addEventListener('error', fail);
-        if(audio.src !== url) audio.src = url;
-        const started = audio.play();
-        if(started && started.catch) started.catch(fail);
-    });
 }
 function bindAudioWait(root) {
     bindPhotoWait(root);
@@ -3714,20 +3749,24 @@ function bindAudioWait(root) {
         const audio = wrap.querySelector('audio');
         if(!audio) return;
         const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'audio'));
-        if(saved) {
+        if(saved && !audio.src) {
             audio.src = saved;
             audio.addEventListener('canplay', () => markAudioReady(wrap), {once: true});
         }
         if(!wrap.querySelector('.audio-speed')) attachAudioSpeed(wrap, audio);
-        const begin = event => {
-            if(wrap.dataset.loading === '1') return;
-            if(audioCanPlay(audio)) { markAudioReady(wrap); return; }
-            if(event) { event.preventDefault(); event.stopPropagation(); }
-            startAudioWait(wrap, audio);
-        };
         const hit = wrap.querySelector('.audio-hit');
-        if(hit) hit.addEventListener('click', begin);
-        audio.addEventListener('play', () => begin());
+        if(hit) {
+            hit.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                if(wrap.dataset.loading === '1') return;
+                startAudioWait(wrap, audio);
+            });
+        }
+        audio.addEventListener('play', () => {
+            stopAllOtherAudios(audio);
+            markAudioReady(wrap);
+        });
         audio.addEventListener('error', () => {
             if(wrap.dataset.loading === '1') return;
             dropAudioCache(wrap, audio);
@@ -3737,6 +3776,11 @@ function bindAudioWait(root) {
         });
     });
 }
+document.addEventListener('play', event => {
+    if(event.target && event.target.tagName === 'AUDIO') {
+        stopAllOtherAudios(event.target);
+    }
+}, true);
 function dealAudioHtml(deal) {
     if(!deal.voice_url) return '<span class="text-gray-400">—</span>';
     const src = deal.voice_url.startsWith('http') ? deal.voice_url : API_BASE + deal.voice_url;
@@ -4110,7 +4154,9 @@ function dealChatItemHtml(item, token, readonly) {
     const msgAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
     const carousel = waCarouselHtml(item && item.cards);
     const failed = !item.incoming && /^(error|failed|undelivered)$/i.test(String(item.delivery_status || item.status || ''));
-    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
+    const isAudio = isChatAudioItem(item) || /voice|audio|call/i.test(String(item && (item.message_type || item.type) || ''));
+    const hasAudioClass = isAudio ? ' has-audio' : '';
+    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}${hasAudioClass}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
     const body = carousel ? `<div class="wa-carousel-stack">${row}${carousel}</div>` : row;
     return `<div class="deal-chat-wrap ${cls}${carousel ? ' has-carousel' : ''}">${body}${replyBtn}</div>`;
 }
@@ -4490,9 +4536,77 @@ function dropTailStubs(rows) {
 function requestMatchesDeal(seq, leadId) {
     return _dealViewState && _dealViewState.seq === seq && String(_dealViewState.id) === String(leadId);
 }
+function bindSwipeToReply(thread) {
+    if(!thread) return;
+    thread.querySelectorAll('.deal-chat-wrap').forEach(wrap => {
+        if(wrap.dataset.swipeBound) return;
+        wrap.dataset.swipeBound = '1';
+        const row = wrap.querySelector('.deal-chat-row[data-msg-id]');
+        if(!row) return;
+        const msgId = row.getAttribute('data-msg-id');
+
+        let startX = 0, startY = 0, currentDx = 0, isSwiping = false, touchActive = false;
+
+        wrap.addEventListener('touchstart', (e) => {
+            if(e.touches.length !== 1) return;
+            if(e.target.closest('audio, button, a, input, select, textarea, .audio-hit, .photo-miss, .chat-reaction')) return;
+            const t = e.touches[0];
+            startX = t.clientX;
+            startY = t.clientY;
+            currentDx = 0;
+            isSwiping = false;
+            touchActive = true;
+        }, { passive: true });
+
+        wrap.addEventListener('touchmove', (e) => {
+            if(!touchActive || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            const dx = t.clientX - startX;
+            const dy = t.clientY - startY;
+
+            if(!isSwiping) {
+                if(Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+                    isSwiping = true;
+                } else if(Math.abs(dy) > 10) {
+                    touchActive = false;
+                    return;
+                }
+            }
+
+            if(isSwiping) {
+                const sign = dx > 0 ? 1 : -1;
+                const dist = Math.min(65, Math.abs(dx) * 0.6);
+                currentDx = sign * dist;
+                row.style.transform = `translateX(${currentDx}px)`;
+                row.style.transition = 'none';
+            }
+        }, { passive: true });
+
+        const endSwipe = () => {
+            if(!touchActive) return;
+            touchActive = false;
+            if(isSwiping) {
+                row.style.transition = 'transform .2s ease-out';
+                row.style.transform = '';
+                if(Math.abs(currentDx) >= 30) {
+                    const item = (_dealViewState && _dealViewState.messages || []).find(r => String(r.id) === String(msgId));
+                    if(item) {
+                        try { if(navigator.vibrate) navigator.vibrate(25); } catch(_e) {}
+                        setDealChatReply(item);
+                    }
+                }
+                isSwiping = false;
+            }
+        };
+
+        wrap.addEventListener('touchend', endSwipe, { passive: true });
+        wrap.addEventListener('touchcancel', endSwipe, { passive: true });
+    });
+}
 function bindDealChatMedia(thread) {
     if(!thread) return;
     bindAudioWait(thread);
+    bindSwipeToReply(thread);
     thread.querySelectorAll('audio').forEach(el => {
         el.addEventListener('ended', () => {
             try { el.pause(); el.currentTime = 0; } catch(_err) {}
@@ -5197,7 +5311,6 @@ async function loadMobileBaxishChat() {
         }
     } catch(_err) {}
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    ensureDealSnapshotLoaded(deal, false).catch(() => {});
 }
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
@@ -5492,6 +5605,9 @@ function applyDealSide(deal, readonly) {
     const headPhone = document.getElementById('deal-head-phone');
     const phone = (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '';
     if(headPhone) headPhone.value = phone;
+    document.querySelectorAll('.deal-head-phone-row').forEach(row => {
+        if(!row.querySelector('input')) row.textContent = phone || '—';
+    });
     const sideName = document.getElementById('deal-side-name');
     const sidePhone = document.getElementById('deal-side-phone');
     if(sideName) sideName.value = clientName;
@@ -6032,7 +6148,11 @@ function closeDealViewModal() {
     clearDealPendingFile();
     _dealViewState = null;
     _dealInboxMode = false;
-    document.body.classList.remove('deal-modal-open');
+    document.body.classList.remove('deal-modal-open', 'chat-open');
+    if(window.Telegram && Telegram.WebApp && Telegram.WebApp.BackButton) {
+        Telegram.WebApp.BackButton.hide();
+        Telegram.WebApp.BackButton.offClick(closeDealViewModal);
+    }
     document.getElementById('deal-photo-zoom')?.remove();
     document.getElementById('deal-view-modal')?.remove();
     closeDealInfoDrawer();
@@ -6919,6 +7039,7 @@ function paintDealViewModal(deal, readonly, opts) {
         const pane = document.getElementById('chats-pane');
         if(!pane) return;
         pane.innerHTML = dealWorkspaceHtml(deal, token, readonly, {inbox: true});
+        document.body.classList.add('chat-open');
         document.getElementById('chats-app')?.classList.add('chat-open');
         root = pane;
         if(window.history && history.pushState) {
@@ -6955,14 +7076,83 @@ function paintDealViewModal(deal, readonly, opts) {
     } else {
         const modal = document.createElement('div');
         modal.id = 'deal-view-modal';
-        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#efeae2;display:flex;padding:0';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#efeae2;display:flex;padding:0;will-change:transform';
         modal.innerHTML = dealWorkspaceHtml(deal, token, readonly);
-        document.body.classList.add('deal-modal-open');
+        document.body.classList.add('deal-modal-open', 'chat-open');
         document.body.appendChild(modal);
         root = modal;
         const back = modal.querySelector('#chats-back');
         if(back) back.onclick = closeDealViewModal;
+        if(window.Telegram && Telegram.WebApp && Telegram.WebApp.BackButton) {
+            Telegram.WebApp.BackButton.show();
+            Telegram.WebApp.BackButton.onClick(closeDealViewModal);
+        }
+
+        let _mTouchStartX = 0;
+        let _mTouchStartY = 0;
+        let _mTouchActive = false;
+        modal.addEventListener('touchstart', (e) => {
+            if(!window.matchMedia('(max-width: 1023px)').matches) return;
+            if(e.touches.length !== 1) return;
+            const t = e.touches[0];
+            _mTouchStartX = t.clientX;
+            _mTouchStartY = t.clientY;
+            _mTouchActive = _mTouchStartX <= 75;
+        }, { passive: true });
+
+        modal.addEventListener('touchmove', (e) => {
+            if(!_mTouchActive || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            const dx = t.clientX - _mTouchStartX;
+            const dy = t.clientY - _mTouchStartY;
+            if(dx > 8 && Math.abs(dx) > Math.abs(dy)) {
+                modal.style.transform = `translateX(${Math.max(0, dx)}px)`;
+                modal.style.transition = 'none';
+            }
+        }, { passive: true });
+
+        const onModalTouchEnd = (e) => {
+            if(!_mTouchActive) return;
+            _mTouchActive = false;
+            const t = (e.changedTouches && e.changedTouches[0]) || null;
+            const dx = t ? (t.clientX - _mTouchStartX) : 0;
+            const dy = t ? (t.clientY - _mTouchStartY) : 0;
+            if(dx > 65 && Math.abs(dy) < 80) {
+                modal.style.transition = 'transform .22s ease-out';
+                modal.style.transform = 'translateX(100%)';
+                setTimeout(closeDealViewModal, 220);
+            } else {
+                modal.style.transition = 'transform .22s ease-out';
+                modal.style.transform = '';
+            }
+        };
+        modal.addEventListener('touchend', onModalTouchEnd, { passive: true });
+        modal.addEventListener('touchcancel', () => {
+            _mTouchActive = false;
+            modal.style.transition = '';
+            modal.style.transform = '';
+        }, { passive: true });
+
         if(!window.matchMedia('(max-width: 1023px)').matches) ensureDealSnapshotLoaded(deal, readonly);
+    }
+    if(!deal.phone && (!deal.phones || !deal.phones.length)) {
+        idbGet('deal_details', String(deal.id)).then(cached => {
+            if(cached && (cached.phone || (cached.phones && cached.phones.length))) {
+                const p = (cached.phones && cached.phones[0]) || cached.phone;
+                const phEl = root.querySelector('.deal-head-phone-row');
+                if(phEl && (!phEl.textContent || phEl.textContent.trim() === '—')) phEl.textContent = p;
+                const waEl = root.querySelector('#deal-head-wa');
+                if(waEl && p) {
+                    waEl.href = 'https://wa.me/' + p.replace(/\D/g, '');
+                    waEl.removeAttribute('hidden');
+                }
+                const nm = cached.name || cached.contact_name || cached.client_name;
+                if(nm) {
+                    const nmEl = root.querySelector('.deal-shell-head .name');
+                    if(nmEl && (!nmEl.textContent || nmEl.textContent.trim() === 'Müştəri')) nmEl.textContent = nm;
+                }
+            }
+        }).catch(() => {});
     }
     bindDealInfoToggle(deal, readonly);
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
@@ -8329,6 +8519,7 @@ function closeInboxChat(opts) {
     clearDealPendingFile();
     _dealViewState = null;
     _dealInboxMode = false;
+    document.body.classList.remove('chat-open');
     const app = document.getElementById('chats-app');
     const pane = document.getElementById('chats-pane');
     app?.classList.remove('chat-open');
@@ -8502,6 +8693,37 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
     }
 }
 
+const _prewarmingLeads = new Set();
+async function prewarmChat(leadId) {
+    const lid = String(leadId || '').trim();
+    if(!lid || !CURRENT_USER_ID || _prewarmingLeads.has(lid)) return;
+    _prewarmingLeads.add(lid);
+    try {
+        const q = new URLSearchParams({lead_id: lid, preview: '1', limit: '20', _ts: String(Date.now())});
+        const r = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': String(CURRENT_USER_ID)}
+        });
+        const d = await r.json().catch(() => ({}));
+        if(d && d.success && Array.isArray(d.chat) && d.chat.length) {
+            const rows = d.chat.filter(row => row && !row.preview);
+            if(rows.length) {
+                rememberOpenedChat(lid, '', rows);
+            }
+        }
+    } catch(_e) {}
+    finally {
+        setTimeout(() => _prewarmingLeads.delete(lid), 8000);
+    }
+}
+if('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', event => {
+        if(event.data && event.data.type === 'CHAT_INCOMING' && event.data.leadId) {
+            prewarmChat(event.data.leadId);
+        }
+    });
+}
+
 async function pollInboxPulse() {
     if(!CURRENT_USER_ID) return;
     const chatsOpen = !!document.getElementById('screen-chats')?.classList.contains('active');
@@ -8548,6 +8770,20 @@ async function pollInboxPulse() {
                 const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
             }
+
+            const toWarm = [];
+            (Array.isArray(payload.events) ? payload.events : []).forEach(ev => {
+                if(ev && (ev.type === 'incoming_message' || ev.event === 'incoming_message') && ev.lead_id) {
+                    toWarm.push(String(ev.lead_id));
+                }
+            });
+            rows.forEach(r => {
+                if(r && r.id && (r.last_incoming_at || r.unread_count)) {
+                    toWarm.push(String(r.id));
+                }
+            });
+            const uniqueWarm = [...new Set(toWarm)];
+            uniqueWarm.slice(0, 5).forEach(lid => prewarmChat(lid));
 
             // Incremental sync for affected deals from webhook / bot action events
             if(!isFirstPulse) {
