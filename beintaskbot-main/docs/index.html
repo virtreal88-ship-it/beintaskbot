@@ -3484,9 +3484,13 @@ function dealAudioHtml(deal) {
     const withUser = CURRENT_USER_ID ? src + join + 'uid=' + encodeURIComponent(CURRENT_USER_ID) : src;
     return audioWaitHtml(withUser);
 }
+function isPlaceholderChatText(text) {
+    const t = String(text || '').trim().toLowerCase();
+    return t === 'whatsapp mesajı' || t === 'whatsapp mesaji' || t === 'mesaj' || t === 'telegram mesajı' || t === 'instagram mesajı' || t === 'tiktok mesajı';
+}
 function dealLastClientMessage(deal) {
     const direct = String((deal && deal.last_client_message) || '').trim();
-    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(direct)) {
+    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct) && !isPlaceholderChatText(direct) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(direct)) {
         if(isDealMediaNotice(direct)) return '📷 Şəkil';
         return direct.replace(/\s+/g, ' ').slice(0, 140);
     }
@@ -3495,7 +3499,7 @@ function dealLastClientMessage(deal) {
         const item = chat[i];
         if(!item || !item.incoming || item.is_comment) continue;
         const text = String(item.text || '').trim();
-        if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text) || isDealMissedCall(item)) continue;
+        if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text) || isPlaceholderChatText(text) || isDealMissedCall(item)) continue;
         if(isDealMediaNotice(text)) return '📷 Şəkil';
         return text.replace(/\s+/g, ' ').slice(0, 140);
     }
@@ -3871,7 +3875,7 @@ function callItemsFromDeal(deal) {
     }));
 }
 function dealTimelineMessages(chat, deal) {
-    const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text));
+    const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text) && !(isPlaceholderChatText(item.text) && !item.media_url && !item.file_uuid));
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
     // Link media from deal.notes if a chat item is a media notice and lacks media_url/file_uuid
     rows.forEach(item => {
@@ -4677,16 +4681,19 @@ function getRememberedChat(leadId, channel) {
         if(raw) {
             const parsed = JSON.parse(raw);
             if(Array.isArray(parsed) && parsed.length) {
-                _openedChatCache[key] = parsed;
-                _openedChatCache[defaultKey] = parsed;
-                return parsed;
+                const clean = parsed.filter(row => row && !(isPlaceholderChatText(row.text) && !row.media_url && !row.file_uuid));
+                if(clean.length) {
+                    _openedChatCache[key] = clean;
+                    _openedChatCache[defaultKey] = clean;
+                    return clean;
+                }
             }
         }
     } catch(_e) {}
     return null;
 }
 function rememberOpenedChat(leadId, channel, messages) {
-    const rows = (Array.isArray(messages) ? messages : []).filter(row => row && !row.preview).slice(-30);
+    const rows = (Array.isArray(messages) ? messages : []).filter(row => row && !row.preview && !(isPlaceholderChatText(row.text) && !row.media_url && !row.file_uuid)).slice(-30);
     if(!leadId || !rows.length) return;
     _openedChatCache[openedChatCacheKey(leadId, channel)] = rows;
     _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
@@ -8935,7 +8942,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=285');
+    const reg = await navigator.serviceWorker.register('sw.js?v=286');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {

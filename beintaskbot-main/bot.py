@@ -14,6 +14,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 import json
+import base64
 import math
 import hmac
 import hashlib
@@ -48,7 +49,7 @@ from gh_storage import read_json, write_json
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-_KOMMO_TOKEN_FALLBACK = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNjZDgwYzY0NzM2ODFlMDY4ZTliMTkzZWE2ZjM4NTQ1NGZlNzNkNjRlZjFkNDJiOWQ1ZjkxZDRiOTc0ZGY2MjIzODA0NTU1OWU2YjdkOTI3In0.eyJhdWQiOiJjMjFiNjBhOC00Y2I0LTRjYWQtOGU5NC03ZmI0NTIyMGU4OWMiLCJqdGkiOiIzY2Q4MGM2NDczNjgxZTA2OGU5YjE5M2VhNmYzODU0NTRmZTczZDY0ZWYxZDQyYjlkNWY5MWQ0Yjk3NGRmNjIyMzgwNDU1NTllNmI3ZDkyNyIsImlhdCI6MTc4MjkwNjc3MiwibmJmIjoxNzgyOTA2NzcyLCJleHAiOjE4NjE4MzM2MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsIm5vdGlmaWNhdGlvbnMiLCJwdXNoX25vdGlmaWNhdGlvbnMiLCJ1c2Vyc19hY3RpdmF0ZSIsInVzZXJzX2FkZCIsInVzZXJzX2RlYWN0aXZhdGUiXSwiaGFzaF91dWlkIjoiMmJjODBmNTItNmRhMC00YTkyLWJkODMtZmUwYTVhZWQ3YTY2IiwiYXBpX2RvbWFpbiI6ImFwaS1nLmtvbW1vLmNvbSJ9.fUU7hoGZzSzS0gd5yXY26gut46gYjYDWvtQ1snGVgm2YU6D2FqpUH4U46ef36YHirRaas7DB6an5aPCKSzqXU5D7OLsFxhj_y3PASLE-b1-sDVXVFPO1HiW3EPn8CTn9IHxSt-MKBPjQs49a9ldV5kFRyLOdjr91IH3lHvmwp_qKgWIN3y5RD4ogwH755fpuXL3bMo-zwTc4_zx0FPj2mP8G0MsvwlvxKzlEXx7kZW5uQ8sXxDhHYTGn1bd5DWac-41MeNswGFTCgnHBITCQsSEOgedZb4EvfL9SXlNSJZpXU__khNg6YCC-slE3jZjXIWHXHFMdaUfX5I8IaPnQGA"
+_KOMMO_TOKEN_FALLBACK = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6Ijk4MzE4ZjNhZjUzZTUzOTQ2MzkwMmJjYzM2NmMzZWY4YzI1MzFlMDRjNGM4NzUzYzg3MDM1MTYxOGIzYWM2Y2IyMDJjZjcxNjkwZTliYTIyIn0.eyJhdWQiOiIwNzkyYzY5ZS1hYjcxLTQ2MWQtYWY4YS05ODI0NjVjZDIyYWMiLCJqdGkiOiI5ODMxOGYzYWY1M2U1Mzk0NjM5MDJiY2MzNjZjM2VmOGMyNTMxZTA0YzRjODc1M2M4NzAzNTE2MThiM2FjNmNiMjAyY2Y3MTY5MGU5YmEyMiIsImlhdCI6MTc5MDE5MjIwNCwibmJmIjoxNzkwMTkyMjA0LCJleHAiOjE5Mjc2NzA0MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsImxpc3RfZXh0ZXJuYWxfbWVzc2FnZXMiLCJub3RpZmljYXRpb25zIiwicHVzaF9ub3RpZmljYXRpb25zIiwic2VuZF9leHRlcm5hbF9tZXNzYWdlcyIsInVzZXJzX2FjdGl2YXRlIiwidXNlcnNfYWRkIiwidXNlcnNfZGVhY3RpdmF0ZSJdLCJoYXNoX3V1aWQiOiJiZDliOWU2ZC05ZTIxLTQzMjUtODIzYS04YmFhM2Q0NDg4ODgiLCJhcGlfZG9tYWluIjoiYXBpLWcua29tbW8uY29tIn0.AbWmj1TI6yhfr2bv3TUyeHWKSMuJFTkyHdhPEihPkg17FVtHenV1yB0pILNRWGrflI5MkBkJvY30B5oVnz3BgxYOmjVjGRnwIGDk1nuhIoJ6SDlWpXvTme3EQGP-0DlGx_ITEWrMpB7l25WnJb0S9VqVZEA-D5LckFN-UOjYH4us-EDfNxPqKT2tsFXMJd3jynsT6iJrYviBTU1eGrDNZhI3yCp5On-XKxVFK67nEdlfxkrZ6lJhevcJIREUwJmaQkJy4Md_ePNwMc6Dh7k6tP-i0ri58abSOPstaOGpoWSNhvPg2gqNsMxSpKXevelBZzvT0-k57NdsgW2yaANwsg"
 KOMMO_TOKEN = (os.environ.get("KOMMO_TOKEN") or "").strip() or _KOMMO_TOKEN_FALLBACK
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
@@ -1356,6 +1357,18 @@ def _paced_session_request(self, method, url, *args, **kwargs):
 
 requests.Session.request = _paced_session_request
 
+def _token_has_scope(tok: str, scope: str) -> bool:
+    try:
+        parts = str(tok or "").split(".")
+        if len(parts) < 2:
+            return False
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        return scope in (data.get("scopes") or [])
+    except Exception:
+        return False
+
 # An empty env var is not the only failure mode: a stale or truncated
 # KOMMO_TOKEN on Railway returns 401 and the whole CRM (deals, tasks, chats)
 # looks empty even though the built-in token still works.
@@ -1371,6 +1384,13 @@ except Exception as _kommo_probe_exc:
     _kommo_probe_status = 0
 if _kommo_probe_status != 200 and KOMMO_TOKEN != _KOMMO_TOKEN_FALLBACK:
     logger.error("Env KOMMO_TOKEN rejected with HTTP %s; using built-in token", _kommo_probe_status)
+    KOMMO_TOKEN = _KOMMO_TOKEN_FALLBACK
+elif (
+    KOMMO_TOKEN != _KOMMO_TOKEN_FALLBACK
+    and not _token_has_scope(KOMMO_TOKEN, "list_external_messages")
+    and _token_has_scope(_KOMMO_TOKEN_FALLBACK, "list_external_messages")
+):
+    logger.info("Env KOMMO_TOKEN lacks list_external_messages; using built-in fallback with full chat permissions")
     KOMMO_TOKEN = _KOMMO_TOKEN_FALLBACK
 
 HEADERS = {
@@ -6370,7 +6390,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v251 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v252 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -11802,6 +11822,17 @@ def _note_is_system_noise(text: str) -> bool:
     ))
 
 
+def _is_generic_placeholder_message(text: str) -> bool:
+    t = str(text or "").strip().casefold()
+    return t in {
+        "whatsapp mesajı", "whatsapp mesaji", "mesaj",
+        "telegram mesajı", "telegram mesaji",
+        "instagram mesajı", "instagram mesaji",
+        "tiktok mesajı", "tiktok mesaji",
+        "waba mesajı", "waba mesaji",
+    }
+
+
 def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
     """Turn a Kommo chat-note into the same shape as a talk message."""
     if not isinstance(note, dict):
@@ -11818,6 +11849,8 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         return None
     media = str(note.get("media_url") or "").strip()
     file_uuid = str(note.get("file_uuid") or "").strip()
+    if _is_generic_placeholder_message(text) and not media and not file_uuid:
+        return None
     is_media_notice = _is_media_notice_text(text)
     mtype = note.get("message_type") or "text"
     if is_media_notice:
@@ -12117,6 +12150,14 @@ def _collect_deal_chat(
             continue
         item.setdefault("author", employee_name or "")
         _add_chat(item)
+    chat = [
+        item for item in chat
+        if not (
+            _is_generic_placeholder_message(str(item.get("text") or ""))
+            and not str(item.get("media_url") or "").strip()
+            and not str(item.get("file_uuid") or "").strip()
+        )
+    ]
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -12434,6 +12475,8 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     folded = text.casefold()
     if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
         return None
+    if _is_generic_placeholder_message(text) and not media and not file_uuid:
+        return None
     if message_type in {"call", "call_in", "call_out"} or "call" in message_type:
         if _call_is_missed(nested, text) or _call_is_missed(message, text) or _call_is_missed(attachment, text):
             text = "Buraxılmış zəng"
@@ -12563,12 +12606,11 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 origin = str(payload.get("origin") or "").strip()
             channel = _origin_channel_key(origin) or _origin_channel_key(etype)
             if not text and not media and not file_uuid:
-                if etype in {"incoming_chat_message", "outgoing_chat_message"}:
-                    label = CHAT_CHANNEL_LABELS.get(channel, "")
-                    text = f"{label} mesajı" if label else "Mesaj"
-                else:
-                    skipped = True
-                    continue
+                skipped = True
+                continue
+            if _is_generic_placeholder_message(text) and not media and not file_uuid:
+                skipped = True
+                continue
             created = int(event.get("created_at") or 0)
             msgid = _first_msgid(message, payload, event) if isinstance(message, dict) else _first_msgid(payload, event)
             wamid = _first_wamid(message, payload, event)
@@ -12874,6 +12916,8 @@ def _merge_tail_rows(existing: list, extra: list) -> list:
     index: dict[tuple, int] = {}
     for item in list(existing or []) + list(extra or []):
         if not isinstance(item, dict):
+            continue
+        if _is_generic_placeholder_message(str(item.get("text") or "")) and not item.get("media_url") and not item.get("file_uuid"):
             continue
         key = _tail_identity(item)
         slot = index.get(key)
