@@ -1779,6 +1779,10 @@ function restoreSamilWorkspaceFromCache() {
     // Köhnə versiyalar yalnız bir mərhələnin məlumatını yadda saxlayırdı; onları istifadə etməyək.
     if(!cached || (cached.stage_key && cached.stage_key !== 'all')) return false;
     applySamilWorkspace(cached);
+    // Also warm up IndexedDB in background if it was empty
+    idbGet('workspace', SAMIL_WORKSPACE_CACHE_KEY).then(idbData => {
+        if(!idbData) idbSet('workspace', SAMIL_WORKSPACE_CACHE_KEY, cached).catch(() => {});
+    }).catch(() => {});
     return true;
 }
 
