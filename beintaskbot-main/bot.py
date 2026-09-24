@@ -5823,6 +5823,28 @@ def _incoming_message_preview(text: str, message_type: str) -> str:
     return "Yeni mesaj"
 
 
+_seen_incoming_ids: dict[str, float] = {}
+_seen_incoming_lock = threading.Lock()
+
+
+def _incoming_message_seen(message_id: str) -> bool:
+    """True when this Kommo message was already announced. Retries must not notify again."""
+    mid = str(message_id or "").strip()
+    if not mid:
+        return False
+    now = _time_module.time()
+    with _seen_incoming_lock:
+        prev = _seen_incoming_ids.get(mid)
+        if prev and now - prev < 86400:
+            return True
+        _seen_incoming_ids[mid] = now
+        if len(_seen_incoming_ids) > 4000:
+            cutoff = now - 86400
+            for old in [key for key, ts in _seen_incoming_ids.items() if ts < cutoff]:
+                _seen_incoming_ids.pop(old, None)
+        return False
+
+
 def _apply_inbox_incoming(
     lead_id: int,
     preview: str,
@@ -6240,6 +6262,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 except (TypeError, ValueError):
                     talk_id = 0
                 message_id = str(row.get("id") or row.get("msgid") or row.get("message_id") or "").strip()
+                if _incoming_message_seen(message_id):
+                    continue
                 if entity_type in {"contact", "contacts", "1"}:
                     mapped = _cached_lead_id_for_contact(entity_id)
                     if mapped:
@@ -8233,6 +8257,44 @@ def _cloud_outgoing_covers_talk(lead_id: int, updated: int) -> bool:
     return stamp <= last_out + 20
 
 
+_talk_unread_stamp: dict[int, tuple[int, int]] = {}
+
+
+def _talk_unread_size(talk: dict) -> int:
+    if not isinstance(talk, dict):
+        return 0
+    try:
+        unread_n = int(talk.get("unread_messages_count") or talk.get("unread") or 0)
+    except (TypeError, ValueError):
+        unread_n = 0
+    if unread_n > 0:
+        return unread_n
+    if talk.get("is_read") in {False, 0, "0", "false", "False"}:
+        return 1
+    return 0
+
+
+def _stable_talk_incoming_at(lead_id: int, unread_n: int, updated: int) -> int:
+    """Keep the first stamp for this unread count.
+
+    Kommo moves talk.updated_at when nothing new arrived. A higher count is a new message.
+    """
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return 0
+    if unread_n <= 0:
+        _talk_unread_stamp.pop(lid, None)
+        return 0
+    prev_n, prev_stamp = _talk_unread_stamp.get(lid, (0, 0))
+    if prev_n == unread_n and prev_stamp:
+        return prev_stamp
+    stamp = int(updated or 0) or int(prev_stamp or 0)
+    if stamp:
+        _talk_unread_stamp[lid] = (unread_n, stamp)
+    return stamp
+
+
 def _apply_talk_to_inbox(
     talk: dict,
     lead_ids: set[int],
@@ -8269,13 +8331,8 @@ def _apply_talk_to_inbox(
         updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
     except (TypeError, ValueError):
         updated = 0
-    unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
-    try:
-        unread_n = int(talk.get("unread_messages_count") or talk.get("unread") or 0)
-    except (TypeError, ValueError):
-        unread_n = 0
-    if unread_n > 0:
-        unread = True
+    unread_n = _talk_unread_size(talk)
+    unread = unread_n > 0
     preview = "Yeni mesaj" if unread else "Çat"
     avatar = _first_avatar_url(talk)
     for lid in lids:
@@ -8284,9 +8341,11 @@ def _apply_talk_to_inbox(
             updated_by_lead[lid] = updated
             channel_by_lead[lid] = channel
             client_by_lead[lid] = preview
-        if unread and incoming_at_by_lead is not None and updated > incoming_at_by_lead.get(lid, 0):
+        if unread and incoming_at_by_lead is not None:
             if not _talk_last_looks_outgoing(talk) and not _cloud_outgoing_covers_talk(lid, updated):
-                incoming_at_by_lead[lid] = updated
+                stamp = _stable_talk_incoming_at(lid, unread_n, updated)
+                if stamp > incoming_at_by_lead.get(lid, 0):
+                    incoming_at_by_lead[lid] = stamp
         if avatar and avatar_by_lead is not None:
             avatar_by_lead[lid] = avatar
 
@@ -9037,13 +9096,19 @@ def _is_allowed_avatar_url(raw: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in _PROFILE_PHOTO_SUFFIXES)
 
 
+def _host_matches(host: str, suffixes: tuple[str, ...]) -> bool:
+    return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
+
+
 def _is_allowed_media_url(raw: str) -> bool:
     if _is_allowed_kommo_media_url(raw):
         return True
     host = _media_host(raw)
     if not host:
         return False
-    return any(host == suffix or host.endswith("." + suffix) for suffix in _TELEPHONY_MEDIA_SUFFIXES)
+    if _host_matches(host, _TELEPHONY_MEDIA_SUFFIXES) or _host_matches(host, _PROFILE_PHOTO_SUFFIXES):
+        return True
+    return host == "whatsapp.net" or host.endswith(".whatsapp.net")
 
 
 def _as_absolute_media_url(raw: str) -> str:
@@ -11535,14 +11600,12 @@ def _inject_outside_funnel_talk_deals(
             continue
         if channel not in CHAT_CHANNEL_LABELS:
             continue
-        unread = talk.get("is_read") in {False, 0, "0", "false", "False"}
-        try:
-            unread_n = int(talk.get("unread_messages_count") or talk.get("unread") or 0)
-        except (TypeError, ValueError):
-            unread_n = 0
-        if unread_n > 0:
-            unread = True
-        incoming_at = updated if unread and not _talk_last_looks_outgoing(talk) and not _cloud_outgoing_covers_talk(lid, updated) else int(incoming_at_by_lead.get(lid) or 0)
+        unread_n = _talk_unread_size(talk)
+        unread = unread_n > 0
+        if unread and not _talk_last_looks_outgoing(talk) and not _cloud_outgoing_covers_talk(lid, updated):
+            incoming_at = _stable_talk_incoming_at(lid, unread_n, updated)
+        else:
+            incoming_at = int(incoming_at_by_lead.get(lid) or 0)
         preview = client_by_lead.get(lid) or ("Yeni mesaj" if unread else "Çat")
         row = _overview_deal_from_any_lead(lead, preview, updated, channel, incoming_at)
         if avatar_by_lead.get(lid):
@@ -12165,22 +12228,42 @@ def _load_kommo_chat_fallback(lid: int, contact_ids: list[int], employee_name: s
     return rows
 
 
+def _photo_placeholder_text(text: str) -> bool:
+    raw = str(text or "").strip().casefold()
+    if _is_media_notice_text(raw):
+        return True
+    return raw in {"şəkil", "📷 şəkil", "sekil", "picture", "image", "sticker"}
+
+
+def _candidate_is_image(cand: dict) -> bool:
+    kind = str(cand.get("message_type") or "").lower()
+    if kind in {"picture", "image", "sticker"}:
+        return True
+    if str(cand.get("content_type") or "").lower().startswith("image/"):
+        return True
+    return _looks_image_name(str(cand.get("file_name") or ""))
+
+
 def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int]) -> None:
     needed = [
         item for item in chat
         if not str(item.get("media_url") or "").strip() and not str(item.get("file_uuid") or "").strip()
-        and (_is_media_notice_text(str(item.get("text") or "")) or str(item.get("message_type") or "").lower() in {"picture", "audio", "video"})
+        and (
+            _is_media_notice_text(str(item.get("text") or ""))
+            or _photo_placeholder_text(str(item.get("text") or ""))
+            or str(item.get("message_type") or "").lower() in {"picture", "image", "sticker", "audio", "video"}
+        )
     ]
     if not needed:
         return
 
     candidates: list[dict] = []
     for note in _fetch_entity_notes("leads", lid):
-        if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "audio", "file", "video"}:
+        if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "image", "sticker", "audio", "file", "video"}:
             candidates.append(note)
     for cid in contact_ids:
         for note in _fetch_entity_notes("contacts", int(cid)):
-            if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "audio", "file", "video"}:
+            if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "image", "sticker", "audio", "file", "video"}:
                 candidates.append(note)
     lead_files = _fetch_entity_files_as_chat("leads", lid)
     candidates.extend([f for f in lead_files if f.get("file_uuid") or f.get("media_url")])
@@ -12197,7 +12280,10 @@ def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int])
         best_cand = None
         best_diff = 99999999
 
+        want_photo = _photo_placeholder_text(text) or str(item.get("message_type") or "").lower() in {"picture", "image", "sticker"}
         for cand in candidates:
+            if want_photo and not _candidate_is_image(cand):
+                continue
             cand_id = str(cand.get("id") or cand.get("msgid") or cand.get("external_id") or "").strip()
             cand_text = str(cand.get("text") or "")
             cand_name = str(cand.get("file_name") or "")
@@ -12214,9 +12300,9 @@ def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int])
             item["media_url"] = best_cand.get("media_url") or ""
             item["file_uuid"] = best_cand.get("file_uuid") or ""
             item["file_name"] = best_cand.get("file_name") or item.get("file_name") or ""
-            item["message_type"] = best_cand.get("message_type") or "picture"
-            if _is_media_notice_text(text):
-                item["text"] = best_cand.get("file_name") or ""
+            item["message_type"] = "picture" if _candidate_is_image(best_cand) else (best_cand.get("message_type") or "picture")
+            if _is_media_notice_text(text) or _photo_placeholder_text(text):
+                item["text"] = ""
 
 
 def _collect_deal_chat(
@@ -13020,8 +13106,9 @@ def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
             # still include unnamed files as possible voice
             name = "Fayl"
         created = int(item.get("created_at") or 0)
-        is_img = _looks_image_name(name)
-        is_aud = _looks_audio_name(name)
+        content_type = str(item.get("content_type") or item.get("type") or "").lower()
+        is_img = _looks_image_name(name) or content_type.startswith("image/")
+        is_aud = _looks_audio_name(name) or content_type.startswith("audio/")
         rows.append({
             "id": item.get("id") or uuid,
             "direction": "incoming",

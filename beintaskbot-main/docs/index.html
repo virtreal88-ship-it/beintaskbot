@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="272">
+    <meta name="pwa-build" content="273">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -366,8 +366,16 @@
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
         .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
-        .audio-wait .audio-spin { position:absolute; left:8px; top:50%; width:12px; height:12px; margin-top:-6px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; pointer-events:none; }
+        .audio-wait .audio-spin { flex:none; width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .audio-wait.ready .audio-spin { display:none; }
+        .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
+        .photo-wait img.deal-zoom { margin:0; opacity:0; }
+        .photo-wait .audio-spin { position:absolute; width:16px; height:16px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .photo-wait.ready img.deal-zoom { opacity:1; }
+        .photo-wait.ready .audio-spin, .photo-wait.failed .audio-spin { display:none; }
+        .photo-wait .photo-miss { display:none; font-size:11px; color:#64748b; padding:8px 10px; text-align:center; }
+        .photo-wait.failed { min-height:48px; }
+        .photo-wait.failed .photo-miss { display:block; }
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
@@ -3479,7 +3487,35 @@ function dealMediaSrc(raw, token, uuid, extra) {
 }
 function audioWaitHtml(src) {
     const safe = escapeHtml(src);
-    return `<span class="audio-wait"><span class="audio-spin"></span><audio controls preload="none" src="${safe}"></audio></span>`;
+    return `<span class="audio-wait"><span class="audio-spin"></span><audio controls preload="auto" src="${safe}"></audio></span>`;
+}
+function isChatPhotoText(text) {
+    const raw = String(text || '').trim();
+    return isDealMediaNotice(raw) || /^(📷\s*)?şəkil(\s*\(.*\))?$/i.test(raw);
+}
+function isChatPhotoItem(item) {
+    if(!item || isChatAudioItem(item) || isChatProfilePhoto(item)) return false;
+    const kind = String(item.message_type || item.type || '').toLowerCase();
+    if(kind === 'picture' || kind === 'image' || kind === 'sticker') return true;
+    if(isChatPhotoText(item.text)) return true;
+    return /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(String(item.file_name || '') + String(item.media_url || ''));
+}
+function photoWaitHtml(src) {
+    if(!src) return '<span class="photo-wait failed"><span class="photo-miss">Şəkil gəlmədi</span></span>';
+    return `<span class="photo-wait"><span class="audio-spin"></span><img class="deal-zoom" src="${escapeHtml(src)}" alt=""><span class="photo-miss">Şəkil gəlmədi</span></span>`;
+}
+function bindPhotoWait(root) {
+    (root || document).querySelectorAll('.photo-wait img').forEach(el => {
+        const wrap = el.closest('.photo-wait');
+        if(!wrap || wrap.dataset.bound) return;
+        wrap.dataset.bound = '1';
+        const done = () => wrap.classList.add('ready');
+        const fail = () => wrap.classList.add('failed');
+        el.addEventListener('load', done);
+        el.addEventListener('error', fail);
+        if(el.complete && el.naturalWidth > 0) done();
+        else if(el.complete) fail();
+    });
 }
 function bindAudioWait(root) {
     (root || document).querySelectorAll('.audio-wait audio').forEach(el => {
@@ -3505,6 +3541,7 @@ function bindAudioWait(root) {
             }
         });
         if(el.readyState >= 3) done();
+        bindPhotoWait(root);
         const speed = document.createElement('button');
         speed.type = 'button';
         speed.className = 'audio-speed';
@@ -3656,13 +3693,14 @@ function dealMediaBlock(item, token) {
     const type = String(kind || '').toLowerCase();
     const isCall = type === 'call_in' || type === 'call_out' || type === 'call' || /Gələn zəng|Gedən zəng/i.test(text);
     const src = dealMediaSrc(raw, token, uuid, {noteId: item && item.id, entityType: item && item.entity_type, entityId: item && item.entity_id});
-    if(!src) return '';
+    const photo = !isCall && isChatPhotoItem(item);
+    if(!src) return photo ? photoWaitHtml('') : '';
     const safe = escapeHtml(src);
     if(!isCall && isChatAudioItem(item)) {
         return audioWaitHtml(src);
     }
-    if(!isCall && (type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName))) {
-        return `<img class="deal-zoom" src="${safe}" alt="">`;
+    if(photo || type === 'picture' || type === 'sticker' || type === 'image' || /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(raw + fileName)) {
+        return photoWaitHtml(src);
     }
     if(isCall || type === 'voice' || type === 'audio' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
         return audioWaitHtml(src);
@@ -3873,14 +3911,10 @@ function dealChatItemHtml(item, token, readonly) {
     const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(reactKey)}" title="Reaksiya">☺</button>` : '';
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     let displayText = item.text || '';
-    if(isChatAudioItem(item)) {
-        if(isDealMediaNotice(displayText) || /^(📷\s*)?şəkil(\s*\(.*\))?$/i.test(String(displayText).trim())) displayText = '';
+    if(isChatAudioItem(item) || isChatPhotoItem(item)) {
+        if(isChatPhotoText(displayText) || isDealMediaNotice(displayText)) displayText = '';
     } else if(isDealMediaNotice(displayText)) {
-        if(item.media_url || item.file_uuid) {
-            displayText = '';
-        } else {
-            displayText = '📷 Şəkil (yüklənir...)';
-        }
+        displayText = '';
     }
     const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(displayText || '').trim()) ? '' : linkifyText(displayText);
     const pinned = isChatItemPinned(item);
@@ -3988,12 +4022,24 @@ function dealTimelineMessages(chat, deal) {
     // Link media from deal.notes if a chat item is a media notice and lacks media_url/file_uuid
     rows.forEach(item => {
         if(!item || item.media_url || item.file_uuid) return;
-        if(isDealMediaNotice(item.text) || String(item.message_type || '').toLowerCase() === 'picture') {
+        const kind = String(item.message_type || '').toLowerCase();
+        if(isDealMediaNotice(item.text) || isChatPhotoText(item.text) || kind === 'picture' || kind === 'image' || kind === 'sticker') {
             const itemTs = Number(item.created_at || 0);
-            const foundNote = notes.find(n => {
-                if(!n || (!n.media_url && !n.file_uuid)) return false;
+            const wantPhoto = kind === 'picture' || kind === 'image' || kind === 'sticker' || isChatPhotoText(item.text);
+            let foundNote = null;
+            let bestDiff = 601;
+            notes.forEach(n => {
+                if(!n || (!n.media_url && !n.file_uuid)) return;
+                const noteKind = String(n.message_type || '').toLowerCase();
+                const notePhoto = noteKind === 'picture' || noteKind === 'image' || noteKind === 'sticker' || /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(String(n.file_name || ''));
+                if(wantPhoto && !notePhoto) return;
+                if(!notePhoto && noteKind !== 'audio' && noteKind !== 'voice' && noteKind !== 'file' && noteKind !== 'video') return;
                 const noteTs = Number(n.created_at || 0);
-                return itemTs && noteTs && Math.abs(itemTs - noteTs) <= 300;
+                const diff = itemTs && noteTs ? Math.abs(itemTs - noteTs) : 999;
+                if(diff <= 600 && diff < bestDiff) {
+                    bestDiff = diff;
+                    foundNote = n;
+                }
             });
             if(foundNote) {
                 item.media_url = foundNote.media_url || '';
@@ -4002,9 +4048,7 @@ function dealTimelineMessages(chat, deal) {
                 const noteKind = String(foundNote.message_type || '').toLowerCase();
                 const audioNote = noteKind === 'audio' || noteKind === 'voice' || noteKind === 'ptt' || isChatAudioItem(foundNote);
                 item.message_type = audioNote ? 'audio' : (foundNote.message_type || 'picture');
-                if(isDealMediaNotice(item.text)) {
-                    item.text = audioNote ? '' : (foundNote.file_name || '');
-                }
+                if(isDealMediaNotice(item.text) || isChatPhotoText(item.text)) item.text = '';
             }
         }
     });
@@ -7505,7 +7549,7 @@ function alertIncomingDeal(deal, fromPush) {
     playIncomingChatSound();
     if(!fromPush) showIncomingChatNotice(deal);
 }
-function watchIncomingChats() {
+function watchIncomingChats(freshIds) {
     if(!HAS_CHATS) return;
     const next = {};
     const fresh = [];
@@ -7517,8 +7561,12 @@ function watchIncomingChats() {
         next[id] = key;
         if(!_chatAlertSeeded) return;
         const prevKey = _chatAlertMap[id] || '';
-        const prevStamp = Number(prevKey.includes('|') ? prevKey.slice(prevKey.lastIndexOf('|') + 1) : 0);
-        if(stamp > prevStamp && !(chatsOutgoingAt(deal) && chatsOutgoingAt(deal) >= stamp)) fresh.push(deal);
+        const splitAt = prevKey.lastIndexOf('|');
+        const prevPreview = splitAt >= 0 ? prevKey.slice(0, splitAt) : '';
+        const prevStamp = Number(splitAt >= 0 ? prevKey.slice(splitAt + 1) : 0);
+        const sameText = !!(preview && prevPreview && preview === prevPreview);
+        const forced = !!(freshIds && typeof freshIds.has === 'function' && freshIds.has(id));
+        if(stamp > prevStamp && !(chatsOutgoingAt(deal) && chatsOutgoingAt(deal) >= stamp) && (!sameText || forced)) fresh.push(deal);
     });
     _chatAlertMap = next;
     if(!_chatAlertSeeded) {
@@ -8281,7 +8329,8 @@ async function pollInboxPulse() {
             if(changed) {
                 persistLocalSamilWorkspace();
                 if(chatsOpen) renderChatsList();
-                watchIncomingChats();
+                const freshIds = new Set((Array.isArray(payload.events) ? payload.events : []).filter(event => event && event.type === 'incoming_message').map(event => String(event.lead_id)));
+                watchIncomingChats(freshIds);
                 const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
             }
