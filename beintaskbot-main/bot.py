@@ -12018,22 +12018,46 @@ def _collect_deal_chat(
         item_dir = bool(item.get("incoming"))
         item_uuid = str(item.get("file_uuid") or "").strip()
         item_media = str(item.get("media_url") or "").strip()
+        item_ext = str(item.get("external_id") or "").strip()
+        item_id = str(item.get("id") or "").strip()
+        item_is_stub = item_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
+
         for existing in chat:
             if bool(existing.get("incoming")) != item_dir:
                 continue
-            if abs(int(existing.get("created_at") or 0) - item_ts) <= 5:
-                if (item_uuid and item_uuid == str(existing.get("file_uuid") or "").strip()) or \
-                   (item_media and item_media == str(existing.get("media_url") or "").strip()):
-                    return
-                if item_text and item_text == str(existing.get("text") or "").strip():
-                    if (item_uuid or item_media) and not (existing.get("file_uuid") or existing.get("media_url")):
-                        if item_uuid:
-                            existing["file_uuid"] = item_uuid
-                        if item_media:
-                            existing["media_url"] = item_media
-                        if item.get("message_type"):
-                            existing["message_type"] = item.get("message_type")
-                    return
+            ex_id = str(existing.get("id") or "").strip()
+            ex_ext = str(existing.get("external_id") or "").strip()
+            ex_uuid = str(existing.get("file_uuid") or "").strip()
+            ex_media = str(existing.get("media_url") or "").strip()
+            ex_text = str(existing.get("text") or "").strip()
+            ex_ts = int(existing.get("created_at") or 0)
+            ex_is_stub = ex_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
+
+            same_ext = bool(item_ext and ex_ext and item_ext == ex_ext)
+            same_file = bool((item_uuid and item_uuid == ex_uuid) or (item_media and item_media == ex_media))
+            same_text = bool(item_text and item_text == ex_text and abs(ex_ts - item_ts) <= 180)
+
+            if same_ext or same_file or same_text:
+                if ex_is_stub and not item_is_stub:
+                    existing["id"] = item_id
+                    if item_ext:
+                        existing["external_id"] = item_ext
+                    if item.get("talk_id"):
+                        existing["talk_id"] = item["talk_id"]
+                    if item_ts:
+                        existing["created_at"] = item_ts
+                if item_uuid and not ex_uuid:
+                    existing["file_uuid"] = item_uuid
+                if item_media and not ex_media:
+                    existing["media_url"] = item_media
+                if item.get("message_type") and (not existing.get("message_type") or existing.get("message_type") == "text"):
+                    existing["message_type"] = item.get("message_type")
+                if item.get("cards") and not existing.get("cards"):
+                    existing["cards"] = item.get("cards")
+                if item.get("delivery_status") and not existing.get("delivery_status"):
+                    existing["delivery_status"] = item.get("delivery_status")
+                return
+
         seen_chat.add(key)
         chat.append(item)
 
@@ -12096,7 +12120,7 @@ def _collect_deal_chat(
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
                 _add_chat(formatted)
-    if not chat or chat_blocked or len(chat) < 2:
+    if not chat or chat_blocked:
         fallback_rows = _load_kommo_chat_fallback(lid, contact_ids, employee_name)
         for fb_item in fallback_rows:
             _add_chat(fb_item)
@@ -12150,14 +12174,60 @@ def _collect_deal_chat(
             continue
         item.setdefault("author", employee_name or "")
         _add_chat(item)
-    chat = [
-        item for item in chat
-        if not (
-            _is_generic_placeholder_message(str(item.get("text") or ""))
-            and not str(item.get("media_url") or "").strip()
-            and not str(item.get("file_uuid") or "").strip()
-        )
-    ]
+    clean_chat: list[dict] = []
+    for candidate in chat:
+        txt = str(candidate.get("text") or "")
+        if _is_generic_placeholder_message(txt) and not str(candidate.get("media_url") or "").strip() and not str(candidate.get("file_uuid") or "").strip():
+            continue
+        cand_dir = bool(candidate.get("incoming"))
+        cand_text = txt.strip()
+        cand_ts = int(candidate.get("created_at") or 0)
+        cand_ext = str(candidate.get("external_id") or "").strip()
+        cand_uuid = str(candidate.get("file_uuid") or "").strip()
+        cand_media = str(candidate.get("media_url") or "").strip()
+        cand_id = str(candidate.get("id") or "").strip()
+        cand_stub = cand_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
+
+        dup = False
+        for kept in clean_chat:
+            if bool(kept.get("incoming")) != cand_dir:
+                continue
+            k_id = str(kept.get("id") or "").strip()
+            k_ext = str(kept.get("external_id") or "").strip()
+            k_uuid = str(kept.get("file_uuid") or "").strip()
+            k_media = str(kept.get("media_url") or "").strip()
+            k_text = str(kept.get("text") or "").strip()
+            k_ts = int(kept.get("created_at") or 0)
+            k_stub = k_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
+
+            if cand_id and k_id and cand_id == k_id:
+                dup = True
+                break
+            if cand_ext and k_ext and cand_ext == k_ext:
+                dup = True
+                break
+            if cand_uuid and k_uuid and cand_uuid == k_uuid:
+                dup = True
+                break
+            if cand_media and k_media and cand_media == k_media:
+                dup = True
+                break
+            if cand_text and cand_text == k_text and abs(k_ts - cand_ts) <= 180:
+                if k_stub and not cand_stub:
+                    kept["id"] = cand_id
+                    if cand_ext:
+                        kept["external_id"] = cand_ext
+                    if candidate.get("talk_id"):
+                        kept["talk_id"] = candidate["talk_id"]
+                if candidate.get("cards") and not kept.get("cards"):
+                    kept["cards"] = candidate.get("cards")
+                if candidate.get("delivery_status") and not kept.get("delivery_status"):
+                    kept["delivery_status"] = candidate.get("delivery_status")
+                dup = True
+                break
+        if not dup:
+            clean_chat.append(candidate)
+    chat = clean_chat
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
@@ -12925,24 +12995,24 @@ def _merge_tail_rows(existing: list, extra: list) -> list:
             merged[slot] = item
             continue
         replaced = False
-        if key[0] != "soft":
-            text = str(item.get("text") or "")
-            try:
-                created = int(item.get("created_at") or 0)
-            except (TypeError, ValueError):
-                created = 0
-            incoming = bool(item.get("incoming"))
+        text = str(item.get("text") or "").strip()
+        try:
+            created = int(item.get("created_at") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        incoming = bool(item.get("incoming"))
+        if text:
             for pos, old in enumerate(merged):
                 old_id = str(old.get("id") or "")
-                if not old_id.startswith(("hook-", "sent-")):
+                if not old_id.startswith(("hook-", "sent-", "local-", "preview-")):
                     continue
-                if bool(old.get("incoming")) != incoming or str(old.get("text") or "") != text:
+                if bool(old.get("incoming")) != incoming or str(old.get("text") or "").strip() != text:
                     continue
                 try:
                     old_created = int(old.get("created_at") or 0)
                 except (TypeError, ValueError):
                     old_created = 0
-                if abs(old_created - created) > 20:
+                if abs(old_created - created) > 180:
                     continue
                 merged[pos] = item
                 index[key] = pos

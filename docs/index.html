@@ -295,13 +295,21 @@
         .wa-tpl-in svg { width:18px; height:18px; display:block; }
         .chats-new-btn { width:36px; height:36px; border:0; border-radius:10px; background:#ffffff22; color:#fff; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .chats-new-btn svg { width:18px; height:18px; display:block; }
-        #wa-tpl-modal { position:fixed; inset:0; z-index:14200; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:16px; }
-        #wa-tpl-modal .wa-tpl-card { background:#fff; border-radius:18px; width:min(440px,100%); max-height:88vh; overflow:auto; box-shadow:0 18px 50px rgba(15,23,42,.2); }
-        #wa-tpl-modal .wa-tpl-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 16px 6px; }
-        #wa-tpl-modal .wa-tpl-head h3 { margin:0; font-size:15px; font-weight:600; color:#0f172a; }
-        #wa-tpl-modal .wa-tpl-head button { border:0; background:#f3f4f6; color:#374151; border-radius:50%; width:28px; height:28px; padding:0; font-size:18px; line-height:1; font-weight:600; }
-        #wa-tpl-modal .wa-tpl-card.has-carousel { width:min(560px,100%); }
-        #wa-tpl-modal .wa-tpl-body { padding:6px 16px 16px; display:grid; gap:10px; }
+        #wa-tpl-modal { position:fixed; inset:0; z-index:14200; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:12px; }
+        #wa-tpl-modal .wa-tpl-card { background:#fff; border-radius:18px; width:min(780px,96vw); max-height:92vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 20px 50px rgba(15,23,42,.25); }
+        #wa-tpl-modal .wa-tpl-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 18px 10px; border-bottom:1px solid #f1f5f9; flex:none; }
+        #wa-tpl-modal .wa-tpl-head h3 { margin:0; font-size:16px; font-weight:700; color:#0f172a; }
+        #wa-tpl-modal .wa-tpl-head button { border:0; background:#f3f4f6; color:#374151; border-radius:50%; width:30px; height:30px; padding:0; font-size:18px; line-height:1; font-weight:600; cursor:pointer; }
+        #wa-tpl-modal .wa-tpl-card.has-carousel { width:min(900px,96vw); }
+        #wa-tpl-modal .wa-tpl-body { padding:14px 18px 18px; display:grid; grid-template-columns:1fr; gap:16px; overflow-y:auto; flex:1; min-height:0; }
+        @media (min-width:640px) {
+            #wa-tpl-modal .wa-tpl-body { grid-template-columns:1.05fr 0.95fr; align-items:start; gap:20px; }
+            .wa-tpl-col-form { display:grid; gap:10px; }
+            .wa-tpl-col-preview { position:sticky; top:0; display:flex; flex-direction:column; gap:6px; min-width:0; }
+            .wa-tpl-col-preview .wa-tpl-stage { max-height:calc(92vh - 84px); overflow-y:auto; }
+        }
+        .wa-tpl-col-form { display:grid; gap:10px; min-width:0; }
+        .wa-tpl-col-preview { display:flex; flex-direction:column; gap:6px; min-width:0; }
         #wa-tpl-modal label { font-size:10px; font-weight:600; color:#9ca3af; text-transform:uppercase; letter-spacing:.03em; display:block; margin-bottom:3px; }
         #wa-tpl-modal input, #wa-tpl-modal select { width:100%; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:10px; padding:9px 11px; font-size:13px; font-weight:400; color:#0f172a; background:#f8fafc; outline:none; font-family:inherit; }
         #wa-tpl-modal input:focus, #wa-tpl-modal select:focus { border-color:#2b8cff; background:#fff; }
@@ -368,19 +376,22 @@
         .wa-chip-text { display:flex; flex-direction:column; align-items:flex-start; line-height:1.15; min-width:0; }
         .wa-chip-phone { font-size:9px; font-weight:600; opacity:.78; letter-spacing:.01em; }
         .wa-chip svg, .chat-ch svg { display:block; flex:none; }
-        .wa-thread { flex:1 1 0; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px 12px 16px; position:relative; }
-        .wa-thread::-webkit-scrollbar { width:8px; }
-        .wa-thread::-webkit-scrollbar-thumb { background:#c5cdd6; border-radius:8px; }
+        .wa-thread { flex:1 1 0; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px 12px 16px; position:relative; scroll-behavior:smooth; }
+        .wa-thread::-webkit-scrollbar, .chats-rows::-webkit-scrollbar { width:6px; }
+        .wa-thread::-webkit-scrollbar-track, .chats-rows::-webkit-scrollbar-track { background:transparent; }
+        .wa-thread::-webkit-scrollbar-thumb, .chats-rows::-webkit-scrollbar-thumb { background:rgba(0,0,0,.16); border-radius:6px; }
+        .wa-thread::-webkit-scrollbar-thumb:hover, .chats-rows::-webkit-scrollbar-thumb:hover { background:rgba(0,0,0,.28); }
         .wa-preloader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; color:#667781; font-size:12px; }
         .wa-preloader-more { min-height:0; padding:8px 0 4px; }
         .deal-chat-wrap { display:flex; align-items:center; gap:4px; max-width:86%; margin:8px 0; }
         .deal-chat-wrap.in { margin-right:auto; }
         .deal-chat-wrap.out { margin-left:auto; flex-direction:row-reverse; }
-        .deal-chat-row { border-radius:12px; padding:9px 12px 6px; margin:0; max-width:100%; font-size:13px; font-weight:400; line-height:1.45; box-shadow:none; position:relative; flex:1; min-width:0; }
-        .deal-chat-row.wa-pop { animation:waPop .2s cubic-bezier(.2,.8,.2,1); }
-        @keyframes waPop { from { opacity:0; transform:translateY(10px) scale(.96); } to { opacity:1; transform:none; } }
-        .deal-chat-row.in { background:#fff; margin-right:0; border:1px solid #e8ecf0; }
-        .deal-chat-row.out { background:#ffe8c4; margin-left:0; }
+        .deal-chat-wrap.fly-in, .deal-chat-row.fly-in { animation:waFlyIn .28s cubic-bezier(.34,1.56,.64,1) both; }
+        @keyframes waFlyIn { 0% { opacity:0; transform:translateY(22px) scale(.94); } 60% { opacity:1; transform:translateY(-2px) scale(1.01); } 100% { opacity:1; transform:translateY(0) scale(1); } }
+        .deal-chat-row { border-radius:12px; padding:8px 12px 6px; margin:0; max-width:100%; font-size:13px; font-weight:400; line-height:1.45; box-shadow:0 1px .5px rgba(11,20,26,.12); position:relative; flex:1; min-width:0; }
+        .deal-chat-row.wa-pop { animation:waFlyIn .28s cubic-bezier(.34,1.56,.64,1); }
+        .deal-chat-row.in { background:#fff; margin-right:0; border:1px solid #e8ecf0; border-radius:12px 12px 12px 2px; }
+        .deal-chat-row.out { background:#ffe8c4; margin-left:0; border-radius:12px 12px 2px 12px; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:600; color:#64748b; margin-bottom:3px; }
         .chat-msg-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:#e2e8f0; }
         .deal-chat-row.avatar-only { background:transparent; box-shadow:none; padding:2px 0; max-width:none; }
@@ -397,6 +408,8 @@
         .wa-ticks { letter-spacing:-1.5px; font-size:12px; line-height:1; color:#8696a0; font-weight:600; }
         .wa-ticks.read { color:#53bdeb; }
         .wa-ticks.failed { color:#dc2626; letter-spacing:0; }
+        .wa-ticks.sending { font-size:11px; letter-spacing:0; color:#8696a0; display:inline-block; animation:waTickPulse 1.4s ease-in-out infinite; }
+        @keyframes waTickPulse { 0%, 100% { opacity:.45; transform:scale(.92); } 50% { opacity:1; transform:scale(1.05); } }
         .wa-state { font-size:9px; font-weight:600; color:#9aa7b0; letter-spacing:.01em; }
         .wa-state.failed { color:#dc2626; }
         .chat-reply-btn { flex:none; border:0; background:transparent; color:#8696a0; font-size:15px; font-weight:600; line-height:1; padding:4px; cursor:pointer; opacity:.55; }
@@ -505,8 +518,8 @@
         .chats-line label { flex:none; color:#64748b; font-weight:600; }
         .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:600; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
         .chats-search { width:100%; margin-top:0; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; font-size:12px; background:#f8fafc; outline:none; font-family:inherit; }
-        .chats-rows { flex:1; min-height:0; overflow:auto; }
-        .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .12s ease; }
+        .chats-rows { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scroll-behavior:smooth; }
+        .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .15s ease, transform .12s ease; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row:active { background:#e9edef; }
         .chats-row.on { background:#eef5ff; }
@@ -3682,6 +3695,7 @@ function dealChatWhen(item) {
 function dealChatTicks(item) {
     if(!item || item.incoming || item.is_comment) return '';
     const st = String(item.delivery_status || item.status || 'sent').toLowerCase();
+    if(st === 'sending' || st === 'pending' || st === '0') return '<span class="wa-ticks sending" title="Göndərilir">🕒</span><span class="wa-state">Göndərilir</span>';
     if(st === 'read' || st === 'seen' || st === '3') return '<span class="wa-ticks read" title="Oxundu">✓✓</span><span class="wa-state">Oxundu</span>';
     if(st === 'delivered' || st === '1' || st === '2') return '<span class="wa-ticks" title="Çatdırıldı">✓✓</span><span class="wa-state">Çatdırıldı</span>';
     if(st === 'error' || st === 'failed' || st === 'undelivered') return '<span class="wa-ticks failed" title="Çatdırılmadı">✕</span><span class="wa-state failed">Çatdırılmadı</span>';
@@ -4010,12 +4024,27 @@ function deliveryRank(status) {
 }
 function sameChatMessage(a, b) {
     if(!a || !b) return false;
-    const idA = String(a.id || '');
-    const idB = String(b.id || '');
-    if(idA && idA === idB) return true;
-    const extA = String(a.external_id || '');
-    const extB = String(b.external_id || '');
-    if(extA && extA === extB) return true;
+    if(!!a.incoming !== !!b.incoming) return false;
+    const idA = String(a.id || '').trim();
+    const idB = String(b.id || '').trim();
+    if(idA && idB && idA === idB) return true;
+    const extA = String(a.external_id || '').trim();
+    const extB = String(b.external_id || '').trim();
+    if(extA && extB && extA === extB) return true;
+    const uuidA = String(a.file_uuid || '').trim();
+    const uuidB = String(b.file_uuid || '').trim();
+    if(uuidA && uuidB && uuidA === uuidB) return true;
+    const medA = String(a.media_url || '').trim();
+    const medB = String(b.media_url || '').trim();
+    if(medA && medB && medA === medB) return true;
+    const txtA = String(a.text || '').trim();
+    const txtB = String(b.text || '').trim();
+    const tsA = Number(a.created_at || 0);
+    const tsB = Number(b.created_at || 0);
+    if(txtA && txtA === txtB) {
+        if(tsA && tsB && Math.abs(tsA - tsB) <= 180) return true;
+        if(!tsA || !tsB) return true;
+    }
     return chatMessageKey(a) === chatMessageKey(b);
 }
 function applyChatDelivery(existing, incoming) {
@@ -4063,41 +4092,51 @@ function dropMatchedLocalVoices(incoming) {
 function mergeDealChat(existing, incoming, atStart) {
     const rows = (existing || []).slice();
     const extra = [];
-    const pool = () => rows.concat(extra);
     (incoming || []).forEach(item => {
-        if(isDealSystemNoise(item && item.text)) return;
-        let match = pool().find(row => sameChatMessage(row, item));
-        if(!match && item && !item.incoming) {
-            const text = String(item.text || '');
-            const at = Number(item.created_at || 0);
-            if(text && at) {
-                match = pool().find(row => row && !row.incoming && String(row.text || '') === text && Math.abs(Number(row.created_at || 0) - at) <= 180 && ((Array.isArray(row.cards) && row.cards.length) || (Array.isArray(item.cards) && item.cards.length)));
-            }
+        if(!item || isDealSystemNoise(item.text)) return;
+        let matchIndex = rows.findIndex(row => row && sameChatMessage(row, item));
+        if(matchIndex >= 0) {
+            const current = rows[matchIndex];
+            const currentStatus = String(current.delivery_status || current.status || '');
+            const nextStatus = String(item.delivery_status || item.status || '');
+            const keepStatus = deliveryRank(nextStatus) >= deliveryRank(currentStatus) ? nextStatus : currentStatus;
+            rows[matchIndex] = Object.assign({}, current, item, {
+                delivery_status: keepStatus || item.delivery_status || current.delivery_status,
+                local: false,
+                cards: (Array.isArray(item.cards) && item.cards.length) ? item.cards : current.cards,
+                message_type: (item.message_type && item.message_type !== 'text') ? item.message_type : (current.message_type || item.message_type)
+            });
+            return;
         }
-        if(match) {
-            if((!Array.isArray(match.cards) || !match.cards.length) && Array.isArray(item.cards) && item.cards.length) match.cards = item.cards;
-            if(item.message_type && (!match.message_type || match.message_type === 'text') && item.cards && item.cards.length) match.message_type = item.message_type;
+        let matchExtra = extra.find(r => r && sameChatMessage(r, item));
+        if(matchExtra) {
+            Object.assign(matchExtra, item);
             return;
         }
         extra.push(item);
     });
-    return atStart ? extra.concat(rows) : rows.concat(extra);
+    const result = atStart ? extra.concat(rows) : rows.concat(extra);
+    return dropTailStubs(result);
 }
 function dropTailStubs(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    const real = list.filter(row => {
-        const id = String(row && row.id || '');
-        return row && !id.startsWith('hook-') && !id.startsWith('sent-');
-    });
+    const isStub = row => {
+        if(!row) return false;
+        const id = String(row.id || '');
+        return !!row.local || id.startsWith('local-') || id.startsWith('sent-') || id.startsWith('hook-') || id.startsWith('preview-');
+    };
+    const real = list.filter(row => row && !isStub(row));
     return list.filter(row => {
-        const id = String(row && row.id || '');
-        if(!id.startsWith('hook-') && !id.startsWith('sent-')) return true;
-        const rowIsMedia = isDealMediaNotice(row && row.text) || String(row && row.message_type || '').toLowerCase() === 'picture';
+        if(!row || !isStub(row)) return !!row;
+        const rowIsMedia = isDealMediaNotice(row.text) || String(row.message_type || '').toLowerCase() === 'picture';
+        const rowText = String(row.text || '').trim();
+        const rowTs = Number(row.created_at || 0);
         return !real.some(item => {
             if(!!item.incoming !== !!row.incoming) return false;
-            const itemIsMedia = isDealMediaNotice(item && item.text) || String(item && item.message_type || '').toLowerCase() === 'picture';
-            if(rowIsMedia && itemIsMedia && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 60) return true;
-            return String(item.text || '') === String(row.text || '') && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 20;
+            const itemIsMedia = isDealMediaNotice(item.text) || String(item.message_type || '').toLowerCase() === 'picture';
+            const itemTs = Number(item.created_at || 0);
+            if(rowIsMedia && itemIsMedia && Math.abs(itemTs - rowTs) <= 180) return true;
+            return rowText && rowText === String(item.text || '').trim() && (!rowTs || !itemTs || Math.abs(itemTs - rowTs) <= 180);
         });
     });
 }
@@ -4562,11 +4601,18 @@ function paintDealChatThread(opts) {
     paintDealPinBar();
     paintDealOlderBar();
     if(stickBottom && opts && opts.force) {
-        const last = thread.querySelector('.deal-chat-row:last-child');
-        if(last) last.classList.add('wa-pop');
+        const last = thread.querySelector('.deal-chat-wrap:last-child') || thread.querySelector('.deal-chat-row:last-child');
+        if(last) last.classList.add('fly-in');
     }
-    if(stickBottom) thread.scrollTop = thread.scrollHeight;
-    else thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
+    if(stickBottom) {
+        if(opts && opts.smooth) {
+            thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
+        } else {
+            thread.scrollTop = thread.scrollHeight;
+        }
+    } else {
+        thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
+    }
 }
 function chatsSenderLines() {
     if(isAdmin || IS_RUFAT) return CHAT_SENDER_LINES.slice();
@@ -5890,12 +5936,17 @@ async function openWaTemplateModal(opts) {
             <button type="button" id="wa-tpl-close" aria-label="Bağla">×</button>
         </div>
         <div class="wa-tpl-body">
-            ${needsPhone ? '<div><label>Nömrə</label><div class="wa-phone-row"><span>+994</span><input type="tel" id="wa-tpl-phone" inputmode="numeric" placeholder="50 123 45 67" autocomplete="off"></div></div>' : `<div class="wa-tpl-note">Alıcı: ${escapeHtml(options.title || '')}</div>`}
-            <div><label>Şablon</label><select id="wa-tpl-select"><option value="">Yüklənir...</option></select></div>
-            <div class="wa-tpl-vars" id="wa-tpl-vars"></div>
-            <div><label>Önizləmə</label><div class="wa-tpl-preview" id="wa-tpl-preview"></div></div>
-            <div class="wa-tpl-note">İlk mesaj yalnız təsdiqlənmiş şablonla göndərilir.</div>
-            <button type="button" class="wa-tpl-send" id="wa-tpl-send" disabled>Göndər</button>
+            <div class="wa-tpl-col wa-tpl-col-form">
+                ${needsPhone ? '<div><label>Nömrə</label><div class="wa-phone-row"><span>+994</span><input type="tel" id="wa-tpl-phone" inputmode="numeric" placeholder="50 123 45 67" autocomplete="off"></div></div>' : `<div class="wa-tpl-note">Alıcı: ${escapeHtml(options.title || '')}</div>`}
+                <div><label>Şablon</label><select id="wa-tpl-select"><option value="">Yüklənir...</option></select></div>
+                <div class="wa-tpl-vars" id="wa-tpl-vars"></div>
+                <div class="wa-tpl-note">İlk mesaj yalnız təsdiqlənmiş şablonla göndərilir.</div>
+                <button type="button" class="wa-tpl-send" id="wa-tpl-send" disabled>Göndər</button>
+            </div>
+            <div class="wa-tpl-col wa-tpl-col-preview">
+                <label>Önizləmə</label>
+                <div class="wa-tpl-preview" id="wa-tpl-preview"></div>
+            </div>
         </div>
     </div>`;
     modal.addEventListener('click', event => { if(event.target === modal) closeWaTemplateModal(); });
@@ -6167,32 +6218,51 @@ async function sendDealChatMessage(fileArg) {
     const replyExternal = replyTo && replyTo.externalId ? String(replyTo.externalId) : '';
     const channelRow = (_dealViewState.channels || []).find(row => row.key === channel);
     const talkId = Number((replyTo && replyTo.talkId) || (channelRow && channelRow.talk_id) || 0);
+
     _dealChatSending = true;
     if(field) field.classList.add('sending');
-    if(input) input.disabled = true;
     if(btn) btn.disabled = true;
+
+    const savedInputText = input ? input.value : '';
+    if(input) {
+        input.value = '';
+        input.style.height = 'auto';
+    }
+    setChatDraft(leadId, '');
+
     const voiceNow = isDealAudioFile(file);
-    const localId = voiceNow ? ('local-voice-' + Date.now()) : '';
-    if(voiceNow && requestMatchesDeal(seq, leadId)) {
-        if(!_dealPendingUrl) _dealPendingUrl = URL.createObjectURL(file);
-        _dealViewState.messages = (_dealViewState.messages || []).concat([{
-            id: localId,
-            local: true,
-            incoming: false,
-            text: text || '🎤 Səs mesajı',
-            message_type: 'audio',
-            file_name: file.name || 'voice.ogg',
-            media_url: _dealPendingUrl,
-            created_at: Math.floor(Date.now() / 1000),
-            delivery_status: 'sent',
-            channel: channel
-        }]);
-        paintDealChatThread({stickBottom: true, force: true});
+    const localId = 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+    let localBlobUrl = '';
+    if(file && !_dealPendingUrl) {
+        try { localBlobUrl = URL.createObjectURL(file); _dealPendingUrl = localBlobUrl; } catch(_e) {}
+    }
+
+    const optimisticMsg = {
+        id: localId,
+        local: true,
+        incoming: false,
+        text: text || (voiceNow ? '🎤 Səs mesajı' : (file ? (file.name || 'Fayl') : '')),
+        message_type: voiceNow ? 'audio' : (file && /^image\//i.test(file.type) ? 'picture' : (file ? 'file' : 'text')),
+        file_name: file ? (file.name || '') : '',
+        media_url: _dealPendingUrl || localBlobUrl,
+        created_at: Math.floor(Date.now() / 1000),
+        delivery_status: 'sending',
+        channel: channel,
+        author: (dealStaffLine() && dealStaffLine().name) || '',
+        reply_to_message_id: replyId,
+        reply_to_text: replyText,
+        reply_to_author: replyAuthor
+    };
+
+    if(requestMatchesDeal(seq, leadId)) {
+        _dealViewState.messages = (_dealViewState.messages || []).concat([optimisticMsg]);
+        paintDealChatThread({stickBottom: true, force: true, smooth: true});
         const voiceBox = document.getElementById('deal-voice-preview');
         if(voiceBox) voiceBox.hidden = true;
         if(field) field.classList.remove('has-voice');
-        if(input) input.value = '';
+        clearDealChatReply();
     }
+
     try {
         let r;
         if(file) {
@@ -6227,18 +6297,11 @@ async function sendDealChatMessage(fileArg) {
             const detail = isAdmin && d.detail && !sameDetail ? ` (${String(d.detail).slice(0, 160)})` : '';
             throw new Error((d.error || 'Göndərilmədi') + detail);
         }
-        if(input) input.value = '';
-        setChatDraft(leadId, '');
+
+        optimisticMsg.delivery_status = 'sent';
+        clearDealPendingFile();
+
         const serverChat = Array.isArray(d.chat) ? d.chat : [];
-        if(localId && serverHasFreshVoice(serverChat, Math.floor(Date.now() / 1000))) {
-            dropLocalChatMessage(localId);
-            clearDealPendingFile();
-        } else if(localId) {
-            _dealPendingUrl = '';
-            _dealPendingFile = null;
-        } else {
-            clearDealPendingFile();
-        }
         applyChatDelivery(_dealViewState.messages, serverChat);
         dropMatchedLocalVoices(serverChat);
         const kept = (_dealViewState.messages || []).filter(row => row && !row.preview);
@@ -6253,17 +6316,19 @@ async function sendDealChatMessage(fileArg) {
                 rememberChatReply(sent.id, {id: replyId, text: replyText, author: replyAuthor});
             }
         }
-        clearDealChatReply();
         markChatsSeen(leadId);
         _dealViewState.blocked = !!d.chat_blocked;
         applyDealChannels(d.channels || _dealViewState.channels);
         rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
-        paintDealChatThread({stickBottom: true, force: true});
+        paintDealChatThread({stickBottom: true, force: false});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
-            if(localId) {
-                dropLocalChatMessage(localId);
-                paintDealChatThread({stickBottom: true, force: true});
+            optimisticMsg.delivery_status = 'error';
+            paintDealChatThread({stickBottom: false, force: true});
+            if(input && !input.value) {
+                input.value = savedInputText;
+            }
+            if(voiceNow) {
                 const voiceBox = document.getElementById('deal-voice-preview');
                 const player = voiceBox && voiceBox.querySelector('audio');
                 if(voiceBox && player && _dealPendingFile && _dealPendingUrl) {
@@ -6277,7 +6342,6 @@ async function sendDealChatMessage(fileArg) {
     } finally {
         _dealChatSending = false;
         if(field) field.classList.remove('sending');
-        if(input) input.disabled = false;
         if(btn) btn.disabled = false;
     }
 }
