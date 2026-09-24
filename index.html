@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="274">
+    <meta name="pwa-build" content="275">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -366,19 +366,16 @@
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
         .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
-        .audio-play { border:0; background:transparent; padding:0; color:#2563eb; font-weight:600; font-size:13px; text-decoration:underline; cursor:pointer; }
-        .audio-wait .audio-spin { flex:none; width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
-        .audio-wait.ready .audio-spin { display:none; }
+        .audio-wait .audio-spin { display:none; position:absolute; left:8px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:2; pointer-events:none; background:#fff; }
+        .audio-wait.loading .audio-spin { display:block; }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
         .photo-wait img.deal-zoom { margin:0; opacity:0; }
         .photo-wait .audio-spin { position:absolute; width:16px; height:16px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .photo-wait.ready img.deal-zoom { opacity:1; }
         .photo-wait.ready .audio-spin, .photo-wait.failed .audio-spin { display:none; }
-        .photo-wait .photo-miss { display:none; font-size:11px; color:#64748b; padding:8px 10px; text-align:center; }
-        .photo-wait.failed { min-height:48px; }
+        .photo-wait .photo-miss { display:none; position:relative; z-index:2; border:0; background:transparent; font-size:13px; font-weight:600; color:#2563eb; text-decoration:underline; cursor:pointer; padding:8px 10px; }
+        .photo-wait.failed { min-height:96px; }
         .photo-wait.failed .photo-miss { display:block; }
-        button.photo-wait { border:0; font:inherit; color:#2563eb; cursor:pointer; }
-        button.photo-wait .photo-miss { text-decoration:underline; }
         .photo-wait.loading .audio-spin { display:block; }
         .photo-wait.loading .photo-miss { display:none; }
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
@@ -3511,9 +3508,14 @@ function mediaLookupUrl(wrap, kind) {
 function authFetchHeaders() {
     return CURRENT_USER_ID ? {'X-TG-User-ID': String(CURRENT_USER_ID)} : {};
 }
+const _mediaBlobs = new Map();
+function mediaCacheKey(wrap, kind) {
+    const lead = String((_dealViewState && _dealViewState.id) || '');
+    return [kind, lead, wrap.getAttribute('data-msg') || '', wrap.getAttribute('data-at') || '', wrap.getAttribute('data-src') || ''].join('|');
+}
 function audioWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><button type="button" class="audio-play">Səs mesajı</button></span>`;
+    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><audio controls preload="none"></audio></span>`;
 }
 function isChatPhotoText(text) {
     const raw = String(text || '').trim();
@@ -3527,30 +3529,53 @@ function isChatPhotoItem(item) {
     return /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(String(item.file_name || '') + String(item.media_url || ''));
 }
 function photoWaitHtml(src, item) {
-    const attrs = mediaClickAttrs(item);
-    if(!src) return `<button type="button" class="photo-wait failed photo-load"${attrs}><span class="audio-spin"></span><span class="photo-miss">Şəkil gəlmədi</span></button>`;
-    return `<span class="photo-wait"${attrs}><span class="audio-spin"></span><img class="deal-zoom" src="${escapeHtml(src)}" alt=""><span class="photo-miss">Şəkil gəlmədi</span></span>`;
+    const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
+    const img = src ? `<img class="deal-zoom" src="${escapeHtml(src)}" alt="">` : '';
+    return `<span class="photo-wait${src ? '' : ' failed'}"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span>${img}<button type="button" class="photo-miss">Yüklə</button></span>`;
+}
+function showCachedPhoto(wrap) {
+    const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'picture'));
+    if(!saved) return false;
+    let img = wrap.querySelector('img');
+    if(!img) {
+        img = document.createElement('img');
+        img.className = 'deal-zoom';
+        img.alt = '';
+        wrap.insertBefore(img, wrap.querySelector('.photo-miss'));
+    }
+    img.src = saved;
+    img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
+    wrap.classList.add('ready');
+    wrap.classList.remove('failed', 'loading');
+    return true;
 }
 async function loadMissingPhoto(wrap) {
     if(!wrap || wrap.dataset.loading === '1' || wrap.classList.contains('ready')) return;
+    if(showCachedPhoto(wrap)) return;
     wrap.dataset.loading = '1';
     wrap.classList.add('loading');
     wrap.classList.remove('failed');
     try {
-        const response = await fetch(mediaLookupUrl(wrap, 'picture'), {headers: authFetchHeaders()});
+        const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'picture');
+        const response = await fetch(src, {headers: authFetchHeaders()});
         if(!response.ok) throw new Error('fail');
         const blob = await response.blob();
         const type = String(blob.type || '');
         if(!blob.size || type.startsWith('text/')) throw new Error('fail');
-        const img = document.createElement('img');
-        img.className = 'deal-zoom';
-        img.alt = '';
-        img.src = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        _mediaBlobs.set(mediaCacheKey(wrap, 'picture'), url);
+        let img = wrap.querySelector('img');
+        if(!img) {
+            img = document.createElement('img');
+            img.className = 'deal-zoom';
+            img.alt = '';
+            wrap.insertBefore(img, wrap.querySelector('.photo-miss'));
+        }
+        img.src = url;
         img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
-        const host = document.createElement('span');
-        host.className = 'photo-wait ready';
-        host.appendChild(img);
-        wrap.replaceWith(host);
+        wrap.classList.add('ready');
+        wrap.classList.remove('loading', 'failed');
+        wrap.dataset.loading = '';
     } catch(_err) {
         wrap.classList.remove('loading', 'ready');
         wrap.classList.add('failed');
@@ -3561,18 +3586,22 @@ function bindPhotoWait(root) {
     (root || document).querySelectorAll('.photo-wait').forEach(wrap => {
         if(wrap.dataset.bound) return;
         wrap.dataset.bound = '1';
+        if(showCachedPhoto(wrap)) return;
         const img = wrap.querySelector('img');
         if(img) {
             const done = () => wrap.classList.add('ready');
             const fail = () => wrap.classList.add('failed');
-            img.addEventListener('load', done);
+            img.addEventListener('load', () => {
+                if(img.naturalWidth > 0) done();
+                else fail();
+            });
             img.addEventListener('error', fail);
             if(img.complete && img.naturalWidth > 0) done();
             else if(img.complete) fail();
         }
-        wrap.addEventListener('click', event => {
-            if(wrap.classList.contains('ready')) return;
-            if(!wrap.classList.contains('failed') && !wrap.classList.contains('photo-load')) return;
+        const button = wrap.querySelector('.photo-miss');
+        if(!button) return;
+        button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
             loadMissingPhoto(wrap);
@@ -3593,41 +3622,34 @@ function attachAudioSpeed(wrap, audio) {
     };
     wrap.appendChild(speed);
 }
-async function startAudioWait(wrap) {
-    if(!wrap || wrap.dataset.loading === '1' || wrap.querySelector('audio')) return;
+async function startAudioWait(wrap, audio) {
+    if(!wrap || !audio || wrap.dataset.loading === '1' || wrap.dataset.ready === '1') return;
     wrap.dataset.loading = '1';
-    const button = wrap.querySelector('.audio-play');
-    if(button) button.hidden = true;
-    const spin = document.createElement('span');
-    spin.className = 'audio-spin';
-    wrap.appendChild(spin);
+    wrap.classList.add('loading');
+    try { audio.pause(); } catch(_err) {}
     try {
-        const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
-        const response = await fetch(src, {headers: authFetchHeaders()});
-        if(!response.ok) throw new Error('fail');
-        const blob = await response.blob();
-        const type = String(blob.type || '');
-        if(!blob.size || type.startsWith('text/')) throw new Error('fail');
-        const audio = document.createElement('audio');
-        audio.controls = true;
-        audio.preload = 'none';
-        audio.src = URL.createObjectURL(blob);
-        audio.addEventListener('ended', () => {
-            try { audio.pause(); audio.currentTime = 0; } catch(_err) {}
-        });
-        spin.remove();
-        if(button) button.remove();
+        const key = mediaCacheKey(wrap, 'audio');
+        let url = _mediaBlobs.get(key) || '';
+        if(!url) {
+            const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
+            const response = await fetch(src, {headers: authFetchHeaders()});
+            if(!response.ok) throw new Error('fail');
+            const blob = await response.blob();
+            const type = String(blob.type || '');
+            if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+            url = URL.createObjectURL(blob);
+            _mediaBlobs.set(key, url);
+        }
+        audio.src = url;
+        wrap.dataset.ready = '1';
+        wrap.classList.remove('loading');
         wrap.classList.add('ready');
-        wrap.appendChild(audio);
-        attachAudioSpeed(wrap, audio);
+        wrap.dataset.loading = '';
         audio.play().catch(() => {});
     } catch(_err) {
-        spin.remove();
-        if(button) {
-            button.hidden = false;
-            button.textContent = 'Yüklə';
-        }
+        wrap.classList.remove('loading', 'ready');
         wrap.dataset.loading = '';
+        wrap.dataset.ready = '';
     }
 }
 function bindAudioWait(root) {
@@ -3635,12 +3657,24 @@ function bindAudioWait(root) {
     (root || document).querySelectorAll('.audio-wait').forEach(wrap => {
         if(wrap.dataset.bound) return;
         wrap.dataset.bound = '1';
-        const button = wrap.querySelector('.audio-play');
-        if(!button) return;
-        button.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            startAudioWait(wrap);
+        const audio = wrap.querySelector('audio');
+        if(!audio) return;
+        const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'audio'));
+        if(saved) {
+            audio.src = saved;
+            wrap.dataset.ready = '1';
+            wrap.classList.add('ready');
+        }
+        if(!wrap.querySelector('.audio-speed')) attachAudioSpeed(wrap, audio);
+        const begin = event => {
+            if(wrap.dataset.ready === '1' || wrap.dataset.loading === '1') return;
+            if(event) { event.preventDefault(); event.stopPropagation(); }
+            startAudioWait(wrap, audio);
+        };
+        audio.addEventListener('play', () => begin());
+        audio.addEventListener('click', begin);
+        audio.addEventListener('ended', () => {
+            try { audio.pause(); audio.currentTime = 0; } catch(_err) {}
         });
     });
 }
@@ -4402,7 +4436,7 @@ function bindDealChatMedia(thread) {
     bindAudioWait(thread);
     thread.querySelectorAll('audio').forEach(el => {
         el.addEventListener('ended', () => {
-            try { el.pause(); el.currentTime = 0; el.load(); } catch(_err) {}
+            try { el.pause(); el.currentTime = 0; } catch(_err) {}
         });
     });
     thread.querySelectorAll('.chat-reply-btn').forEach(btn => {
