@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="275">
+    <meta name="pwa-build" content="276">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -520,9 +520,10 @@
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
         .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:#2b8cff; }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
-        .chats-toolbar-title { font-size:16px; font-weight:600; color:#fff; display:inline-flex; align-items:baseline; gap:8px; }
-        .chats-unread-label { border:0; background:transparent; padding:0; margin:0; cursor:pointer; font-family:inherit; font-size:11px; font-weight:500; color:#dbeafe; letter-spacing:.01em; text-decoration:underline; }
-        .chats-unread-label.on { color:#fff; }
+        .chats-filter-tabs { display:flex; align-items:center; gap:8px; padding:8px 12px; background:#fff; border-bottom:1px solid #e9edef; overflow-x:auto; flex:none; }
+        .chats-filter-tab { border:0; background:#f0f2f5; color:#54656f; border-radius:16px; height:34px; padding:0 12px; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+        .chats-filter-tab.on { background:#d9fdd3; color:#111b21; }
+        .chats-filter-count { font-size:14px; font-weight:600; }
         .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
         .chats-toolbar .search-icon-btn.on { background:#fff; color:#2b8cff; border-color:#fff; }
         .chats-toolbar .search-expand { margin-top:8px; }
@@ -889,7 +890,7 @@
             <aside class="chats-list">
                 <div class="chats-toolbar">
                     <div class="chats-toolbar-bar">
-                        <span class="chats-toolbar-title">Çatlar <button type="button" id="chats-unread-label" class="chats-unread-label" hidden></button></span>
+                        <span></span>
                         <span class="flex items-center gap-2">
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
@@ -901,6 +902,10 @@
                 </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
             </div>
+                <div class="chats-filter-tabs" role="tablist">
+                    <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış</button>
+                    <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
+                </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
             <section id="chats-pane" class="chats-pane"></section>
@@ -7564,23 +7569,40 @@ function paintChatsUnreadBadge() {
         tab.textContent = text;
         tab.style.display = show ? 'flex' : 'none';
     }
-    const label = document.getElementById('chats-unread-label');
-    if(label) {
-        if(!show) _chatsUnreadOnly = false;
-        label.textContent = show ? (text + ' oxunmamış') : '';
-        label.hidden = !show;
-        label.classList.toggle('on', !!(_chatsUnreadOnly && show));
-        label.setAttribute('aria-pressed', _chatsUnreadOnly ? 'true' : 'false');
-        if(!label.dataset.bound) {
-            label.dataset.bound = '1';
-            label.onclick = () => {
-                _chatsUnreadOnly = !_chatsUnreadOnly;
-                renderChatsList();
-            };
+    const unanswered = HAS_CHATS ? chatsInboxDeals().filter(chatsIsUnanswered).length : 0;
+    const unreadBtn = document.getElementById('chats-unread-label');
+    const waitBtn = document.getElementById('chats-unanswered-tab');
+    const waitCount = document.getElementById('chats-unanswered-count');
+    if(_chatsListFilter === 'unread' && !show) _chatsListFilter = '';
+    if(unreadBtn) {
+        unreadBtn.classList.toggle('on', _chatsListFilter === 'unread');
+        unreadBtn.setAttribute('aria-pressed', _chatsListFilter === 'unread' ? 'true' : 'false');
+        if(!unreadBtn.dataset.bound) {
+            unreadBtn.dataset.bound = '1';
+            unreadBtn.onclick = () => setChatsListFilter('unread');
+        }
+    }
+    if(waitCount) waitCount.textContent = unanswered > 99 ? '99+' : String(unanswered);
+    if(waitBtn) {
+        waitBtn.classList.toggle('on', _chatsListFilter === 'unanswered');
+        waitBtn.setAttribute('aria-pressed', _chatsListFilter === 'unanswered' ? 'true' : 'false');
+        if(!waitBtn.dataset.bound) {
+            waitBtn.dataset.bound = '1';
+            waitBtn.onclick = () => setChatsListFilter('unanswered');
         }
     }
 }
-let _chatsUnreadOnly = false;
+function chatsIsUnanswered(deal) {
+    const incoming = chatsIncomingAt(deal);
+    if(!incoming) return false;
+    const outgoing = chatsOutgoingAt(deal);
+    return !outgoing || incoming > outgoing;
+}
+function setChatsListFilter(next) {
+    _chatsListFilter = _chatsListFilter === next ? '' : next;
+    renderChatsList();
+}
+let _chatsListFilter = '';
 let _chatAlertMap = {};
 let _chatAlertSeeded = false;
 const _chatAlertLock = {};
@@ -8111,10 +8133,12 @@ function renderChatsList() {
     fillChatsLineSelect();
     let deals = chatsInboxDeals();
     const seen = seedChatsSeen(deals);
-    if(_chatsUnreadOnly) {
+    if(_chatsListFilter === 'unread') {
         const unreadDeals = deals.filter(deal => chatsIsUnread(deal, seen));
         if(unreadDeals.length) deals = unreadDeals;
-        else _chatsUnreadOnly = false;
+        else _chatsListFilter = '';
+    } else if(_chatsListFilter === 'unanswered') {
+        deals = deals.filter(chatsIsUnanswered);
     }
     const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
     if(!deals.length) {
