@@ -11683,8 +11683,13 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if not phone:
             continue
         preview, kind = _wa_incoming_preview(message)
+        reaction_emoji = ""
+        reaction_target_mid = ""
         if kind == "reaction":
-            continue
+            reaction_data = message.get("reaction") if isinstance(message.get("reaction"), dict) else {}
+            reaction_emoji = str(reaction_data.get("emoji") or "").strip()
+            reaction_target_mid = str(reaction_data.get("message_id") or "").strip()
+            preview = f"💬 Reaksiya: {reaction_emoji}" if reaction_emoji else "💬 Müştəri reaksiya bildirdi"
         name = contacts.get(_wa_phone_key(phone)) or contacts.get(phone) or ""
         try:
             created = int(message.get("timestamp") or 0)
@@ -11695,6 +11700,8 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if not lead_id:
             logger.warning("WhatsApp incoming has no lead phone=%s", phone)
             continue
+        if kind == "reaction" and reaction_emoji and reaction_target_mid:
+            _remember_reaction(lead_id, reaction_target_mid, reaction_emoji)
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
         _remember_sent_message(lead_id, _sent_message_item(
@@ -11704,7 +11711,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             message_type=kind,
             incoming=True,
             created_at=created,
-            reply_id=str(context.get("id") or ""),
+            reply_id=reaction_target_mid or str(context.get("id") or ""),
             phone=phone,
         ))
         try:
@@ -11805,6 +11812,54 @@ def _chat_item_key(item: dict) -> tuple:
         int(item.get("created_at") or 0),
         str(item.get("file_uuid") or ""),
     )
+
+
+def _split_quote_prefix(text: str) -> tuple[str, str]:
+    raw = str(text or "")
+    stripped = raw.lstrip()
+    if stripped.startswith("«") and "»" in stripped:
+        quote, sep, rest = stripped.partition("»")
+        body = rest.lstrip("\n").strip()
+        preview = quote[1:].strip()
+        if preview and body:
+            return preview, body
+    if not stripped.startswith(">"):
+        return "", raw
+    quote_lines: list[str] = []
+    rest: list[str] = []
+    for line in raw.splitlines():
+        if not rest and line.lstrip().startswith(">"):
+            quote_lines.append(line.lstrip()[1:].strip())
+            continue
+        if not rest and not line.strip():
+            continue
+        rest.append(line)
+    body = "\n".join(rest).strip()
+    quote = "\n".join(item for item in quote_lines if item).strip()
+    if not quote or not body:
+        return "", raw
+    return quote, body
+
+
+def _clean_body_text(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    quote, body = _split_quote_prefix(raw)
+    return body.strip() if body else raw
+
+
+def _delivery_rank(status: str) -> int:
+    text = str(status or "").strip().lower()
+    if text in {"error", "failed", "undelivered", "4", "-1"}:
+        return 4
+    if text in {"read", "seen", "viewed", "3"}:
+        return 3
+    if text in {"delivered", "1", "2"}:
+        return 2
+    if text in {"sent", "sending", "0"}:
+        return 1
+    return 0
 
 
 def _normalized_channel(key: str) -> str:
@@ -12014,6 +12069,7 @@ def _collect_deal_chat(
         if key in seen_chat:
             return
         item_text = str(item.get("text") or "").strip()
+        item_clean_text = _clean_body_text(item_text)
         item_ts = int(item.get("created_at") or 0)
         item_dir = bool(item.get("incoming"))
         item_uuid = str(item.get("file_uuid") or "").strip()
@@ -12030,12 +12086,16 @@ def _collect_deal_chat(
             ex_uuid = str(existing.get("file_uuid") or "").strip()
             ex_media = str(existing.get("media_url") or "").strip()
             ex_text = str(existing.get("text") or "").strip()
+            ex_clean_text = _clean_body_text(ex_text)
             ex_ts = int(existing.get("created_at") or 0)
             ex_is_stub = ex_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
 
             same_ext = bool(item_ext and ex_ext and item_ext == ex_ext)
             same_file = bool((item_uuid and item_uuid == ex_uuid) or (item_media and item_media == ex_media))
-            same_text = bool(item_text and item_text == ex_text and abs(ex_ts - item_ts) <= 180)
+            same_text = bool(
+                (item_text and item_text == ex_text and abs(ex_ts - item_ts) <= 300)
+                or (item_clean_text and item_clean_text == ex_clean_text and abs(ex_ts - item_ts) <= 300)
+            )
 
             if same_ext or same_file or same_text:
                 if ex_is_stub and not item_is_stub:
@@ -12046,6 +12106,8 @@ def _collect_deal_chat(
                         existing["talk_id"] = item["talk_id"]
                     if item_ts:
                         existing["created_at"] = item_ts
+                    if item_text:
+                        existing["text"] = item_text
                 if item_uuid and not ex_uuid:
                     existing["file_uuid"] = item_uuid
                 if item_media and not ex_media:
@@ -12054,7 +12116,7 @@ def _collect_deal_chat(
                     existing["message_type"] = item.get("message_type")
                 if item.get("cards") and not existing.get("cards"):
                     existing["cards"] = item.get("cards")
-                if item.get("delivery_status") and not existing.get("delivery_status"):
+                if _delivery_rank(item.get("delivery_status")) > _delivery_rank(existing.get("delivery_status")):
                     existing["delivery_status"] = item.get("delivery_status")
                 return
 
@@ -12116,9 +12178,10 @@ def _collect_deal_chat(
                 formatted["channel"] = channel_key
                 formatted["talk_id"] = talk_id
                 if not formatted.get("incoming"):
-                    author = str(formatted.get("author") or "")
-                    if channel_key == "whatsapp" or _is_generic_chat_author(author):
-                        formatted["author"] = employee_name or author
+                    if not formatted.get("is_bot"):
+                        author = str(formatted.get("author") or "")
+                        if channel_key == "whatsapp" or _is_generic_chat_author(author):
+                            formatted["author"] = employee_name or author
                 _add_chat(formatted)
     if not chat or chat_blocked:
         fallback_rows = _load_kommo_chat_fallback(lid, contact_ids, employee_name)
@@ -12172,7 +12235,8 @@ def _collect_deal_chat(
             for other_text, other_created in outgoing_seen
         ):
             continue
-        item.setdefault("author", employee_name or "")
+        if not item.get("is_bot"):
+            item.setdefault("author", employee_name or "")
         _add_chat(item)
     clean_chat: list[dict] = []
     for candidate in chat:
@@ -12181,6 +12245,7 @@ def _collect_deal_chat(
             continue
         cand_dir = bool(candidate.get("incoming"))
         cand_text = txt.strip()
+        cand_clean = _clean_body_text(cand_text)
         cand_ts = int(candidate.get("created_at") or 0)
         cand_ext = str(candidate.get("external_id") or "").strip()
         cand_uuid = str(candidate.get("file_uuid") or "").strip()
@@ -12197,31 +12262,52 @@ def _collect_deal_chat(
             k_uuid = str(kept.get("file_uuid") or "").strip()
             k_media = str(kept.get("media_url") or "").strip()
             k_text = str(kept.get("text") or "").strip()
+            k_clean = _clean_body_text(k_text)
             k_ts = int(kept.get("created_at") or 0)
             k_stub = k_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
 
             if cand_id and k_id and cand_id == k_id:
+                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
+                    kept["delivery_status"] = candidate.get("delivery_status")
                 dup = True
                 break
             if cand_ext and k_ext and cand_ext == k_ext:
+                if k_stub and not cand_stub:
+                    kept["id"] = cand_id
+                    if cand_ts:
+                        kept["created_at"] = cand_ts
+                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
+                    kept["delivery_status"] = candidate.get("delivery_status")
                 dup = True
                 break
             if cand_uuid and k_uuid and cand_uuid == k_uuid:
+                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
+                    kept["delivery_status"] = candidate.get("delivery_status")
                 dup = True
                 break
             if cand_media and k_media and cand_media == k_media:
+                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
+                    kept["delivery_status"] = candidate.get("delivery_status")
                 dup = True
                 break
-            if cand_text and cand_text == k_text and abs(k_ts - cand_ts) <= 180:
+            same_c = (
+                (cand_text and cand_text == k_text and abs(k_ts - cand_ts) <= 300)
+                or (cand_clean and cand_clean == k_clean and abs(k_ts - cand_ts) <= 300)
+            )
+            if same_c:
                 if k_stub and not cand_stub:
                     kept["id"] = cand_id
                     if cand_ext:
                         kept["external_id"] = cand_ext
                     if candidate.get("talk_id"):
                         kept["talk_id"] = candidate["talk_id"]
+                    if cand_text:
+                        kept["text"] = candidate.get("text")
+                    if cand_ts:
+                        kept["created_at"] = cand_ts
                 if candidate.get("cards") and not kept.get("cards"):
                     kept["cards"] = candidate.get("cards")
-                if candidate.get("delivery_status") and not kept.get("delivery_status"):
+                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
                     kept["delivery_status"] = candidate.get("delivery_status")
                 dup = True
                 break
@@ -12245,19 +12331,6 @@ def _collect_deal_chat(
             if emoji:
                 item["my_reaction"] = emoji
     return page, bool(chat_blocked and not page), int(reply_talk_id or 0), has_more, channels, wanted
-
-
-def _delivery_rank(status: str) -> int:
-    text = str(status or "").strip().lower()
-    if text in {"error", "failed", "undelivered", "4", "-1"}:
-        return 4
-    if text in {"read", "seen", "viewed", "3"}:
-        return 3
-    if text in {"delivered", "1", "2"}:
-        return 2
-    if text in {"sent", "sending", "0"}:
-        return 1
-    return 0
 
 
 def _message_is_voice(item: dict) -> bool:
@@ -12300,8 +12373,10 @@ def _overlay_sent_delivery(items: list, lead_id: int) -> None:
                     continue
                 if voice and _message_is_voice(row):
                     candidates.append(row)
-                elif text and text == str(row.get("text") or ""):
-                    candidates.append(row)
+                elif text:
+                    row_txt = str(row.get("text") or "")
+                    if text == row_txt or _clean_body_text(text) == _clean_body_text(row_txt):
+                        candidates.append(row)
             if len(candidates) == 1:
                 matched = candidates[0]
         if not matched:
@@ -12466,33 +12541,6 @@ def _is_generic_chat_author(name: str) -> bool:
     return folded in {"client", "bot", "capi", "im", "wa", "fb"}
 
 
-def _split_quote_prefix(text: str) -> tuple[str, str]:
-    raw = str(text or "")
-    stripped = raw.lstrip()
-    if stripped.startswith("«") and "»" in stripped:
-        quote, sep, rest = stripped.partition("»")
-        body = rest.lstrip("\n").strip()
-        preview = quote[1:].strip()
-        if preview and body:
-            return preview, body
-    if not stripped.startswith(">"):
-        return "", raw
-    quote_lines: list[str] = []
-    rest: list[str] = []
-    for line in raw.splitlines():
-        if not rest and line.lstrip().startswith(">"):
-            quote_lines.append(line.lstrip()[1:].strip())
-            continue
-        if not rest and not line.strip():
-            continue
-        rest.append(line)
-    body = "\n".join(rest).strip()
-    quote = "\n".join(item for item in quote_lines if item).strip()
-    if not quote or not body:
-        return "", raw
-    return quote, body
-
-
 def _find_wamid(value, depth: int = 0) -> str:
     if depth > 5 or value is None:
         return ""
@@ -12582,8 +12630,28 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
             text = ""
         if not author_avatar:
             author_avatar = media
+    author_type = str((author or {}).get("type") or "").strip().lower()
+    raw_author_name = str((author or {}).get("name") or "").strip()
+    is_bot = False
+    bot_name = ""
+    if author_type == "bot" or "salesbot" in raw_author_name.casefold() or "gpt" in raw_author_name.casefold():
+        folded_bot = raw_author_name.casefold()
+        transport_tokens = ("whatsapp", "waba", "telegram", "viber", "instagram", "facebook", "messenger", "tiktok")
+        if not any(t in folded_bot for t in transport_tokens):
+            is_bot = True
+            bot_name = raw_author_name or "Salesbot"
+
     if not text and not media and not file_uuid and not author_avatar:
-        return None
+        reaction_obj = nested.get("reaction") or message.get("reaction") or {}
+        if isinstance(reaction_obj, dict) and reaction_obj.get("emoji"):
+            emoji = str(reaction_obj.get("emoji") or "").strip()
+            text = f"💬 Reaksiya: {emoji}" if emoji else "💬 Müştəri reaksiya bildirdi"
+            message_type = "reaction"
+        elif incoming:
+            text = "💬 Müştəri reaksiya bildirdi"
+            message_type = "reaction"
+        else:
+            return None
     reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
     reply_id = ""
     reply_text = ""
@@ -12614,7 +12682,9 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         "external_id": external_id,
         "direction": "incoming" if incoming else "outgoing",
         "incoming": incoming,
-        "author": _chat_author_name(author, message, incoming),
+        "author": bot_name if is_bot else _chat_author_name(author, message, incoming),
+        "is_bot": is_bot,
+        "bot_name": bot_name,
         "text": text,
         "message_type": message_type,
         "created_at": created,
@@ -13002,17 +13072,22 @@ def _merge_tail_rows(existing: list, extra: list) -> list:
             created = 0
         incoming = bool(item.get("incoming"))
         if text:
+            clean_item_text = _clean_body_text(text)
             for pos, old in enumerate(merged):
                 old_id = str(old.get("id") or "")
                 if not old_id.startswith(("hook-", "sent-", "local-", "preview-")):
                     continue
-                if bool(old.get("incoming")) != incoming or str(old.get("text") or "").strip() != text:
+                if bool(old.get("incoming")) != incoming:
+                    continue
+                old_text = str(old.get("text") or "").strip()
+                old_clean = _clean_body_text(old_text)
+                if old_text != text and (not clean_item_text or not old_clean or old_clean != clean_item_text):
                     continue
                 try:
                     old_created = int(old.get("created_at") or 0)
                 except (TypeError, ValueError):
                     old_created = 0
-                if abs(old_created - created) > 180:
+                if abs(old_created - created) > 300:
                     continue
                 merged[pos] = item
                 index[key] = pos
@@ -13958,12 +14033,13 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
+    tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name or text)
     if sent_via_cloud:
         # The app renders Kommo message types, so translate the Cloud API kind.
         local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
         _remember_sent_message(int(lead.get("id") or lead_id), _sent_message_item(
             wamid=sent_wamid,
-            text=sent_text or (VOICE_CAPTION_TEXT if local_type == "audio" else upload_name),
+            text=tail_text,
             author=employee_name_for_lead(lead),
             message_type=local_type,
             file_uuid=drive_uuid,
@@ -13977,7 +14053,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "external_id": str(sent_wamid or ""),
         "incoming": False,
         "direction": "outgoing",
-        "text": sent_text or (VOICE_CAPTION_TEXT if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name or text),
+        "text": tail_text,
         "created_at": int(_time_module.time()),
         "message_type": "audio" if upload_raw and _looks_voice_upload(upload_name, upload_type) else "text",
         "channel": channel,
@@ -13985,6 +14061,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "delivery_status": "sent",
         "file_name": "" if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name,
         "file_uuid": drive_uuid,
+        "reply_to_message_id": reply_to_message_id or wa_quote_id,
+        "reply_to_text": reply_preview,
+        "reply_to_author": reply_author,
     })
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
@@ -14114,6 +14193,86 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
         return web.json_response({"success": True, "skipped": True})
     ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
     return web.json_response({"success": bool(ok)})
+
+
+def _kommo_run_salesbot(lead_id: int, bot_id: int = 60151) -> tuple[bool, str]:
+    url = f"{KOMMO_BASE_URL}/api/v2/salesbot/run"
+    payload = [{"bot_id": int(bot_id), "entity_id": int(lead_id), "entity_type": 2}]
+    try:
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=12)
+        if resp.status_code in (200, 202):
+            return True, ""
+        return False, f"Kommo status {resp.status_code}: {resp.text[:120]}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _kommo_stop_salesbot(lead_id: int, bot_id: int = 60151) -> tuple[bool, str]:
+    url = f"{KOMMO_BASE_URL}/api/v4/bots/{int(bot_id)}/stop"
+    payload = {"entity_id": int(lead_id), "entity_type": 2}
+    try:
+        resp = _http.post(url, headers=HEADERS, json=payload, timeout=12)
+        if resp.status_code in (200, 202, 204):
+            return True, ""
+    except Exception:
+        pass
+    try:
+        v2_url = f"{KOMMO_BASE_URL}/api/v2/salesbot/stop"
+        v2_payload = [{"bot_id": int(bot_id), "entity_id": int(lead_id), "entity_type": 2}]
+        resp2 = _http.post(v2_url, headers=HEADERS, json=v2_payload, timeout=12)
+        if resp2.status_code in (200, 202, 204):
+            return True, ""
+        return False, f"Kommo status {resp2.status_code}: {resp2.text[:120]}"
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def handle_api_deal_bot_run(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    bot_id = int(data.get("bot_id") or 60151)
+    ok, err_msg = await asyncio.to_thread(_kommo_run_salesbot, lead_id, bot_id)
+    return web.json_response({"success": ok, "error": err_msg if not ok else None})
+
+
+async def handle_api_deal_bot_stop(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    bot_id = int(data.get("bot_id") or 60151)
+    ok, err_msg = await asyncio.to_thread(_kommo_stop_salesbot, lead_id, bot_id)
+    return web.json_response({"success": ok, "error": err_msg if not ok else None})
 
 
 _CHAT_PINS_FILE = "chat_pins.json"
@@ -15571,6 +15730,10 @@ async def start_webhook_server():
     app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/read", handle_api_deal_chat_read)
+    app_web.router.add_route('OPTIONS', '/api/deal/bot/run', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/bot/run", handle_api_deal_bot_run)
+    app_web.router.add_route('OPTIONS', '/api/deal/bot/stop', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/bot/stop", handle_api_deal_bot_stop)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/pin', lambda r: web.Response())
     app_web.router.add_get("/api/deal/chat/pin", handle_api_deal_chat_pin)
     app_web.router.add_post("/api/deal/chat/pin", handle_api_deal_chat_pin)

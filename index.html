@@ -657,7 +657,7 @@
             .chats-pane { transform:translateX(100%); z-index:2; }
             .chats-app.chat-open .chats-list { transform:translateX(-22%); }
             .chats-app.chat-open .chats-pane { transform:translateX(0); }
-            .chats-back { display:inline-flex; align-items:center; justify-content:center; }
+            .chats-back { display:none !important; }
             #chats-pane .deal-shell-body { grid-template-columns:1fr; }
             #chats-pane .deal-side { display:none !important; }
             body.chats-screen:has(.chats-app.chat-open) #tab-bar,
@@ -3653,8 +3653,15 @@ function waMeUrl(phone) {
     return 'https://wa.me/' + digits;
 }
 function dealChatActor(item) {
+    if(item && (item.is_bot || item.bot_name)) {
+        return '🤖 ' + (item.bot_name || 'İİ Bot');
+    }
     const deal = _dealViewState && _dealViewState.deal;
     const author = String((item && item.author) || '').trim();
+    const low = author.toLowerCase();
+    if(low.includes('salesbot') || low.includes('gpt agent') || low.includes('ii bot') || low.includes('i̇i̇ bot')) {
+        return '🤖 ' + author;
+    }
     const employee = dealEmployeeName(deal);
     if(item && item.is_comment) return author || employee;
     if(item && item.incoming) {
@@ -3762,6 +3769,9 @@ function dealChatItemHtml(item, token, readonly) {
     }
     if(isDealMissedCall(item)) {
         return dealPlainSystemHtml('Buraxılmış zəng', when);
+    }
+    if(item && (item.message_type === 'reaction' || (item.incoming && !item.text && !item.media_url && !item.file_uuid))) {
+        return dealPlainSystemHtml(item.text || '💬 Müştəri reaksiya bildirdi', when);
     }
     if(isDealEditedContextNotice(item && item.text)) {
         return dealSystemNoticeHtml(dealEditedNoticeText(), when);
@@ -3889,7 +3899,8 @@ function callItemsFromDeal(deal) {
     }));
 }
 function dealTimelineMessages(chat, deal) {
-    const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text) && !(isPlaceholderChatText(item.text) && !item.media_url && !item.file_uuid));
+    let rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text) && !(isPlaceholderChatText(item.text) && !item.media_url && !item.file_uuid));
+    rows = dropTailStubs(rows);
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
     // Link media from deal.notes if a chat item is a media notice and lacks media_url/file_uuid
     rows.forEach(item => {
@@ -4022,6 +4033,12 @@ function deliveryRank(status) {
     if(st === 'sent' || st === '0' || st === 'sending') return 1;
     return 0;
 }
+function cleanMessageText(text) {
+    const raw = String(text || '').trim();
+    if(!raw) return '';
+    const parts = splitQuotePrefix(raw);
+    return (parts && parts.body) ? parts.body.trim() : raw;
+}
 function sameChatMessage(a, b) {
     if(!a || !b) return false;
     if(!!a.incoming !== !!b.incoming) return false;
@@ -4039,10 +4056,12 @@ function sameChatMessage(a, b) {
     if(medA && medB && medA === medB) return true;
     const txtA = String(a.text || '').trim();
     const txtB = String(b.text || '').trim();
+    const cleanA = cleanMessageText(txtA);
+    const cleanB = cleanMessageText(txtB);
     const tsA = Number(a.created_at || 0);
     const tsB = Number(b.created_at || 0);
-    if(txtA && txtA === txtB) {
-        if(tsA && tsB && Math.abs(tsA - tsB) <= 180) return true;
+    if((txtA && txtA === txtB) || (cleanA && cleanA === cleanB)) {
+        if(tsA && tsB && Math.abs(tsA - tsB) <= 300) return true;
         if(!tsA || !tsB) return true;
     }
     return chatMessageKey(a) === chatMessageKey(b);
@@ -4130,13 +4149,17 @@ function dropTailStubs(rows) {
         if(!row || !isStub(row)) return !!row;
         const rowIsMedia = isDealMediaNotice(row.text) || String(row.message_type || '').toLowerCase() === 'picture';
         const rowText = String(row.text || '').trim();
+        const rowClean = cleanMessageText(rowText);
         const rowTs = Number(row.created_at || 0);
         return !real.some(item => {
             if(!!item.incoming !== !!row.incoming) return false;
             const itemIsMedia = isDealMediaNotice(item.text) || String(item.message_type || '').toLowerCase() === 'picture';
             const itemTs = Number(item.created_at || 0);
-            if(rowIsMedia && itemIsMedia && Math.abs(itemTs - rowTs) <= 180) return true;
-            return rowText && rowText === String(item.text || '').trim() && (!rowTs || !itemTs || Math.abs(itemTs - rowTs) <= 180);
+            if(rowIsMedia && itemIsMedia && Math.abs(itemTs - rowTs) <= 300) return true;
+            const itemText = String(item.text || '').trim();
+            const itemClean = cleanMessageText(itemText);
+            const sameTxt = (rowText && rowText === itemText) || (rowClean && itemClean && rowClean === itemClean);
+            return sameTxt && (!rowTs || !itemTs || Math.abs(itemTs - rowTs) <= 300);
         });
     });
 }
@@ -6496,6 +6519,35 @@ function paintDealViewModal(deal, readonly, opts) {
         pane.innerHTML = dealWorkspaceHtml(deal, token, readonly, {inbox: true});
         document.getElementById('chats-app')?.classList.add('chat-open');
         root = pane;
+        if(window.history && history.pushState) {
+            history.pushState({ chatOpen: true, leadId: deal.id }, '');
+        }
+        if(window.Telegram && Telegram.WebApp && Telegram.WebApp.BackButton) {
+            Telegram.WebApp.BackButton.show();
+            Telegram.WebApp.BackButton.onClick(closeInboxChat);
+        }
+        let _touchStartX = 0;
+        let _touchStartY = 0;
+        let _touchActive = false;
+        pane.ontouchstart = (e) => {
+            if(!window.matchMedia('(max-width: 1023px)').matches) return;
+            if(e.touches.length !== 1) return;
+            const t = e.touches[0];
+            _touchStartX = t.clientX;
+            _touchStartY = t.clientY;
+            _touchActive = _touchStartX <= 60;
+        };
+        pane.ontouchend = (e) => {
+            if(!_touchActive) return;
+            _touchActive = false;
+            if(e.changedTouches.length !== 1) return;
+            const t = e.changedTouches[0];
+            const dx = t.clientX - _touchStartX;
+            const dy = t.clientY - _touchStartY;
+            if(dx > 65 && Math.abs(dy) < 60) {
+                closeInboxChat();
+            }
+        };
         const back = document.getElementById('chats-back');
         if(back) back.onclick = closeInboxChat;
         const dealBtn = document.getElementById('chats-open-deal');
@@ -7826,7 +7878,7 @@ function bindChatsRowMenu(box) {
         if(Math.abs(event.movementX) + Math.abs(event.movementY) > 6) cancelPress();
     });
 }
-function closeInboxChat() {
+function closeInboxChat(opts) {
     persistOpenChatDraft();
     hideChatMsgMenu();
     closeDealInfoDrawer();
@@ -7838,6 +7890,13 @@ function closeInboxChat() {
     const app = document.getElementById('chats-app');
     const pane = document.getElementById('chats-pane');
     app?.classList.remove('chat-open');
+    if(window.Telegram && Telegram.WebApp && Telegram.WebApp.BackButton) {
+        Telegram.WebApp.BackButton.hide();
+        Telegram.WebApp.BackButton.offClick(closeInboxChat);
+    }
+    if(!(opts && opts.fromPopState) && window.history && history.state && history.state.chatOpen) {
+        history.back();
+    }
     const seq = ++_chatSlideSeq;
     window.setTimeout(() => {
         if(seq !== _chatSlideSeq) return;
@@ -7845,6 +7904,12 @@ function closeInboxChat() {
         renderChatsList();
     }, 280);
 }
+window.addEventListener('popstate', () => {
+    const app = document.getElementById('chats-app');
+    if(app && app.classList.contains('chat-open')) {
+        closeInboxChat({ fromPopState: true });
+    }
+});
 let _chatsPollTimer = null;
 function stopChatsPolling() {
     if(_chatsPollTimer) { clearInterval(_chatsPollTimer); _chatsPollTimer = null; }
