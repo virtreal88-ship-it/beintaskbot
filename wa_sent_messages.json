@@ -314,7 +314,8 @@
     "14159141403": 58657872,
     "994997021110": 78022517,
     "5239151781171635": 77975561,
-    "994519909911": 77997887
+    "994519909911": 77997887,
+    "994102369525": 78034859
   },
   "78016925": [
     {
@@ -340,7 +341,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790222070,
+    "at": 1790251291,
     "fields": [
       "messages"
     ]
@@ -841,6 +842,30 @@
       "file_uuid": "",
       "file_name": "",
       "delivery_status": "failed",
+      "via_cloud": true
+    }
+  ],
+  "78034859": [
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMzY5NTI1FQIAEhggQTU1OTk4QkMzQkY3OUQ4N0ZGRjdDNDNCOTZBQkE1QjUA",
+      "external_id": "wamid.HBgMOTk0MTAyMzY5NTI1FQIAEhggQTU1OTk4QkMzQkY3OUQ4N0ZGRjdDNDNCOTZBQkE1QjUA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Smart",
+      "phone": "994102369525",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790251288,
+      "created": "24.09.2026 16:01",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
       "via_cloud": true
     }
   ]
