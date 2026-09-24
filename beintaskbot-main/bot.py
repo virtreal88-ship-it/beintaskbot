@@ -6046,6 +6046,8 @@ async def _hydrate_inbox_lead(
         int(lead_id), preview, created_at, origin,
         talk_id=talk_id, message_id=message_id,
     )
+    _invalidate_deal_chat_cache(int(lead_id))
+    record_lead_pulse_event(int(lead_id), "incoming_message", preview=preview, incoming_at=created_at)
 
 
 async def _hydrate_inbox_contact(
@@ -6235,7 +6237,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         ]
         if incoming_rows:
             for row in incoming_rows:
-                entity_type = str(row.get("entity_type") or "lead").strip().lower()
+                entity_type = str(row.get("entity_type") or row.get("element_type") or "lead").strip().lower()
                 try:
                     entity_id = int(row.get("entity_id") or row.get("element_id") or 0)
                 except (TypeError, ValueError):
@@ -6272,6 +6274,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                             talk_id=talk_id, message_id=message_id,
                             media_url=media_url, file_uuid=file_uuid, message_type=mtype,
                         )
+                        _invalidate_deal_chat_cache(mapped)
+                        record_lead_pulse_event(mapped, "incoming_message", preview=preview, incoming_at=created_at)
                         if not _apply_inbox_incoming(mapped, preview, created_at, origin):
                             asyncio.create_task(_hydrate_inbox_lead(
                                 mapped, preview, created_at, origin, talk_id, message_id,
@@ -6288,6 +6292,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     talk_id=talk_id, message_id=message_id,
                     media_url=media_url, file_uuid=file_uuid, message_type=mtype,
                 )
+                _invalidate_deal_chat_cache(entity_id)
+                record_lead_pulse_event(entity_id, "incoming_message", preview=preview, incoming_at=created_at)
                 if not _apply_inbox_incoming(entity_id, preview, created_at, origin):
                     asyncio.create_task(_hydrate_inbox_lead(
                         entity_id, preview, created_at, origin, talk_id, message_id,
@@ -9971,11 +9977,13 @@ def _send_kommo_talk_message(
 ) -> tuple[bool, str, int]:
     # Official send_message is text/attachment only and silently drops reply_to.
     # Native quotes go through amojo / ajax / talks messages only.
+    att_clean = dict(attachment) if isinstance(attachment, dict) else None
+    is_voice = bool(att_clean and att_clean.pop("is_voice", False))
     payload: dict = {}
     if text:
         payload["text"] = text
-    if attachment:
-        payload["attachment"] = attachment
+    if att_clean:
+        payload["attachment"] = att_clean
     if not payload:
         return False, "Mesaj boş ola bilməz", 0
     reply_id = str(reply_to or "").strip()
@@ -9992,8 +10000,8 @@ def _send_kommo_talk_message(
         ajax = {"X-Requested-With": "XMLHttpRequest"}
         if chat_id:
             amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
-            if attachment:
-                amojo_body["attachment"] = attachment
+            if att_clean:
+                amojo_body["attachment"] = {**att_clean, "type": "voice"} if is_voice else att_clean
             if reply_text:
                 amojo_body["reply_to"]["message"]["type"] = "text"
                 amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
@@ -10007,7 +10015,16 @@ def _send_kommo_talk_message(
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
     if not reply_id:
-        attempts.append((talk_send, payload, {}))
+        if is_voice and att_clean:
+            voice_att = {**att_clean, "type": "voice"}
+            attempts.append((talk_send, {"attachment": voice_att}, {}))
+            attempts.append((talk_send, {"attachment": att_clean}, {}))
+            if text:
+                attempts.append((talk_send, {"text": text, "attachment": att_clean}, {}))
+            else:
+                attempts.append((talk_send, {"text": VOICE_CAPTION_TEXT, "attachment": att_clean}, {}))
+        else:
+            attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_body = ""
     last_status = 0
@@ -10992,6 +11009,7 @@ def _remember_sent_message(lead_id: int, item: dict) -> None:
         store[key] = rows[-_WA_SENT_PER_LEAD:]
     _schedule_sent_messages_save()
     try:
+        _store_chat_tail(int(lead_id), [item])
         _invalidate_deal_chat_cache(int(lead_id))
     except Exception:
         pass
@@ -11970,6 +11988,8 @@ def _ingest_cloud_incoming(value: dict) -> None:
             _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
+        _invalidate_deal_chat_cache(lead_id)
+        record_lead_pulse_event(lead_id, "incoming_message", preview=preview, incoming_at=created)
         _notify_cloud_chat_incoming(lead_id, name, preview, phone)
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
@@ -12013,6 +12033,8 @@ def _ingest_cloud_echoes(value: dict) -> None:
             _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
+        _invalidate_deal_chat_cache(lead_id)
+        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0)
         logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
 
 
@@ -13393,7 +13415,7 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
 _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
 _chat_open_preview: dict[int, list] = {}
 _deal_chat_cache_lock = threading.Lock()
-_DEAL_CHAT_CACHE_TTL = 25.0
+_DEAL_CHAT_CACHE_TTL = 3.0
 _chat_collect_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deal-chat")
 
 
@@ -13799,6 +13821,8 @@ async def _refresh_one_talk_tail(lead_id: int, talk_id: int, origin: str) -> Non
         rows = await asyncio.to_thread(_load)
         if rows:
             _store_chat_tail(lead_id, rows)
+            _invalidate_deal_chat_cache(int(lead_id))
+            record_lead_pulse_event(int(lead_id), "deal_update")
     except Exception as exc:
         logger.warning("Talk tail refresh failed lead=%s talk=%s: %s", lead_id, talk_id, exc)
     finally:
@@ -14343,7 +14367,15 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     want_quote = bool(reply_to_message_id or reply_external or reply_preview)
     drive_uuid = ""
     drive_version = ""
+    attachment = None
     if upload_raw:
+        is_voice = _looks_voice_upload(upload_name, upload_type)
+        if is_voice:
+            converted, conv_mime, conv_name, _voice_flag = _ffmpeg_voice_for_cloud(upload_raw, upload_name)
+            if converted:
+                upload_raw = converted
+                upload_type = conv_mime
+                upload_name = conv_name
         # Drive keeps a durable copy so the file stays playable inside the app.
         drive_uuid, drive_version = _upload_kommo_drive_bytes(upload_name, upload_raw, upload_type)
         if not drive_uuid or not drive_version:
@@ -14352,6 +14384,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             "type": _attachment_kind(upload_name, upload_type),
             "drive_uuid": drive_uuid,
             "drive_version_uuid": drive_version,
+            "is_voice": is_voice,
         }
     ok = False
     last_error = ""
@@ -14372,9 +14405,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         sent_via_cloud = ok
     if not ok and reply_talk_id:
         kommo_text = text
-        if upload_raw and _looks_voice_upload(upload_name, upload_type) and not kommo_text:
-            # Kommo rejects an empty text even when a file is attached.
-            kommo_text = VOICE_CAPTION_TEXT
+        if upload_raw and not _looks_voice_upload(upload_name, upload_type) and not kommo_text:
+            kommo_text = upload_name or "Fayl"
         quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
         social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
         if channel == "whatsapp":
@@ -14485,6 +14517,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     _store_chat_tail(int(lead.get("id") or lead_id), chat)
     if reply_to_message_id:
         _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
+    lid_int = int(lead.get("id") or lead_id)
+    _invalidate_deal_chat_cache(lid_int)
+    record_lead_pulse_event(lid_int, "deal_outgoing", preview=tail_text, incoming_at=0)
     return web.json_response({
         "success": True,
         "chat": chat,
