@@ -6062,8 +6062,17 @@ _user_seen_lock = threading.Lock()
 def _get_user_seen_map(chat_id: int) -> dict[str, int]:
     try:
         data = read_json(_USER_SEEN_FILE) or {}
-        user_data = data.get(str(chat_id)) or {}
-        return user_data if isinstance(user_data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        cid = int(chat_id or 0)
+        target_cids = RUFAT_COMPAT_CHAT_IDS if cid in RUFAT_COMPAT_CHAT_IDS else {cid}
+        merged: dict[str, int] = {}
+        for c in target_cids:
+            user_data = data.get(str(c)) or {}
+            if isinstance(user_data, dict):
+                for k, v in user_data.items():
+                    merged[str(k)] = max(int(merged.get(str(k)) or 0), int(v or 0))
+        return merged
     except Exception:
         return {}
 
@@ -6075,17 +6084,17 @@ def _record_user_seen(chat_id: int, lead_id: int, seen_ts: int = 0) -> None:
         if not lid or not cid:
             return
         ts = int(seen_ts or _time_module.time())
+        target_cids = RUFAT_COMPAT_CHAT_IDS if cid in RUFAT_COMPAT_CHAT_IDS else {cid}
         with _user_seen_lock:
             data = read_json(_USER_SEEN_FILE) or {}
             if not isinstance(data, dict):
                 data = {}
-            user_data = data.get(str(cid)) or {}
-            if not isinstance(user_data, dict):
-                user_data = {}
-            if user_data.get(str(lid)) == ts:
-                return
-            user_data[str(lid)] = ts
-            data[str(cid)] = user_data
+            for c in target_cids:
+                user_data = data.get(str(c)) or {}
+                if not isinstance(user_data, dict):
+                    user_data = {}
+                user_data[str(lid)] = ts
+                data[str(c)] = user_data
             write_json(_USER_SEEN_FILE, data)
         record_lead_pulse_event(lid, "deal_seen", preview="", incoming_at=0)
     except Exception as exc:
@@ -6260,11 +6269,23 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         entity_id, preview, created_at, origin, talk_id, message_id,
                     ))
             return web.Response(status=200, text="OK")
+        is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
+        has_lead_event = any(k.startswith(("leads[status][0]", "leads[add][0]")) for k in data.keys())
+        if is_task_event or has_lead_event:
+            asyncio.create_task(_process_kommo_webhook_background(data))
+        return web.Response(status=200, text="OK")
+    except Exception as e:
+        logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
+        return web.Response(status=200, text="OK")
+
+
+async def _process_kommo_webhook_background(data: dict):
+    try:
         # Detect event type
         is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
         if is_task_event:
             await _handle_kommo_task_webhook(data)
-            return web.Response(status=200, text="OK")
+            return
         add_lead_id = data.get("leads[add][0][id]")
         if add_lead_id:
             try:
@@ -6275,13 +6296,13 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         # Lead status change
         lead_keys = [k for k in data.keys() if k.startswith("leads[status][0]")]
         if not lead_keys:
-            return web.Response(status=200, text="OK")
+            return
         lead_id = data.get("leads[status][0][id]")
         old_status_id = data.get("leads[status][0][old_status_id]")
         new_status_id = data.get("leads[status][0][status_id]")
         pipeline_id = data.get("leads[status][0][pipeline_id]")
         if not lead_id or not new_status_id:
-            return web.Response(status=200, text="OK")
+            return
         lead_id = int(lead_id)
         old_status_id = int(old_status_id) if old_status_id else 0
         new_status_id = int(new_status_id)
@@ -6305,27 +6326,27 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         send_push_notification(str(rufat_chat), "🔄 Mərhələ dəyişdi", f"{rufat_lead.get('name', lead_id)} — {rufat_stage}")
                     except Exception:
                         pass
-            return web.Response(status=200, text="OK")
+            return
         if pipeline_id not in (PIPELINE_ID, RUFAT_PIPELINE_ID):
-            return web.Response(status=200, text="OK")
+            return
         # Suppress webhook echo when bot itself changed the stage
         import time as _time
         if lead_id in _bot_changed_leads:
             if _time.time() - _bot_changed_leads[lead_id] < 120:
                 logger.info(f"Webhook suppressed: bot-initiated stage change for lead {lead_id}")
-                return web.Response(status=200, text="OK")
+                return
             else:
                 del _bot_changed_leads[lead_id]
         # Notify only the target stage; ignore all other Sövdələşmələr stage changes.
         if new_status_id != NOTIFY_STAGE_ID:
             logger.info(f"Webhook ignored: stage {new_status_id} is not Nömrə alınıb")
-            return web.Response(status=200, text="OK")
+            return
         # Deduplicate: same lead+stage within 60s = duplicate webhook
         import time as _time2
         _dedup_key = (lead_id, new_status_id)
         if _dedup_key in _webhook_stage_dedup and _time2.time() - _webhook_stage_dedup[_dedup_key] < 1800:
             logger.info(f"Webhook dedup: lead {lead_id} stage {new_status_id} already processed")
-            return web.Response(status=200, text="OK")
+            return
         _webhook_stage_dedup[_dedup_key] = _time2.time()
         # Cleanup old dedup entries
         _cutoff = _time2.time() - 3600
@@ -6356,7 +6377,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
         admin_chat = get_chat_id_for_kommo_user(10932455)
         if not admin_chat or not _bot_app:
-            return web.Response(status=200, text="OK")
+            return
         # Qiymət təklifi - notification only (task creation is handled in API handler)
         if new_status_id == STAGES["qiymet_teklifi"]:
             msg = (f"💰 *Qiymət təklifi mərhələsinə keçdi:*\n\n"
@@ -6365,10 +6386,9 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-#                send_push_to_admin(f"Qiymət təklifi: {contact_name}", title="💰 Qiymət təklifi")
             except:
                 pass
-            return web.Response(status=200, text="OK")
+            return
         # Stages that require assignee selection + task creation
         _STAGE_TASK_KEYS = {
             STAGES["teqdimat"]: "teqdimat",
@@ -6426,10 +6446,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 sent = await _bot_app.bot.send_message(admin_chat, msg, parse_mode="Markdown", disable_web_page_preview=True)
                 if sent:
                     store_message_lead(admin_chat, sent.message_id, lead_id, lead_name, contact_phone)
-#                send_push_to_admin(f"{contact_name}: {old_stage_name} → {new_stage_name}", title="🔄 Mərhələ dəyişdi")
             except:
                 pass
-        return web.Response(status=200, text="OK")
+    except Exception as exc:
+        logger.error(f"Background webhook processing error: {exc}\n{traceback.format_exc()}")
     except Exception as e:
         logger.error(f"Webhook error: {e}\n{traceback.format_exc()}")
         return web.Response(status=200, text="OK")
@@ -11729,7 +11749,7 @@ def _already_have_wamid(lead_id: int, wamid: str) -> bool:
 
 
 def _update_cloud_status(wamid: str, status: str) -> None:
-    wanted = str(wamid or "")
+    wanted = str(wamid or "").strip()
     mapped = {"sent": "sent", "delivered": "delivered", "read": "read", "failed": "failed"}.get(str(status or "").lower(), "")
     if not wanted or not mapped:
         return
@@ -11741,21 +11761,53 @@ def _update_cloud_status(wamid: str, status: str) -> None:
             if key in {_WA_REACTIONS_KEY, _WA_PHONE_LEADS_KEY} or not isinstance(rows, list):
                 continue
             for row in rows:
-                if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
-                    row["delivery_status"] = mapped
-                    changed = True
+                if not isinstance(row, dict):
+                    continue
+                row_ext = str(row.get("external_id") or "").strip()
+                row_id = str(row.get("id") or "").strip()
+                match = (
+                    row_ext == wanted
+                    or row_id == wanted
+                    or row_id == f"wa-{wanted}"
+                    or row_id == f"sent-{wanted}"
+                    or (wanted.startswith("wamid.") and row_ext == wanted[6:])
+                    or (row_ext.startswith("wamid.") and row_ext[6:] == wanted)
+                )
+                if match:
+                    if _delivery_rank(mapped) > _delivery_rank(str(row.get("delivery_status") or "")):
+                        row["delivery_status"] = mapped
+                        changed = True
                     try:
                         touched_leads.append(int(key))
                     except (TypeError, ValueError):
                         pass
                     break
-            if changed:
-                break
+    with _deal_chat_cache_lock:
+        for lid, rows in list(_chat_open_preview.items()):
+            for item in (rows or []):
+                if not isinstance(item, dict) or item.get("incoming"):
+                    continue
+                i_ext = str(item.get("external_id") or "").strip()
+                i_id = str(item.get("id") or "").strip()
+                match = (
+                    i_ext == wanted
+                    or i_id == wanted
+                    or i_id == f"wa-{wanted}"
+                    or i_id == f"sent-{wanted}"
+                    or (wanted.startswith("wamid.") and i_ext == wanted[6:])
+                    or (i_ext.startswith("wamid.") and i_ext[6:] == wanted)
+                )
+                if match:
+                    if _delivery_rank(mapped) > _delivery_rank(str(item.get("delivery_status") or "")):
+                        item["delivery_status"] = mapped
+                    if lid not in touched_leads:
+                        touched_leads.append(lid)
     if changed:
         _schedule_sent_messages_save()
-        for lid in touched_leads:
-            _invalidate_deal_chat_cache(lid)
-            _overlay_tail_delivery(lid)
+    for lid in touched_leads:
+        _invalidate_deal_chat_cache(lid)
+        _overlay_tail_delivery(lid)
+        record_lead_pulse_event(lid, "deal_delivery", preview="", incoming_at=0)
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
@@ -13615,6 +13667,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
                         break
         if not remembered or lid not in _deal_side_cache:
             _priority_chat_tail(lid)
+        _overlay_sent_delivery(remembered, lid)
         return web.json_response({
             "success": True,
             "preview": True,
@@ -14891,7 +14944,7 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
                 overview["pipelines"] = load_all_kommo_pipelines()
             except Exception as exc:
                 logger.warning("Admin pipelines attach failed: %s", exc)
-        return web.json_response({"success": True, **overview, "is_admin": is_admin(chat_id)})
+        return web.json_response({"success": True, **overview, "seen": _get_user_seen_map(chat_id), "is_admin": is_admin(chat_id)})
     except Exception as exc:
         logger.error("Rüfət overview error: %s", exc)
         payload = {"success": False, "error": "Kommo sorğusu uğursuz oldu."}
@@ -16023,10 +16076,14 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"tecili_alarm_check error for task {task_id}: {exc}")
 
 
+_overdue_notified_tasks: dict[int, float] = {}
+
+
 # ─── Background Jobs ─────────────────────────────────────────────────────────
 async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
     """Check tasks due in 15 minutes and overdue tasks."""
     now = datetime.now(tz=BAKU_TZ)
+    now_ts = _time_module.time()
     # Tasks due in next 15 minutes
     start = now
     end = now + timedelta(minutes=15)
@@ -16088,6 +16145,9 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         # Skip cavab gözlənilir tasks
         if t.get("task_type_id") == 4229224:
             continue
+        if task_id in _overdue_notified_tasks and now_ts - _overdue_notified_tasks[task_id] < 14400:
+            continue
+        _overdue_notified_tasks[task_id] = now_ts
         chat_id = get_chat_id_for_kommo_user(responsible_id)
         if not chat_id:
             continue
