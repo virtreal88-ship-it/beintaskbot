@@ -26,6 +26,7 @@ import traceback
 import asyncio
 import uuid
 import threading
+import collections
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote
@@ -1260,43 +1261,97 @@ def resolve_time_from_text(text: str) -> str | None:
     return None
 
 # ─── Kommo API Helpers ───────────────────────────────────────────────────────
-# Kommo blocks the account above 7 requests per second. Parallel chats, tasks
-# and webhooks share one queue and stay at 6/s so a burst cannot cross the line.
+# Kommo strictly blocks the account above 7 requests per second.
+# We enforce a hard limit of 6 RPS globally across all threads, sessions,
+# webhooks, and background workers using:
+# 1) A sliding 1.05s window to ensure at most 6 requests within ANY rolling second.
+# 2) A minimum interval of 0.170s between consecutive requests.
+# 3) A global cooldown coordinator upon encountering HTTP 429 to pause all threads.
 KOMMO_MAX_RPS = 6
+KOMMO_WINDOW_SEC = 1.05
+KOMMO_MIN_GAP = max(0.170, 1.0 / KOMMO_MAX_RPS)
+
 _kommo_pace_lock = threading.Lock()
+_kommo_history = collections.deque()
 _kommo_next_at = 0.0
+_kommo_global_cooldown_until = 0.0
 
 def _is_kommo_url(url) -> bool:
     try:
-        host = (urlparse(str(url or "")).hostname or "").lower()
+        raw = str(url or "").strip().lower()
+        if "kommo.com" in raw or "amocrm.ru" in raw or "amocrm.com" in raw:
+            return True
+        host = (urlparse(raw).hostname or "").lower()
+        return (
+            host == "kommo.com" or host.endswith(".kommo.com")
+            or host == "amocrm.ru" or host.endswith(".amocrm.ru")
+            or host == "amocrm.com" or host.endswith(".amocrm.com")
+        )
     except Exception:
         return False
-    return host == "kommo.com" or host.endswith(".kommo.com") or host == "amocrm.ru" or host.endswith(".amocrm.ru")
 
-def _kommo_wait() -> None:
-    global _kommo_next_at
-    gap = 1.0 / KOMMO_MAX_RPS
+def _kommo_engage_cooldown(seconds: float = 3.0) -> None:
+    """Pause all Kommo requests across all threads for a cooldown period."""
+    global _kommo_global_cooldown_until, _kommo_next_at
     with _kommo_pace_lock:
         now = _time_module.monotonic()
-        slot = now if now > _kommo_next_at else _kommo_next_at
-        _kommo_next_at = slot + gap
-    delay = slot - _time_module.monotonic()
-    if delay > 0:
-        _time_module.sleep(delay)
+        _kommo_global_cooldown_until = max(_kommo_global_cooldown_until, now + seconds)
+        _kommo_next_at = max(_kommo_next_at, _kommo_global_cooldown_until)
+        _kommo_history.clear()
+
+def _kommo_wait() -> None:
+    """Enforce strict global rate limiting (<= 6 RPS) across all threads."""
+    global _kommo_next_at, _kommo_global_cooldown_until
+    while True:
+        cooldown_delay = 0.0
+        with _kommo_pace_lock:
+            now = _time_module.monotonic()
+            if now < _kommo_global_cooldown_until:
+                cooldown_delay = _kommo_global_cooldown_until - now
+        if cooldown_delay > 0:
+            _time_module.sleep(cooldown_delay)
+            continue
+
+        with _kommo_pace_lock:
+            now = _time_module.monotonic()
+            if now < _kommo_global_cooldown_until:
+                continue
+            base = max(now, _kommo_next_at)
+            while _kommo_history and _kommo_history[0] <= base - KOMMO_WINDOW_SEC:
+                _kommo_history.popleft()
+            if len(_kommo_history) >= KOMMO_MAX_RPS:
+                slot = max(base, _kommo_history[0] + KOMMO_WINDOW_SEC)
+            else:
+                slot = base
+            _kommo_next_at = slot + KOMMO_MIN_GAP
+            _kommo_history.append(slot)
+
+        delay = slot - _time_module.monotonic()
+        interrupted = False
+        while delay > 0:
+            _time_module.sleep(min(delay, 0.05))
+            if _time_module.monotonic() < _kommo_global_cooldown_until:
+                interrupted = True
+                break
+            delay = slot - _time_module.monotonic()
+
+        if interrupted:
+            continue
+        return
 
 _orig_session_request = requests.Session.request
 
 def _paced_session_request(self, method, url, *args, **kwargs):
     kommo = _is_kommo_url(url)
     response = None
-    for attempt in range(2):
+    for attempt in range(3):
         if kommo:
             _kommo_wait()
         response = _orig_session_request(self, method, url, *args, **kwargs)
-        if not kommo or getattr(response, "status_code", 0) != 429 or attempt:
+        if not kommo or getattr(response, "status_code", 0) != 429 or attempt >= 2:
             return response
-        logger.warning("Kommo returned 429; waiting before one retry")
-        _time_module.sleep(1.0)
+        logger.warning("Kommo returned 429 on attempt %s; initiating global cooldown", attempt + 1)
+        _kommo_engage_cooldown(2.5 * (attempt + 1))
     return response
 
 requests.Session.request = _paced_session_request
