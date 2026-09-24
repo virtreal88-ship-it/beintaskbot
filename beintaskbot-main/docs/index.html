@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="270">
+    <meta name="pwa-build" content="271">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -397,6 +397,7 @@
         .deal-chat-row.wa-pop { animation:waFlyIn .28s cubic-bezier(.34,1.56,.64,1); }
         .deal-chat-row.in { background:#fff; margin-right:0; border:1px solid #e8ecf0; border-radius:12px 12px 12px 2px; }
         .deal-chat-row.out { background:#ffe8c4; margin-left:0; border-radius:12px 12px 2px 12px; }
+        .deal-chat-row.failed { background:#fee2e2; box-shadow:inset 0 0 0 1px #fca5a5; }
         .chat-row-head { display:flex; align-items:center; gap:5px; font-size:10px; font-weight:600; color:#64748b; margin-bottom:3px; }
         .chat-msg-avatar { width:28px; height:28px; border-radius:50%; object-fit:cover; flex:none; background:#e2e8f0; }
         .deal-chat-row.avatar-only { background:transparent; box-shadow:none; padding:2px 0; max-width:none; }
@@ -413,11 +414,11 @@
         .wa-ticks { letter-spacing:-1.5px; font-size:12px; line-height:1; color:#8696a0; font-weight:600; }
         .wa-ticks.delivered { color:#8696a0; }
         .wa-ticks.read { color:#53bdeb; }
-        .wa-ticks.failed { color:#dc2626; letter-spacing:0; }
+        .wa-ticks.failed { color:#fff; letter-spacing:0; background:#dc2626; border-radius:999px; padding:1px 5px; font-size:11px; }
+        .wa-state.failed { color:#fff; background:#dc2626; border-radius:999px; padding:2px 7px; font-size:11px; font-weight:700; }
         .wa-ticks.sending { font-size:11px; letter-spacing:0; color:#8696a0; display:inline-block; animation:waTickPulse 1.4s ease-in-out infinite; }
         @keyframes waTickPulse { 0%, 100% { opacity:.45; transform:scale(.92); } 50% { opacity:1; transform:scale(1.05); } }
         .wa-state { font-size:9px; font-weight:600; color:#9aa7b0; letter-spacing:.01em; }
-        .wa-state.failed { color:#dc2626; }
         .chat-reply-btn { flex:none; border:0; background:transparent; color:#8696a0; font-size:15px; font-weight:600; line-height:1; padding:4px; cursor:pointer; opacity:.55; }
         .deal-chat-wrap:hover .chat-reply-btn, .deal-chat-wrap:focus-within .chat-reply-btn { opacity:1; color:#54656f; }
         .chat-pin-mark { display:none; color:#8696a0; line-height:1; }
@@ -1156,6 +1157,8 @@
 
 <div id="task-edit-modal" onclick="if(event.target===this) closeTaskEditModal()">
     <div class="task-edit-card" onclick="event.stopPropagation()">
+        <input id="modal-task-client" placeholder="Müştəri adı">
+        <input id="modal-task-phone" type="tel" placeholder="Telefon">
         <textarea id="modal-task-desc" placeholder="Mətni yazın..."></textarea>
         <input type="datetime-local" id="modal-task-deadline" class="mt-3">
         <select id="modal-task-type" class="mt-3">
@@ -3535,10 +3538,17 @@ function dealLastClientMessage(deal) {
     }
     return '';
 }
+function isChatAudioItem(item) {
+    if(!item) return false;
+    const kind = String(item.message_type || item.type || '').toLowerCase();
+    if(kind === 'audio' || kind === 'voice' || kind === 'ptt') return true;
+    const blob = String(item.file_name || '') + ' ' + String(item.media_url || '');
+    return /\.(ogg|opus|mp3|m4a|wav|aac|oga)(\?|$)/i.test(blob);
+}
 function chatRowPreviewText(item) {
     if(!item || item.is_comment || item.preview) return '';
     const kind = String(item.message_type || item.type || '').toLowerCase();
-    if(kind === 'audio' || kind === 'voice' || kind === 'ptt') return '🎤 Səs';
+    if(isChatAudioItem(item)) return '🎤 Səs';
     if(kind === 'video') return '🎬 Video';
     const text = String(item.text || '').replace(/\s+/g, ' ').trim();
     if(isDealMediaNotice(text) || kind === 'picture' || kind === 'image') return '📷 Şəkil';
@@ -3547,6 +3557,7 @@ function chatRowPreviewText(item) {
     if(/^(yeni mesaj|çat|mesaj)$/i.test(text)) return '';
     return text.slice(0, 140);
 }
+const _dealPreviewHold = {};
 function dealLastMessageText(deal) {
     if(!deal || !deal.id) return '';
     const remembered = getRememberedChat(deal.id);
@@ -3568,8 +3579,13 @@ function dealLastMessageText(deal) {
         direct = isDealMediaNotice(directRaw) ? '📷 Şəkil' : directRaw.slice(0, 140);
     }
     const incomingAt = Number(deal.last_incoming_at || 0);
-    if(direct && (!fromRows || (incomingAt && rowAt && incomingAt > rowAt))) return direct;
-    return fromRows || direct;
+    const next = (direct && (!fromRows || (incomingAt && rowAt && incomingAt > rowAt + 2))) ? direct : (fromRows || direct);
+    const id = String(deal.id);
+    const held = _dealPreviewHold[id];
+    const now = Date.now();
+    if(held && held.text && next && held.text !== next && now - held.at < 2500) return held.text;
+    if(next) _dealPreviewHold[id] = {text: next, at: held && held.text === next ? held.at : now};
+    return next;
 }
 function dealTasksHtml(deal) {
     const allTasks = Array.isArray(deal && deal.tasks) ? deal.tasks.filter(item => !isDealTaskCompleted(item)) : [];
@@ -3634,6 +3650,9 @@ function dealMediaBlock(item, token) {
     const src = dealMediaSrc(raw, token, uuid, {noteId: item && item.id, entityType: item && item.entity_type, entityId: item && item.entity_id});
     if(!src) return '';
     const safe = escapeHtml(src);
+    if(!isCall && isChatAudioItem(item)) {
+        return audioWaitHtml(src);
+    }
     if(!isCall && (type === 'picture' || type === 'sticker' || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(raw + fileName))) {
         return `<img class="deal-zoom" src="${safe}" alt="">`;
     }
@@ -3846,7 +3865,9 @@ function dealChatItemHtml(item, token, readonly) {
     const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(reactKey)}" title="Reaksiya">☺</button>` : '';
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     let displayText = item.text || '';
-    if(isDealMediaNotice(displayText)) {
+    if(isChatAudioItem(item)) {
+        if(isDealMediaNotice(displayText) || /^(📷\s*)?şəkil(\s*\(.*\))?$/i.test(String(displayText).trim())) displayText = '';
+    } else if(isDealMediaNotice(displayText)) {
         if(item.media_url || item.file_uuid) {
             displayText = '';
         } else {
@@ -3863,7 +3884,8 @@ function dealChatItemHtml(item, token, readonly) {
     const msgId = String(item.id || '');
     const msgAttr = msgId ? ` data-msg-id="${escapeHtml(msgId)}"` : '';
     const carousel = waCarouselHtml(item && item.cards);
-    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
+    const failed = !item.incoming && /^(error|failed|undelivered)$/i.test(String(item.delivery_status || item.status || ''));
+    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
     const body = carousel ? `<div class="wa-carousel-stack">${row}${carousel}</div>` : row;
     return `<div class="deal-chat-wrap ${cls}${carousel ? ' has-carousel' : ''}">${body}${replyBtn}</div>`;
 }
@@ -3969,9 +3991,11 @@ function dealTimelineMessages(chat, deal) {
                 item.media_url = foundNote.media_url || '';
                 item.file_uuid = foundNote.file_uuid || '';
                 item.file_name = foundNote.file_name || item.file_name || '';
-                item.message_type = foundNote.message_type || 'picture';
+                const noteKind = String(foundNote.message_type || '').toLowerCase();
+                const audioNote = noteKind === 'audio' || noteKind === 'voice' || noteKind === 'ptt' || isChatAudioItem(foundNote);
+                item.message_type = audioNote ? 'audio' : (foundNote.message_type || 'picture');
                 if(isDealMediaNotice(item.text)) {
-                    item.text = foundNote.file_name || '';
+                    item.text = audioNote ? '' : (foundNote.file_name || '');
                 }
             }
         }
@@ -3988,6 +4012,18 @@ function dealTimelineMessages(chat, deal) {
         rows.push(item);
     });
     rows.sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    const outgoingVoices = rows.filter(item => item && !item.incoming && isChatAudioItem(item));
+    if(outgoingVoices.length) {
+        rows = rows.filter(item => {
+            if(!item || !item.incoming || isChatAudioItem(item)) return true;
+            const text = String(item.text || '').trim();
+            const fakePhoto = text === '📷 Şəkil' || text === 'Şəkil' || text === '📷 Şəkil (yüklənir...)' || isDealMediaNotice(text);
+            const namedImage = /\.(png|jpe?g|gif|webp|heic)(\?|$)/i.test(String(item.file_name || '') + String(item.media_url || ''));
+            if(!fakePhoto || namedImage) return true;
+            const ts = Number(item.created_at || 0);
+            return !outgoingVoices.some(voice => Math.abs(Number(voice.created_at || 0) - ts) <= 180);
+        });
+    }
     return hydrateDealQuotes(rows);
 }
 function dealChatRowsHtml(chat, token, blocked, loading) {
@@ -4662,23 +4698,22 @@ function paintDealChatThread(opts) {
     const prevHeight = thread.scrollHeight;
     const prevTop = thread.scrollTop;
     applyStoredChatReactions(_dealViewState.messages);
+    _dealViewState.pinning = true;
     thread.innerHTML = dealChatRowsHtml(_dealViewState.messages, _dealViewState.token, _dealViewState.blocked, _dealViewState.loading);
     bindDealChatMedia(thread);
     paintDealPinBar();
     paintDealOlderBar();
-    if(stickBottom && opts && opts.force) {
-        const last = thread.querySelector('.deal-chat-wrap:last-child') || thread.querySelector('.deal-chat-row:last-child');
-        if(last) last.classList.add('fly-in');
-    }
     if(stickBottom) {
         if(opts && opts.smooth) {
             thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
         } else {
             thread.scrollTop = thread.scrollHeight;
         }
+        _dealViewState.anchored = true;
     } else {
         thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
     }
+    _dealViewState.pinning = false;
 }
 function chatsSenderLines() {
     if(isAdmin || IS_RUFAT) return CHAT_SENDER_LINES.slice();
@@ -4905,22 +4940,12 @@ async function loadDealChatLatest() {
     const instant = instantChatRows(deal, remembered);
     const hasRealInstant = instant.some(row => row && !row.preview);
     _dealViewState.fullReady = false;
+    _dealViewState.atBottom = true;
     _dealViewState.loading = !hasRealInstant;
-    _dealViewState.messages = instant;
-    paintDealChatThread({stickBottom: true, force: true});
-    let tail = null;
-    try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
-    if(tail && tail.success && !tail.stale && requestMatchesDeal(seq, deal && deal.id)) {
-        applyDealSidePreview(tail);
-        if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
-        const hasTailMessages = Array.isArray(tail.chat) && tail.chat.filter(row => row && !row.preview).length > 0;
-        if(hasTailMessages) {
-            applyDealChatTail(seq, deal && deal.id, tail.chat);
-        }
-    }
+    _dealViewState.messages = hasRealInstant ? instant : [];
+    paintDealChatThread({stickBottom: true});
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-
-    // Direct fetch fallback without 12x 1.2s delay - always load full conversation history
+    let painted = false;
     try {
         const page = await fetchDealChatPage();
         if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
@@ -4929,19 +4954,19 @@ async function loadDealChatLatest() {
             const chatRows = Array.isArray(page.chat) ? page.chat : [];
             if(chatRows.length) {
                 applyDealChatPage(seq, deal && deal.id, chatRows, page.chat_blocked, page.has_more);
-                return;
+                painted = true;
             }
         }
     } catch(_err) {}
-
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    _dealViewState.loading = false;
-    _dealViewState.fullReady = true;
-    paintDealChatThread({stickBottom: true, force: true});
-    // Ensure snapshot details (notes, tasks, calls) are also populated in background
+    if(!painted) {
+        _dealViewState.loading = false;
+        _dealViewState.fullReady = true;
+        paintDealChatThread({stickBottom: true});
+    }
     ensureDealSnapshotLoaded(deal, false).then(() => {
-        if(requestMatchesDeal(seq, deal && deal.id)) {
-            paintDealChatThread({stickBottom: false, force: true});
+        if(requestMatchesDeal(seq, deal && deal.id) && _dealViewState && _dealViewState.atBottom !== false) {
+            paintDealChatThread({stickBottom: true});
         }
     }).catch(() => {});
 }
@@ -5389,7 +5414,9 @@ function bindDealSideActions(deal) {
                 task_type_id: item.task_type_id || '4232112',
                 assigneeName: item.responsible || '',
                 contact_name: deal.contact_name || '',
-                lead_name: deal.name || ''
+                lead_name: deal.name || '',
+                phone: (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '',
+                lead_id: deal.id
             });
         };
     });
@@ -5555,9 +5582,16 @@ function bindDealChatThread() {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread) return;
     thread.addEventListener('scroll', () => {
-        if(!_dealViewState || _dealViewState.loading) return;
-        if(thread.scrollTop > 32) return;
-        loadOlderDealChat();
+        if(!_dealViewState || _dealViewState.loading || _dealViewState.loadingOlder || _dealViewState.pinning) return;
+        const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+        if(gap < 48) {
+            _dealViewState.anchored = true;
+            _dealViewState.atBottom = true;
+        } else if(gap > 140) {
+            _dealViewState.atBottom = false;
+        }
+        if(!_dealViewState.anchored || gap < 80 || thread.scrollTop > 48) return;
+        loadOlderDealChat(true);
     });
 }
 function switchDealChatChannel(channel) {
@@ -6480,8 +6514,8 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
             </div>
             </div>
         </div>`;
-    const inbox = !!(opts && opts.inbox);
-    const shareBtn = (!inbox && !(readonly && !isAdmin))
+    const panelOpen = !(opts && opts.inbox);
+    const shareBtn = (panelOpen && !(readonly && !isAdmin))
         ? '<button type="button" id="deal-view-share" class="deal-share-btn" title="Paylaş"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></button>'
         : '';
     return `<div class="deal-shell inbox-shell">
@@ -6495,9 +6529,9 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
             ${waHtml}
             ${readonly ? '' : '<button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et" aria-label="Xülasə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></button>'}
             ${shareBtn}
-            <button type="button" id="chats-open-deal" class="chats-deal-link" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
+            <button type="button" id="chats-open-deal" class="chats-deal-link${panelOpen ? ' on' : ''}" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
         </div>
-        <div class="deal-shell-body show-chat hide-info" id="deal-shell-body">
+        <div class="deal-shell-body show-chat${panelOpen ? '' : ' hide-info'}" id="deal-shell-body">
             <section class="wa-pane">
                 <div id="deal-pin-bar" class="chat-pin-bar" hidden>
                     <button type="button" class="chat-pin-jump" id="deal-pin-jump">
@@ -6614,6 +6648,7 @@ function paintDealViewModal(deal, readonly, opts) {
         root = modal;
         const back = modal.querySelector('#chats-back');
         if(back) back.onclick = closeDealViewModal;
+        if(!window.matchMedia('(max-width: 1023px)').matches) ensureDealSnapshotLoaded(deal, readonly);
     }
     bindDealInfoToggle(deal, readonly);
     paintDealChannels(_dealViewState.channels, _dealViewState.channel);
@@ -7253,7 +7288,6 @@ function chatsIsUnread(deal, seen) {
     const lastSeen = Number(store[String(deal.id)] || 0);
     if(incomingAt && lastSeen >= incomingAt) return false;
     if(store['unread_' + String(deal.id)]) return true;
-    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) return false;
     const outgoingAt = chatsOutgoingAt(deal);
     if(outgoingAt && incomingAt && outgoingAt >= incomingAt) return false;
     if(incomingAt && incomingAt > lastSeen) return true;
@@ -8449,9 +8483,18 @@ function openTaskEditModal(task) {
     const markerMatch = rawDesc.match(/^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Texniki)(?::[\d.]+)?\]\s*/i);
     const cleanDesc = markerMatch ? rawDesc.replace(markerMatch[0], '') : rawDesc;
     const descEl = document.getElementById('modal-task-desc');
+    const clientEl = document.getElementById('modal-task-client');
+    const phoneEl = document.getElementById('modal-task-phone');
     const typeEl = document.getElementById('modal-task-type');
     const dlEl = document.getElementById('modal-task-deadline');
     if(descEl) descEl.value = cleanDesc;
+    const leadKey = String(task.lead_id || task.deal_id || '');
+    let linkedDeal = leadKey ? (samilDeals || []).find(item => String(item.id) === leadKey) : null;
+    if(!linkedDeal && leadKey && _dealViewState && _dealViewState.deal && String(_dealViewState.deal.id) === leadKey) linkedDeal = _dealViewState.deal;
+    const clientName = task.contact_name || task.client_name || task.lead_name || (linkedDeal && dealClientName(linkedDeal)) || '';
+    const clientPhone = task.phone || task.client_phone || (linkedDeal && ((Array.isArray(linkedDeal.phones) && linkedDeal.phones[0]) || linkedDeal.phone)) || '';
+    if(clientEl) clientEl.value = clientName;
+    if(phoneEl) phoneEl.value = clientPhone;
     if(typeEl) {
         const nextType = String(task.task_type_id || task.task_type || '4232112');
         typeEl.value = ['4232112','4239844'].includes(nextType) ? nextType : '4232112';
@@ -8477,7 +8520,9 @@ function openTaskEditModal(task) {
     }
     window._taskEditContext = {
         assigneeName: task.assigneeName || task.assignee_name || (markerMatch ? markerMatch[1] : ''),
-        clientName: task.contact_name || task.lead_name || ''
+        clientName,
+        clientPhone,
+        leadId: task.lead_id || task.deal_id || (linkedDeal && linkedDeal.id) || ''
     };
     document.getElementById('task-edit-modal').classList.add('open');
 }
@@ -8497,10 +8542,12 @@ async function saveTaskEditModal() {
     if(!textInput) { toast('Mətni daxil edin!', true); return; }
     const deadlineVal = document.getElementById('modal-task-deadline')?.value || '';
     const taskType = document.getElementById('modal-task-type')?.value || '';
+    const clientName = (document.getElementById('modal-task-client')?.value || '').trim();
+    const clientPhone = (document.getElementById('modal-task-phone')?.value || '').trim();
     const ctx = window._taskEditContext || {};
     const assigneeName = ctx.assigneeName || (task && task.assigneeName) || (dealTask && dealTask.responsible) || '';
     const finalText = assigneeName ? '[' + assigneeName + '] ' + textInput : textInput;
-    const payload = {action: 'update_task', task_id: taskId, text: finalText, client_name: ctx.clientName || ''};
+    const payload = {action: 'update_task', task_id: taskId, text: finalText, client_name: clientName || ctx.clientName || ''};
     if(deadlineVal) payload.deadline = 'custom:' + deadlineVal;
     if(taskType) payload.task_type = taskType;
     if(assigneeName) payload.assigneeName = assigneeName;
@@ -8519,6 +8566,40 @@ async function saveTaskEditModal() {
         });
         const j = await r.json();
         if(!r.ok || !j.success) throw new Error(j.error || 'Yenilənmədi');
+        const leadId = ctx.leadId || (task && (task.lead_id || task.deal_id)) || (_dealViewState && _dealViewState.deal && _dealViewState.deal.id);
+        const prevName = String(ctx.clientName || '').trim();
+        const prevPhone = String(ctx.clientPhone || '').trim();
+        if(leadId && clientName && (clientName !== prevName || clientPhone !== prevPhone)) {
+            const liveDeal = (_dealViewState && _dealViewState.deal && String(_dealViewState.deal.id) === String(leadId) && _dealViewState.deal)
+                || (samilDeals || []).find(item => String(item.id) === String(leadId))
+                || {id: leadId};
+            const contactId = (liveDeal.contacts && liveDeal.contacts[0] && liveDeal.contacts[0].id) || '';
+            await samilDealAction({action:'deal_edit_contact', lead_id: leadId, contact_id: contactId, name: clientName, phone: clientPhone});
+            liveDeal.contact_name = clientName;
+            liveDeal.name = clientName;
+            liveDeal.phone = clientPhone;
+            liveDeal.phones = clientPhone ? [clientPhone] : (liveDeal.phones || []);
+            const listed = (samilDeals || []).find(item => String(item.id) === String(leadId));
+            if(listed && listed !== liveDeal) {
+                listed.contact_name = clientName;
+                listed.name = clientName;
+                listed.phone = clientPhone;
+                listed.phones = liveDeal.phones;
+            }
+            if(task) {
+                task.contact_name = clientName;
+                task.client_name = clientName;
+                task.phone = clientPhone;
+            }
+            const headName = document.getElementById('deal-head-name');
+            const headPhone = document.getElementById('deal-head-phone');
+            const sideName = document.getElementById('deal-side-name');
+            const sidePhone = document.getElementById('deal-side-phone');
+            if(headName && headName.tagName === 'INPUT') headName.value = clientName;
+            if(sideName) sideName.value = clientName;
+            if(headPhone && headPhone.tagName === 'INPUT') headPhone.value = clientPhone;
+            if(sidePhone) sidePhone.value = clientPhone;
+        }
         if(task) {
             task.desc = finalText;
             task.text = finalText;

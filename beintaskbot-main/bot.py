@@ -9325,7 +9325,11 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
         text = file_name or "Şəkil"
         message_type = "picture"
     is_media_notice = _is_media_notice_text(text)
-    if is_media_notice:
+    audio_hint = message_type in {"audio", "voice", "ptt"} or _looks_audio_name(file_name)
+    if is_media_notice and audio_hint:
+        message_type = "audio"
+        text = "Səs mesajı"
+    elif is_media_notice:
         message_type = "picture"
         text = file_name or "Şəkil" if (media or file_uuid) else "📷 Şəkil"
     is_chat = _is_chat_note_type(ntype, file_name, message_type)
@@ -12340,6 +12344,11 @@ def _collect_deal_chat(
     _link_missing_chat_media(chat, lid, contact_ids)
     for item in chat:
         txt = str(item.get("text") or "")
+        if _message_is_voice(item) or _looks_audio_name(str(item.get("file_name") or "")) or _looks_audio_name(str(item.get("media_url") or "")):
+            item["message_type"] = "audio"
+            if _is_media_notice_text(txt) or txt.strip() in {"📷 Şəkil", "Şəkil"}:
+                item["text"] = "Səs mesajı"
+            continue
         if _is_media_notice_text(txt):
             item["message_type"] = "picture"
             if item.get("media_url") or item.get("file_uuid"):
@@ -12383,6 +12392,23 @@ def _collect_deal_chat(
             continue
         if not item.get("is_bot"):
             item.setdefault("author", employee_name or "")
+        if _message_is_voice(item):
+            chat[:] = [
+                row for row in chat
+                if not (
+                    row.get("incoming")
+                    and abs(int(row.get("created_at") or 0) - created) <= 180
+                    and (
+                        _is_media_notice_text(str(row.get("text") or ""))
+                        or str(row.get("text") or "").strip() in {"📷 Şəkil", "Şəkil"}
+                        or (
+                            str(row.get("message_type") or "").lower() == "picture"
+                            and not _looks_image_name(str(row.get("file_name") or ""))
+                            and not _looks_image_name(str(row.get("media_url") or ""))
+                        )
+                    )
+                )
+            ]
         _add_chat(item)
     clean_chat: list[dict] = []
     for candidate in chat:
@@ -12748,7 +12774,11 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
         else:
             message_type = "audio" if media or file_uuid else message_type
     is_media_notice = _is_media_notice_text(text)
-    if is_media_notice:
+    audio_hint = message_type in {"voice", "audio", "ptt"} or _looks_audio_name(file_name)
+    if is_media_notice and audio_hint:
+        message_type = "audio"
+        text = "Səs mesajı"
+    elif is_media_notice:
         message_type = "picture"
         if media or file_uuid:
             text = file_name or ""
