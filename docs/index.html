@@ -3486,13 +3486,17 @@ function dealAudioHtml(deal) {
 }
 function dealLastClientMessage(deal) {
     const direct = String((deal && deal.last_client_message) || '').trim();
-    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(direct)) return direct.replace(/\s+/g, ' ').slice(0, 140);
+    if(direct && !isDealHiddenNotice(direct) && !isDealSystemNoise(direct) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(direct)) {
+        if(isDealMediaNotice(direct)) return '📷 Şəkil';
+        return direct.replace(/\s+/g, ' ').slice(0, 140);
+    }
     const chat = Array.isArray(deal && deal.chat) ? deal.chat : [];
     for(let i = chat.length - 1; i >= 0; i -= 1) {
         const item = chat[i];
         if(!item || !item.incoming || item.is_comment) continue;
         const text = String(item.text || '').trim();
         if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text) || isDealMissedCall(item)) continue;
+        if(isDealMediaNotice(text)) return '📷 Şəkil';
         return text.replace(/\s+/g, ' ').slice(0, 140);
     }
     return '';
@@ -3760,7 +3764,15 @@ function dealChatItemHtml(item, token, readonly) {
     const canReact = !readonly && !item.preview && !!reactKey;
     const reactBtn = canReact ? `<button type="button" class="chat-react-btn" data-react-id="${escapeHtml(reactKey)}" title="Reaksiya">☺</button>` : '';
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
-    const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(item.text || '').trim()) ? '' : linkifyText(item.text || '');
+    let displayText = item.text || '';
+    if(isDealMediaNotice(displayText)) {
+        if(item.media_url || item.file_uuid) {
+            displayText = '';
+        } else {
+            displayText = '📷 Şəkil (yüklənir...)';
+        }
+    }
+    const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(displayText || '').trim()) ? '' : linkifyText(displayText);
     const pinned = isChatItemPinned(item);
     const pinMark = `<span class="chat-pin-mark" title="Sabitlənmiş"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.2 1.6l4.2 4.2-1.1 1.1-1.7-.3-3.8 3.8v1.6L6.6 13 5 11.4 2.4 14 1.3 12.9 4 10.2 2.4 8.6h1.6l3.8-3.8-.3-1.7 1.1-1.1z"/></svg></span>`;
     if(profile && !text && !quote) {
@@ -3829,7 +3841,7 @@ function splitQuotePrefix(text) {
 }
 function commentItemsFromDeal(deal) {
     const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
-    return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat) && item.type !== 'call_in' && item.type !== 'call_out').map(item => ({
+    return notes.filter(item => item && item.text && item.text.trim() !== '⟦silindi⟧' && (item.type === 'common' || !item.is_chat) && item.type !== 'call_in' && item.type !== 'call_out' && !isDealMediaNotice(item.text)).map(item => ({
         id: 'note-' + (item.id || item.created_at || ''),
         is_comment: true,
         incoming: false,
@@ -3860,6 +3872,28 @@ function callItemsFromDeal(deal) {
 }
 function dealTimelineMessages(chat, deal) {
     const rows = (Array.isArray(chat) ? chat : []).filter(item => item && !item.is_comment && !isDealSystemNoise(item.text));
+    const notes = Array.isArray(deal && deal.notes) ? deal.notes : [];
+    // Link media from deal.notes if a chat item is a media notice and lacks media_url/file_uuid
+    rows.forEach(item => {
+        if(!item || item.media_url || item.file_uuid) return;
+        if(isDealMediaNotice(item.text) || String(item.message_type || '').toLowerCase() === 'picture') {
+            const itemTs = Number(item.created_at || 0);
+            const foundNote = notes.find(n => {
+                if(!n || (!n.media_url && !n.file_uuid)) return false;
+                const noteTs = Number(n.created_at || 0);
+                return itemTs && noteTs && Math.abs(itemTs - noteTs) <= 300;
+            });
+            if(foundNote) {
+                item.media_url = foundNote.media_url || '';
+                item.file_uuid = foundNote.file_uuid || '';
+                item.file_name = foundNote.file_name || item.file_name || '';
+                item.message_type = foundNote.message_type || 'picture';
+                if(isDealMediaNotice(item.text)) {
+                    item.text = foundNote.file_name || '';
+                }
+            }
+        }
+    });
     const have = new Set(rows.map(item => String(item.id || '')));
     commentItemsFromDeal(deal).forEach(item => {
         if(have.has(String(item.id))) return;
@@ -3901,6 +3935,10 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
 function isDealSystemNoise(text) {
     const folded = String(text || '').toLowerCase();
     return folded.includes('агенты ии остановлены') || folded.includes('ai agents have been stopped');
+}
+function isDealMediaNotice(text) {
+    const folded = String(text || '').toLowerCase();
+    return folded.includes('вам пришло медиа') || folded.includes('медиа-сообщение') || folded.includes('пожалуйста, подождите загрузки') || folded.includes('пожалуйста, подождите');
 }
 function chatReplyStore() {
     try { return JSON.parse(localStorage.getItem('deal-chat-replies') || '{}') || {}; }
@@ -4050,7 +4088,13 @@ function dropTailStubs(rows) {
     return list.filter(row => {
         const id = String(row && row.id || '');
         if(!id.startsWith('hook-') && !id.startsWith('sent-')) return true;
-        return !real.some(item => String(item.text || '') === String(row.text || '') && !!item.incoming === !!row.incoming && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 20);
+        const rowIsMedia = isDealMediaNotice(row && row.text) || String(row && row.message_type || '').toLowerCase() === 'picture';
+        return !real.some(item => {
+            if(!!item.incoming !== !!row.incoming) return false;
+            const itemIsMedia = isDealMediaNotice(item && item.text) || String(item && item.message_type || '').toLowerCase() === 'picture';
+            if(rowIsMedia && itemIsMedia && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 60) return true;
+            return String(item.text || '') === String(row.text || '') && Math.abs(Number(item.created_at || 0) - Number(row.created_at || 0)) < 20;
+        });
     });
 }
 function requestMatchesDeal(seq, leadId) {
@@ -4695,6 +4739,22 @@ function applyDealSidePreview(payload) {
     }
     if(changed) applyDealSide(deal, !!_dealViewState.readonly);
 }
+function applyDealChatPage(seq, dealId, rows, blocked, hasMore) {
+    if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
+    const incoming = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview);
+    const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
+    const merged = dropTailStubs(mergeDealChat(local, incoming, false));
+    merged.sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    _dealViewState.messages = merged;
+    _dealViewState.loading = false;
+    _dealViewState.fullReady = true;
+    _dealViewState.blocked = !!blocked;
+    _dealViewState.has_more = typeof hasMore === 'boolean' ? hasMore : _dealViewState.has_more;
+    rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
+    paintDealChatThread({stickBottom: true, force: true});
+    markDealChatRead(false);
+    return true;
+}
 function applyDealChatTail(seq, dealId, rows) {
     if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
     const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-15);
@@ -4702,7 +4762,6 @@ function applyDealChatTail(seq, dealId, rows) {
     const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
     _dealViewState.messages = dropTailStubs(mergeDealChat(local, stored, false));
     _dealViewState.loading = false;
-    _dealViewState.fullReady = true;
     _dealViewState.has_more = true;
     rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
     paintDealChatThread({stickBottom: true, force: true});
@@ -4731,15 +4790,17 @@ async function loadDealChatLatest() {
     paintDealChatThread({stickBottom: true, force: true});
     let tail = null;
     try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
-    if(tail && tail.success && !tail.stale) {
+    if(tail && tail.success && !tail.stale && requestMatchesDeal(seq, deal && deal.id)) {
         applyDealSidePreview(tail);
         if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
         const hasTailMessages = Array.isArray(tail.chat) && tail.chat.filter(row => row && !row.preview).length > 0;
-        if(hasTailMessages && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+        if(hasTailMessages) {
+            applyDealChatTail(seq, deal && deal.id, tail.chat);
+        }
     }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
 
-    // Direct fetch fallback without 12x 1.2s delay
+    // Direct fetch fallback without 12x 1.2s delay - always load full conversation history
     try {
         const page = await fetchDealChatPage();
         if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
@@ -4747,7 +4808,7 @@ async function loadDealChatLatest() {
             if(Array.isArray(page.channels) && page.channels.length) applyDealChannels(page.channels);
             const chatRows = Array.isArray(page.chat) ? page.chat : [];
             if(chatRows.length) {
-                applyDealChatTail(seq, deal && deal.id, chatRows);
+                applyDealChatPage(seq, deal && deal.id, chatRows, page.chat_blocked, page.has_more);
                 return;
             }
         }

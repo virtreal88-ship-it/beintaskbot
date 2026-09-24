@@ -5777,7 +5777,10 @@ def _kommo_form_message_rows(data: dict) -> list[dict]:
 
 
 def _incoming_message_preview(text: str, message_type: str) -> str:
-    clean = " ".join(str(text or "").split())[:140]
+    raw = str(text or "").strip()
+    if _is_media_notice_text(raw):
+        return "📷 Şəkil"
+    clean = " ".join(raw.split())[:140]
     if clean:
         return clean
     kind = str(message_type or "").strip().lower()
@@ -6144,6 +6147,13 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     created_at = int(_time_module.time())
                 preview = _incoming_message_preview(str(row.get("text") or ""), str(row.get("message_type") or ""))
                 origin = str(row.get("origin") or "")
+                attachment = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
+                file_uuid = _extract_file_uuid(row) or _extract_file_uuid(attachment)
+                media_url = _extract_media_url(row) or _extract_media_url(attachment)
+                mtype = str(row.get("message_type") or row.get("type") or "").lower()
+                raw_text = str(row.get("text") or "")
+                if _is_media_notice_text(raw_text):
+                    mtype = "picture"
                 try:
                     talk_id = int(row.get("talk_id") or 0)
                 except (TypeError, ValueError):
@@ -6155,6 +6165,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         _capture_incoming_tail(
                             mapped, preview, created_at, origin,
                             talk_id=talk_id, message_id=message_id,
+                            media_url=media_url, file_uuid=file_uuid, message_type=mtype,
                         )
                         if not _apply_inbox_incoming(mapped, preview, created_at, origin):
                             asyncio.create_task(_hydrate_inbox_lead(
@@ -6170,6 +6181,7 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                 _capture_incoming_tail(
                     entity_id, preview, created_at, origin,
                     talk_id=talk_id, message_id=message_id,
+                    media_url=media_url, file_uuid=file_uuid, message_type=mtype,
                 )
                 if not _apply_inbox_incoming(entity_id, preview, created_at, origin):
                     asyncio.create_task(_hydrate_inbox_lead(
@@ -6358,7 +6370,7 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v250 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(status=200, text=f"Bot is running v251 {hook} {incoming}{lead_part}{sub_part}")
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -9010,24 +9022,45 @@ def _extract_nested_text(value, depth: int = 0) -> str:
     return ""
 
 
-def _extract_file_uuid(params: dict) -> str:
-    if not isinstance(params, dict):
+def _extract_file_uuid(params, depth: int = 0) -> str:
+    if depth > 4 or params is None:
         return ""
-    for key in ("file_uuid", "uuid"):
-        val = str(params.get(key) or "").strip()
-        if len(val) >= 32:
-            return val
-    file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
-    for key in ("file_uuid", "uuid"):
-        val = str(file_obj.get(key) or "").strip()
-        if len(val) >= 32:
-            return val
+    if isinstance(params, dict):
+        for key in ("file_uuid", "uuid", "fileId", "file_id", "attachment_id"):
+            val = str(params.get(key) or "").strip()
+            if len(val) >= 32:
+                return val
+        file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
+        for key in ("file_uuid", "uuid", "fileId", "file_id", "attachment_id"):
+            val = str(file_obj.get(key) or "").strip()
+            if len(val) >= 32:
+                return val
+        for key, inner in params.items():
+            if isinstance(inner, (dict, list)):
+                found = _extract_file_uuid(inner, depth + 1)
+                if found:
+                    return found
+    elif isinstance(params, list):
+        for inner in params:
+            found = _extract_file_uuid(inner, depth + 1)
+            if found:
+                return found
     return ""
 
 
 def _looks_audio_name(name: str) -> bool:
     n = str(name or "").casefold()
     return any(n.endswith(ext) for ext in (".ogg", ".mp3", ".m4a", ".wav", ".opus", ".aac", ".oga", ".webm", ".mpeg")) or "voice" in n or "audio" in n
+
+
+def _looks_image_name(name: str) -> bool:
+    n = str(name or "").casefold()
+    return any(n.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp")) or any(token in n for token in ("photo", "image", "şəkil", "sekil", "картинка", "фото"))
+
+
+def _is_media_notice_text(text: str) -> bool:
+    low = str(text or "").casefold()
+    return "вам пришло медиа" in low or "медиа-сообщение" in low or "пожалуйста, подождите загрузки" in low or "пожалуйста, подождите" in low
 
 
 def _looks_profile_photo(file_name: str, message_type: str = "") -> bool:
@@ -9105,10 +9138,10 @@ def _is_chat_note_type(note_type: str, file_name: str = "", message_type: str = 
     if ntype in {"sms_in", "sms_out", "amomail_message", "facebook_message", "instagram_business", "chat", "whatsapp", "telegram", "viber", "waba", "call_in", "call_out", "call_missed"}:
         return True
     if ntype in {"attachment", "file"}:
-        return _looks_audio_name(file_name) or message_type in {"voice", "audio", "picture", "video"}
+        return _looks_audio_name(file_name) or _looks_image_name(file_name) or message_type in {"voice", "audio", "picture", "video"}
     if message_type in {"voice", "audio", "picture", "video", "file", "sticker"}:
         return True
-    if _looks_audio_name(file_name) or _looks_audio_name(combined):
+    if _looks_audio_name(file_name) or _looks_audio_name(combined) or _looks_image_name(file_name):
         return True
     return "message" in ntype or ntype.startswith("sms")
 
@@ -9140,7 +9173,12 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
             message_type = "audio"
     elif ntype in {"attachment", "file"}:
         text = _extract_nested_text(params) or file_name or "Fayl"
-        message_type = "audio" if _looks_audio_name(file_name) else "file"
+        if _looks_audio_name(file_name):
+            message_type = "audio"
+        elif _looks_image_name(file_name) or _looks_image_name(text):
+            message_type = "picture"
+        else:
+            message_type = "file"
     else:
         text = _extract_nested_text(params)
         media = media or _extract_media_url(params)
@@ -9149,10 +9187,18 @@ def _format_deal_note(note: dict, entity_type: str = "leads") -> dict | None:
     if _looks_audio_name(file_name) and not text:
         text = "Səs mesajı"
         message_type = "audio"
+    elif _looks_image_name(file_name) and not text:
+        text = file_name or "Şəkil"
+        message_type = "picture"
+    is_media_notice = _is_media_notice_text(text)
+    if is_media_notice:
+        message_type = "picture"
+        text = file_name or "Şəkil" if (media or file_uuid) else "📷 Şəkil"
     is_chat = _is_chat_note_type(ntype, file_name, message_type)
-    if ntype == "common" and ("səs yazısı" in text.casefold() or "🎤" in text):
+    if ntype == "common" and ("səs yazısı" in text.casefold() or "🎤" in text or is_media_notice):
         is_chat = True
-        message_type = "audio"
+        if not is_media_notice and message_type == "text":
+            message_type = "audio"
     return {
         "id": note.get("id"),
         "entity_id": note.get("entity_id") or None,
@@ -9329,6 +9375,7 @@ def _fetch_talks(lead_id: int, contact_ids: list[int] | None = None, *, include_
     _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
     if include_contacts:
         for contact_id in contact_ids or []:
+            _ingest({"filter[entity_id][]": int(contact_id), "filter[entity_type]": "contact", "limit": 50})
             _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
     return list(talks.values())
 
@@ -11769,7 +11816,14 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
     text = str(note.get("text") or "").strip()
     if _note_is_system_noise(text):
         return None
-    if not text and not str(note.get("media_url") or "").strip() and not str(note.get("file_uuid") or "").strip():
+    media = str(note.get("media_url") or "").strip()
+    file_uuid = str(note.get("file_uuid") or "").strip()
+    is_media_notice = _is_media_notice_text(text)
+    mtype = note.get("message_type") or "text"
+    if is_media_notice:
+        mtype = "picture"
+        text = "" if (media or file_uuid) else "📷 Şəkil"
+    if not text and not media and not file_uuid:
         return None
     incoming = bool(note.get("incoming")) or ntype.startswith("incoming")
     channel = _normalized_channel(note.get("channel"))
@@ -11787,7 +11841,7 @@ def _chat_item_from_note(note: dict, employee_name: str = "") -> dict | None:
         "incoming": incoming,
         "author": author,
         "text": text,
-        "message_type": note.get("message_type") or "text",
+        "message_type": mtype,
         "created_at": int(note.get("created_at") or 0),
         "created": note.get("created") or _deal_fmt_ts(note.get("created_at") or 0),
         "origin": channel,
@@ -11826,7 +11880,66 @@ def _load_kommo_chat_fallback(lid: int, contact_ids: list[int], employee_name: s
             if item["channel"] == "whatsapp" or _is_generic_chat_author(author):
                 item["author"] = employee_name or author
         rows.append(item)
+    for f in _fetch_entity_files_as_chat("leads", lid):
+        rows.append(f)
+    for cid in contact_ids:
+        for f in _fetch_entity_files_as_chat("contacts", int(cid)):
+            rows.append(f)
     return rows
+
+
+def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int]) -> None:
+    needed = [
+        item for item in chat
+        if not str(item.get("media_url") or "").strip() and not str(item.get("file_uuid") or "").strip()
+        and (_is_media_notice_text(str(item.get("text") or "")) or str(item.get("message_type") or "").lower() in {"picture", "audio", "video"})
+    ]
+    if not needed:
+        return
+
+    candidates: list[dict] = []
+    for note in _fetch_entity_notes("leads", lid):
+        if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "audio", "file", "video"}:
+            candidates.append(note)
+    for cid in contact_ids:
+        for note in _fetch_entity_notes("contacts", int(cid)):
+            if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "audio", "file", "video"}:
+                candidates.append(note)
+    lead_files = _fetch_entity_files_as_chat("leads", lid)
+    candidates.extend([f for f in lead_files if f.get("file_uuid") or f.get("media_url")])
+    for cid in contact_ids:
+        c_files = _fetch_entity_files_as_chat("contacts", int(cid))
+        candidates.extend([f for f in c_files if f.get("file_uuid") or f.get("media_url")])
+
+    for item in needed:
+        text = str(item.get("text") or "")
+        match = re.search(r'(?:ID(?:\s+сообщения)?|ID):\s*([A-Za-z0-9_-]+)', text, re.IGNORECASE)
+        target_id = match.group(1).strip() if match else ""
+        item_ts = int(item.get("created_at") or 0)
+
+        best_cand = None
+        best_diff = 99999999
+
+        for cand in candidates:
+            cand_id = str(cand.get("id") or cand.get("msgid") or cand.get("external_id") or "").strip()
+            cand_text = str(cand.get("text") or "")
+            cand_name = str(cand.get("file_name") or "")
+            if target_id and (target_id in cand_id or target_id in cand_text or target_id in cand_name):
+                best_cand = cand
+                break
+            cand_ts = int(cand.get("created_at") or 0)
+            diff = abs(item_ts - cand_ts) if item_ts and cand_ts else 999999
+            if diff <= 600 and diff < best_diff:
+                best_diff = diff
+                best_cand = cand
+
+        if best_cand:
+            item["media_url"] = best_cand.get("media_url") or ""
+            item["file_uuid"] = best_cand.get("file_uuid") or ""
+            item["file_name"] = best_cand.get("file_name") or item.get("file_name") or ""
+            item["message_type"] = best_cand.get("message_type") or "picture"
+            if _is_media_notice_text(text):
+                item["text"] = best_cand.get("file_name") or ""
 
 
 def _collect_deal_chat(
@@ -11867,10 +11980,31 @@ def _collect_deal_chat(
         key = _chat_item_key(item)
         if key in seen_chat:
             return
+        item_text = str(item.get("text") or "").strip()
+        item_ts = int(item.get("created_at") or 0)
+        item_dir = bool(item.get("incoming"))
+        item_uuid = str(item.get("file_uuid") or "").strip()
+        item_media = str(item.get("media_url") or "").strip()
+        for existing in chat:
+            if bool(existing.get("incoming")) != item_dir:
+                continue
+            if abs(int(existing.get("created_at") or 0) - item_ts) <= 5:
+                if (item_uuid and item_uuid == str(existing.get("file_uuid") or "").strip()) or \
+                   (item_media and item_media == str(existing.get("media_url") or "").strip()):
+                    return
+                if item_text and item_text == str(existing.get("text") or "").strip():
+                    if (item_uuid or item_media) and not (existing.get("file_uuid") or existing.get("media_url")):
+                        if item_uuid:
+                            existing["file_uuid"] = item_uuid
+                        if item_media:
+                            existing["media_url"] = item_media
+                        if item.get("message_type"):
+                            existing["message_type"] = item.get("message_type")
+                    return
         seen_chat.add(key)
         chat.append(item)
 
-    talks = _fetch_talks(lid, contact_ids, include_contacts=False)
+    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
     channels = _channels_from_talks(talks, sender_digits)
     if not channels:
         ranked = _ranked_reply_talk_ids(talks)
@@ -11883,8 +12017,18 @@ def _collect_deal_chat(
                 "key": fallback_key,
                 "label": CHAT_CHANNEL_LABELS.get(fallback_key, "WhatsApp"),
                 "talk_id": ranked[0],
+                "chat_id": _talk_chat_id(fallback_talk),
                 "open": True,
                 "sender_phone": _wa_display_number(sender_digits) if fallback_key == "whatsapp" else "",
+            }]
+        else:
+            channels = [{
+                "key": "whatsapp",
+                "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
+                "talk_id": 0,
+                "chat_id": "",
+                "open": True,
+                "sender_phone": _wa_display_number(sender_digits),
             }]
     for row in channels:
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
@@ -11898,12 +12042,17 @@ def _collect_deal_chat(
         target_rows = [channels[0]]
     for row in target_rows:
         talk_id = int(row.get("talk_id") or 0)
-        if not talk_id:
-            continue
+        chat_ref = str(row.get("chat_id") or "")
         channel_key = str(row.get("key") or wanted)
-        messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
+        messages: list[dict] = []
+        blocked = False
+        maybe_more = False
+        if talk_id:
+            messages, blocked, maybe_more = _fetch_talk_messages(talk_id, pages=pages, page_limit=page_limit)
         talk_has_more = talk_has_more or maybe_more
         chat_blocked = chat_blocked or blocked
+        if not messages and chat_ref:
+            messages = _fetch_chat_history_by_chat_id(chat_ref)
         for message in messages:
             formatted = _format_chat_message(message, channel_key)
             if formatted:
@@ -11913,7 +12062,24 @@ def _collect_deal_chat(
                     author = str(formatted.get("author") or "")
                     if channel_key == "whatsapp" or _is_generic_chat_author(author):
                         formatted["author"] = employee_name or author
-            _add_chat(formatted)
+                _add_chat(formatted)
+    if not chat or chat_blocked or len(chat) < 2:
+        fallback_rows = _load_kommo_chat_fallback(lid, contact_ids, employee_name)
+        for fb_item in fallback_rows:
+            _add_chat(fb_item)
+    with _deal_chat_cache_lock:
+        preview_tail = list(_chat_open_preview.get(lid) or [])
+    for tail_item in preview_tail:
+        _add_chat(tail_item)
+    _link_missing_chat_media(chat, lid, contact_ids)
+    for item in chat:
+        txt = str(item.get("text") or "")
+        if _is_media_notice_text(txt):
+            item["message_type"] = "picture"
+            if item.get("media_url") or item.get("file_uuid"):
+                item["text"] = item.get("file_name") or ""
+            else:
+                item["text"] = "📷 Şəkil"
     # Cloud API sends are not returned by Kommo talks, so replay our own log and
     # drop the copies Kommo did mirror back.
     known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
@@ -12264,24 +12430,34 @@ def _format_chat_message(message: dict, origin: str = "") -> dict | None:
     message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
     if message_type in {"incoming", "outgoing"}:
         message_type = str(nested.get("type") or "text")
+    text = str(nested.get("text") or message.get("text") or "").strip()
+    folded = text.casefold()
+    if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
+        return None
     if message_type in {"call", "call_in", "call_out"} or "call" in message_type:
         if _call_is_missed(nested, text) or _call_is_missed(message, text) or _call_is_missed(attachment, text):
             text = "Buraxılmış zəng"
             message_type = "call_missed"
         else:
             message_type = "audio" if media or file_uuid else message_type
-    text = str(nested.get("text") or message.get("text") or "").strip()
-    folded = text.casefold()
-    if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
-        return None
-    if not text:
+    is_media_notice = _is_media_notice_text(text)
+    if is_media_notice:
+        message_type = "picture"
+        if media or file_uuid:
+            text = file_name or ""
+        else:
+            text = "📷 Şəkil"
+    elif not text:
         if message_type in {"voice", "audio"} or _looks_audio_name(file_name):
             text = "Səs mesajı"
             message_type = "audio" if message_type not in {"voice", "audio"} else message_type
-        elif message_type == "picture":
-            text = "Şəkil"
+        elif message_type == "picture" or _looks_image_name(file_name):
+            text = file_name or "Şəkil"
+            message_type = "picture"
         elif message_type in {"file", "video", "sticker"}:
             text = file_name or message_type
+    elif _looks_image_name(file_name) and message_type in {"text", ""}:
+        message_type = "picture"
     direction = str(message.get("type") or message.get("direction") or "")
     incoming = direction == "incoming" or str(author.get("type") or "") == "external"
     if direction not in {"incoming", "outgoing"} and str(author.get("client_id") or ""):
@@ -12399,6 +12575,10 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
             external = wamid or msgid or ""
             if isinstance(message, dict) and not external:
                 external = str(message.get("id") or message.get("msgid") or "").strip()
+            is_media_notice = _is_media_notice_text(text)
+            mtype = "call_missed" if call_event or str(text).startswith("Buraxılmış") else ("picture" if is_media_notice else ("audio" if _looks_audio_name(text) else "text"))
+            if is_media_notice:
+                text = "" if (media or file_uuid) else "📷 Şəkil"
             rows.append({
                 "id": event.get("id") or external,
                 "msgid": msgid or wamid or external,
@@ -12407,7 +12587,7 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
                 "incoming": incoming,
                 "author": KOMMO_USERS.get(event.get("created_by") or event.get("created_by_id"), "") or "",
                 "text": text,
-                "message_type": "call_missed" if call_event or str(text).startswith("Buraxılmış") else ("audio" if _looks_audio_name(text) else "text"),
+                "message_type": mtype,
                 "created_at": created,
                 "created": _deal_fmt_ts(created),
                 "origin": origin or etype,
@@ -12443,13 +12623,15 @@ def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
             # still include unnamed files as possible voice
             name = "Fayl"
         created = int(item.get("created_at") or 0)
+        is_img = _looks_image_name(name)
+        is_aud = _looks_audio_name(name)
         rows.append({
             "id": item.get("id") or uuid,
             "direction": "incoming",
             "incoming": True,
             "author": "",
-            "text": "Səs mesajı" if _looks_audio_name(name) else name,
-            "message_type": "audio" if _looks_audio_name(name) else "file",
+            "text": "Səs mesajı" if is_aud else ("Şəkil" if is_img else name),
+            "message_type": "audio" if is_aud else ("picture" if is_img else "file"),
             "created_at": created,
             "created": _deal_fmt_ts(created),
             "origin": "file",
@@ -12767,6 +12949,9 @@ def _capture_incoming_tail(
     *,
     talk_id: int = 0,
     message_id: str = "",
+    media_url: str = "",
+    file_uuid: str = "",
+    message_type: str = "",
 ) -> None:
     try:
         lid = int(lead_id)
@@ -12778,17 +12963,23 @@ def _capture_incoming_tail(
         return
     channel = _origin_channel_key(origin) or "whatsapp"
     mid = str(message_id or "").strip() or f"hook-{lid}-{created}"
+    raw_preview = str(preview or "").strip()
+    is_media = _is_media_notice_text(raw_preview)
+    mtype = message_type or ("picture" if (is_media or media_url or file_uuid) else "text")
+    clean_text = ("📷 Şəkil" if not (media_url or file_uuid) else "") if is_media else raw_preview
     _append_chat_tail(lid, {
         "id": mid,
         "incoming": True,
         "direction": "incoming",
-        "text": preview,
+        "text": clean_text,
         "created_at": created or int(_time_module.time()),
-        "message_type": "text",
+        "message_type": mtype,
         "channel": channel,
         "origin": origin,
         "talk_id": talk,
         "author": "",
+        "media_url": media_url,
+        "file_uuid": file_uuid,
     })
     if talk:
         _schedule_talk_tail_refresh(lid, talk, origin)

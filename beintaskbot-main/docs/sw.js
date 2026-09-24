@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-24-066';
+const CACHE_NAME = 'beintaskbot-v2026-09-24-067';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
