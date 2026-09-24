@@ -1331,10 +1331,109 @@ function setUserDisplayName(name) {
     if(area) area.innerHTML = display ? `<span class="font-bold text-emerald-400">${display}</span>` : '';
     document.querySelectorAll('.page-user-name').forEach(el => { el.textContent = display; });
 }
+// ─── Browser Local Database (IndexedDB: crm_local_db) ──────────────────────
+const CRM_DB_NAME = 'crm_local_db';
+const CRM_DB_VERSION = 1;
+let _crmDbPromise = null;
+
+function getCrmDb() {
+    if(typeof window === 'undefined' || !window.indexedDB) return Promise.resolve(null);
+    if(_crmDbPromise) return _crmDbPromise;
+    _crmDbPromise = new Promise(resolve => {
+        try {
+            const req = indexedDB.open(CRM_DB_NAME, CRM_DB_VERSION);
+            req.onupgradeneeded = event => {
+                const db = event.target.result;
+                if(!db.objectStoreNames.contains('workspace')) {
+                    db.createObjectStore('workspace');
+                }
+                if(!db.objectStoreNames.contains('deal_details')) {
+                    db.createObjectStore('deal_details');
+                }
+                if(!db.objectStoreNames.contains('chats')) {
+                    db.createObjectStore('chats');
+                }
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => {
+                console.warn('IndexedDB failed to open:', req.error);
+                resolve(null);
+            };
+            req.onblocked = () => {
+                console.warn('IndexedDB blocked');
+                resolve(null);
+            };
+        } catch(err) {
+            console.warn('IndexedDB error:', err);
+            resolve(null);
+        }
+    });
+    return _crmDbPromise;
+}
+
+async function idbGet(storeName, key) {
+    try {
+        const db = await getCrmDb();
+        if(!db) return null;
+        return new Promise(resolve => {
+            const tx = db.transaction(storeName, 'readonly');
+            const store = tx.objectStore(storeName);
+            const req = store.get(String(key));
+            req.onsuccess = () => resolve(req.result ?? null);
+            req.onerror = () => resolve(null);
+        });
+    } catch(_err) {
+        return null;
+    }
+}
+
+async function idbSet(storeName, key, value) {
+    try {
+        const db = await getCrmDb();
+        if(!db) return false;
+        return new Promise(resolve => {
+            const tx = db.transaction(storeName, 'readwrite');
+            const store = tx.objectStore(storeName);
+            const req = store.put(value, String(key));
+            req.onsuccess = () => resolve(true);
+            req.onerror = () => resolve(false);
+        });
+    } catch(_err) {
+        return false;
+    }
+}
+
+async function idbDelete(storeName, key) {
+    try {
+        const db = await getCrmDb();
+        if(!db) return false;
+        return new Promise(resolve => {
+            const tx = db.transaction(storeName, 'readwrite');
+            const store = tx.objectStore(storeName);
+            const req = store.delete(String(key));
+            req.onsuccess = () => resolve(true);
+            req.onerror = () => resolve(false);
+        });
+    } catch(_err) {
+        return false;
+    }
+}
+
 function getCachedTasks() { try { return JSON.parse(localStorage.getItem(CACHE_KEY)); } catch(e){} return null; }
 function setCachedTasks(tasks) { try { localStorage.setItem(CACHE_KEY, JSON.stringify(tasks)); } catch(e){} }
 function getCachedSamilWorkspace() { try { return JSON.parse(localStorage.getItem(SAMIL_WORKSPACE_CACHE_KEY)); } catch(e){} return null; }
 function setCachedSamilWorkspace(data) { try { localStorage.setItem(SAMIL_WORKSPACE_CACHE_KEY, JSON.stringify(data)); } catch(e){} }
+
+async function restoreSamilWorkspaceFromLocalDatabase() {
+    try {
+        const idbData = await idbGet('workspace', SAMIL_WORKSPACE_CACHE_KEY);
+        if(idbData && (!idbData.stage_key || idbData.stage_key === 'all')) {
+            applySamilWorkspace(idbData);
+            return true;
+        }
+    } catch(_e) {}
+    return restoreSamilWorkspaceFromCache();
+}
 
 function syncSamilStagesFromPayload(payload) {
     const incoming = Array.isArray(payload?.stages) ? payload.stages : [];
@@ -1359,7 +1458,7 @@ function groupSamilDealsByStage(deals) {
 
 function persistLocalSamilWorkspace() {
     try {
-        setCachedSamilWorkspace({
+        const data = {
             deals: samilDeals,
             deals_by_stage: samilDealsByStage,
             stage_counts: samilStageCounts,
@@ -1367,7 +1466,9 @@ function persistLocalSamilWorkspace() {
             gozleme: gozlemeItems,
             partners: employeePartners,
             stage_key: null,
-        });
+        };
+        setCachedSamilWorkspace(data);
+        idbSet('workspace', SAMIL_WORKSPACE_CACHE_KEY, data).catch(() => {});
     } catch (e) {}
 }
 function applyPendingSamilStageMoves() {
@@ -1854,10 +1955,12 @@ async function initApp() {
     if(name) setUserDisplayName(name);
     initSessionPersistence();
     restoreSessionForms();
+    await restoreSamilWorkspaceFromLocalDatabase();
     applySamilUi();
     bindPageSearchToggles();
     setPendingTabVisible();
     applyDesktopSidebar();
+    startAppPulse();
     if(HAS_CHATS) await switchTab('tab-chats', false);
     else await openNotifications();
     applyHashRoute({skipChat: true});
@@ -4542,6 +4645,7 @@ function rememberOpenedChat(leadId, channel, messages) {
     try {
         sessionStorage.setItem('deal_chat_cache_' + leadId, JSON.stringify(rows));
     } catch(_e) {}
+    idbSet('chats', String(leadId), rows).catch(() => {});
 }
 function instantChatRows(deal, remembered) {
     if(Array.isArray(remembered) && remembered.length) return remembered.slice(-15);
@@ -4605,7 +4709,16 @@ async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
     const seq = _dealViewState.seq;
     const deal = _dealViewState.deal;
-    const remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
+    let remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
+    if((!remembered || !remembered.length) && _dealViewState.id) {
+        try {
+            const idbRows = await idbGet('chats', String(_dealViewState.id));
+            if(Array.isArray(idbRows) && idbRows.length && requestMatchesDeal(seq, deal && deal.id)) {
+                remembered = idbRows;
+                _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')] = idbRows;
+            }
+        } catch(_e) {}
+    }
     const instant = instantChatRows(deal, remembered);
     const hasRealInstant = instant.some(row => row && !row.preview);
     _dealViewState.fullReady = false;
@@ -4920,6 +5033,20 @@ async function ensureDealSnapshotLoaded(deal, readonly) {
     if(modalSide && !sideContainers.includes(modalSide)) sideContainers.push(modalSide);
     const drawerSide = document.querySelector('#deal-info-drawer .deal-side');
     if(drawerSide && !sideContainers.includes(drawerSide)) sideContainers.push(drawerSide);
+
+    // Instant paint from local database cache (IndexedDB)
+    idbGet('deal_details', leadId).then(cachedSnap => {
+        if(cachedSnap && _dealViewState && String(_dealViewState.id) === leadId && !_dealViewState.snapshotLoaded) {
+            const live = _dealViewState.deal || deal;
+            const merged = mergeDealSnapshot(live, cachedSnap);
+            _dealViewState.deal = merged;
+            applyDealSide(merged, readonly !== undefined ? readonly : !!_dealViewState.readonly);
+            sideContainers.forEach(el => {
+                const loader = el.querySelector('.deal-side-loader');
+                if(loader) loader.remove();
+            });
+        }
+    }).catch(() => {});
 
     sideContainers.forEach(el => {
         if(!el.querySelector('.deal-side-loader')) {
@@ -6375,7 +6502,9 @@ async function loadDealSnapshot(deal) {
     const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(deal.id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
     const d = await r.json().catch(() => ({}));
     if(!d.success || !d.deal) throw new Error(d.error || 'Sövdələşmə tapılmadı');
-    return Object.assign({}, deal, d.deal, {share_token: d.share_token});
+    const snapshot = Object.assign({}, deal, d.deal, {share_token: d.share_token});
+    idbSet('deal_details', deal.id, snapshot).catch(() => {});
+    return snapshot;
 }
 async function openDealViewModal(deal, opts) {
     if(!deal) return;
@@ -7578,6 +7707,11 @@ function stopChatsPolling() {
     if(_chatsPollTimer) { clearInterval(_chatsPollTimer); _chatsPollTimer = null; }
 }
 let _inboxPulseRev = 0;
+try {
+    const savedRev = Number(sessionStorage.getItem('crm_pulse_rev') || 0);
+    if(savedRev) _inboxPulseRev = savedRev;
+} catch(_e) {}
+
 let _inboxFullAt = Date.now();
 let _inboxFullBusy = false;
 let _inboxResumeAt = 0;
@@ -7612,8 +7746,114 @@ function applyInboxPulseRow(row) {
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
     return true;
 }
+
+const _inProgressSingleDealSync = new Set();
+async function syncSingleDealIncremental(leadId, eventInfo) {
+    if(!leadId || !CURRENT_USER_ID) return;
+    const key = String(leadId);
+    if(_inProgressSingleDealSync.has(key)) return;
+    _inProgressSingleDealSync.add(key);
+    try {
+        const response = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(key), {
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success || !data.deal) return;
+        const freshDeal = data.deal;
+
+        // Save snapshot to local database (IndexedDB)
+        idbSet('deal_details', key, Object.assign({}, freshDeal, {share_token: data.share_token})).catch(() => {});
+
+        // Normalize deal fields
+        const dealName = String(freshDeal.name || '').trim();
+        const contactName = String(freshDeal.contact_name || '').trim();
+        freshDeal.name = dealName;
+        freshDeal.contact_name = contactName || '—';
+        if(!freshDeal.last_note && Array.isArray(freshDeal.notes) && freshDeal.notes.length) {
+            freshDeal.last_note = freshDeal.notes[0]?.text || '';
+        }
+        if(!freshDeal.stage_name && freshDeal.stage_key) {
+            const matched = (SAMIL_ALL_STAGES || []).find(([k]) => k === freshDeal.stage_key);
+            if(matched) freshDeal.stage_name = matched[1];
+        }
+
+        // Update in-memory samilDeals
+        let oldStageKey = '';
+        const idx = (samilDeals || []).findIndex(d => String(d.id) === key);
+        if(idx !== -1) {
+            oldStageKey = samilDeals[idx].stage_key;
+            samilDeals[idx] = Object.assign({}, samilDeals[idx], freshDeal);
+        } else {
+            samilDeals.unshift(freshDeal);
+        }
+
+        // Update samilDealsByStage
+        const newStageKey = freshDeal.stage_key;
+        if(oldStageKey && oldStageKey !== newStageKey && samilDealsByStage && Array.isArray(samilDealsByStage[oldStageKey])) {
+            samilDealsByStage[oldStageKey] = samilDealsByStage[oldStageKey].filter(d => String(d.id) !== key);
+        }
+        if(newStageKey && samilDealsByStage) {
+            if(!Array.isArray(samilDealsByStage[newStageKey])) samilDealsByStage[newStageKey] = [];
+            const sIdx = samilDealsByStage[newStageKey].findIndex(d => String(d.id) === key);
+            if(sIdx !== -1) {
+                samilDealsByStage[newStageKey][sIdx] = Object.assign({}, samilDealsByStage[newStageKey][sIdx], freshDeal);
+            } else {
+                samilDealsByStage[newStageKey].unshift(freshDeal);
+            }
+        }
+
+        // Update stage counts
+        if(SAMIL_UI_STAGES && samilStageCounts && samilDealsByStage) {
+            SAMIL_UI_STAGES.forEach(([stKey]) => {
+                samilStageCounts[stKey] = Array.isArray(samilDealsByStage[stKey]) ? samilDealsByStage[stKey].length : 0;
+            });
+        }
+
+        // Update mockTasks for this deal
+        if(Array.isArray(freshDeal.tasks) && Array.isArray(mockTasks)) {
+            mockTasks = mockTasks.filter(t => String(t.lead_id || t.deal_id) !== key);
+            freshDeal.tasks.forEach(t => {
+                mockTasks.push(Object.assign({}, t, {
+                    lead_id: Number(key),
+                    deal_id: Number(key),
+                    client_name: freshDeal.contact_name || freshDeal.name || '',
+                    phone: (Array.isArray(freshDeal.phones) && freshDeal.phones[0]) || freshDeal.phone || ''
+                }));
+            });
+        }
+
+        // Persist to local database workspace
+        persistLocalSamilWorkspace();
+
+        // Dynamically re-render active screen
+        if(document.getElementById('screen-samil-deals')?.classList.contains('active')) {
+            renderSamilDeals();
+        }
+        if(document.getElementById('screen-notifications')?.classList.contains('active')) {
+            renderNotifications();
+        }
+        if(document.getElementById('screen-gozleme')?.classList.contains('active')) {
+            renderGozleme();
+        }
+        if(document.getElementById('screen-chats')?.classList.contains('active')) {
+            renderChatsList();
+        }
+
+        // If currently open deal view matches, update sidebar and poll latest chat
+        if(_dealViewState && String(_dealViewState.id) === key) {
+            _dealViewState.deal = mergeDealSnapshot(_dealViewState.deal, freshDeal);
+            applyDealSide(_dealViewState.deal, !!_dealViewState.readonly);
+            pollDealChat();
+        }
+    } catch(err) {
+        console.warn('Incremental single deal sync failed:', key, err);
+    } finally {
+        _inProgressSingleDealSync.delete(key);
+    }
+}
+
 async function pollInboxPulse() {
-    if(!HAS_CHATS || !CURRENT_USER_ID) return;
+    if(!CURRENT_USER_ID) return;
     const chatsOpen = !!document.getElementById('screen-chats')?.classList.contains('active');
     try {
         const response = await fetch(API_BASE + '/api/chats/pulse?rev=' + encodeURIComponent(String(_inboxPulseRev)) + '&_ts=' + Date.now(), {
@@ -7623,8 +7863,10 @@ async function pollInboxPulse() {
         const payload = await response.json().catch(() => ({}));
         if(response.ok && payload.success) {
             const rev = Number(payload.rev || 0);
-            if(rev < _inboxPulseRev) _inboxPulseRev = rev;
-            else _inboxPulseRev = rev;
+            const isFirstPulse = (_inboxPulseRev === 0);
+            _inboxPulseRev = rev;
+            try { sessionStorage.setItem('crm_pulse_rev', String(rev)); } catch(_e) {}
+
             const rows = Array.isArray(payload.chats) ? payload.chats : [];
             let changed = false;
             rows.forEach(row => { if(applyInboxPulseRow(row)) changed = true; });
@@ -7635,6 +7877,18 @@ async function pollInboxPulse() {
                 const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && rows.some(row => String(row.id) === openId)) pollDealChat();
             }
+
+            // Incremental sync for affected deals from webhook / bot action events
+            if(!isFirstPulse) {
+                const events = Array.isArray(payload.events) ? payload.events : [];
+                if(events.length) {
+                    const uniqueLids = [...new Set(events.map(e => e && e.lead_id).filter(Boolean))];
+                    uniqueLids.forEach(lid => {
+                        const ev = events.find(e => String(e.lead_id) === String(lid));
+                        syncSingleDealIncremental(lid, ev);
+                    });
+                }
+            }
         }
     } catch(_err) {}
     if(chatsOpen && !_inboxFullBusy && Date.now() - _inboxFullAt > 180000) {
@@ -7643,6 +7897,17 @@ async function pollInboxPulse() {
         Promise.resolve(loadSamilWorkspace(false, null, true)).finally(() => { _inboxFullBusy = false; });
     }
 }
+
+let _appPulseTimer = null;
+function startAppPulse() {
+    if(_appPulseTimer) clearInterval(_appPulseTimer);
+    _appPulseTimer = setInterval(() => {
+        if(document.hidden) return;
+        pollInboxPulse();
+    }, 3500);
+    pollInboxPulse();
+}
+
 function startChatsPolling() {
     stopChatsPolling();
     _chatsPollTimer = setInterval(() => {
@@ -7654,7 +7919,7 @@ function startChatsPolling() {
     }, 3000);
 }
 function resumeInboxPulse() {
-    if(!HAS_CHATS || !CURRENT_USER_ID) return;
+    if(!CURRENT_USER_ID) return;
     const now = Date.now();
     if(now - _inboxResumeAt < 1500) return;
     _inboxResumeAt = now;

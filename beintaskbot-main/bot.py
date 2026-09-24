@@ -5480,6 +5480,106 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Kommo Webhook Handler ───────────────────────────────────────────────────
 _bot_app: Application = None
 
+_inbox_pulse_rev = 0
+_inbox_pulse_events: list[dict] = []
+_inbox_pulse_lock = threading.Lock()
+
+
+def _cached_lead_id_for_contact(contact_id: int) -> int:
+    try:
+        wanted = int(contact_id)
+    except (TypeError, ValueError):
+        return 0
+    if not wanted:
+        return 0
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if not isinstance(deal, dict):
+                continue
+            for contact in deal.get("contacts") or []:
+                if not isinstance(contact, dict):
+                    continue
+                try:
+                    current = int(contact.get("id") or 0)
+                    lead_id = int(deal.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if current == wanted and lead_id:
+                    return lead_id
+    return 0
+
+
+def record_lead_pulse_event(
+    lead_id: int,
+    event_type: str = "deal_update",
+    *,
+    pipeline_id: int = 0,
+    stage_key: str = "",
+    preview: str = "",
+    channel: str = "",
+    contact_name: str = "",
+    phone: str = "",
+    missing: bool = False,
+    refresh: bool = False,
+) -> None:
+    """Record an incremental event into the pulse queue for browser polling."""
+    global _inbox_pulse_rev
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not lid:
+        return
+    pipe = int(pipeline_id or 0)
+    cname = str(contact_name or "")
+    cphone = str(phone or "")
+    # Check personal overview cache if missing details
+    if not pipe or not cname or not cphone:
+        for overview in _personal_overview_cache.values():
+            if not isinstance(overview, dict):
+                continue
+            for deal in overview.get("deals") or []:
+                if isinstance(deal, dict) and int(deal.get("id") or 0) == lid:
+                    if not pipe:
+                        try:
+                            pipe = int(deal.get("pipeline_id") or 0)
+                        except (TypeError, ValueError):
+                            pipe = 0
+                    if not cname:
+                        cname = str(deal.get("contact_name") or "")
+                    if not cphone:
+                        cphone = str(deal.get("phone") or "")
+                    break
+            if pipe and cname:
+                break
+
+    now_ts = int(_time_module.time())
+    with _inbox_pulse_lock:
+        _inbox_pulse_rev += 1
+        _inbox_pulse_events.append({
+            "rev": _inbox_pulse_rev,
+            "lead_id": lid,
+            "type": str(event_type or "deal_update"),
+            "pipeline_id": pipe,
+            "stage_key": str(stage_key or ""),
+            "contact_name": cname,
+            "phone": cphone,
+            "last_client_message": str(preview or ""),
+            "last_incoming_at": now_ts,
+            "chat_channel": str(channel or ""),
+            "missing": bool(missing),
+            "refresh": bool(refresh),
+        })
+        if len(_inbox_pulse_events) > 150:
+            del _inbox_pulse_events[:-150]
+    try:
+        _invalidate_deal_chat_cache(lid)
+    except Exception:
+        pass
+
+
 async def _handle_kommo_task_webhook(data: dict):
     """Process add_task / update_task Kommo webhook events."""
     if not _bot_app:
@@ -5536,6 +5636,14 @@ async def _handle_kommo_task_webhook(data: dict):
         link = f"{KOMMO_BASE_URL}/{'leads' if entity_type == 'leads' else 'contacts'}/detail/{entity_id}"
         client_name = get_contact_name_from_entity(entity_id, entity_type)
         client_phone = get_phone_from_entity(entity_id, entity_type)
+        target_lid = entity_id if entity_type == "leads" else _cached_lead_id_for_contact(entity_id)
+        if target_lid:
+            record_lead_pulse_event(
+                target_lid,
+                "task_update",
+                contact_name=client_name,
+                phone=client_phone,
+            )
     admin_chat = get_chat_id_for_kommo_user(10932455)
     # Suppress any webhook for bot-touched tasks
     import time as _time
@@ -5652,10 +5760,6 @@ async def _handle_kommo_task_webhook(data: dict):
             except:
                 pass
 
-_inbox_pulse_rev = 0
-_inbox_pulse_events: list[dict] = []
-_inbox_pulse_lock = threading.Lock()
-
 
 def _kommo_form_message_rows(data: dict) -> list[dict]:
     if not isinstance(data, dict):
@@ -5739,6 +5843,7 @@ def _apply_inbox_incoming(
         _inbox_pulse_events.append({
             "rev": _inbox_pulse_rev,
             "lead_id": int(lead_id),
+            "type": "incoming_message",
             "pipeline_id": event_pipe,
             "contact_name": event_name,
             "phone": event_phone,
@@ -5748,8 +5853,8 @@ def _apply_inbox_incoming(
             "missing": not found,
             "refresh": False,
         })
-        if len(_inbox_pulse_events) > 80:
-            del _inbox_pulse_events[:-80]
+        if len(_inbox_pulse_events) > 150:
+            del _inbox_pulse_events[:-150]
     try:
         _invalidate_deal_chat_cache(int(lead_id))
     except Exception:
@@ -5764,11 +5869,12 @@ def _flag_inbox_refresh(lead_id: int) -> None:
         _inbox_pulse_events.append({
             "rev": _inbox_pulse_rev,
             "lead_id": int(lead_id),
+            "type": "deal_refresh",
             "missing": True,
             "refresh": True,
         })
-        if len(_inbox_pulse_events) > 80:
-            del _inbox_pulse_events[:-80]
+        if len(_inbox_pulse_events) > 150:
+            del _inbox_pulse_events[:-150]
 
 
 def _minimal_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -> dict:
@@ -5834,33 +5940,9 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
     return placed
 
 
-def _cached_lead_id_for_contact(contact_id: int) -> int:
-    try:
-        wanted = int(contact_id)
-    except (TypeError, ValueError):
-        return 0
-    if not wanted:
-        return 0
-    for overview in _personal_overview_cache.values():
-        if not isinstance(overview, dict):
-            continue
-        for deal in overview.get("deals") or []:
-            if not isinstance(deal, dict):
-                continue
-            for contact in deal.get("contacts") or []:
-                if not isinstance(contact, dict):
-                    continue
-                try:
-                    current = int(contact.get("id") or 0)
-                    lead_id = int(deal.get("id") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if current == wanted and lead_id:
-                    return lead_id
-    return 0
-
-
-def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict) -> bool:
+def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_user: bool = False) -> bool:
+    if is_admin_user:
+        return True
     try:
         lead_id = int(row.get("lead_id") or 0)
         event_pipe = int(row.get("pipeline_id") or 0)
@@ -5943,6 +6025,7 @@ async def _hydrate_inbox_contact(
 
 
 def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
+    is_admin_user = is_admin(chat_id)
     owner = get_funnel_owner(chat_id) or {}
     try:
         pipeline_id = int(owner.get("pipeline_id") or 0)
@@ -5963,27 +6046,38 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         rev = int(_inbox_pulse_rev)
         fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
     chats = []
-    seen: set[int] = set()
+    events = []
+    seen_chats: set[int] = set()
     for row in reversed(fresh):
         try:
             lid = int(row.get("lead_id") or 0)
         except (TypeError, ValueError):
             continue
-        if not lid or lid in seen or not _pulse_event_visible(pipeline_id, row, visible):
+        if not lid or not _pulse_event_visible(pipeline_id, row, visible, is_admin_user=is_admin_user):
             continue
-        seen.add(lid)
         deal = visible.get(lid) or {}
         incoming_at = int(row.get("last_incoming_at") or deal.get("last_incoming_at") or 0)
-        chats.append({
-            "id": lid,
+        events.append({
+            "rev": int(row.get("rev") or 0),
+            "lead_id": lid,
+            "type": str(row.get("type") or "deal_update"),
+            "pipeline_id": int(row.get("pipeline_id") or 0),
+            "stage_key": str(row.get("stage_key") or ""),
             "contact_name": deal.get("contact_name") or row.get("contact_name") or "",
             "phone": deal.get("phone") or row.get("phone") or "",
-            "last_client_message": row.get("last_client_message") or deal.get("last_client_message") or "",
-            "last_incoming_at": incoming_at,
-            "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
-            "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
         })
-    return {"success": True, "rev": rev, "chats": chats, "refresh": False}
+        if lid not in seen_chats and (row.get("last_client_message") or row.get("chat_channel")):
+            seen_chats.add(lid)
+            chats.append({
+                "id": lid,
+                "contact_name": deal.get("contact_name") or row.get("contact_name") or "",
+                "phone": deal.get("phone") or row.get("phone") or "",
+                "last_client_message": row.get("last_client_message") or deal.get("last_client_message") or "",
+                "last_incoming_at": incoming_at,
+                "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
+                "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
+            })
+    return {"success": True, "rev": rev, "chats": chats, "events": events, "refresh": False}
 
 
 async def handle_api_chats_pulse(request: web.Request) -> web.Response:
@@ -6012,6 +6106,23 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         if not data:
             data = dict(await request.post())
         logger.info(f"Webhook received: {list(data.keys())[:10]}")
+        # Emit incremental pulse events for any lead events in webhook
+        for k in data:
+            m = re.match(r"^leads\[(status|update|add)\]\[(\d+)\]\[id\]$", str(k))
+            if m:
+                ev_kind = m.group(1)
+                try:
+                    wh_lid = int(data[k])
+                    wh_pipe = 0
+                    pipe_k = f"leads[{ev_kind}][{m.group(2)}][pipeline_id]"
+                    if pipe_k in data:
+                        try:
+                            wh_pipe = int(data[pipe_k])
+                        except:
+                            pass
+                    record_lead_pulse_event(wh_lid, f"deal_{ev_kind}", pipeline_id=wh_pipe)
+                except:
+                    pass
         incoming_rows = [
             row for row in _kommo_form_message_rows(data)
             if str(row.get("type") or "incoming").strip().lower() != "outgoing"
@@ -6477,6 +6588,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 apply_menbe(contact_id, lead_id, source_label, overwrite=True)
                 invalidate_rufat_overview_cache()
             patch_rufat_overview_deal_stage(lead_id, stage_key)
+            record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=pipeline_id, stage_key=stage_key)
             return web.json_response({
                 "success": True,
                 "message": "Sövdələşmə yeniləndi.",
@@ -6496,6 +6608,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
             result = add_note(lead_id, text, "leads")
             invalidate_rufat_overview_cache()
+            if result:
+                record_lead_pulse_event(lead_id, "deal_add_note")
             return web.json_response({
                 "success": bool(result),
                 "note_id": _first_note_id(result),
@@ -6517,6 +6631,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             ok, err = update_note(note_id, text, entity_type, entity_id)
             if ok:
                 invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_edit_note")
             return web.json_response({
                 "success": ok,
                 "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi.",
@@ -6537,6 +6652,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             ok, err = delete_note(note_id, entity_type, entity_id)
             if ok:
                 invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_delete_note")
             return web.json_response({
                 "success": ok,
                 "message": "Qeyd silindi." if ok else "Qeyd silinmədi.",
@@ -6585,6 +6701,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     )
                     send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
             invalidate_rufat_overview_cache()
+            if result:
+                record_lead_pulse_event(lead_id, "deal_add_task")
             return web.json_response({
                 "success": bool(result),
                 "task_id": _created_task_id(result),
@@ -6606,6 +6724,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             ok = bool(update_task_kommo(task_id, payload))
             if ok:
                 invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_edit_task")
             return web.json_response({"success": ok, "message": "Tapşırıq yeniləndi." if ok else "Tapşırıq yenilənmədi."})
         elif action == "deal_delete_task":
             lead_id = int(data.get("lead_id") or 0)
@@ -6615,6 +6734,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             ok = bool(update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Silindi"}}))
             if ok:
                 invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_delete_task")
             return web.json_response({"success": ok, "message": "Tapşırıq silindi." if ok else "Tapşırıq silinmədi."})
         elif action == "deal_edit_contact":
             lead_id = int(data.get("lead_id") or 0)
@@ -6640,6 +6760,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             ok = bool(update_contact_kommo(contact_id, payload))
             if ok:
                 invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_edit_contact", contact_name=name, phone=phone)
             return web.json_response({"success": ok, "message": "Kontakt yeniləndi." if ok else "Kontakt yenilənmədi."})
         elif action == "info":
             if is_funnel_chat(chat_id) and not is_admin(chat_id):
@@ -7352,6 +7473,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             )
             stage_msg = ""
             if result and lead_id:
+                record_lead_pulse_event(int(lead_id), "task_complete")
                 if samil_completion_stage:
                     target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
                     target_pipeline_name = owner_name_for_pipeline(target_pipeline_id) or "Əməliyyatlar lövhəsi"
