@@ -5543,6 +5543,7 @@ def record_lead_pulse_event(
     phone: str = "",
     missing: bool = False,
     refresh: bool = False,
+    incoming_at: int = 0,
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -5576,6 +5577,13 @@ def record_lead_pulse_event(
                 break
 
     now_ts = int(_time_module.time())
+    if incoming_at > 0:
+        event_incoming_at = incoming_at
+    elif str(event_type or "").strip().lower() in {"incoming_message", "incoming"} and preview:
+        event_incoming_at = now_ts
+    else:
+        event_incoming_at = 0
+
     with _inbox_pulse_lock:
         _inbox_pulse_rev += 1
         _inbox_pulse_events.append({
@@ -5587,7 +5595,7 @@ def record_lead_pulse_event(
             "contact_name": cname,
             "phone": cphone,
             "last_client_message": str(preview or ""),
-            "last_incoming_at": now_ts,
+            "last_incoming_at": event_incoming_at,
             "chat_channel": str(channel or ""),
             "missing": bool(missing),
             "refresh": bool(refresh),
@@ -6047,6 +6055,43 @@ async def _hydrate_inbox_contact(
         await _hydrate_inbox_lead(lead_id, preview, created_at, origin, talk_id, message_id)
 
 
+_USER_SEEN_FILE = "user_seen_leads.json"
+_user_seen_lock = threading.Lock()
+
+
+def _get_user_seen_map(chat_id: int) -> dict[str, int]:
+    try:
+        data = read_json(_USER_SEEN_FILE) or {}
+        user_data = data.get(str(chat_id)) or {}
+        return user_data if isinstance(user_data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _record_user_seen(chat_id: int, lead_id: int, seen_ts: int = 0) -> None:
+    try:
+        lid = int(lead_id or 0)
+        cid = int(chat_id or 0)
+        if not lid or not cid:
+            return
+        ts = int(seen_ts or _time_module.time())
+        with _user_seen_lock:
+            data = read_json(_USER_SEEN_FILE) or {}
+            if not isinstance(data, dict):
+                data = {}
+            user_data = data.get(str(cid)) or {}
+            if not isinstance(user_data, dict):
+                user_data = {}
+            if user_data.get(str(lid)) == ts:
+                return
+            user_data[str(lid)] = ts
+            data[str(cid)] = user_data
+            write_json(_USER_SEEN_FILE, data)
+        record_lead_pulse_event(lid, "deal_seen", preview="", incoming_at=0)
+    except Exception as exc:
+        logger.warning("Failed to record user seen lead=%s: %s", lead_id, exc)
+
+
 def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
     is_admin_user = is_admin(chat_id)
     owner = get_funnel_owner(chat_id) or {}
@@ -6100,7 +6145,14 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
             })
-    return {"success": True, "rev": rev, "chats": chats, "events": events, "refresh": False}
+    return {
+        "success": True,
+        "rev": rev,
+        "chats": chats,
+        "events": events,
+        "seen": _get_user_seen_map(chat_id),
+        "refresh": False,
+    }
 
 
 async def handle_api_chats_pulse(request: web.Request) -> web.Response:
@@ -6772,16 +6824,13 @@ async def handle_api_action(request: web.Request) -> web.Response:
             lead_id = int(data.get("lead_id") or 0)
             name = str(data.get("name") or data.get("contact_name") or "").strip()
             phone = str(data.get("phone") or "").strip()
-            if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
+            if not lead_id or (not is_funnel_chat(chat_id) and not is_admin(chat_id) and not lead_allowed_for_chat(lead_id, chat_id)):
                 return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            lead = get_lead_details(lead_id) or {}
-            contacts = (lead.get("_embedded") or {}).get("contacts") or []
+            contact_id = 0
             try:
-                contact_id = int(data.get("contact_id") or (contacts[0].get("id") if contacts else 0) or 0)
-            except (TypeError, ValueError, AttributeError):
+                contact_id = int(data.get("contact_id") or 0)
+            except (TypeError, ValueError):
                 contact_id = 0
-            if not contact_id:
-                return web.json_response({"success": False, "error": "Kontakt tapılmadı."}, status=400)
             payload: dict = {}
             if name:
                 payload["name"] = name
@@ -6789,8 +6838,53 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 payload["custom_fields_values"] = [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}]
             if not payload:
                 return web.json_response({"success": False, "error": "Ad və ya telefon yazın."}, status=400)
-            ok = bool(update_contact_kommo(contact_id, payload))
+
+            ok = False
+            if contact_id:
+                ok = bool(update_contact_kommo(contact_id, payload))
+
+            if not ok:
+                lead = get_lead_details(lead_id) or {}
+                contacts = (lead.get("_embedded") or {}).get("contacts") or []
+                if contacts:
+                    try:
+                        cid = int(contacts[0].get("id") or 0)
+                    except (TypeError, ValueError):
+                        cid = 0
+                    if cid:
+                        ok = bool(update_contact_kommo(cid, payload))
+                        contact_id = cid
+
+            if not ok:
+                # Create contact and link to lead
+                create_payload = [{
+                    "name": name or "Müştəri",
+                    "custom_fields_values": [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}] if phone else [],
+                    "_embedded": {"leads": [{"id": lead_id}]}
+                }]
+                try:
+                    resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, json=create_payload, timeout=8)
+                    ok = resp.status_code in (200, 201)
+                except Exception as exc:
+                    logger.error("Failed to create and link contact for lead %s: %s", lead_id, exc)
+
             if ok:
+                if name:
+                    try:
+                        update_lead_kommo(lead_id, {"name": name})
+                    except Exception:
+                        pass
+                for overview in _personal_overview_cache.values():
+                    if not isinstance(overview, dict):
+                        continue
+                    for deal in overview.get("deals") or []:
+                        if isinstance(deal, dict) and int(deal.get("id") or 0) == lead_id:
+                            if name:
+                                deal["contact_name"] = name
+                                deal["name"] = name
+                            if phone:
+                                deal["phone"] = phone
+                                deal["phones"] = [phone]
                 invalidate_rufat_overview_cache()
                 record_lead_pulse_event(lead_id, "deal_edit_contact", contact_name=name, phone=phone)
             return web.json_response({"success": ok, "message": "Kontakt yeniləndi." if ok else "Kontakt yenilənmədi."})
@@ -12946,6 +13040,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "chat_blocked": False,
         "reply_talk_id": 0,
         "can_reply": bool(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN")),
+        "bot_stopped": _is_lead_bot_stopped(lid),
         "voice_url": f"/api/voice/{lid}" if str(lid) in _voice_urls else "",
         "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lid}",
     }
@@ -13563,6 +13658,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         "sender_phone": _wa_display_number(sender_digits),
         "can_reply": bool(reply_talk_id) or cloud_ready,
         "cloud_ready": cloud_ready,
+        "bot_stopped": _is_lead_bot_stopped(int(lead.get("id") or lead_id)),
     }
     with _deal_chat_cache_lock:
         _deal_chat_cache[cache_key] = (now, payload)
@@ -13809,6 +13905,14 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
         if not phone:
             _ids, phones = _contact_ids_and_phones(lead)
             phone = phones[0] if phones else ""
+    elif phone:
+        try:
+            resolved_lead_id = _resolve_cloud_lead(phone, "")
+            if resolved_lead_id:
+                lead = get_lead_details(resolved_lead_id)
+                lead_id = resolved_lead_id
+        except Exception as exc:
+            logger.warning("Could not resolve cloud lead for template phone=%s: %s", phone, exc)
     if not _normalize_wa_number(phone):
         return web.json_response({"success": False, "error": "Nömrə tapılmadı."}, status=400)
     ok, error, wamid = await asyncio.to_thread(
@@ -13827,10 +13931,17 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
     preview = str(data.get("preview") or "").strip() or name
     preview_cards = _wa_preview_cards(data.get("preview_cards"))
-    if lead:
-        lid = int(lead.get("id") or lead_id)
-        author = employee_name_for_lead(lead)
-        sent_item = _sent_message_item(wamid=wamid, text=preview, author=author, cards=preview_cards)
+    lid = int((lead.get("id") if lead else 0) or lead_id)
+    author = employee_name_for_lead(lead) if lead else ""
+    if not author:
+        for _nm, _cid in NAME_TO_CHAT.items():
+            if _cid == chat_id and len(_nm) > 2:
+                author = _nm
+                break
+    if not author:
+        author = "Menecer"
+    sent_item = _sent_message_item(wamid=wamid, text=preview, author=author, cards=preview_cards)
+    if lid:
         _remember_sent_message(lid, sent_item)
         tail = {
             "id": f"sent-{wamid or uuid.uuid4().hex}",
@@ -13849,6 +13960,7 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
         _append_chat_tail(lid, tail)
     return web.json_response({
         "success": True,
+        "lead_id": lid,
         "wamid": wamid,
         "phone": _wa_display_number(_normalize_wa_number(phone)),
     })
@@ -14184,8 +14296,11 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
         lead_id = 0
     wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
     typing = bool(data.get("typing"))
-    if not lead_id or not wamid:
+    if not lead_id:
         return web.json_response({"success": True, "skipped": True})
+    _record_user_seen(chat_id, lead_id)
+    if not wamid:
+        return web.json_response({"success": True, "seen_recorded": True})
     _lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
@@ -14195,12 +14310,60 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
     return web.json_response({"success": bool(ok)})
 
 
+async def handle_api_deal_chat_seen(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if lead_id:
+        _record_user_seen(chat_id, lead_id)
+        return web.json_response({"success": True, "lead_id": lead_id})
+    return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
+
+
+_LEAD_BOT_FILE = "lead_bot_state.json"
+_lead_bot_lock = threading.Lock()
+
+
+def _is_lead_bot_stopped(lead_id: int) -> bool:
+    try:
+        data = read_json(_LEAD_BOT_FILE) or {}
+        return bool(data.get(str(int(lead_id))))
+    except Exception:
+        return False
+
+
+def _set_lead_bot_stopped(lead_id: int, stopped: bool) -> None:
+    try:
+        with _lead_bot_lock:
+            data = read_json(_LEAD_BOT_FILE) or {}
+            if not isinstance(data, dict):
+                data = {}
+            if stopped:
+                data[str(int(lead_id))] = True
+            else:
+                data.pop(str(int(lead_id)), None)
+            write_json(_LEAD_BOT_FILE, data)
+    except Exception:
+        pass
+
+
 def _kommo_run_salesbot(lead_id: int, bot_id: int = 60151) -> tuple[bool, str]:
-    url = f"{KOMMO_BASE_URL}/api/v2/salesbot/run"
-    payload = [{"bot_id": int(bot_id), "entity_id": int(lead_id), "entity_type": 2}]
+    url = f"{KOMMO_BASE_URL}/api/v4/bots/{int(bot_id)}/run"
+    payload = {"entity_id": int(lead_id), "entity_type": "leads"}
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=12)
-        if resp.status_code in (200, 202):
+        if resp.status_code in (200, 202, 204):
+            _set_lead_bot_stopped(lead_id, False)
             return True, ""
         return False, f"Kommo status {resp.status_code}: {resp.text[:120]}"
     except Exception as exc:
@@ -14209,20 +14372,13 @@ def _kommo_run_salesbot(lead_id: int, bot_id: int = 60151) -> tuple[bool, str]:
 
 def _kommo_stop_salesbot(lead_id: int, bot_id: int = 60151) -> tuple[bool, str]:
     url = f"{KOMMO_BASE_URL}/api/v4/bots/{int(bot_id)}/stop"
-    payload = {"entity_id": int(lead_id), "entity_type": 2}
+    payload = {"entity_id": int(lead_id), "entity_type": "leads"}
     try:
         resp = _http.post(url, headers=HEADERS, json=payload, timeout=12)
         if resp.status_code in (200, 202, 204):
+            _set_lead_bot_stopped(lead_id, True)
             return True, ""
-    except Exception:
-        pass
-    try:
-        v2_url = f"{KOMMO_BASE_URL}/api/v2/salesbot/stop"
-        v2_payload = [{"bot_id": int(bot_id), "entity_id": int(lead_id), "entity_type": 2}]
-        resp2 = _http.post(v2_url, headers=HEADERS, json=v2_payload, timeout=12)
-        if resp2.status_code in (200, 202, 204):
-            return True, ""
-        return False, f"Kommo status {resp2.status_code}: {resp2.text[:120]}"
+        return False, f"Kommo status {resp.status_code}: {resp.text[:120]}"
     except Exception as exc:
         return False, str(exc)
 
@@ -14248,7 +14404,7 @@ async def handle_api_deal_bot_run(request: web.Request) -> web.Response:
         return err
     bot_id = int(data.get("bot_id") or 60151)
     ok, err_msg = await asyncio.to_thread(_kommo_run_salesbot, lead_id, bot_id)
-    return web.json_response({"success": ok, "error": err_msg if not ok else None})
+    return web.json_response({"success": ok, "bot_stopped": False, "error": err_msg if not ok else None})
 
 
 async def handle_api_deal_bot_stop(request: web.Request) -> web.Response:
@@ -14272,7 +14428,7 @@ async def handle_api_deal_bot_stop(request: web.Request) -> web.Response:
         return err
     bot_id = int(data.get("bot_id") or 60151)
     ok, err_msg = await asyncio.to_thread(_kommo_stop_salesbot, lead_id, bot_id)
-    return web.json_response({"success": ok, "error": err_msg if not ok else None})
+    return web.json_response({"success": ok, "bot_stopped": True, "error": err_msg if not ok else None})
 
 
 _CHAT_PINS_FILE = "chat_pins.json"
@@ -15730,6 +15886,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/read", handle_api_deal_chat_read)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/seen', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/seen", handle_api_deal_chat_seen)
     app_web.router.add_route('OPTIONS', '/api/deal/bot/run', lambda r: web.Response())
     app_web.router.add_post("/api/deal/bot/run", handle_api_deal_bot_run)
     app_web.router.add_route('OPTIONS', '/api/deal/bot/stop', lambda r: web.Response())

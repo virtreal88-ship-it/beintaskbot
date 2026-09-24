@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="268">
+    <meta name="pwa-build" content="269">
     <meta name="theme-color" content="#1a252f">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -289,10 +289,19 @@
         .deal-side-form button.busy::after { content:''; position:absolute; left:50%; top:50%; width:12px; height:12px; margin:-6px 0 0 -6px; border:2px solid #fff; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .wa-attach-in { position:absolute; left:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:22px; line-height:1; padding:0; display:inline-flex; align-items:center; justify-content:center; }
         .wa-attach-in svg { display:block; width:22px; height:22px; }
-        .wa-mic-in { position:absolute; right:72px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
-        .wa-mic-in.rec { background:#dc2626; color:#fff; }
-        .wa-tpl-in { position:absolute; right:104px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; padding:0; display:inline-flex; align-items:center; justify-content:center; }
+        .wa-tpl-in { position:absolute; right:134px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; padding:0; display:inline-flex; align-items:center; justify-content:center; }
         .wa-tpl-in svg { width:18px; height:18px; display:block; }
+        .wa-mic-in { position:absolute; right:102px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:#54656f; font-size:15px; padding:0; }
+        .wa-mic-in.rec { background:#dc2626; color:#fff; }
+        .deal-bot-btn { position:absolute; right:70px; left:auto; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#f1f5f9; color:#475569; font-size:13px; line-height:1; padding:0; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; }
+        .deal-bot-btn.active { background:#dcfce7; color:#15803d; }
+        .deal-bot-btn.stopped { background:#fee2e2; color:#b91c1c; }
+        .deal-bot-btn.loading { pointer-events:none; opacity:.6; }
+        .deal-ai-btn { border:0; border-radius:8px; background:#dbeafe; color:#1d4ed8; font-size:10px; font-weight:600; padding:0; width:28px; height:28px; position:absolute; right:38px; top:50%; transform:translateY(-50%); z-index:2; }
+        .deal-ai-btn .deal-ai-spin { display:none; position:absolute; inset:7px; border:2px solid #93c5fd; border-top-color:#1d4ed8; border-radius:50%; animation:spin .8s linear infinite; }
+        .deal-ai-btn.loading { pointer-events:none; }
+        .deal-ai-btn.loading .deal-ai-label { visibility:hidden; }
+        .deal-ai-btn.loading .deal-ai-spin { display:block; }
         .chats-new-btn { width:36px; height:36px; border:0; border-radius:10px; background:#ffffff22; color:#fff; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .chats-new-btn svg { width:18px; height:18px; display:block; }
         #wa-tpl-modal { position:fixed; inset:0; z-index:14200; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:12px; }
@@ -376,7 +385,7 @@
         .wa-chip-text { display:flex; flex-direction:column; align-items:flex-start; line-height:1.15; min-width:0; }
         .wa-chip-phone { font-size:9px; font-weight:600; opacity:.78; letter-spacing:.01em; }
         .wa-chip svg, .chat-ch svg { display:block; flex:none; }
-        .wa-thread { flex:1 1 0; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px 12px 16px; position:relative; scroll-behavior:smooth; }
+        .wa-thread { flex:1 1 0; min-height:0; overflow-x:hidden; overflow-y:auto; padding:10px 12px 16px; position:relative; }
         .wa-thread::-webkit-scrollbar, .chats-rows::-webkit-scrollbar { width:6px; }
         .wa-thread::-webkit-scrollbar-track, .chats-rows::-webkit-scrollbar-track { background:transparent; }
         .wa-thread::-webkit-scrollbar-thumb, .chats-rows::-webkit-scrollbar-thumb { background:rgba(0,0,0,.16); border-radius:6px; }
@@ -438,7 +447,7 @@
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
         .wa-composer-field { position:relative; flex:1; min-width:0; }
-        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 140px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+        .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 172px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
         .wa-voice-preview[hidden] { display:none !important; }
         .wa-voice-preview audio { flex:1; min-width:0; height:30px; }
         .wa-voice-preview button { flex:0 0 auto; border:0; background:transparent; font-size:15px; line-height:1; color:#dc2626; padding:0 2px; }
@@ -458,7 +467,7 @@
         #deal-photo-zoom img { max-width:96vw; max-height:92vh; border-radius:8px; }
         .wa-older { display:flex; justify-content:center; padding:4px 0 10px; }
         .wa-older button { border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-size:11px; font-weight:600; }
-        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 140px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; font-weight:400; background:#fff; }
+        .wa-composer textarea { width:100%; box-sizing:border-box; min-height:42px; max-height:90px; resize:none; padding:10px 172px 10px 40px; border:1px solid #e2e8f0; border-radius:12px; font-size:13px; font-weight:400; background:#fff; }
         .wa-icon-btn, .wa-send { width:42px; height:42px; border:0; border-radius:50%; background:#1e293b; color:#fff; font-size:16px; font-weight:600; }
         .wa-icon-btn { background:#fff; color:#54656f; border:1px solid #e2e8f0; }
         .deal-tabs { display:none; }
@@ -4267,10 +4276,7 @@ function showChatMsgMenu(x, y, item) {
     const pop = document.createElement('div');
     pop.id = 'chat-msg-ctx';
     pop.className = 'chats-ctx';
-    const reactKey = chatReactKey(item);
-    const emojis = CHAT_REACTION_EMOJI.map(emoji => `<button type="button" data-emoji="${escapeHtml(emoji)}">${emoji}</button>`).join('');
-    pop.innerHTML = `<div class="chat-react-row">${emojis}</div>
-        <button type="button" data-act="reply">Cavab</button>
+    pop.innerHTML = `<button type="button" data-act="reply">Cavab</button>
         <button type="button" data-act="copy">Kopyala</button>
         <button type="button" data-act="pin">${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
@@ -4290,14 +4296,6 @@ function showChatMsgMenu(x, y, item) {
         hideChatMsgMenu();
         copyChatMessage(item);
     };
-    pop.querySelectorAll('[data-emoji]').forEach(btn => {
-        btn.onclick = event => {
-            event.preventDefault();
-            event.stopPropagation();
-            hideChatMsgMenu();
-            sendChatReaction(reactKey, btn.getAttribute('data-emoji') || '');
-        };
-    });
     pop.querySelector('[data-act="pin"]').onclick = event => {
         event.preventDefault();
         event.stopPropagation();
@@ -4799,7 +4797,11 @@ async function fetchDealChatTail() {
     return payload;
 }
 function applyDealSidePreview(payload) {
-    if(!_dealViewState || !payload || !payload.side_ready) return;
+    if(!_dealViewState || !payload) return;
+    if(typeof payload.bot_stopped === 'boolean') {
+        paintDealBotButton(payload.bot_stopped);
+    }
+    if(!payload.side_ready) return;
     const deal = _dealViewState.deal;
     if(!deal) return;
     let changed = false;
@@ -5116,6 +5118,10 @@ function dealSideDetailsHtml(deal) {
         ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline">Kommo-da aç</a></div>` : ''}`;
 }
 function applyDealSide(deal, readonly) {
+    if(!deal) return;
+    if(_dealViewState && typeof _dealViewState.bot_stopped === 'boolean') {
+        paintDealBotButton(_dealViewState.bot_stopped);
+    }
     document.querySelectorAll('#deal-notes-list').forEach(notes => {
         notes.innerHTML = dealNotesListHtml(deal, readonly);
     });
@@ -5401,6 +5407,7 @@ function bindDealSideActions(deal) {
 }
 async function saveDealContactFromHeader(deal) {
     if(!deal || !_dealViewState || _dealViewState.readonly) return;
+    const currentLeadId = String(deal.id);
     const name = String((document.getElementById('deal-side-name') || document.getElementById('deal-head-name'))?.value || document.getElementById('deal-head-name')?.value || '').trim();
     const phone = String((document.getElementById('deal-side-phone') || document.getElementById('deal-head-phone'))?.value || document.getElementById('deal-head-phone')?.value || '').trim();
     const prevName = dealClientName(deal);
@@ -5411,22 +5418,45 @@ async function saveDealContactFromHeader(deal) {
         const contactId = (deal.contacts && deal.contacts[0] && deal.contacts[0].id) || '';
         await samilDealAction({action:'deal_edit_contact', lead_id: deal.id, contact_id: contactId, name, phone});
         deal.contact_name = name;
+        deal.name = name;
         deal.phone = phone;
         deal.phones = phone ? [phone] : (deal.phones || []);
-        const listed = (samilDeals || []).find(item => String(item.id) === String(deal.id));
+        
+        // Update samilDeals & samilDealsByStage
+        const listed = (samilDeals || []).find(item => String(item.id) === currentLeadId);
         if(listed) {
             listed.contact_name = name;
+            listed.name = name;
             listed.phone = phone;
             listed.phones = deal.phones;
         }
-        ['deal-head-name', 'deal-side-name'].forEach(id => {
-            const el = document.getElementById(id);
-            if(el && el.tagName === 'INPUT') el.value = name;
-        });
-        ['deal-head-phone', 'deal-side-phone'].forEach(id => {
-            const el = document.getElementById(id);
-            if(el && el.tagName === 'INPUT') el.value = phone;
-        });
+        if(typeof samilDealsByStage === 'object' && samilDealsByStage) {
+            Object.values(samilDealsByStage).forEach(arr => {
+                if(Array.isArray(arr)) {
+                    const stDeal = arr.find(item => String(item.id) === currentLeadId);
+                    if(stDeal) {
+                        stDeal.contact_name = name;
+                        stDeal.name = name;
+                        stDeal.phone = phone;
+                        stDeal.phones = deal.phones;
+                    }
+                }
+            });
+        }
+        persistLocalSamilWorkspace();
+        idbSet('deal_details', currentLeadId, deal).catch(() => {});
+
+        // Only update DOM inputs if the user is still on the same deal
+        if(_dealViewState && String(_dealViewState.id) === currentLeadId) {
+            ['deal-head-name', 'deal-side-name'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el && el.tagName === 'INPUT') el.value = name;
+            });
+            ['deal-head-phone', 'deal-side-phone'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el && el.tagName === 'INPUT') el.value = phone;
+            });
+        }
         if(_dealInboxMode) renderChatsList();
         toast('Kontakt yeniləndi');
     } catch(err) { toast(err.message || 'Kontakt yenilənmədi', true); }
@@ -5735,6 +5765,45 @@ function dealAiPayload(mode) {
             author: item.author || ''
         }))
     };
+}
+function paintDealBotButton(stopped) {
+    const btn = document.getElementById('deal-chat-bot');
+    if(!btn) return;
+    if(stopped) {
+        btn.classList.remove('active');
+        btn.classList.add('paused');
+        btn.title = 'İİ Bot dayandırılıb (aktivləşdirmək üçün vurun)';
+    } else {
+        btn.classList.remove('paused');
+        btn.classList.add('active');
+        btn.title = 'İİ Bot aktivdir (dayandırmaq üçün vurun)';
+    }
+}
+let _dealBotBusy = false;
+async function toggleDealBot() {
+    if(_dealBotBusy || !_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return;
+    const btn = document.getElementById('deal-chat-bot');
+    const isStopped = btn ? btn.classList.contains('paused') : false;
+    const action = isStopped ? 'run' : 'stop';
+    _dealBotBusy = true;
+    if(btn) btn.style.opacity = '0.5';
+    try {
+        const r = await fetch(API_BASE + '/api/deal/bot/' + action, {
+            method: 'POST',
+            headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({lead_id: _dealViewState.id})
+        });
+        const d = await r.json().catch(() => ({}));
+        if(!r.ok || !d.success) throw new Error(d.error || 'Xəta baş verdi');
+        const nowStopped = typeof d.bot_stopped === 'boolean' ? d.bot_stopped : (action === 'stop');
+        paintDealBotButton(nowStopped);
+        toast(nowStopped ? 'İİ Bot dayandırıldı' : 'İİ Bot aktivləşdirildi');
+    } catch(err) {
+        toast(err.message || 'Xəta baş verdi', true);
+    } finally {
+        _dealBotBusy = false;
+        if(btn) btn.style.opacity = '';
+    }
 }
 let _dealAiBusy = false;
 async function requestDealAiReply() {
@@ -6066,7 +6135,7 @@ async function sendWaTemplate(options) {
         if(!r.ok || !d.success) throw new Error(d.error || 'Şablon göndərilmədi');
         closeWaTemplateModal();
         toast('Şablon göndərildi');
-        showSentTemplate(options, d.phone || phone, previewText, d.wamid || '', model.cards || []);
+        showSentTemplate(options, d.phone || phone, previewText, d.wamid || '', model.cards || [], d.lead_id || 0);
     } catch(err) {
         toast(err.message || 'Şablon göndərilmədi', true);
         if(sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Göndər'; }
@@ -6406,6 +6475,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                 <textarea id="deal-chat-input" placeholder="Mesaj yazın"></textarea>
                 <button type="button" class="wa-tpl-in" id="deal-chat-template" title="Şablon" aria-label="Şablon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h10M7 13h6"/></svg></button>
                 <button type="button" class="wa-mic-in" id="deal-chat-mic" title="Səs mesajı">🎙</button>
+                <button type="button" class="deal-bot-btn active" id="deal-chat-bot" title="İİ Bot aktivdir (dayandırmaq üçün vurun)" aria-label="İİ Bot">🤖</button>
                 <button type="button" class="deal-ai-btn" id="deal-chat-ai" title="AI cavab"><span class="deal-ai-label">AI</span><span class="deal-ai-spin" aria-hidden="true"></span></button>
                 <button type="button" class="wa-send-in" id="deal-chat-send" title="Göndər">➤</button>
             </div>
@@ -6585,6 +6655,14 @@ function paintDealViewModal(deal, readonly, opts) {
         sendBtn.addEventListener('pointerdown', event => {
             event.preventDefault();
             sendDealChatMessage();
+        });
+    }
+    const botBtn = document.getElementById('deal-chat-bot');
+    if(botBtn) {
+        botBtn.addEventListener('pointerdown', event => {
+            if(event.pointerType === 'mouse' && event.button !== 0) return;
+            event.preventDefault();
+            toggleDealBot();
         });
     }
     const aiBtn = document.getElementById('deal-chat-ai');
@@ -7187,6 +7265,13 @@ function markChatsSeen(leadId) {
     seen['p_' + String(leadId)] = dealLastClientMessage(deal) || '';
     delete seen['unread_' + String(leadId)];
     saveChatsSeen(seen);
+    if(leadId && CURRENT_USER_ID) {
+        fetch(API_BASE + '/api/deal/chat/seen', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
+            body: JSON.stringify({lead_id: leadId})
+        }).catch(() => {});
+    }
 }
 function markChatsUnread(leadId) {
     const id = String(leadId || '');
@@ -7472,7 +7557,7 @@ function findDealByWaPhone(phone) {
     };
     return (samilDeals || []).find(match) || loadWaOutbox().find(match) || null;
 }
-function showSentTemplate(options, phone, text, wamid, cards) {
+function showSentTemplate(options, phone, text, wamid, cards, createdLeadId) {
     const now = Math.floor(Date.now() / 1000);
     const body = String(text || '').trim() || 'Şablon göndərildi';
     const gallery = (Array.isArray(cards) ? cards : []).map(card => ({
@@ -7492,9 +7577,23 @@ function showSentTemplate(options, phone, text, wamid, cards) {
         channel: 'whatsapp',
         delivery_status: 'sent'
     };
-    const leadId = options && options.leadId;
+    const leadId = (options && options.leadId) || createdLeadId;
     let deal = leadId ? (samilDeals || []).find(item => String(item.id) === String(leadId)) : findDealByWaPhone(phone);
     if(!deal && leadId && _dealViewState && String(_dealViewState.id) === String(leadId)) deal = _dealViewState.deal;
+    if(!deal && createdLeadId) {
+        deal = {
+            id: Number(createdLeadId) || createdLeadId,
+            name: phone || 'Yeni müştəri',
+            contact_name: phone || 'Yeni müştəri',
+            phone: phone,
+            phones: [phone],
+            last_client_message: body.slice(0, 140),
+            chat_at: now,
+            last_outgoing_at: now,
+            chat_channel: 'whatsapp'
+        };
+        if(Array.isArray(samilDeals)) samilDeals.unshift(deal);
+    }
     const reveal = () => {
         if(!deal || !deal.id) return;
         unhideInboxChat(deal.id);
@@ -8078,6 +8177,26 @@ async function pollInboxPulse() {
             const rows = Array.isArray(payload.chats) ? payload.chats : [];
             let changed = false;
             rows.forEach(row => { if(applyInboxPulseRow(row)) changed = true; });
+
+            if(payload.seen && typeof payload.seen === 'object') {
+                const localSeen = getChatsSeen();
+                let seenUpdated = false;
+                Object.entries(payload.seen).forEach(([k, sTs]) => {
+                    const serverSeenTs = Number(sTs || 0);
+                    const currentLocalTs = Number(localSeen[k] || 0);
+                    if(serverSeenTs > currentLocalTs) {
+                        localSeen[k] = serverSeenTs;
+                        delete localSeen['unread_' + k];
+                        seenUpdated = true;
+                    }
+                });
+                if(seenUpdated) {
+                    saveChatsSeen(localSeen);
+                    paintChatsUnreadBadge();
+                    if(chatsOpen) renderChatsList();
+                }
+            }
+
             if(changed) {
                 persistLocalSamilWorkspace();
                 if(chatsOpen) renderChatsList();
