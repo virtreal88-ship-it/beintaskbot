@@ -1,6 +1,43 @@
 {
-  "at": 1790269187.6842146,
+  "at": 1790273087.0022357,
   "rows": [
+    {
+      "name": "ilk_messag",
+      "language": "az",
+      "category": "MARKETING",
+      "parameter_format": "POSITIONAL",
+      "header_format": "",
+      "header": "",
+      "header_vars": 0,
+      "header_names": [],
+      "body": "Salam . Adım *Rüfət Həsənzadə*. Sizi *BeinSystems* şirkətindən narahat edirəm.",
+      "body_vars": 0,
+      "body_names": [],
+      "buttons": [
+        {
+          "index": 0,
+          "type": "URL",
+          "text": "Sayta keçid",
+          "vars": 0,
+          "names": [],
+          "needs_value": false
+        },
+        {
+          "index": 1,
+          "type": "PHONE_NUMBER",
+          "text": "Zəng et",
+          "vars": 0,
+          "names": [],
+          "needs_value": false
+        }
+      ],
+      "cards": [],
+      "parts": [
+        "BODY",
+        "FOOTER",
+        "BUTTONS[URL,PHONE_NUMBER]"
+      ]
+    },
     {
       "name": "novyi_shablon_whatsapp_21_09_2026_13_07_xtoh4t",
       "language": "az",
@@ -18,7 +55,7 @@
         {
           "index": 0,
           "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/801008318_1361979462679660_3177430764524370087_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=nH3_FdwJsXEQ7kNvwGJDyN_&_nc_oc=Adpd1TDtfsAMUK8BT8Sh2_rCPOJxlxw7r4jOV-4mu2pE6UnLM9lO1Gs8QuKccUh971k&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=SCn_ZqfuxJBnd2UWW64MZA&oh=01_Q5Aa5gGtFo8RSa0EENExpgcVqcOWGiZvd0B5A_IboimVB4BCKg&oe=6ADCAFAE",
+          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/801008318_1361979462679660_3177430764524370087_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=nH3_FdwJsXEQ7kNvwFL6z6H&_nc_oc=Adqkmvzd5fnjCj9-Wosk2dMcmeIDNl-bceZkn4jWGvfjH3ITCvVIHoqxjybAvrf3ZEE&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=7uJE0lauFxkz_ORaHl6axA&oh=01_Q5Aa5gH5AdK0NGZo_Qa1M_lbgDKZKvb0-VOqIX8kC5OpbjtjMw&oe=6ADCE7EE",
           "body": "Magazalar ,Anbarlar və s.",
           "body_vars": 0,
           "body_names": [],
@@ -36,7 +73,7 @@
         {
           "index": 1,
           "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/800164880_2412114985989000_6188789566567780181_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=gPyKGPpltaAQ7kNvwEorq0A&_nc_oc=Adpsvu1Q_kfDn2hGyzd7D1TWSgUufzSWrIDH4_pJDF4tF7TDiGSyck-2FUPpwdzIXfQ&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=SCn_ZqfuxJBnd2UWW64MZA&oh=01_Q5Aa5gFZppMwC521288Be4_WaESCbd5JJwKs0KwPtFnyqPxsKg&oe=6ADCB679",
+          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/800164880_2412114985989000_6188789566567780181_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=gPyKGPpltaAQ7kNvwE7pamq&_nc_oc=Adr4tuG_ZIer3bdtyIV-wV0Byq0JzRY_zWNwU8JfR9WOQepEm21GH0Njq0oXJRArTyI&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=7uJE0lauFxkz_ORaHl6axA&oh=01_Q5Aa5gFYneL_NrOW9MkjPSicpGVyAgC-mPjdWeKeEc-h2xTtZg&oe=6ADCEEB9",
           "body": "Restoran,Cafe,Coffeshop,Playzone,Otel",
           "body_vars": 0,
           "body_names": [],
@@ -54,7 +91,7 @@
         {
           "index": 2,
           "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/794411786_1807082133626109_8493046909241692822_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=ALnvLVsoqRkQ7kNvwFFcQlH&_nc_oc=AdrGj25tOi70HQT7QXNTtBSin5k9VGHoNQeDyGs5JniMNy8dBkJTsudHaR65hLANhN8&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=SCn_ZqfuxJBnd2UWW64MZA&oh=01_Q5Aa5gGoQVgf1PhY7pDaSiGnLlKBUKWVdJO3i8LY6FtnrwA_Cg&oe=6ADCB896",
+          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/794411786_1807082133626109_8493046909241692822_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=ALnvLVsoqRkQ7kNvwH72RJd&_nc_oc=AdpdmqotHMpcTtcVdWWsRwVH6XcLwy-uebckslBrWCSfWN97Cji1aHn9s7LQFT8_Xwg&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=7uJE0lauFxkz_ORaHl6axA&oh=01_Q5Aa5gF3_R9nKpHSvK7jHLkuYOxN1mhOgase2OZxA8xGPjgPGA&oe=6ADCF0D6",
           "body": "Anbar,Səyyar,İstehsalat və s.",
           "body_vars": 0,
           "body_names": [],
