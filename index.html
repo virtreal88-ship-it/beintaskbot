@@ -595,10 +595,23 @@
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
-            display:block; border-right:0; border-left:1px solid #e8ecf0; background:#fff; padding:16px 16px 20px;
+            position:relative; display:block; border-right:0; border-left:1px solid #e8ecf0; background:#fff; padding:16px 16px 20px;
         }
         #chats-pane .deal-shell-body.hide-info { grid-template-columns:1fr; }
         #chats-pane .deal-shell-body.hide-info .deal-side { display:none; }
+        .deal-side { position:relative; }
+        .deal-side-loader {
+            position:absolute; inset:0; background:rgba(255,255,255,0.92);
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:12px; z-index:30; pointer-events:auto;
+        }
+        .deal-side-spinner {
+            width:28px; height:28px; border:3px solid #e2e8f0; border-top-color:#2563eb;
+            border-radius:50%; animation:spin 0.7s linear infinite;
+        }
+        .deal-side-loader-text {
+            font-size:12px; font-weight:600; color:#64748b;
+        }
         .inbox-shell .deal-shell-head {
             background:#fff; color:#111827; border-bottom:1px solid #e8ecf0;
         }
@@ -4479,7 +4492,9 @@ async function fetchDealChatPage(before) {
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
     const channel = _dealViewState.channel || '';
-    const q = new URLSearchParams({lead_id: String(leadId), limit: before ? '20' : '10', _ts: String(Date.now())});
+    const isMobile = window.innerWidth <= 800 || window.matchMedia('(max-width: 1023px)').matches;
+    const limit = before ? '20' : (isMobile ? '12' : '15');
+    const q = new URLSearchParams({lead_id: String(leadId), limit, _ts: String(Date.now())});
     if(channel) q.set('channel', channel);
     const sender = dealWaSenderPhone();
     if(sender) q.set('sender_phone', sender);
@@ -4496,14 +4511,40 @@ const _openedChatCache = {};
 function openedChatCacheKey(leadId, channel) {
     return String(leadId || '') + '|' + String(channel || '');
 }
+function getRememberedChat(leadId, channel) {
+    if(!leadId) return null;
+    const key = openedChatCacheKey(leadId, channel || '');
+    if(_openedChatCache[key] && _openedChatCache[key].length) {
+        return _openedChatCache[key];
+    }
+    const defaultKey = openedChatCacheKey(leadId, '');
+    if(_openedChatCache[defaultKey] && _openedChatCache[defaultKey].length) {
+        return _openedChatCache[defaultKey];
+    }
+    try {
+        const raw = sessionStorage.getItem('deal_chat_cache_' + leadId);
+        if(raw) {
+            const parsed = JSON.parse(raw);
+            if(Array.isArray(parsed) && parsed.length) {
+                _openedChatCache[key] = parsed;
+                _openedChatCache[defaultKey] = parsed;
+                return parsed;
+            }
+        }
+    } catch(_e) {}
+    return null;
+}
 function rememberOpenedChat(leadId, channel, messages) {
-    const rows = Array.isArray(messages) ? messages.slice() : [];
+    const rows = (Array.isArray(messages) ? messages : []).filter(row => row && !row.preview).slice(-30);
     if(!leadId || !rows.length) return;
     _openedChatCache[openedChatCacheKey(leadId, channel)] = rows;
     _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
+    try {
+        sessionStorage.setItem('deal_chat_cache_' + leadId, JSON.stringify(rows));
+    } catch(_e) {}
 }
 function instantChatRows(deal, remembered) {
-    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-8);
+    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-15);
     const text = chatNoticeText(dealLastClientMessage(deal));
     if(!text || !deal) return [];
     return [{
@@ -4548,7 +4589,7 @@ function applyDealSidePreview(payload) {
 }
 function applyDealChatTail(seq, dealId, rows) {
     if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
-    const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-8);
+    const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-15);
     if(!stored.length) return false;
     const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
     _dealViewState.messages = dropTailStubs(mergeDealChat(local, stored, false));
@@ -4564,30 +4605,36 @@ async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
     const seq = _dealViewState.seq;
     const deal = _dealViewState.deal;
-    const remembered = _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')];
+    const remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
     const instant = instantChatRows(deal, remembered);
+    const hasRealInstant = instant.some(row => row && !row.preview);
     _dealViewState.fullReady = false;
-    _dealViewState.loading = true;
+    _dealViewState.loading = !hasRealInstant;
     _dealViewState.messages = instant;
     paintDealChatThread({stickBottom: true, force: true});
     let tail = null;
     try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
     if(tail && tail.success && !tail.stale) {
         applyDealSidePreview(tail);
+        if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
         if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
     }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    _dealViewState.loading = true;
-    _dealViewState.has_more = true;
-    for(let attempt = 0; attempt < 12; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 1200));
-        if(!requestMatchesDeal(seq, deal && deal.id)) return;
-        try { tail = await fetchDealChatTail(); } catch(_err) { tail = null; }
-        if(tail && tail.success && !tail.stale) {
-            applyDealSidePreview(tail);
-            if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+
+    // Direct fetch fallback without 12x 1.2s delay
+    try {
+        const page = await fetchDealChatPage();
+        if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
+            _dealViewState.blocked = !!page.chat_blocked;
+            if(Array.isArray(page.channels) && page.channels.length) applyDealChannels(page.channels);
+            const chatRows = Array.isArray(page.chat) ? page.chat : [];
+            if(chatRows.length) {
+                applyDealChatTail(seq, deal && deal.id, chatRows);
+                return;
+            }
         }
-    }
+    } catch(_err) {}
+
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
     _dealViewState.loading = false;
     _dealViewState.fullReady = true;
@@ -4630,6 +4677,7 @@ async function pollDealChat() {
         applyChatDelivery(_dealViewState.messages, d.chat);
         dropMatchedLocalVoices(d.chat);
         _dealViewState.messages = dropTailStubs(mergeDealChat(_dealViewState.messages, d.chat, false));
+        rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
         if(Array.isArray(d.channels) && d.channels.length) applyDealChannels(d.channels);
         const thread = document.getElementById('deal-chat-thread');
         const nearBottom = thread ? (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80) : true;
@@ -4751,7 +4799,7 @@ function adminPipelineStageOptionsHtml(selectedPid, selectedStage) {
     }).join('');
 }
 function fillAdminPipelineStageSelect(selectId, selectedPid, selectedStage) {
-    const el = document.getElementById(selectId);
+    const el = typeof selectId === 'string' ? document.getElementById(selectId) : selectId;
     if(!el) return;
     el.innerHTML = adminPipelineStageOptionsHtml(selectedPid, selectedStage);
     const token = pipelineStageToken(selectedPid || CURRENT_PIPELINE_ID, selectedStage);
@@ -4800,18 +4848,30 @@ function dealPipelineStageFieldsHtml(deal) {
         <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
     </div>`;
 }
+function dealSideDetailsHtml(deal) {
+    return `${dealCardTitle(deal) ? `<div><b>${escapeHtml(dealCardTitle(deal))}</b></div>` : ''}
+        ${sourceUrlsHtml(deal)}
+        ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
+        ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline">Kommo-da aç</a></div>` : ''}`;
+}
 function applyDealSide(deal, readonly) {
-    const notes = document.getElementById('deal-notes-list');
-    const tasks = document.getElementById('deal-tasks-list');
-    if(notes) notes.innerHTML = dealNotesListHtml(deal, readonly);
-    if(tasks) tasks.innerHTML = dealTasksListHtml(deal, readonly);
-    const stageEl = document.getElementById('deal-stage-select');
-    if(stageEl && isAdmin) {
-        fillAdminPipelineStageSelect('deal-stage-select', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
-    } else if(stageEl) {
-        stageEl.innerHTML = dealStageOptionsHtml(deal);
-        if(deal.stage_key) stageEl.value = deal.stage_key;
-    }
+    document.querySelectorAll('#deal-notes-list').forEach(notes => {
+        notes.innerHTML = dealNotesListHtml(deal, readonly);
+    });
+    document.querySelectorAll('#deal-tasks-list').forEach(tasks => {
+        tasks.innerHTML = dealTasksListHtml(deal, readonly);
+    });
+    document.querySelectorAll('#deal-side-details').forEach(details => {
+        details.innerHTML = dealSideDetailsHtml(deal);
+    });
+    document.querySelectorAll('#deal-stage-select').forEach(stageEl => {
+        if(isAdmin) {
+            fillAdminPipelineStageSelect(stageEl, deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+        } else {
+            stageEl.innerHTML = dealStageOptionsHtml(deal);
+            if(deal.stage_key) stageEl.value = deal.stage_key;
+        }
+    });
     const headName = document.getElementById('deal-head-name') || document.querySelector('#deal-view-modal .deal-shell-head .name');
     const clientName = dealClientName(deal);
     if(headName) {
@@ -4843,17 +4903,81 @@ function mergeDealSnapshot(prev, snap) {
     if(prev && prev.last_incoming_at && !next.last_incoming_at) next.last_incoming_at = prev.last_incoming_at;
     return next;
 }
+async function ensureDealSnapshotLoaded(deal, readonly) {
+    if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
+    const leadId = String(deal.id);
+    if(_dealViewState && String(_dealViewState.id) === leadId && _dealViewState.snapshotLoaded) {
+        return _dealViewState.deal || deal;
+    }
+    if(_dealViewState && String(_dealViewState.id) === leadId && _dealViewState.snapshotLoading && _dealViewState.snapshotPromise) {
+        return _dealViewState.snapshotPromise;
+    }
+
+    const sideContainers = [];
+    const infoSide = document.getElementById('deal-info-side');
+    if(infoSide) sideContainers.push(infoSide);
+    const modalSide = document.querySelector('#deal-view-modal .deal-side');
+    if(modalSide && !sideContainers.includes(modalSide)) sideContainers.push(modalSide);
+    const drawerSide = document.querySelector('#deal-info-drawer .deal-side');
+    if(drawerSide && !sideContainers.includes(drawerSide)) sideContainers.push(drawerSide);
+
+    sideContainers.forEach(el => {
+        if(!el.querySelector('.deal-side-loader')) {
+            const loader = document.createElement('div');
+            loader.className = 'deal-side-loader';
+            loader.innerHTML = '<div class="deal-side-spinner"></div><div class="deal-side-loader-text">Məlumat yüklənir...</div>';
+            el.appendChild(loader);
+        }
+    });
+
+    if(_dealViewState && String(_dealViewState.id) === leadId) {
+        _dealViewState.snapshotLoading = true;
+    }
+
+    const promise = (async () => {
+        try {
+            const snap = await loadDealSnapshot(deal);
+            const live = (_dealViewState && String(_dealViewState.id) === leadId) ? (_dealViewState.deal || deal) : deal;
+            const merged = mergeDealSnapshot(live, snap);
+            if(_dealViewState && String(_dealViewState.id) === leadId) {
+                _dealViewState.deal = merged;
+                _dealViewState.snapshotLoaded = true;
+            }
+            applyDealSide(merged, readonly !== undefined ? readonly : !!(_dealViewState && _dealViewState.readonly));
+            if(isAdmin) {
+                ensureAdminPipelines().then(() => {
+                    if(!_dealViewState || String(_dealViewState.id) !== leadId) return;
+                    const d = _dealViewState.deal || merged;
+                    fillAdminPipelinePickers('deal-pipeline-select', 'deal-stage-select', d.pipeline_id || CURRENT_PIPELINE_ID, d.stage_key);
+                    bindDealSideActions(d);
+                });
+            }
+            if(_dealViewState && String(_dealViewState.id) === leadId && !_dealViewState.loading) {
+                paintDealChatThread({stickBottom: false});
+            }
+            return merged;
+        } catch(err) {
+            console.warn('Failed to load deal snapshot:', err);
+            return deal;
+        } finally {
+            if(_dealViewState && String(_dealViewState.id) === leadId) {
+                _dealViewState.snapshotLoading = false;
+            }
+            sideContainers.forEach(el => {
+                const loader = el.querySelector('.deal-side-loader');
+                if(loader) loader.remove();
+            });
+        }
+    })();
+
+    if(_dealViewState && String(_dealViewState.id) === leadId) {
+        _dealViewState.snapshotPromise = promise;
+    }
+    return promise;
+}
 async function refreshDealSnapshot(deal) {
     if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
-    const snap = await loadDealSnapshot(deal);
-    if(_dealViewState && String(_dealViewState.id) === String(deal.id)) {
-        const merged = mergeDealSnapshot(_dealViewState.deal || deal, snap);
-        _dealViewState.deal = merged;
-        applyDealSide(merged, !!_dealViewState.readonly);
-        if(!_dealViewState.loading) paintDealChatThread({stickBottom: false});
-        return merged;
-    }
-    return snap;
+    return await ensureDealSnapshotLoaded(deal, !!(_dealViewState && _dealViewState.readonly));
 }
 function bindDealSideActions(deal) {
     const noteOpen = document.getElementById('deal-note-open');
@@ -5275,11 +5399,8 @@ function dealInfoBodyHtml(deal, readonly) {
             <div class="deal-info-field deal-source-row"><span>Mənbə</span><div class="deal-chat-channels"></div></div>
         </div>
         <h3>Sövdələşmə</h3>
-        <div class="text-[13px] text-gray-700 space-y-1">
-            ${dealCardTitle(deal) ? `<div><b>${escapeHtml(dealCardTitle(deal))}</b></div>` : ''}
-            ${sourceUrlsHtml(deal)}
-            ${deal.voice_url ? `<div class="mt-1">${dealAudioHtml(deal)}</div>` : ''}
-            ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline">Kommo-da aç</a></div>` : ''}
+        <div id="deal-side-details" class="text-[13px] text-gray-700 space-y-1">
+            ${dealSideDetailsHtml(deal)}
         </div>
         ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
         <h3>Tapşırıq</h3>
@@ -5315,13 +5436,7 @@ function openDealInfoDrawer(deal, readonly) {
     bindDealSideActions(deal);
     if(_dealViewState) paintDealChannels(_dealViewState.channels, _dealViewState.channel);
     bindAudioWait(drawer);
-    if(!readonly && isAdmin) {
-        ensureAdminPipelines().then(() => {
-            const live = (_dealViewState && _dealViewState.deal) || deal;
-            fillAdminPipelinePickers('deal-pipeline-select', 'deal-stage-select', live.pipeline_id || CURRENT_PIPELINE_ID, live.stage_key);
-            bindDealSideActions(live);
-        });
-    }
+    ensureDealSnapshotLoaded(deal, readonly);
 }
 let _dealViewState = null;
 let _dealInboxMode = false;
@@ -5936,6 +6051,7 @@ async function sendDealChatMessage(fileArg) {
         markChatsSeen(leadId);
         _dealViewState.blocked = !!d.chat_blocked;
         applyDealChannels(d.channels || _dealViewState.channels);
+        rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
         paintDealChatThread({stickBottom: true, force: true});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
@@ -6013,9 +6129,9 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
             </div>
             ${waHtml}
             <button type="button" id="deal-chat-summary" class="deal-sum-btn" title="Dialoqu xülasə et" aria-label="Xülasə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg></button>
-            <button type="button" id="chats-open-deal" class="chats-deal-link on" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
+            <button type="button" id="chats-open-deal" class="chats-deal-link" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
         </div>
-        <div class="deal-shell-body show-chat" id="deal-shell-body">
+        <div class="deal-shell-body show-chat hide-info" id="deal-shell-body">
             <section class="wa-pane">
                 <div id="deal-pin-bar" class="chat-pin-bar" hidden>
                     <button type="button" class="chat-pin-jump" id="deal-pin-jump">
@@ -6098,7 +6214,10 @@ function paintDealViewModal(deal, readonly, opts) {
         has_more: !deal.outbox,
         loading: !readonly && !deal.outbox,
         loadingOlder: false,
-        blocked: false
+        blocked: false,
+        snapshotLoaded: false,
+        snapshotLoading: false,
+        snapshotPromise: null
     };
     let root;
     if(inbox) {
@@ -6120,6 +6239,9 @@ function paintDealViewModal(deal, readonly, opts) {
             if(!body) return;
             const hidden = body.classList.toggle('hide-info');
             dealBtn.classList.toggle('on', !hidden);
+            if(!hidden) {
+                ensureDealSnapshotLoaded(live, readonly);
+            }
         };
     } else {
         const modal = document.createElement('div');
@@ -6211,6 +6333,9 @@ function paintDealViewModal(deal, readonly, opts) {
                 if(chat) {
                     const thread = document.getElementById('deal-chat-thread');
                     if(thread) thread.scrollTop = thread.scrollHeight;
+                } else {
+                    const live = (_dealViewState && _dealViewState.deal) || deal;
+                    ensureDealSnapshotLoaded(live, readonly);
                 }
             };
         });
@@ -6220,16 +6345,11 @@ function paintDealViewModal(deal, readonly, opts) {
     bindDealChatThread();
     bindDealSideActions(deal);
     bindAudioWait(root);
-    if(!readonly && isAdmin) {
-        ensureAdminPipelines().then(() => {
-            if(!_dealViewState || String(_dealViewState.id) !== String(deal.id)) return;
-            const live = _dealViewState.deal || deal;
-            fillAdminPipelinePickers('deal-pipeline-select', 'deal-stage-select', live.pipeline_id || CURRENT_PIPELINE_ID, live.stage_key);
-            bindDealSideActions(live);
-        });
+    if(!inbox && !window.matchMedia('(max-width: 800px)').matches) {
+        ensureDealSnapshotLoaded(deal, readonly);
     }
     if(!readonly && !deal.outbox) {
-        loadDealChatLatest().then(() => refreshDealSnapshot(deal).catch(() => {}));
+        loadDealChatLatest();
         startDealChatPolling();
     } else if(deal.outbox) {
         paintDealChatThread({stickBottom: true, force: true});
