@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="280">
+    <meta name="pwa-build" content="281">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3513,7 +3513,12 @@ function authFetchHeaders() {
 const _mediaBlobs = new Map();
 function mediaCacheKey(wrap, kind) {
     const lead = String((_dealViewState && _dealViewState.id) || '');
-    return [kind, lead, wrap.getAttribute('data-msg') || '', wrap.getAttribute('data-at') || '', wrap.getAttribute('data-src') || ''].join('|');
+    const parts = [kind, lead, wrap.getAttribute('data-msg') || '', wrap.getAttribute('data-at') || ''];
+    if(kind !== 'audio') parts.push(wrap.getAttribute('data-src') || '');
+    return parts.join('|');
+}
+function audioCanPlay(audio) {
+    return !!(audio && audio.getAttribute('src') && audio.readyState >= 2 && !audio.error);
 }
 function audioWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
@@ -3634,35 +3639,72 @@ function attachAudioSpeed(wrap, audio) {
     };
     wrap.appendChild(speed);
 }
+function markAudioReady(wrap) {
+    wrap.dataset.ready = '1';
+    wrap.dataset.loading = '';
+    wrap.classList.remove('loading');
+    wrap.classList.add('ready');
+}
+function dropAudioCache(wrap, audio) {
+    _mediaBlobs.delete(mediaCacheKey(wrap, 'audio'));
+    wrap.dataset.ready = '';
+    wrap.dataset.loading = '';
+    wrap.classList.remove('ready', 'loading');
+    try { audio.removeAttribute('src'); audio.load(); } catch(_err) {}
+}
+async function fetchAudioObjectUrl(wrap) {
+    const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
+    const response = await fetch(src, {headers: authFetchHeaders()});
+    if(!response.ok) throw new Error('fail');
+    const blob = await response.blob();
+    const type = String(blob.type || '');
+    if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+    return URL.createObjectURL(blob);
+}
 async function startAudioWait(wrap, audio) {
-    if(!wrap || !audio || wrap.dataset.loading === '1' || wrap.dataset.ready === '1') return;
+    if(!wrap || !audio || wrap.dataset.loading === '1') return;
+    if(audioCanPlay(audio)) { markAudioReady(wrap); return; }
     wrap.dataset.loading = '1';
+    wrap.dataset.ready = '';
+    wrap.classList.remove('ready');
     wrap.classList.add('loading');
     try { audio.pause(); } catch(_err) {}
+    const key = mediaCacheKey(wrap, 'audio');
+    let url = _mediaBlobs.get(key) || '';
     try {
-        const key = mediaCacheKey(wrap, 'audio');
-        let url = _mediaBlobs.get(key) || '';
-        if(!url) {
-            const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
-            const response = await fetch(src, {headers: authFetchHeaders()});
-            if(!response.ok) throw new Error('fail');
-            const blob = await response.blob();
-            const type = String(blob.type || '');
-            if(!blob.size || type.startsWith('text/')) throw new Error('fail');
-            url = URL.createObjectURL(blob);
-            _mediaBlobs.set(key, url);
+        if(url) {
+            try {
+                await playAudioSource(audio, url);
+                markAudioReady(wrap);
+                return;
+            } catch(_err) {
+                _mediaBlobs.delete(key);
+                url = '';
+                try { audio.removeAttribute('src'); } catch(_drop) {}
+            }
         }
-        audio.src = url;
-        wrap.dataset.ready = '1';
-        wrap.classList.remove('loading');
-        wrap.classList.add('ready');
-        wrap.dataset.loading = '';
-        audio.play().catch(() => {});
+        url = await fetchAudioObjectUrl(wrap);
+        _mediaBlobs.set(key, url);
+        await playAudioSource(audio, url);
+        markAudioReady(wrap);
     } catch(_err) {
-        wrap.classList.remove('loading', 'ready');
-        wrap.dataset.loading = '';
-        wrap.dataset.ready = '';
+        dropAudioCache(wrap, audio);
     }
+}
+function playAudioSource(audio, url) {
+    return new Promise((resolve, reject) => {
+        const done = () => { cleanup(); resolve(); };
+        const fail = () => { cleanup(); reject(new Error('fail')); };
+        const cleanup = () => {
+            audio.removeEventListener('playing', done);
+            audio.removeEventListener('error', fail);
+        };
+        audio.addEventListener('playing', done);
+        audio.addEventListener('error', fail);
+        if(audio.src !== url) audio.src = url;
+        const started = audio.play();
+        if(started && started.catch) started.catch(fail);
+    });
 }
 function bindAudioWait(root) {
     bindPhotoWait(root);
@@ -3674,18 +3716,22 @@ function bindAudioWait(root) {
         const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'audio'));
         if(saved) {
             audio.src = saved;
-            wrap.dataset.ready = '1';
-            wrap.classList.add('ready');
+            audio.addEventListener('canplay', () => markAudioReady(wrap), {once: true});
         }
         if(!wrap.querySelector('.audio-speed')) attachAudioSpeed(wrap, audio);
         const begin = event => {
-            if(wrap.dataset.ready === '1' || wrap.dataset.loading === '1') return;
+            if(wrap.dataset.loading === '1') return;
+            if(audioCanPlay(audio)) { markAudioReady(wrap); return; }
             if(event) { event.preventDefault(); event.stopPropagation(); }
             startAudioWait(wrap, audio);
         };
         const hit = wrap.querySelector('.audio-hit');
         if(hit) hit.addEventListener('click', begin);
         audio.addEventListener('play', () => begin());
+        audio.addEventListener('error', () => {
+            if(wrap.dataset.loading === '1') return;
+            dropAudioCache(wrap, audio);
+        });
         audio.addEventListener('ended', () => {
             try { audio.pause(); audio.currentTime = 0; } catch(_err) {}
         });
