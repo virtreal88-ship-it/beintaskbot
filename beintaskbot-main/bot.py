@@ -12244,6 +12244,87 @@ def _candidate_is_image(cand: dict) -> bool:
     return _looks_image_name(str(cand.get("file_name") or ""))
 
 
+def _candidate_is_audio(cand: dict) -> bool:
+    kind = str(cand.get("message_type") or "").lower()
+    if kind in {"audio", "voice", "ptt"}:
+        return True
+    blob = f"{cand.get('file_name') or ''} {cand.get('media_url') or ''}"
+    return _looks_audio_name(blob)
+
+
+def _unix_seconds(value) -> int:
+    try:
+        stamp = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    if stamp > 10_000_000_000:
+        stamp //= 1000
+    return stamp
+
+
+def _deal_media_candidates(lid: int, contact_ids: list[int]) -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+
+    def add(row: dict) -> None:
+        if not isinstance(row, dict):
+            return
+        if not (str(row.get("media_url") or "").strip() or str(row.get("file_uuid") or "").strip()):
+            return
+        key = str(row.get("file_uuid") or row.get("media_url") or row.get("id") or "")
+        if not key or key in seen:
+            return
+        seen.add(key)
+        candidates.append(row)
+
+    for note in _fetch_entity_notes("leads", lid):
+        add(note)
+    for cid in contact_ids:
+        for note in _fetch_entity_notes("contacts", int(cid)):
+            add(note)
+    for row in _fetch_entity_files_as_chat("leads", lid):
+        add(row)
+    for cid in contact_ids:
+        for row in _fetch_entity_files_as_chat("contacts", int(cid)):
+            add(row)
+    return candidates
+
+
+def _find_click_media(lid: int, contact_ids: list[int], created_at: int, kind: str, message_id: str) -> dict | None:
+    """One file for the bubble the user tapped. Nearest Kommo file of that kind."""
+    created_at = _unix_seconds(created_at)
+    message_id = str(message_id or "").strip()
+    if not created_at and not message_id:
+        return None
+    want_audio = str(kind or "").lower() in {"audio", "voice", "ptt"}
+    best = None
+    best_rank = None
+    for cand in _deal_media_candidates(lid, contact_ids):
+        is_audio = _candidate_is_audio(cand)
+        if want_audio and not is_audio:
+            continue
+        if not want_audio and is_audio:
+            continue
+        ident = " ".join(
+            str(cand.get(key) or "")
+            for key in ("id", "msgid", "external_id", "file_uuid", "file_name", "text")
+        )
+        if message_id and message_id in ident:
+            return cand
+        cand_ts = _unix_seconds(cand.get("created_at"))
+        if not created_at or not cand_ts:
+            continue
+        diff = abs(created_at - cand_ts)
+        if diff > 1800:
+            continue
+        type_rank = 0 if (want_audio or _candidate_is_image(cand)) else 1
+        rank = (type_rank, diff)
+        if best_rank is None or rank < best_rank:
+            best_rank = rank
+            best = cand
+    return best
+
+
 def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int]) -> None:
     needed = [
         item for item in chat
@@ -15059,9 +15140,31 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
             if note_uuid and not file_uuid:
                 file_uuid = note_uuid
     from_drive = False
+    picked_name = ""
     if file_uuid and not src:
         src = _drive_file_download_url(file_uuid)
         from_drive = bool(src)
+    if not src and not file_uuid and lead is not None:
+        kind = str(request.rel_url.query.get("kind") or "").strip().lower()
+        msg = str(request.rel_url.query.get("msg") or "").strip()
+        try:
+            at = int(request.rel_url.query.get("at") or 0)
+        except (TypeError, ValueError):
+            at = 0
+        try:
+            lookup_lead = int(request.rel_url.query.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lookup_lead = 0
+        if lookup_lead and kind in {"picture", "image", "sticker", "audio", "voice", "ptt"} and (at or msg):
+            contact_ids, _phones = _contact_ids_and_phones(lead)
+            cand = _find_click_media(lookup_lead, contact_ids, at, kind, msg)
+            if isinstance(cand, dict):
+                picked_name = str(cand.get("file_name") or "")
+                file_uuid = str(cand.get("file_uuid") or "").strip()
+                src = str(cand.get("media_url") or "").strip()
+                if file_uuid and (not src or not _is_allowed_media_url(src)):
+                    src = _drive_file_download_url(file_uuid)
+                    from_drive = bool(src)
     if not src or (not from_drive and not from_note and not _is_allowed_media_url(src)):
         return web.Response(status=400, text="Invalid media")
     try:
@@ -15071,7 +15174,7 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
             audio_resp = requests.get(src, timeout=20, allow_redirects=True)
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
-        file_name = str(request.rel_url.query.get("name") or "")
+        file_name = str(request.rel_url.query.get("name") or picked_name)
         content_type = _sniff_media_type(audio_resp.content, audio_resp.headers.get("Content-Type") or "", src, file_name)
         return _media_bytes_response(request, audio_resp.content, content_type)
     except Exception as exc:

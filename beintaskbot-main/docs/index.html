@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="273">
+    <meta name="pwa-build" content="274">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -366,6 +366,7 @@
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
         .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
+        .audio-play { border:0; background:transparent; padding:0; color:#2563eb; font-weight:600; font-size:13px; text-decoration:underline; cursor:pointer; }
         .audio-wait .audio-spin { flex:none; width:12px; height:12px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .audio-wait.ready .audio-spin { display:none; }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
@@ -376,6 +377,10 @@
         .photo-wait .photo-miss { display:none; font-size:11px; color:#64748b; padding:8px 10px; text-align:center; }
         .photo-wait.failed { min-height:48px; }
         .photo-wait.failed .photo-miss { display:block; }
+        button.photo-wait { border:0; font:inherit; color:#2563eb; cursor:pointer; }
+        button.photo-wait .photo-miss { text-decoration:underline; }
+        .photo-wait.loading .audio-spin { display:block; }
+        .photo-wait.loading .photo-miss { display:none; }
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
@@ -3485,9 +3490,30 @@ function dealMediaSrc(raw, token, uuid, extra) {
     const join = voice.includes('?') ? '&' : '?';
     return voice + (CURRENT_USER_ID ? join + 'uid=' + encodeURIComponent(CURRENT_USER_ID) : '');
 }
-function audioWaitHtml(src) {
-    const safe = escapeHtml(src);
-    return `<span class="audio-wait"><span class="audio-spin"></span><audio controls preload="auto" src="${safe}"></audio></span>`;
+function mediaClickAttrs(item) {
+    const at = Number(item && item.created_at || 0);
+    const id = escapeHtml(String(item && item.id || ''));
+    return ` data-at="${at}" data-msg="${id}"`;
+}
+function mediaLookupUrl(wrap, kind) {
+    const q = new URLSearchParams();
+    const leadId = _dealViewState && _dealViewState.id;
+    if(leadId) q.set('lead_id', String(leadId));
+    q.set('at', wrap.getAttribute('data-at') || '0');
+    q.set('kind', kind);
+    const msg = wrap.getAttribute('data-msg') || '';
+    if(msg) q.set('msg', msg);
+    const token = (_dealViewState && _dealViewState.token) || '';
+    if(token) q.set('k', token);
+    if(CURRENT_USER_ID) q.set('uid', String(CURRENT_USER_ID));
+    return API_BASE + '/api/deal/file?' + q.toString();
+}
+function authFetchHeaders() {
+    return CURRENT_USER_ID ? {'X-TG-User-ID': String(CURRENT_USER_ID)} : {};
+}
+function audioWaitHtml(src, item) {
+    const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
+    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><button type="button" class="audio-play">Səs mesajı</button></span>`;
 }
 function isChatPhotoText(text) {
     const raw = String(text || '').trim();
@@ -3500,59 +3526,122 @@ function isChatPhotoItem(item) {
     if(isChatPhotoText(item.text)) return true;
     return /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(String(item.file_name || '') + String(item.media_url || ''));
 }
-function photoWaitHtml(src) {
-    if(!src) return '<span class="photo-wait failed"><span class="photo-miss">Şəkil gəlmədi</span></span>';
-    return `<span class="photo-wait"><span class="audio-spin"></span><img class="deal-zoom" src="${escapeHtml(src)}" alt=""><span class="photo-miss">Şəkil gəlmədi</span></span>`;
+function photoWaitHtml(src, item) {
+    const attrs = mediaClickAttrs(item);
+    if(!src) return `<button type="button" class="photo-wait failed photo-load"${attrs}><span class="audio-spin"></span><span class="photo-miss">Şəkil gəlmədi</span></button>`;
+    return `<span class="photo-wait"${attrs}><span class="audio-spin"></span><img class="deal-zoom" src="${escapeHtml(src)}" alt=""><span class="photo-miss">Şəkil gəlmədi</span></span>`;
+}
+async function loadMissingPhoto(wrap) {
+    if(!wrap || wrap.dataset.loading === '1' || wrap.classList.contains('ready')) return;
+    wrap.dataset.loading = '1';
+    wrap.classList.add('loading');
+    wrap.classList.remove('failed');
+    try {
+        const response = await fetch(mediaLookupUrl(wrap, 'picture'), {headers: authFetchHeaders()});
+        if(!response.ok) throw new Error('fail');
+        const blob = await response.blob();
+        const type = String(blob.type || '');
+        if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+        const img = document.createElement('img');
+        img.className = 'deal-zoom';
+        img.alt = '';
+        img.src = URL.createObjectURL(blob);
+        img.onclick = event => { event.stopPropagation(); openDealPhotoZoom(img.src); };
+        const host = document.createElement('span');
+        host.className = 'photo-wait ready';
+        host.appendChild(img);
+        wrap.replaceWith(host);
+    } catch(_err) {
+        wrap.classList.remove('loading', 'ready');
+        wrap.classList.add('failed');
+        wrap.dataset.loading = '';
+    }
 }
 function bindPhotoWait(root) {
-    (root || document).querySelectorAll('.photo-wait img').forEach(el => {
-        const wrap = el.closest('.photo-wait');
-        if(!wrap || wrap.dataset.bound) return;
+    (root || document).querySelectorAll('.photo-wait').forEach(wrap => {
+        if(wrap.dataset.bound) return;
         wrap.dataset.bound = '1';
-        const done = () => wrap.classList.add('ready');
-        const fail = () => wrap.classList.add('failed');
-        el.addEventListener('load', done);
-        el.addEventListener('error', fail);
-        if(el.complete && el.naturalWidth > 0) done();
-        else if(el.complete) fail();
+        const img = wrap.querySelector('img');
+        if(img) {
+            const done = () => wrap.classList.add('ready');
+            const fail = () => wrap.classList.add('failed');
+            img.addEventListener('load', done);
+            img.addEventListener('error', fail);
+            if(img.complete && img.naturalWidth > 0) done();
+            else if(img.complete) fail();
+        }
+        wrap.addEventListener('click', event => {
+            if(wrap.classList.contains('ready')) return;
+            if(!wrap.classList.contains('failed') && !wrap.classList.contains('photo-load')) return;
+            event.preventDefault();
+            event.stopPropagation();
+            loadMissingPhoto(wrap);
+        });
     });
 }
-function bindAudioWait(root) {
-    (root || document).querySelectorAll('.audio-wait audio').forEach(el => {
-        const wrap = el.closest('.audio-wait');
-        if(!wrap || wrap.dataset.bound) return;
-        wrap.dataset.bound = '1';
-        const done = () => wrap.classList.add('ready');
-        const wait = () => wrap.classList.remove('ready');
-        el.addEventListener('loadstart', wait);
-        el.addEventListener('waiting', wait);
-        el.addEventListener('canplay', done);
-        el.addEventListener('playing', done);
-        el.addEventListener('error', () => {
-            done();
-            if(!wrap.querySelector('.audio-dl')) {
-                const link = document.createElement('a');
-                link.className = 'audio-dl';
-                link.href = el.currentSrc || el.src || '#';
-                link.target = '_blank';
-                link.rel = 'noopener';
-                link.textContent = 'Yüklə';
-                wrap.appendChild(link);
-            }
+function attachAudioSpeed(wrap, audio) {
+    const speed = document.createElement('button');
+    speed.type = 'button';
+    speed.className = 'audio-speed';
+    speed.textContent = '1×';
+    speed.onclick = event => {
+        event.stopPropagation();
+        const fast = audio.playbackRate < 1.5;
+        audio.playbackRate = fast ? 1.5 : 1;
+        speed.textContent = fast ? '1.5×' : '1×';
+        speed.classList.toggle('on', fast);
+    };
+    wrap.appendChild(speed);
+}
+async function startAudioWait(wrap) {
+    if(!wrap || wrap.dataset.loading === '1' || wrap.querySelector('audio')) return;
+    wrap.dataset.loading = '1';
+    const button = wrap.querySelector('.audio-play');
+    if(button) button.hidden = true;
+    const spin = document.createElement('span');
+    spin.className = 'audio-spin';
+    wrap.appendChild(spin);
+    try {
+        const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
+        const response = await fetch(src, {headers: authFetchHeaders()});
+        if(!response.ok) throw new Error('fail');
+        const blob = await response.blob();
+        const type = String(blob.type || '');
+        if(!blob.size || type.startsWith('text/')) throw new Error('fail');
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'none';
+        audio.src = URL.createObjectURL(blob);
+        audio.addEventListener('ended', () => {
+            try { audio.pause(); audio.currentTime = 0; } catch(_err) {}
         });
-        if(el.readyState >= 3) done();
-        bindPhotoWait(root);
-        const speed = document.createElement('button');
-        speed.type = 'button';
-        speed.className = 'audio-speed';
-        speed.textContent = '1×';
-        speed.onclick = () => {
-            const fast = el.playbackRate < 1.5;
-            el.playbackRate = fast ? 1.5 : 1;
-            speed.textContent = fast ? '1.5×' : '1×';
-            speed.classList.toggle('on', fast);
-        };
-        wrap.appendChild(speed);
+        spin.remove();
+        if(button) button.remove();
+        wrap.classList.add('ready');
+        wrap.appendChild(audio);
+        attachAudioSpeed(wrap, audio);
+        audio.play().catch(() => {});
+    } catch(_err) {
+        spin.remove();
+        if(button) {
+            button.hidden = false;
+            button.textContent = 'Yüklə';
+        }
+        wrap.dataset.loading = '';
+    }
+}
+function bindAudioWait(root) {
+    bindPhotoWait(root);
+    (root || document).querySelectorAll('.audio-wait').forEach(wrap => {
+        if(wrap.dataset.bound) return;
+        wrap.dataset.bound = '1';
+        const button = wrap.querySelector('.audio-play');
+        if(!button) return;
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            startAudioWait(wrap);
+        });
     });
 }
 function dealAudioHtml(deal) {
@@ -3694,17 +3783,18 @@ function dealMediaBlock(item, token) {
     const isCall = type === 'call_in' || type === 'call_out' || type === 'call' || /Gələn zəng|Gedən zəng/i.test(text);
     const src = dealMediaSrc(raw, token, uuid, {noteId: item && item.id, entityType: item && item.entity_type, entityId: item && item.entity_id});
     const photo = !isCall && isChatPhotoItem(item);
-    if(!src) return photo ? photoWaitHtml('') : '';
+    const audioItem = !isCall && (isChatAudioItem(item) || type === 'voice' || type === 'audio' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName));
+    if(!src) {
+        if(photo) return photoWaitHtml('', item);
+        if(audioItem || isCall) return audioWaitHtml('', item);
+        return '';
+    }
     const safe = escapeHtml(src);
-    if(!isCall && isChatAudioItem(item)) {
-        return audioWaitHtml(src);
-    }
+    if(audioItem) return audioWaitHtml(src, item);
     if(photo || type === 'picture' || type === 'sticker' || type === 'image' || /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(raw + fileName)) {
-        return photoWaitHtml(src);
+        return photoWaitHtml(src, item);
     }
-    if(isCall || type === 'voice' || type === 'audio' || /audio|voice|ogg|mp3|m4a|wav/i.test(type + raw + fileName)) {
-        return audioWaitHtml(src);
-    }
+    if(isCall) return audioWaitHtml(src, item);
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
@@ -4511,7 +4601,7 @@ function bindDealMessageMenu(thread) {
     let pressItem = null;
     const itemFromEvent = event => {
         const row = event.target.closest('.deal-chat-row[data-msg-id]');
-        if(!row || event.target.closest('.chat-reply-btn, .chat-react-btn, a, button, audio, video, img')) return null;
+        if(!row || event.target.closest('.chat-reply-btn, .chat-react-btn, .photo-wait, .audio-wait, a, button, audio, video, img')) return null;
         const id = row.getAttribute('data-msg-id');
         return (_dealViewState && _dealViewState.messages || []).find(rowItem => String(rowItem.id) === String(id)) || null;
     };
