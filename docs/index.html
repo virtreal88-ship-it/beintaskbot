@@ -273,10 +273,13 @@
         .deal-note-row, .deal-task-row { padding:10px 12px; border:1px solid #e8ecf0; background:#fff; border-radius:12px; margin:0 0 8px; position:relative; font-family:'Nunito Sans', sans-serif; font-size:13px; font-weight:400; line-height:1.45; color:#111827; }
         .deal-note-row { border-left:3px solid #f5c16c; }
         .deal-task-row { border-left:3px solid #93c5fd; }
+        .deal-task-row.overdue { border-left-color:#ef4444; }
         .deal-note-meta, .deal-task-meta { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; margin-bottom:4px; font-size:11px; font-weight:600; color:#6b7280; }
         .deal-note-body, .deal-task-text { font-weight:400; }
         .deal-note-body b, .deal-task-text b { font-weight:600; }
         .deal-note-row.saving::after, .deal-task-row.saving::after { content:''; position:absolute; right:8px; top:8px; width:10px; height:10px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .deal-task-date { font-weight:500; }
+        .deal-task-date.overdue { color:#dc2626; font-weight:700; }
         #deal-tasks-list.saving { position:relative; min-height:28px; }
         #deal-tasks-list.saving::after { content:''; position:absolute; right:4px; top:0; width:14px; height:14px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .deal-note-del, .deal-note-edit, .deal-task-del, .deal-task-edit { border:0; background:transparent; color:#2563eb; width:22px; height:22px; padding:0; display:inline-flex; align-items:center; justify-content:center; }
@@ -3228,6 +3231,70 @@ function setSamilStageFilter(stageKey) {
     renderSamilDeals();
 }
 
+function isDealTaskCompleted(item) {
+    if(!item) return true;
+    if(item.is_completed || item.completed || item.isCompleted) return true;
+    const status = String(item.status || item.state || '').toLowerCase();
+    if(status === 'completed' || status === 'done' || status === 'closed') return true;
+    if(typeof _completedTaskIds === 'object' && _completedTaskIds[item.id]) return true;
+    return false;
+}
+
+function formatDealTaskDeadline(item) {
+    if(!item) return '';
+    let val = item.deadline || item.time || item.deadline_text || '';
+    if(typeof val === 'string' && val.startsWith('custom:')) {
+        val = val.slice(7).trim();
+    }
+    if(typeof val === 'string' && val.trim()) {
+        const trimmed = val.trim();
+        if(/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+            const dt = new Date(trimmed);
+            if(!isNaN(dt.getTime())) {
+                const p = n => String(n).padStart(2, '0');
+                return p(dt.getDate()) + '.' + p(dt.getMonth() + 1) + '.' + dt.getFullYear() + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+            }
+        }
+        if(!/^\d{9,12}$/.test(trimmed)) {
+            return trimmed;
+        }
+    }
+    const ts = Number(item.complete_till || item.deadline_ts || (typeof val === 'number' || (typeof val === 'string' && /^\d{9,12}$/.test(val.trim())) ? val : 0));
+    if(ts && !isNaN(ts) && ts > 0) {
+        try {
+            const dt = new Date(ts * 1000);
+            if(!isNaN(dt.getTime())) {
+                const p = n => String(n).padStart(2, '0');
+                return p(dt.getDate()) + '.' + p(dt.getMonth() + 1) + '.' + dt.getFullYear() + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+            }
+        } catch(_) {}
+    }
+    return '';
+}
+
+function isDealTaskOverdue(item) {
+    if(!item || isDealTaskCompleted(item)) return false;
+    if(item.is_overdue === true || item.overdue === true) return true;
+    let ts = Number(item.complete_till || item.deadline_ts || 0);
+    if(!ts && item.deadline && typeof item.deadline === 'string') {
+        let dl = item.deadline.startsWith('custom:') ? item.deadline.slice(7).trim() : item.deadline.trim();
+        if(/^\d{4}-\d{2}-\d{2}/.test(dl)) {
+            const dt = new Date(dl);
+            if(!isNaN(dt.getTime())) ts = Math.floor(dt.getTime() / 1000);
+        } else {
+            const m = dl.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
+            if(m) {
+                const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]));
+                if(!isNaN(dt.getTime())) ts = Math.floor(dt.getTime() / 1000);
+            }
+        }
+    }
+    if(ts > 0) {
+        return ts * 1000 < Date.now();
+    }
+    return false;
+}
+
 function dealMediaSrc(raw, token, uuid, extra) {
     const direct = String(raw || '');
     if(direct.startsWith('blob:') || direct.startsWith('data:')) return direct;
@@ -3311,10 +3378,17 @@ function dealLastClientMessage(deal) {
     return '';
 }
 function dealTasksHtml(deal) {
-    const allTasks = Array.isArray(deal.tasks) ? deal.tasks : [];
-    const task = escapeHtml((deal.task_desc || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
-    if(allTasks.length > 1) {
-        return allTasks.map(item => `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('');
+    const allTasks = Array.isArray(deal && deal.tasks) ? deal.tasks.filter(item => !isDealTaskCompleted(item)) : [];
+    if(allTasks.length > 0) {
+        return allTasks.map(item => {
+            const dl = formatDealTaskDeadline(item);
+            return `<div>${escapeHtml((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${dl ? ` <span class="text-gray-400">(${escapeHtml(dl)})</span>` : ''}</div>`;
+        }).join('');
+    }
+    const dl = deal && (deal.deadline || formatDealTaskDeadline({complete_till: deal.deadline_ts}));
+    const task = escapeHtml((deal && (deal.task_desc || deal.task_text || deal.task) || '').replace(/^\[[^\]]+\]\s*/, '') || '—');
+    if(task !== '—' && dl) {
+        return `<div>${task} <span class="text-gray-400">(${escapeHtml(dl)})</span></div>`;
     }
     return task;
 }
@@ -4584,21 +4658,19 @@ function dealTaskRowHtml(item, readonly) {
     const actions = canEdit
         ? `<span><button type="button" class="deal-task-edit" title="Dəyiş" data-task-id="${escapeHtml(String(item.id))}">${dealIconEdit()}</button><button type="button" class="deal-task-del" title="Sil" data-task-id="${escapeHtml(String(item.id))}">${dealIconDel()}</button></span>`
         : '';
-    return `<div class="deal-task-row" data-task-id="${escapeHtml(String(item.id || ''))}"><div class="deal-task-meta"><span>Tapşırıq</span>${actions}</div><div class="deal-task-text">${linkifyText(text)}</div></div>`;
+    const dl = formatDealTaskDeadline(item);
+    const overdue = isDealTaskOverdue(item);
+    const dlHtml = dl
+        ? `<span class="deal-task-date${overdue ? ' overdue' : ''}" title="${overdue ? 'Vaxtı keçib' : 'Son tarix'}"> · ${overdue ? '⚠️ ' : ''}${escapeHtml(dl)}</span>`
+        : '';
+    const rowClass = `deal-task-row${overdue ? ' overdue' : ''}`;
+    return `<div class="${rowClass}" data-task-id="${escapeHtml(String(item.id || ''))}"><div class="deal-task-meta"><span>Tapşırıq${dlHtml}</span>${actions}</div><div class="deal-task-text">${linkifyText(text)}</div></div>`;
 }
 function dealNotesListHtml(deal, readonly) {
     const notes = Array.isArray(deal.notes) ? deal.notes.filter(item => item && String(item.text || '').trim() && String(item.text).trim() !== '⟦silindi⟧') : [];
     if(notes.length) return notes.map(item => dealNoteRowHtml(item, readonly)).join('');
     if(deal.last_note) return dealNoteRowHtml({text: deal.last_note}, true);
     return '<div class="text-gray-400">Qeyd yoxdur</div>';
-}
-function isDealTaskCompleted(item) {
-    if(!item) return true;
-    if(item.is_completed || item.completed || item.isCompleted) return true;
-    const status = String(item.status || item.state || '').toLowerCase();
-    if(status === 'completed' || status === 'done' || status === 'closed') return true;
-    if(typeof _completedTaskIds === 'object' && _completedTaskIds[item.id]) return true;
-    return false;
 }
 function dealOpenTasks(deal) {
     const tasks = Array.isArray(deal && deal.tasks) ? deal.tasks : [];
@@ -4607,6 +4679,13 @@ function dealOpenTasks(deal) {
 function dealTasksListHtml(deal, readonly) {
     const tasks = dealOpenTasks(deal);
     if(tasks.length) return tasks.map(item => dealTaskRowHtml(item, readonly)).join('');
+    if(deal && (deal.task_desc || deal.task_text || deal.task)) {
+        return dealTaskRowHtml({
+            text: deal.task_desc || deal.task_text || deal.task,
+            deadline: deal.deadline,
+            complete_till: deal.deadline_ts
+        }, true);
+    }
     return '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
 }
 function dealPipelineLabel(deal) {
@@ -4862,6 +4941,7 @@ function bindDealSideActions(deal) {
                 desc: item.text || '',
                 text: item.text || '',
                 complete_till: item.complete_till,
+                deadline: item.deadline,
                 task_type_id: item.task_type_id || '4232112',
                 assigneeName: item.responsible || '',
                 contact_name: deal.contact_name || '',
@@ -5081,7 +5161,10 @@ function dealDetailSectionsHtml(deal, token, opts) {
         ? notes.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9"><div class="text-[11px] text-gray-400">${escapeHtml(item.created || '')}</div><div>${linkifyText(item.text || '')}</div>${dealMediaBlock(item, token)}</div>`).join('')
         : `<div class="text-gray-400">${linkifyText(deal.last_note || 'Qeyd yoxdur')}</div>`;
     const tasksHtml = tasks.length
-        ? tasks.map(item => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${item.deadline ? ` <span class="text-gray-400">(${escapeHtml(item.deadline)})</span>` : ''}</div>`).join('')
+        ? tasks.map(item => {
+            const dl = formatDealTaskDeadline(item);
+            return `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${dl ? ` <span class="text-gray-400">(${escapeHtml(dl)})</span>` : ''}</div>`;
+        }).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
     const chatHtml = dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
     const composer = canReply ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
@@ -7703,6 +7786,19 @@ function openTaskEditModal(task) {
         if(task.complete_till) {
             const d = new Date(task.complete_till * 1000);
             dlEl.value = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+        } else if(task.deadline) {
+            let rawDl = String(task.deadline).trim();
+            if(rawDl.startsWith('custom:')) rawDl = rawDl.slice(7);
+            if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawDl)) {
+                dlEl.value = rawDl.slice(0, 16);
+            } else {
+                const m = rawDl.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
+                if(m) {
+                    dlEl.value = `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}`;
+                } else {
+                    dlEl.value = '';
+                }
+            }
         } else dlEl.value = '';
     }
     window._taskEditContext = {
