@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="276">
+    <meta name="pwa-build" content="277">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -17,7 +17,6 @@
         @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;1,6..12,400&display=swap');
         html, body { font-family: 'Nunito Sans', sans-serif; }
         body { background:linear-gradient(180deg,#f7f1e8 0%,#f4efe6 42%,#eef3f1 100%); margin:0; padding:0; font-weight: 600; color:#1c1917; }
-        .bein-mark { width:28px; height:28px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; flex:none; background:linear-gradient(145deg,#1f3a34,#0f766e); color:#f8f3ea; font-size:14px; font-weight:700; letter-spacing:-0.04em; line-height:1; }
         .deal-last-msg { margin-top:6px; white-space:pre-wrap; word-break:break-word; color:#334155; font-size:12px; line-height:1.45; font-weight:400; }
         button, input, select, textarea { font-family: inherit; }
         .font-bold, .font-extrabold, .font-black, .font-semibold { font-weight: 600 !important; }
@@ -365,8 +364,10 @@
         .wa-composer-field.sending textarea { color:transparent; }
         .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; }
-        .audio-wait audio { flex:1; min-width:0; width:100%; height:28px; }
-        .audio-wait .audio-spin { display:none; position:absolute; left:8px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:2; pointer-events:none; background:#fff; }
+        .audio-wait audio { flex:1; min-width:0; width:100%; height:32px; }
+        .audio-hit { position:absolute; left:0; top:0; bottom:0; width:42px; z-index:3; border:0; padding:0; background:transparent; cursor:pointer; }
+        .audio-wait.ready .audio-hit { display:none; }
+        .audio-wait .audio-spin { display:none; position:absolute; left:12px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:4; pointer-events:none; background:#fff; }
         .audio-wait.loading .audio-spin { display:block; }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
         .photo-wait img.deal-zoom { margin:0; opacity:0; }
@@ -518,14 +519,14 @@
             .chats-app.chat-open { grid-template-columns:280px minmax(0,1fr); }
         }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
-        .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:#2b8cff; }
+        .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:linear-gradient(145deg,#1f3a34,#0f766e); }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
-        .chats-filter-tabs { display:flex; align-items:center; gap:8px; padding:8px 12px; background:#fff; border-bottom:1px solid #e9edef; overflow-x:auto; flex:none; }
-        .chats-filter-tab { border:0; background:#f0f2f5; color:#54656f; border-radius:16px; height:34px; padding:0 12px; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
-        .chats-filter-tab.on { background:#d9fdd3; color:#111b21; }
-        .chats-filter-count { font-size:14px; font-weight:600; }
+        .chats-filter-tabs { display:flex; align-items:center; gap:6px; padding:6px 10px; background:#fff; border-bottom:1px solid #e9edef; overflow-x:auto; flex:none; }
+        .chats-filter-tab { border:0; background:#fff; color:#54656f; border-radius:14px; height:26px; padding:0 10px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; box-shadow:inset 0 0 0 1px #e9edef; }
+        .chats-filter-tab.on { background:#d9fdd3; color:#111b21; box-shadow:none; }
+        .chats-filter-count { font-size:13px; font-weight:600; }
         .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
-        .chats-toolbar .search-icon-btn.on { background:#fff; color:#2b8cff; border-color:#fff; }
+        .chats-toolbar .search-icon-btn.on { background:#fff; color:#1f3a34; border-color:#fff; }
         .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
         .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
@@ -762,7 +763,6 @@
         </button>
     </div>
     <div class="sidebar-brand">
-        <span class="bein-mark" aria-hidden="true">B</span>
         <div class="sidebar-brand-text">
             <h1>Bein Systems</h1>
             <span>CRM</span>
@@ -802,7 +802,6 @@
 <!-- HEADER (mobile/tablet only) -->
 <div id="mobile-header" class="text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
     <div class="flex items-center gap-2">
-        <span class="bein-mark" aria-hidden="true">B</span>
         <div>
             <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
             <span class="text-[10px] text-gray-300">CRM Smart Assistant</span>
@@ -903,7 +902,7 @@
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
             </div>
                 <div class="chats-filter-tabs" role="tablist">
-                    <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış</button>
+                    <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış <span id="chats-unread-count" class="chats-filter-count">0</span></button>
                     <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
                 </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
@@ -3520,7 +3519,7 @@ function mediaCacheKey(wrap, kind) {
 }
 function audioWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><audio controls preload="none"></audio></span>`;
+    return `<span class="audio-wait"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><audio controls preload="none"></audio><button type="button" class="audio-hit" aria-label="Play"></button></span>`;
 }
 function isChatPhotoText(text) {
     const raw = String(text || '').trim();
@@ -3676,8 +3675,9 @@ function bindAudioWait(root) {
             if(event) { event.preventDefault(); event.stopPropagation(); }
             startAudioWait(wrap, audio);
         };
+        const hit = wrap.querySelector('.audio-hit');
+        if(hit) hit.addEventListener('click', begin);
         audio.addEventListener('play', () => begin());
-        audio.addEventListener('click', begin);
         audio.addEventListener('ended', () => {
             try { audio.pause(); audio.currentTime = 0; } catch(_err) {}
         });
@@ -7571,8 +7571,10 @@ function paintChatsUnreadBadge() {
     }
     const unanswered = HAS_CHATS ? chatsInboxDeals().filter(chatsIsUnanswered).length : 0;
     const unreadBtn = document.getElementById('chats-unread-label');
+    const unreadCount = document.getElementById('chats-unread-count');
     const waitBtn = document.getElementById('chats-unanswered-tab');
     const waitCount = document.getElementById('chats-unanswered-count');
+    if(unreadCount) unreadCount.textContent = text;
     if(_chatsListFilter === 'unread' && !show) _chatsListFilter = '';
     if(unreadBtn) {
         unreadBtn.classList.toggle('on', _chatsListFilter === 'unread');
