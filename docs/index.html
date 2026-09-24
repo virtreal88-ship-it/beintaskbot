@@ -6,8 +6,8 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="271">
-    <meta name="theme-color" content="#1a252f">
+    <meta name="pwa-build" content="272">
+    <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=251">
@@ -16,7 +16,9 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;1,6..12,400&display=swap');
         html, body { font-family: 'Nunito Sans', sans-serif; }
-        body { background-color: #f8f9fa; margin:0; padding:0; font-weight: 600; }
+        body { background:linear-gradient(180deg,#f7f1e8 0%,#f4efe6 42%,#eef3f1 100%); margin:0; padding:0; font-weight: 600; color:#1c1917; }
+        .bein-mark { width:28px; height:28px; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; flex:none; background:linear-gradient(145deg,#1f3a34,#0f766e); color:#f8f3ea; font-size:14px; font-weight:700; letter-spacing:-0.04em; line-height:1; }
+        .deal-last-msg { margin-top:6px; white-space:pre-wrap; word-break:break-word; color:#334155; font-size:12px; line-height:1.45; font-weight:400; }
         button, input, select, textarea { font-family: inherit; }
         .font-bold, .font-extrabold, .font-black, .font-semibold { font-weight: 600 !important; }
         .filter-pill { border:1px solid #cbd5e1; background:#fff; color:#1e293b; transition:all 0.2s ease; }
@@ -32,6 +34,7 @@
         #sync-indicator .sync-meter .sync-pct { color:#cbd5e1; }
         #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:600; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
         #preloader { pointer-events:none !important; }
+        #mobile-header { background:linear-gradient(120deg,#1c2b28,#243832); }
         #tab-bar { z-index:11060 !important; }
         #toast.error { background:#b91c1c; }
         .screen { display:none; } .screen.active { display:block; }
@@ -84,7 +87,7 @@
         @media (min-width: 1024px) {
             :root { --crm-nav-h: 0px; --crm-side-w: 56px; }
             body.sidebar-open { --crm-side-w: 232px; }
-            body { background:#f4f6f8; color:#0f172a; }
+            body { background:linear-gradient(180deg,#f7f1e8 0%,#f4efe6 42%,#eef3f1 100%); color:#0f172a; }
             button:active { transform:none; opacity:1; }
             #mobile-header, #tab-bar, #tab-more-sheet { display:none !important; }
             #desktop-sidebar {
@@ -102,11 +105,10 @@
             .sidebar-icon-btn:hover { background:#eef1f4; color:#0f172a; }
             .sidebar-icon-btn.active { background:#e2e8f0; color:#0f172a; }
             body.sidebar-open #pin-sidebar-btn { margin-left:auto; margin-top:0; }
-            #desktop-sidebar .sidebar-brand { padding:0 8px 12px; border:0; margin:0; flex-shrink:0; min-height:36px; }
+            #desktop-sidebar .sidebar-brand { padding:0 8px 12px; border:0; margin:0; flex-shrink:0; min-height:36px; display:flex; align-items:center; gap:8px; }
             #desktop-sidebar .sidebar-brand h1 { font-size:14px; font-weight:600; letter-spacing:-0.03em; margin:0; color:#0f172a; white-space:nowrap; overflow:hidden; }
-            #desktop-sidebar .sidebar-brand span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
-            body:not(.sidebar-open) #desktop-sidebar .sidebar-brand h1,
-            body:not(.sidebar-open) #desktop-sidebar .sidebar-brand span,
+            #desktop-sidebar .sidebar-brand-text span { font-size:10px; color:#94a3b8; display:block; margin-top:1px; font-weight:500; }
+            body:not(.sidebar-open) #desktop-sidebar .sidebar-brand-text,
             body:not(.sidebar-open) .sidebar-item-label { display:none; }
             body:not(.sidebar-open) #pin-sidebar-btn { display:none; }
             #desktop-sidebar .sidebar-nav { display:flex; flex-direction:column; align-items:stretch; gap:4px; flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; }
@@ -749,8 +751,11 @@
         </button>
     </div>
     <div class="sidebar-brand">
-        <h1>Bein Systems</h1>
-        <span>CRM</span>
+        <span class="bein-mark" aria-hidden="true">B</span>
+        <div class="sidebar-brand-text">
+            <h1>Bein Systems</h1>
+            <span>CRM</span>
+        </div>
     </div>
     <div class="sidebar-nav">
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
@@ -784,10 +789,13 @@
 </nav>
 
 <!-- HEADER (mobile/tablet only) -->
-<div id="mobile-header" class="bg-[#1a252f] text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
-    <div>
-        <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
-        <span class="text-[10px] text-gray-400">CRM Smart Assistant</span>
+<div id="mobile-header" class="text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
+    <div class="flex items-center gap-2">
+        <span class="bein-mark" aria-hidden="true">B</span>
+        <div>
+            <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
+            <span class="text-[10px] text-gray-300">CRM Smart Assistant</span>
+        </div>
     </div>
     <div class="text-right flex flex-col items-end">
         <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
@@ -3550,12 +3558,12 @@ function chatRowPreviewText(item) {
     const kind = String(item.message_type || item.type || '').toLowerCase();
     if(isChatAudioItem(item)) return '🎤 Səs';
     if(kind === 'video') return '🎬 Video';
-    const text = String(item.text || '').replace(/\s+/g, ' ').trim();
+    const text = String(item.text || '').trim();
     if(isDealMediaNotice(text) || kind === 'picture' || kind === 'image') return '📷 Şəkil';
     if(!text || isDealHiddenNotice(text) || isDealSystemNoise(text) || isPlaceholderChatText(text)) return '';
     if(/buraxılmış zəng|пропущен|missed (voice )?call/i.test(text) || isDealMissedCall(item)) return '';
     if(/^(yeni mesaj|çat|mesaj)$/i.test(text)) return '';
-    return text.slice(0, 140);
+    return text;
 }
 const _dealPreviewHold = {};
 function dealLastMessageText(deal) {
@@ -3573,10 +3581,10 @@ function dealLastMessageText(deal) {
         rowAt = Number(rows[i].created_at || 0);
         break;
     }
-    const directRaw = String(deal.last_client_message || '').replace(/\s+/g, ' ').trim();
+    const directRaw = String(deal.last_client_message || '').trim();
     let direct = '';
     if(directRaw && !/^(yeni mesaj|çat|mesaj)$/i.test(directRaw) && !isPlaceholderChatText(directRaw) && !isDealHiddenNotice(directRaw) && !isDealSystemNoise(directRaw) && !/buraxılmış zəng|пропущен|missed (voice )?call/i.test(directRaw)) {
-        direct = isDealMediaNotice(directRaw) ? '📷 Şəkil' : directRaw.slice(0, 140);
+        direct = isDealMediaNotice(directRaw) ? '📷 Şəkil' : directRaw;
     }
     const incomingAt = Number(deal.last_incoming_at || 0);
     const next = (direct && (!fromRows || (incomingAt && rowAt && incomingAt > rowAt + 2))) ? direct : (fromRows || direct);
@@ -4923,8 +4931,53 @@ function applyDealChatTail(seq, dealId, rows) {
     markDealChatRead(false);
     return true;
 }
+async function loadMobileBaxishChat() {
+    const seq = _dealViewState.seq;
+    const deal = _dealViewState.deal;
+    const remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
+    const instant = instantChatRows(deal, remembered);
+    const hasRealInstant = instant.some(row => row && !row.preview);
+    _dealViewState.fullReady = false;
+    _dealViewState.atBottom = true;
+    _dealViewState.loading = !hasRealInstant;
+    _dealViewState.messages = hasRealInstant ? instant : [];
+    paintDealChatThread({stickBottom: true});
+    idbGet('chats', String(_dealViewState.id)).then(idbRows => {
+        if(!requestMatchesDeal(seq, deal && deal.id) || hasRealInstant) return;
+        if(!Array.isArray(idbRows) || !idbRows.length) return;
+        _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')] = idbRows;
+        _dealViewState.messages = idbRows;
+        _dealViewState.loading = false;
+        paintDealChatThread({stickBottom: true});
+    }).catch(() => {});
+    try {
+        const tail = await fetchDealChatTail();
+        if(tail && tail.success && !tail.stale && requestMatchesDeal(seq, deal && deal.id)) {
+            applyDealSidePreview(tail);
+            if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
+            const rows = Array.isArray(tail.chat) ? tail.chat.filter(row => row && !row.preview) : [];
+            if(rows.length) applyDealChatTail(seq, deal && deal.id, rows);
+        }
+    } catch(_err) {}
+    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    try {
+        const page = await fetchDealChatPage();
+        if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
+            _dealViewState.blocked = !!page.chat_blocked;
+            if(Array.isArray(page.channels) && page.channels.length) applyDealChannels(page.channels);
+            const chatRows = Array.isArray(page.chat) ? page.chat : [];
+            if(chatRows.length) applyDealChatPage(seq, deal && deal.id, chatRows, page.chat_blocked, page.has_more);
+        }
+    } catch(_err) {}
+    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    ensureDealSnapshotLoaded(deal, false).catch(() => {});
+}
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
+    if(!_dealInboxMode && window.matchMedia('(max-width: 1023px)').matches) {
+        await loadMobileBaxishChat();
+        return;
+    }
     const seq = _dealViewState.seq;
     const deal = _dealViewState.deal;
     let remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
@@ -5883,19 +5936,60 @@ async function requestDealSummary() {
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
 }
 let _waTemplates = null, _waTemplatesAt = 0, _waTplSending = false;
-async function loadWaTemplates(force) {
-    if(!CURRENT_USER_ID) return [];
-    if(!force && Array.isArray(_waTemplates) && Date.now() - _waTemplatesAt < 300000) return _waTemplates;
-    const r = await fetch(API_BASE + '/api/whatsapp/templates' + (force ? '?refresh=1' : ''), {
-        cache: 'no-store',
+const WA_TPL_CACHE_KEY = 'wa_tpl_cache_v1';
+function readWaTemplateCache() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(WA_TPL_CACHE_KEY) || 'null');
+        if(saved && Array.isArray(saved.rows) && saved.rows.length) return saved;
+    } catch(_err) {}
+    return null;
+}
+function writeWaTemplateCache(rows) {
+    _waTemplates = Array.isArray(rows) ? rows : [];
+    _waTemplatesAt = Date.now();
+    try { localStorage.setItem(WA_TPL_CACHE_KEY, JSON.stringify({at: _waTemplatesAt, rows: _waTemplates})); } catch(_err) {}
+}
+function paintWaTemplateSelect(rows) {
+    const select = document.getElementById('wa-tpl-select');
+    const sendBtn = document.getElementById('wa-tpl-send');
+    if(!select || !document.getElementById('wa-tpl-modal')) return;
+    const prev = select.value;
+    if(!rows.length) {
+        select.innerHTML = '<option value="">Təsdiqlənmiş şablon yoxdur</option>';
+        if(sendBtn) sendBtn.disabled = true;
+        return;
+    }
+    select.innerHTML = rows.map((row, index) => `<option value="${index}">${escapeHtml(row.name)} (${escapeHtml(row.language)})</option>`).join('');
+    if(prev && select.querySelector('option[value="' + prev + '"]')) select.value = prev;
+    select.onchange = paintWaTplForm;
+    if(sendBtn) sendBtn.disabled = false;
+    paintWaTplForm();
+}
+async function refreshWaTemplates() {
+    const r = await fetch(API_BASE + '/api/whatsapp/templates', {
         headers: {'X-TG-User-ID': CURRENT_USER_ID}
     });
     const d = await r.json().catch(() => ({}));
     if(!r.ok || !d.success) throw new Error(d.error || 'Şablonlar yüklənmədi');
-    _waTemplates = Array.isArray(d.templates) ? d.templates : [];
-    _waTemplatesAt = Date.now();
-    if(!_waTemplates.length && d.error) throw new Error(d.error);
-    return _waTemplates;
+    const rows = Array.isArray(d.templates) ? d.templates : [];
+    if(!rows.length && d.error) throw new Error(d.error);
+    if(rows.length) {
+        writeWaTemplateCache(rows);
+        paintWaTemplateSelect(rows);
+    }
+    return rows;
+}
+async function loadWaTemplates(force) {
+    if(!CURRENT_USER_ID) return [];
+    if(!force && Array.isArray(_waTemplates) && _waTemplates.length && Date.now() - _waTemplatesAt < 3600000) return _waTemplates;
+    const saved = !force ? readWaTemplateCache() : null;
+    if(saved) {
+        _waTemplates = saved.rows;
+        _waTemplatesAt = Number(saved.at || 0);
+        if(Date.now() - _waTemplatesAt > 60000) refreshWaTemplates().catch(() => {});
+        return saved.rows;
+    }
+    return refreshWaTemplates();
 }
 function waTplFill(text, values, names) {
     let out = String(text || '');
@@ -6083,14 +6177,7 @@ async function openWaTemplateModal(opts) {
     try {
         const rows = await loadWaTemplates(false);
         if(!document.getElementById('wa-tpl-modal')) return;
-        if(!rows.length) {
-            select.innerHTML = '<option value="">Təsdiqlənmiş şablon yoxdur</option>';
-            return;
-        }
-        select.innerHTML = rows.map((row, index) => `<option value="${index}">${escapeHtml(row.name)} (${escapeHtml(row.language)})</option>`).join('');
-        select.onchange = paintWaTplForm;
-        sendBtn.disabled = false;
-        paintWaTplForm();
+        paintWaTemplateSelect(rows);
     } catch(err) {
         select.innerHTML = '<option value="">Şablonlar yüklənmədi</option>';
         toast(err.message || 'Şablonlar yüklənmədi', true);
@@ -6919,7 +7006,7 @@ function renderSamilDeals() {
             const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
             const note = escapeHtml(stripNamePrefix(deal.last_note) || '—');
             const tasksHtml = dealTasksHtml(deal);
-            const clientMessage = escapeHtml(dealLastMessageText(deal) || '—');
+            const clientMessage = dealLastMessageText(deal);
             return `<article class="samil-deal-card bg-white p-3 rounded-xl" draggable="true" data-deal-id="${deal.id}" data-stage-key="${escapeHtml(deal.stage_key || '')}">
                 <div class="flex items-start gap-2 mb-2">
                     <span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>
@@ -6943,7 +7030,7 @@ function renderSamilDeals() {
                     <div>📋 <b>Tapşırıq:</b> ${tasksHtml}</div>
                     <div>📝 <b>Son qeyd:</b> ${note}</div>
                     <div class="grid grid-cols-2 gap-2 text-gray-500"><div>🕒 ${created}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
-                    <div class="truncate">💬 <b>Son mesaj:</b> ${clientMessage}</div>
+                    ${clientMessage ? `<div class="deal-last-msg">${escapeHtml(clientMessage)}</div>` : ''}
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
                     <div class="flex items-center gap-3 flex-wrap"><button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
@@ -8263,6 +8350,7 @@ async function openInboxChat(leadId) {
 async function openChats() {
     if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
+    loadWaTemplates(false).catch(() => {});
     fillChatsLineSelect();
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();

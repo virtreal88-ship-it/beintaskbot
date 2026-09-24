@@ -10405,8 +10405,9 @@ def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool
 
 _WA_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
 _WA_TEMPLATE_NAME_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
-_WA_TEMPLATES_CACHE: dict = {"at": 0.0, "rows": []}
-_WA_TEMPLATES_TTL = 300.0
+_WA_TEMPLATES_CACHE: dict = {"at": 0.0, "wall": 0.0, "rows": []}
+_WA_TEMPLATES_TTL = 3600.0
+_WA_TEMPLATES_FILE = "wa_templates.json"
 _WA_HEADER_MEDIA = {"IMAGE": "image", "VIDEO": "video", "DOCUMENT": "document"}
 
 
@@ -10483,18 +10484,56 @@ def _wa_template_card(card: dict, index: int) -> dict:
     }
 
 
+def _wa_templates_from_disk() -> tuple[list[dict], float]:
+    data = read_json(_WA_TEMPLATES_FILE) or {}
+    if not isinstance(data, dict):
+        return [], 0.0
+    rows = data.get("rows")
+    try:
+        saved_at = float(data.get("at") or 0)
+    except (TypeError, ValueError):
+        saved_at = 0.0
+    if not isinstance(rows, list):
+        return [], 0.0
+    return [row for row in rows if isinstance(row, dict)], saved_at
+
+
+def _wa_templates_remember(rows: list[dict]) -> None:
+    if not rows:
+        return
+    wall = _time_module.time()
+    _WA_TEMPLATES_CACHE["rows"] = rows
+    _WA_TEMPLATES_CACHE["at"] = _time_module.monotonic()
+    _WA_TEMPLATES_CACHE["wall"] = wall
+    write_json(_WA_TEMPLATES_FILE, {"at": wall, "rows": rows})
+
+
+def _wa_templates_cached() -> tuple[list[dict], bool]:
+    rows = _WA_TEMPLATES_CACHE.get("rows") or []
+    wall = float(_WA_TEMPLATES_CACHE.get("wall") or 0)
+    if not rows:
+        rows, wall = _wa_templates_from_disk()
+        if rows:
+            _WA_TEMPLATES_CACHE["rows"] = rows
+            _WA_TEMPLATES_CACHE["wall"] = wall
+            _WA_TEMPLATES_CACHE["at"] = _time_module.monotonic()
+    fresh = bool(rows) and (_time_module.time() - wall) < _WA_TEMPLATES_TTL
+    return list(rows), fresh
+
+
 def _wa_template_rows(force: bool = False) -> list[dict]:
     """Approved WABA templates, shaped for the app picker."""
-    now = _time_module.monotonic()
-    cached = _WA_TEMPLATES_CACHE.get("rows") or []
-    if cached and not force and now - float(_WA_TEMPLATES_CACHE.get("at") or 0) < _WA_TEMPLATES_TTL:
-        return list(cached)
+    cached, fresh = _wa_templates_cached()
+    if cached and fresh and not force:
+        return cached
     waba = str(WA_WABA_ID or "").strip()
     if not waba:
-        return []
+        return cached
     fields = "name,language,status,category,parameter_format,components"
     payload = _wa_graph_get(f"{waba}/message_templates", {"limit": 200, "fields": fields})
-    if isinstance(payload, dict) and payload.get("error"):
+    error = payload.get("error") if isinstance(payload, dict) else None
+    error_text = str((error or {}).get("message") or "") if isinstance(error, dict) else ""
+    if error and "parameter_format" in error_text:
         payload = _wa_graph_get(
             f"{waba}/message_templates",
             {"limit": 200, "fields": "name,language,status,category,components"},
@@ -10559,9 +10598,9 @@ def _wa_template_rows(force: bool = False) -> list[dict]:
         })
     rows.sort(key=lambda row: (row.get("name") or "", row.get("language") or ""))
     if rows:
-        _WA_TEMPLATES_CACHE["rows"] = rows
-        _WA_TEMPLATES_CACHE["at"] = now
-    return list(rows)
+        _wa_templates_remember(rows)
+        return list(rows)
+    return cached
 
 
 def _wa_template_find(name: str, language: str) -> dict | None:
@@ -13920,6 +13959,11 @@ async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
             "error": "WhatsApp Cloud API konfiqurasiya olunmayıb.",
         })
     force = str(request.rel_url.query.get("refresh") or "") == "1"
+    cached, fresh = _wa_templates_cached()
+    if cached and not force:
+        if not fresh:
+            asyncio.create_task(asyncio.to_thread(_wa_template_rows, True))
+        return web.json_response({"success": True, "templates": cached})
     rows = await asyncio.to_thread(_wa_template_rows, force)
     return web.json_response({"success": True, "templates": rows})
 
