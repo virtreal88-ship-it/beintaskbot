@@ -4734,7 +4734,8 @@ async function loadDealChatLatest() {
     if(tail && tail.success && !tail.stale) {
         applyDealSidePreview(tail);
         if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
-        if(applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
+        const hasTailMessages = Array.isArray(tail.chat) && tail.chat.filter(row => row && !row.preview).length > 0;
+        if(hasTailMessages && applyDealChatTail(seq, deal && deal.id, tail.chat)) return;
     }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
 
@@ -4756,6 +4757,12 @@ async function loadDealChatLatest() {
     _dealViewState.loading = false;
     _dealViewState.fullReady = true;
     paintDealChatThread({stickBottom: true, force: true});
+    // Ensure snapshot details (notes, tasks, calls) are also populated in background
+    ensureDealSnapshotLoaded(deal, false).then(() => {
+        if(requestMatchesDeal(seq, deal && deal.id)) {
+            paintDealChatThread({stickBottom: false, force: true});
+        }
+    }).catch(() => {});
 }
 async function loadOlderDealChat(quiet) {
     if(!_dealViewState || _dealViewState.loadingOlder || !_dealViewState.has_more || _dealViewState.loading) return;
