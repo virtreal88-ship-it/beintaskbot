@@ -10052,9 +10052,23 @@ def _send_kommo_talk_message(
             if reply_text:
                 amojo_body["reply_to"]["message"]["type"] = "text"
                 amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
+            if is_voice and att_clean:
+                voice_amojo = dict(amojo_body)
+                voice_amojo["attachment"] = {**att_clean, "type": "voice"}
+                attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", voice_amojo, {}))
             attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
+            if is_voice and att_clean:
+                voice_pri = {**primary, "attachment": {**att_clean, "type": "voice"}}
+                attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", voice_pri, ajax))
+                attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", voice_pri, ajax))
             attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", primary, ajax))
             attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", primary, ajax))
+        if is_voice and att_clean:
+            voice_pri = {**primary, "attachment": {**att_clean, "type": "voice"}}
+            attempts.append((talk_messages, voice_pri, {}))
+            attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", voice_pri, ajax))
+            attempts.append((ajax_talk_send, voice_pri, ajax))
+            attempts.append((ajax_talk_send_v2, voice_pri, ajax))
         attempts.append((talk_messages, primary, {}))
         attempts.append((talk_messages, msgid_only, {}))
         attempts.append((talk_messages, id_only, {}))
@@ -10063,14 +10077,31 @@ def _send_kommo_talk_message(
         attempts.append((ajax_talk_send_v2, primary, ajax))
         if plain_fallback:
             if is_voice and att_clean and not text:
-                attempts.append((talk_send, {"attachment": att_clean}, {}))
-                attempts.append((talk_send, {"text": "", "attachment": att_clean}, {}))
+                voice_att = {**att_clean, "type": "voice"}
+                audio_att = {**att_clean, "type": "audio"}
+                file_att = {**att_clean, "type": "file"}
+                attempts.append((talk_send, {"attachment": voice_att}, {}))
+                attempts.append((talk_send, {"text": "", "attachment": voice_att}, {}))
+                attempts.append((talk_send, {"attachment": audio_att}, {}))
+                attempts.append((talk_send, {"text": "", "attachment": audio_att}, {}))
+                attempts.append((talk_send, {"attachment": file_att}, {}))
+                attempts.append((talk_send, {"text": "", "attachment": file_att}, {}))
             else:
                 attempts.append((talk_send, payload, {}))
     if not reply_id:
         if is_voice and att_clean and not text:
-            attempts.append((talk_send, {"attachment": att_clean}, {}))
-            attempts.append((talk_send, {"text": "", "attachment": att_clean}, {}))
+            voice_att = {**att_clean, "type": "voice"}
+            audio_att = {**att_clean, "type": "audio"}
+            file_att = {**att_clean, "type": "file"}
+            ajax = {"X-Requested-With": "XMLHttpRequest"}
+            attempts.append((talk_send, {"attachment": voice_att}, {}))
+            attempts.append((talk_send, {"text": "", "attachment": voice_att}, {}))
+            attempts.append((ajax_talk_send, {"attachment": voice_att}, ajax))
+            attempts.append((ajax_talk_send_v2, {"attachment": voice_att}, ajax))
+            attempts.append((talk_send, {"attachment": audio_att}, {}))
+            attempts.append((talk_send, {"text": "", "attachment": audio_att}, {}))
+            attempts.append((talk_send, {"attachment": file_att}, {}))
+            attempts.append((talk_send, {"text": "", "attachment": file_att}, {}))
         else:
             attempts.append((talk_send, payload, {}))
     last_detail = ""
@@ -10145,7 +10176,8 @@ def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) 
     if file_size <= 0:
         return "", ""
     effective_mime = content_type or "application/octet-stream"
-    if str(filename or "").lower().endswith(".opus") and effective_mime in {"audio/opus", "application/octet-stream"}:
+    low_name = str(filename or "").lower()
+    if (low_name.endswith((".opus", ".ogg", ".oga")) or effective_mime in {"audio/opus", "audio/webm", "application/octet-stream"}) and "audio" in (effective_mime + low_name):
         effective_mime = "audio/ogg"
     auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
     drive_url = "https://drive-g.kommo.com"
@@ -10514,37 +10546,35 @@ def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str,
 
 
 def _ffmpeg_voice_for_kommo(raw: bytes, filename: str) -> tuple[bytes, str, str]:
-    """Turn voice recording into WhatsApp-compatible PTT Ogg/Opus (.opus) voice note for Kommo WhatsApp."""
-    if _is_ogg_bytes(raw):
-        return raw, "audio/ogg", _generate_ptt_filename()
+    """Turn voice recording into WhatsApp-compatible PTT Ogg/Opus voice note for Kommo WhatsApp."""
     suffix = os.path.splitext(str(filename or ""))[1].lower()
     if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
-        suffix = ".webm"
+        suffix = ".ogg" if _is_ogg_bytes(raw) else ".webm"
     src_path = ""
-    opus_path = ""
+    ogg_path = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
             src.write(raw)
             src_path = src.name
-        opus_path = src_path + ".opus"
+        ogg_path = src_path + ".ogg"
         cmds = [
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", opus_path,
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", ogg_path,
             ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", opus_path,
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", ogg_path,
             ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", src_path, "-vn", "-c:a", "copy", "-f", "ogg", opus_path,
+                "-i", src_path, "-vn", "-c:a", "copy", "-f", "ogg", ogg_path,
             ],
         ]
         for cmd in cmds:
-            data = _ffmpeg_run(cmd, opus_path)
+            data = _ffmpeg_run(cmd, ogg_path)
             if data and len(data) > 64 and _is_ogg_bytes(data):
                 return data, "audio/ogg", _generate_ptt_filename()
         return raw, "audio/ogg", _generate_ptt_filename()
@@ -10552,7 +10582,7 @@ def _ffmpeg_voice_for_kommo(raw: bytes, filename: str) -> tuple[bytes, str, str]
         logger.warning("ffmpeg voice to opus convert error: %s", exc)
         return raw, "audio/ogg", _generate_ptt_filename()
     finally:
-        for p in (src_path, opus_path):
+        for p in (src_path, ogg_path):
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
@@ -10564,9 +10594,9 @@ def _generate_ptt_filename() -> str:
     try:
         now_str = _time_module.strftime("%Y%m%d", _time_module.gmtime())
         seq = random.randint(1, 9999)
-        return f"PTT-{now_str}-WA{seq:04d}.opus"
+        return f"PTT-{now_str}-WA{seq:04d}.ogg"
     except Exception:
-        return "voice.opus"
+        return "voice.ogg"
 
 
 def _is_mp3_bytes(raw: bytes) -> bool:
@@ -14422,11 +14452,13 @@ def _deliver_via_cloud(
                 phone,
                 kind,
                 media_id,
-                caption=text,
-                filename=filename,
+                caption="" if voice else text,
+                filename="" if voice else filename,
                 reply_to=quote_id,
                 voice=voice,
             )
+            if ok and voice and text:
+                _wa_cloud_send_text(phone, text)
         if ok:
             return True, "", wamid, kind
         if error:
@@ -14681,7 +14713,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not drive_uuid or not drive_version:
             return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
         attachment = {
-            "type": _attachment_kind(upload_name, upload_type),
+            "type": "voice" if is_voice else _attachment_kind(upload_name, upload_type),
             "drive_uuid": drive_uuid,
             "drive_version_uuid": drive_version,
             "is_voice": is_voice,

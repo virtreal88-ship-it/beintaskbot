@@ -6996,7 +6996,7 @@ function stopDealVoiceAndGetFile() {
                 return;
             }
             const blob = new Blob(chunks, {type: mime});
-            const name = 'voice_' + Date.now() + '.' + dealVoiceExt(mime);
+            const name = 'voice_' + Date.now() + '.ogg';
             const file = new File([blob], name, {type: mime});
             setDealPendingFile(file, seconds);
             resolve(file);
@@ -7045,7 +7045,7 @@ async function toggleDealVoice() {
         if(cancelled) return;
         if(!chunks.length || seconds < 1) { toast('Səs yazısı çox qısadır', true); return; }
         const blob = new Blob(chunks, {type});
-        const name = 'voice_' + Date.now() + '.' + dealVoiceExt(type);
+        const name = 'voice_' + Date.now() + '.ogg';
         setDealPendingFile(new File([blob], name, {type}), seconds);
     };
     _dealVoiceRec.start();
@@ -7101,7 +7101,7 @@ async function sendDealChatMessage(fileArg) {
         incoming: false,
         text: text || (voiceNow ? '🎤 Səs mesajı' : (file ? (file.name || 'Fayl') : '')),
         message_type: voiceNow ? 'audio' : (file && /^image\//i.test(file.type) ? 'picture' : (file ? 'file' : 'text')),
-        file_name: voiceNow ? 'voice.opus' : (file ? (file.name || '') : ''),
+        file_name: voiceNow ? 'voice.ogg' : (file ? (file.name || '') : ''),
         media_url: _dealPendingUrl || localBlobUrl,
         created_at: Math.floor(Date.now() / 1000),
         delivery_status: 'sending',
@@ -7136,7 +7136,8 @@ async function sendDealChatMessage(fileArg) {
             if(talkId) form.append('talk_id', String(talkId));
             const senderPhone = dealWaSenderPhone();
             if(senderPhone) form.append('sender_phone', senderPhone);
-            form.append('file', file, file.name || 'file');
+            const sendFilename = voiceNow ? (file.name || 'voice.ogg') : (file.name || 'file');
+            form.append('file', file, sendFilename);
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
                 headers: {'X-TG-User-ID': CURRENT_USER_ID},
@@ -10133,7 +10134,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=287');
+    const reg = await navigator.serviceWorker.register('sw.js?v=288');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
