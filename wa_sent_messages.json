@@ -580,6 +580,28 @@
       "file_name": "voice.ogg",
       "delivery_status": "",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTVFQzFCNTRFRTE0MEREQjYxMDFBOUE1MDJGRkNEQjQA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTVFQzFCNTRFRTE0MEREQjYxMDFBOUE1MDJGRkNEQjQA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Oneline SOFT",
+      "phone": "994102135104",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790335417,
+      "created": "25.09.2026 15:23",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "/api/wa/media/1565474871999377",
+      "file_uuid": "",
+      "file_name": "voice.ogg",
+      "delivery_status": "",
+      "via_cloud": true
     }
   ],
   "78019517": [],
