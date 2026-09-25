@@ -12258,6 +12258,57 @@ def _lead_id_from_overview_phone(phone: str) -> int:
     return 0
 
 
+def _phones_for_wa_lead(lead_id: int) -> list[str]:
+    """Customer numbers already known for this chat, without a Kommo request."""
+    phones: list[str] = []
+
+    def _add(raw) -> None:
+        value = str(raw or "").strip()
+        if value and value not in phones:
+            phones.append(value)
+
+    try:
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return []
+    canonical = _canonical_wa_lead_id(lid)
+    for candidate in {lid, canonical}:
+        if candidate >= 9_000_000_000_000:
+            digits = str(candidate - 9_000_000_000_000)
+            if len(digits) >= 9:
+                _add(digits)
+    for row in _sent_messages_for_lead(lid):
+        _add(row.get("phone"))
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if isinstance(idx, dict):
+            for key, mapped in idx.items():
+                try:
+                    if int(mapped or 0) in {lid, canonical}:
+                        _add(key)
+                except (TypeError, ValueError):
+                    continue
+    for overview in _personal_overview_cache.values():
+        deals = overview.get("deals") if isinstance(overview, dict) else None
+        if not isinstance(deals, list):
+            continue
+        for deal in deals:
+            if not isinstance(deal, dict):
+                continue
+            try:
+                if int(deal.get("id") or 0) not in {lid, canonical}:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            _add(deal.get("phone"))
+            extra = deal.get("phones")
+            if isinstance(extra, list):
+                for item in extra:
+                    _add(item)
+    return phones
+
+
 def _fast_cloud_lead(phone: str) -> int:
     return _lead_id_for_stored_phone(phone) or _lead_id_from_overview_phone(phone)
 
@@ -15254,11 +15305,22 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
-    if err:
-        return err
     sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
     use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+    if use_cloud:
+        if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+            return web.json_response({"success": False, "error": "Access denied"}, status=403)
+        known_phones = _phones_for_wa_lead(lead_id)
+        if known_phones:
+            lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
+        else:
+            lead, err = _authorized_deal_lead(chat_id, lead_id)
+            if err:
+                return err
+    else:
+        lead, err = _authorized_deal_lead(chat_id, lead_id)
+        if err:
+            return err
     if use_cloud:
         reply_talk_id, reply_chat_id = 0, ""
     else:
@@ -15435,6 +15497,36 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "reply_to_text": reply_preview,
         "reply_to_author": reply_author,
     })
+    if sent_via_cloud:
+        lid_int = int(lead.get("id") or lead_id)
+        chat = _sent_messages_for_lead(lid_int)
+        chat.sort(key=lambda item: int(item.get("created_at") or 0))
+        chat = chat[-20:]
+        _apply_saved_replies(chat)
+        if reply_to_message_id:
+            _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
+        _invalidate_deal_chat_cache(lid_int)
+        record_lead_pulse_event(lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp")
+        cloud_ready = _wa_cloud_ready(sender_digits)
+        return web.json_response({
+            "success": True,
+            "chat": chat,
+            "chat_blocked": False,
+            "reply_talk_id": 0,
+            "has_more": False,
+            "channel": "whatsapp",
+            "channels": [{
+                "key": "whatsapp",
+                "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
+                "talk_id": 0,
+                "chat_id": "",
+                "open": True,
+                "sender_phone": _wa_display_number(sender_digits),
+            }],
+            "can_reply": cloud_ready,
+            "delivery_status": "sent",
+            "media_url": cloud_media_url,
+        })
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),
