@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790342567,
+    "at": 1790342594,
     "fields": [
       "messages"
     ]
@@ -1723,6 +1723,30 @@
       "file_name": "",
       "delivery_status": "read",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU1NDM5NTcyODhENERCMDRERTZFRDRCMjI0NEVGQUIA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU1NDM5NTcyODhENERCMDRERTZFRDRCMjI0NEVGQUIA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "📷 Şəkil",
+      "message_type": "picture",
+      "created_at": 1790342579,
+      "created": "25.09.2026 17:22",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "/api/wa/media/2525699351262880",
+      "file_uuid": "",
+      "file_name": "photo.jpg",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ],
   "70974946": [
