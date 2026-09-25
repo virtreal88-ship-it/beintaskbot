@@ -206,7 +206,7 @@
     "994703019609": 77992437,
     "994558219058": 70993268,
     "994702222181": 78005569,
-    "994102135103": 74547175,
+    "994102135103": 78022515,
     "994552158229": 77452293,
     "994508552988": 67407438,
     "994553566969": 76476261,
@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790349207,
+    "at": 1790349364,
     "fields": [
       "messages"
     ]
@@ -1039,6 +1039,30 @@
       "message_type": "text",
       "created_at": 1790345556,
       "created": "25.09.2026 18:12",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU5MTJCRjVBODkxRDNDMTUzRDU2REI2OTBEQjVGN0UA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU5MTJCRjVBODkxRDNDMTUzRDU2REI2OTBEQjVGN0UA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "1914",
+      "message_type": "text",
+      "created_at": 1790349300,
+      "created": "25.09.2026 19:15",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
