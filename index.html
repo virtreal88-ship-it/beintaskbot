@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="281">
+    <meta name="pwa-build" content="282">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -373,19 +373,35 @@
         .wa-audio-icon-play, .wa-audio-icon-pause, .wa-audio-icon-spin { display:none; pointer-events:none; }
         .wa-audio-player:not(.playing):not(.loading) .wa-audio-icon-play { display:flex; align-items:center; justify-content:center; margin-left:2px; }
         .wa-audio-player.playing:not(.loading) .wa-audio-icon-pause { display:flex; align-items:center; justify-content:center; }
-        .wa-audio-player.loading .wa-audio-icon-spin { display:block; width:16px; height:16px; border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%; animation:spin .75s linear infinite; }
+        .wa-audio-player.loading .wa-audio-btn { background:#008069; opacity:.92; }
+        .wa-audio-player.loading .wa-audio-icon-spin { display:block; width:18px; height:18px; border:2.5px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%; animation:spin .75s linear infinite; }
         .wa-audio-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
         .wa-audio-scrubber { position:relative; height:24px; display:flex; align-items:center; cursor:pointer; touch-action:none; }
         .wa-audio-track { position:relative; width:100%; height:4px; background:rgba(0,0,0,.15); border-radius:2px; pointer-events:none; }
         .deal-chat-wrap.out .wa-audio-track { background:rgba(0,0,0,.2); }
+        .wa-audio-player.loading .wa-audio-track { overflow:hidden; background:rgba(0,168,132,.18); }
+        .deal-chat-wrap.out .wa-audio-player.loading .wa-audio-track { background:rgba(0,128,105,.22); }
         .wa-audio-bar { position:absolute; left:0; top:0; height:100%; width:0%; background:#00a884; border-radius:2px; pointer-events:none; }
         .deal-chat-wrap.out .wa-audio-bar { background:#008069; }
+        .wa-audio-player.loading .wa-audio-bar { display:block !important; width:45% !important; background:linear-gradient(90deg, #00a884 0%, #25d366 50%, #00a884 100%); animation:waAudioShimmer 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+        .deal-chat-wrap.out .wa-audio-player.loading .wa-audio-bar { background:linear-gradient(90deg, #008069 0%, #10b981 50%, #008069 100%); }
         .wa-audio-thumb { position:absolute; top:50%; left:0%; width:12px; height:12px; margin-top:-6px; margin-left:-6px; border-radius:50%; background:#00a884; box-shadow:0 1px 3px rgba(0,0,0,.35); pointer-events:none; transition:transform .1s ease; }
         .deal-chat-wrap.out .wa-audio-thumb { background:#008069; }
+        .wa-audio-player.loading .wa-audio-thumb { opacity:0; transform:scale(0.5); }
         .wa-audio-scrubber:hover .wa-audio-thumb, .wa-audio-scrubber.active .wa-audio-thumb { transform:scale(1.3); }
         .wa-audio-bottom { display:flex; align-items:center; justify-content:space-between; font-size:11px; color:#667781; line-height:1; }
         .deal-chat-wrap.out .wa-audio-bottom { color:#4a5568; }
         .wa-audio-time { font-family:inherit; font-variant-numeric:tabular-nums; font-size:11px; }
+        .wa-audio-player.loading .wa-audio-time { color:#008069; font-weight:600; letter-spacing:.01em; animation:waAudioPulse 1s ease-in-out infinite alternate; }
+        .deal-chat-wrap.out .wa-audio-player.loading .wa-audio-time { color:#006653; }
+        @keyframes waAudioShimmer {
+            0% { transform:translateX(-100%); }
+            100% { transform:translateX(260%); }
+        }
+        @keyframes waAudioPulse {
+            0% { opacity:.55; }
+            100% { opacity:1; }
+        }
         .wa-audio-speed { border:1px solid rgba(0,0,0,.15); border-radius:4px; background:transparent; font-size:10px; font-weight:700; color:inherit; padding:1px 5px; cursor:pointer; line-height:1.2; outline:none; transition:background .12s ease; }
         .wa-audio-speed:active, .wa-audio-speed.on { background:rgba(0,0,0,.1); }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
@@ -3744,6 +3760,10 @@ function bindPhotoWait(root) {
 function dropAudioCache(wrap, audio) {
     _mediaBlobs.delete(mediaCacheKey(wrap, 'audio'));
     wrap.classList.remove('ready', 'loading', 'playing');
+    const timeEl = wrap.querySelector('.wa-audio-time');
+    if(timeEl && timeEl.textContent === 'Yüklənir...') {
+        timeEl.textContent = wrap.dataset.prevTime || '0:00';
+    }
     if(audio) {
         try { audio.removeAttribute('src'); audio.load(); } catch(_err) {}
     }
@@ -3815,6 +3835,10 @@ function bindAudioWait(root) {
                 wrap.classList.add('loading');
                 wrap.classList.remove('playing', 'ready');
                 stopAllOtherAudios(audio);
+                if(timeEl) {
+                    wrap.dataset.prevTime = timeEl.textContent || '';
+                    timeEl.textContent = 'Yüklənir...';
+                }
 
                 let url = _mediaBlobs.get(key) || '';
                 try {
@@ -3839,6 +3863,9 @@ function bindAudioWait(root) {
                     }
                 } catch(_err) {
                     dropAudioCache(wrap, audio);
+                    if(typeof showToast === 'function') {
+                        showToast('Səs faylı yüklənmədi', 'error');
+                    }
                 }
             });
         }
@@ -3881,6 +3908,7 @@ function bindAudioWait(root) {
                 return x / rect.width;
             }
             function onDragStart(e) {
+                if(wrap.classList.contains('loading') || !audioCanPlay(audio)) return;
                 e.preventDefault();
                 e.stopPropagation();
                 isDragging = true;
@@ -3939,6 +3967,7 @@ function bindAudioWait(root) {
             speedBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if(wrap.classList.contains('loading')) return;
                 if(audio.playbackRate < 1.4) {
                     audio.playbackRate = 1.5;
                     speedBtn.textContent = '1.5×';

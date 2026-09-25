@@ -9982,6 +9982,8 @@ def _send_kommo_talk_message(
     payload: dict = {}
     if text:
         payload["text"] = text
+    elif att_clean:
+        payload["text"] = VOICE_CAPTION_TEXT if is_voice else "Fayl"
     if att_clean:
         payload["attachment"] = att_clean
     if not payload:
@@ -9999,9 +10001,9 @@ def _send_kommo_talk_message(
         id_only = {**payload, "reply_to": {"message": {"id": reply_id}}}
         ajax = {"X-Requested-With": "XMLHttpRequest"}
         if chat_id:
-            amojo_body = {"text": text, "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
+            amojo_body = {"text": payload.get("text", text), "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
             if att_clean:
-                amojo_body["attachment"] = {**att_clean, "type": "voice"} if is_voice else att_clean
+                amojo_body["attachment"] = att_clean
             if reply_text:
                 amojo_body["reply_to"]["message"]["type"] = "text"
                 amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
@@ -10015,16 +10017,7 @@ def _send_kommo_talk_message(
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
     if not reply_id:
-        if is_voice and att_clean:
-            voice_att = {**att_clean, "type": "voice"}
-            attempts.append((talk_send, {"attachment": voice_att}, {}))
-            attempts.append((talk_send, {"attachment": att_clean}, {}))
-            if text:
-                attempts.append((talk_send, {"text": text, "attachment": att_clean}, {}))
-            else:
-                attempts.append((talk_send, {"text": VOICE_CAPTION_TEXT, "attachment": att_clean}, {}))
-        else:
-            attempts.append((talk_send, payload, {}))
+        attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_body = ""
     last_status = 0
@@ -10037,7 +10030,7 @@ def _send_kommo_talk_message(
             last_status = 0
             continue
         last_status = resp.status_code
-        if resp.status_code in {200, 202}:
+        if 200 <= resp.status_code < 300:
             return True, "", resp.status_code
         last_detail = _kommo_error_detail(resp)
         last_body = (resp.text or "")[:400]
@@ -10460,6 +10453,72 @@ def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str,
                     os.unlink(path)
                 except OSError:
                     pass
+
+
+def _is_mp3_bytes(raw: bytes) -> bool:
+    return bool(raw) and (raw.startswith(b"ID3") or (len(raw) >= 2 and raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0))
+
+
+def _ffmpeg_voice_to_mp3(raw: bytes, filename: str) -> tuple[bytes, str, str]:
+    """Turn voice recording into MP3 for universal playback in WhatsApp, Kommo, and browsers."""
+    if _is_mp3_bytes(raw):
+        return raw, "audio/mpeg", "voice.mp3"
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
+        suffix = ".webm"
+    src_path = ""
+    mp3_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        mp3_path = src_path + ".mp3"
+        cmds = [
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "libmp3lame", "-b:a", "64k", mp3_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "libmp3lame", "-b:a", "64k", mp3_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-c:a", "libmp3lame", "-b:a", "64k", mp3_path,
+            ],
+        ]
+        for cmd in cmds:
+            data = _ffmpeg_run(cmd, mp3_path)
+            if data and len(data) > 64 and _is_mp3_bytes(data):
+                return data, "audio/mpeg", "voice.mp3"
+        m4a_path = src_path + ".m4a"
+        m4a_cmds = [
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "aac", "-b:a", "64k", "-f", "mp4", m4a_path,
+            ],
+        ]
+        for cmd in m4a_cmds:
+            data = _ffmpeg_run(cmd, m4a_path)
+            if data and len(data) > 64:
+                return data, "audio/mp4", "voice.m4a"
+        return raw, "audio/mpeg", "voice.mp3"
+    except Exception as exc:
+        logger.warning("ffmpeg voice to mp3 convert error: %s", exc)
+        return raw, "audio/mpeg", "voice.mp3"
+    finally:
+        for p in (src_path, mp3_path, mp3_path.replace(".mp3", ".m4a")):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+
+_OLD_OGG_MP3_CACHE: dict[str, bytes] = {}
 
 
 def _wa_cloud_media_kind(filename: str, content_type: str) -> str:
@@ -14371,7 +14430,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if upload_raw:
         is_voice = _looks_voice_upload(upload_name, upload_type)
         if is_voice:
-            converted, conv_mime, conv_name, _voice_flag = _ffmpeg_voice_for_cloud(upload_raw, upload_name)
+            converted, conv_mime, conv_name = _ffmpeg_voice_to_mp3(upload_raw, upload_name)
             if converted:
                 upload_raw = converted
                 upload_type = conv_mime
@@ -14405,8 +14464,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         sent_via_cloud = ok
     if not ok and reply_talk_id:
         kommo_text = text
-        if upload_raw and not _looks_voice_upload(upload_name, upload_type) and not kommo_text:
-            kommo_text = upload_name or "Fayl"
+        if upload_raw and not kommo_text:
+            if _looks_voice_upload(upload_name, upload_type):
+                kommo_text = VOICE_CAPTION_TEXT
+            else:
+                kommo_text = upload_name or "Fayl"
         quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
         social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
         if channel == "whatsapp":
@@ -15211,7 +15273,25 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
             return web.Response(status=404, text="Media not found")
         file_name = str(request.rel_url.query.get("name") or picked_name)
         content_type = _sniff_media_type(audio_resp.content, audio_resp.headers.get("Content-Type") or "", src, file_name)
-        return _media_bytes_response(request, audio_resp.content, content_type)
+        body_bytes = audio_resp.content
+        if _is_ogg_bytes(body_bytes) or content_type == "audio/ogg":
+            cache_k = file_uuid or src
+            if cache_k and cache_k in _OLD_OGG_MP3_CACHE:
+                body_bytes = _OLD_OGG_MP3_CACHE[cache_k]
+                content_type = "audio/mpeg"
+            else:
+                try:
+                    mp3_data, mp3_mime, _ = _ffmpeg_voice_to_mp3(body_bytes, "voice.ogg")
+                    if mp3_data and len(mp3_data) > 64:
+                        body_bytes = mp3_data
+                        content_type = mp3_mime
+                        if cache_k:
+                            if len(_OLD_OGG_MP3_CACHE) > 500:
+                                _OLD_OGG_MP3_CACHE.pop(next(iter(_OLD_OGG_MP3_CACHE)), None)
+                            _OLD_OGG_MP3_CACHE[cache_k] = mp3_data
+                except Exception as _conv_err:
+                    logger.warning("Old ogg to mp3 on-the-fly convert failed: %s", _conv_err)
+        return _media_bytes_response(request, body_bytes, content_type)
     except Exception as exc:
         logger.warning("Deal media proxy failed: %s", exc)
         return web.Response(status=502, text="Media fetch failed")
