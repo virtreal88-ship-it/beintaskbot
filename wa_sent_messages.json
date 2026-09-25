@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790342910,
+    "at": 1790343104,
     "fields": [
       "messages"
     ]
@@ -1845,6 +1845,28 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAxFQIAERgSOTdFNTE3MkYzQzEzMEY3M0I0AA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAxFQIAERgSOTdFNTE3MkYzQzEzMEY3M0I0AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "onu işləyirlər",
+      "message_type": "text",
+      "created_at": 1790343106,
+      "created": "25.09.2026 17:31",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ],
   "77967731": [
