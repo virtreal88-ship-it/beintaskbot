@@ -353,7 +353,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790338396,
+    "at": 1790338400,
     "fields": [
       "messages"
     ]
@@ -680,6 +680,28 @@
       "message_type": "text",
       "created_at": 1790337616,
       "created": "25.09.2026 16:00",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU5NzQ5Njc1RTdDMjEwNjQ5QjRFRUYxNTRGREFEREUA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU5NzQ5Njc1RTdDMjEwNjQ5QjRFRUYxNTRGREFEREUA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Oneline SOFT",
+      "phone": "994102135104",
+      "text": "Normal",
+      "message_type": "text",
+      "created_at": 1790338307,
+      "created": "25.09.2026 16:11",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
