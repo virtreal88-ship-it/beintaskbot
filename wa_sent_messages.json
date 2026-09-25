@@ -137,7 +137,7 @@
     "994514400373": 77435107,
     "994552111240": 77083137,
     "994555254887": 71699581,
-    "994506223252": 71165441,
+    "994506223252": 70974946,
     "994703909311": 77493529,
     "994558078887": 74585159,
     "994554141416": 77350555,
@@ -327,7 +327,8 @@
     "994705004184": 78042191,
     "994774421510": 78042345,
     "994503423747": 78042749,
-    "994773028262": 78042689
+    "994773028262": 78042689,
+    "994501234567": 78043301
   },
   "78016925": [
     {
@@ -353,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790339527,
+    "at": 1790339949,
     "fields": [
       "messages"
     ]
@@ -1433,6 +1434,30 @@
       "message_type": "text",
       "created_at": 1790339911,
       "created": "25.09.2026 16:38",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "delivered",
+      "via_cloud": true
+    }
+  ],
+  "78043301": [
+    {
+      "id": "wa-wamid.HBgMOTk0NTAxMjM0NTY3FQIAERgSMTg3OTI4NjMzNDZFQkY3QkNFAA==",
+      "external_id": "wamid.HBgMOTk0NTAxMjM0NTY3FQIAERgSMTg3OTI4NjMzNDZFQkY3QkNFAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rüfət Həsənzadə",
+      "phone": "",
+      "text": "ilk_messag",
+      "message_type": "text",
+      "created_at": 1790339949,
+      "created": "25.09.2026 16:39",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
