@@ -6924,7 +6924,7 @@ function paintDealVoiceUi(recording) {
     if(mic) {
         mic.classList.toggle('rec', !!recording);
         mic.textContent = recording ? '⏹' : '🎙';
-        mic.title = recording ? 'Göndər' : 'Səs mesajı';
+        mic.title = recording ? 'Dayandır' : 'Səs mesajı';
     }
     if(attach) {
         attach.innerHTML = recording ? '✕' : waAttachPlusSvg();
@@ -6958,6 +6958,32 @@ function cancelDealVoice() {
     if(!_dealVoiceRec) return;
     _dealVoiceCancelled = true;
     try { _dealVoiceRec.stop(); } catch(_err) { resetDealVoice(); }
+}
+function stopDealVoiceAndGetFile() {
+    if(!_dealVoiceRec || _dealVoiceRec.state === 'inactive') return Promise.resolve(_dealPendingFile);
+    return new Promise(resolve => {
+        const rec = _dealVoiceRec;
+        const mime = rec.mimeType || dealVoiceMime() || 'audio/webm';
+        _dealVoiceCancelled = false;
+        rec.onstop = () => {
+            const chunks = _dealVoiceChunks.slice();
+            const cancelled = _dealVoiceCancelled;
+            const seconds = Math.floor((Date.now() - _dealVoiceStart) / 1000);
+            stopDealVoiceTracks();
+            resetDealVoice();
+            if(cancelled || !chunks.length || seconds < 1) {
+                if(!cancelled) toast('Səs yazısı çox qısadır', true);
+                resolve(null);
+                return;
+            }
+            const blob = new Blob(chunks, {type: mime});
+            const name = 'voice_' + Date.now() + '.' + dealVoiceExt(mime);
+            const file = new File([blob], name, {type: mime});
+            setDealPendingFile(file, seconds);
+            resolve(file);
+        };
+        try { rec.stop(); } catch(_e) { resetDealVoice(); resolve(null); }
+    });
 }
 let _dealVoiceStarting = false;
 async function toggleDealVoice() {
@@ -7009,6 +7035,11 @@ async function toggleDealVoice() {
     _dealVoiceTimer = setInterval(paintDealVoiceTime, 1000);
 }
 async function sendDealChatMessage(fileArg) {
+    if(_dealVoiceRec && _dealVoiceRec.state !== 'inactive') {
+        const file = await stopDealVoiceAndGetFile();
+        if(!file) return;
+        return sendDealChatMessage(file);
+    }
     const input = document.getElementById('deal-chat-input');
     const btn = document.getElementById('deal-chat-send');
     const field = document.querySelector('.wa-composer-field');
@@ -7051,7 +7082,7 @@ async function sendDealChatMessage(fileArg) {
         incoming: false,
         text: text || (voiceNow ? '🎤 Səs mesajı' : (file ? (file.name || 'Fayl') : '')),
         message_type: voiceNow ? 'audio' : (file && /^image\//i.test(file.type) ? 'picture' : (file ? 'file' : 'text')),
-        file_name: file ? (file.name || '') : '',
+        file_name: voiceNow ? 'voice.m4a' : (file ? (file.name || '') : ''),
         media_url: _dealPendingUrl || localBlobUrl,
         created_at: Math.floor(Date.now() / 1000),
         delivery_status: 'sending',
@@ -7078,6 +7109,7 @@ async function sendDealChatMessage(fileArg) {
             form.append('lead_id', String(leadId));
             form.append('channel', channel);
             form.append('text', text);
+            form.append('is_voice', voiceNow ? '1' : '0');
             if(replyId) form.append('reply_to_message_id', replyId);
             if(replyText) form.append('reply_to_text', replyText);
             if(replyAuthor) form.append('reply_to_author', replyAuthor);

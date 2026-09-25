@@ -9983,7 +9983,8 @@ def _send_kommo_talk_message(
     if text:
         payload["text"] = text
     elif att_clean:
-        payload["text"] = VOICE_CAPTION_TEXT if is_voice else "Fayl"
+        if not is_voice:
+            payload["text"] = "Fayl"
     if att_clean:
         payload["attachment"] = att_clean
     if not payload:
@@ -10001,7 +10002,7 @@ def _send_kommo_talk_message(
         id_only = {**payload, "reply_to": {"message": {"id": reply_id}}}
         ajax = {"X-Requested-With": "XMLHttpRequest"}
         if chat_id:
-            amojo_body = {"text": payload.get("text", text), "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
+            amojo_body = {"text": payload.get("text", text or ""), "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
             if att_clean:
                 amojo_body["attachment"] = att_clean
             if reply_text:
@@ -10016,8 +10017,18 @@ def _send_kommo_talk_message(
         attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", primary, ajax))
         attempts.append((ajax_talk_send, primary, ajax))
         attempts.append((ajax_talk_send_v2, primary, ajax))
+        if plain_fallback:
+            if is_voice and att_clean and not text:
+                attempts.append((talk_send, {"attachment": att_clean}, {}))
+                attempts.append((talk_send, {"text": "", "attachment": att_clean}, {}))
+            else:
+                attempts.append((talk_send, payload, {}))
     if not reply_id:
-        attempts.append((talk_send, payload, {}))
+        if is_voice and att_clean and not text:
+            attempts.append((talk_send, {"attachment": att_clean}, {}))
+            attempts.append((talk_send, {"text": "", "attachment": att_clean}, {}))
+        else:
+            attempts.append((talk_send, payload, {}))
     last_detail = ""
     last_body = ""
     last_status = 0
@@ -10452,6 +10463,52 @@ def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str,
                 try:
                     os.unlink(path)
                 except OSError:
+                    pass
+
+
+def _ffmpeg_voice_for_kommo(raw: bytes, filename: str) -> tuple[bytes, str, str]:
+    """Turn voice recording into M4A/AAC for native PTT voice notes in Kommo WhatsApp and universal browser playback."""
+    suffix = os.path.splitext(str(filename or ""))[1].lower()
+    if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
+        suffix = ".webm"
+    src_path = ""
+    m4a_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
+            src.write(raw)
+            src_path = src.name
+        m4a_path = src_path + ".m4a"
+        cmds = [
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
+                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+            ],
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
+                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+            ],
+        ]
+        for cmd in cmds:
+            data = _ffmpeg_run(cmd, m4a_path)
+            if data and len(data) > 64:
+                return data, "audio/mp4", "voice.m4a"
+        return raw, "audio/mp4", "voice.m4a"
+    except Exception as exc:
+        logger.warning("ffmpeg voice to m4a convert error: %s", exc)
+        return raw, "audio/mp4", "voice.m4a"
+    finally:
+        for p in (src_path, m4a_path):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
                     pass
 
 
@@ -14361,6 +14418,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_author = ""
     hinted_talk = 0
     hinted_sender = ""
+    form_is_voice = False
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -14370,6 +14428,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             lead_id = 0
         text = str(form.get("text") or "").strip()
         channel = str(form.get("channel") or "whatsapp").strip().lower()
+        form_is_voice = str(form.get("is_voice") or "").strip().lower() in {"1", "true", "yes"}
         reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
         reply_external = str(form.get("reply_external_id") or "").strip()
         reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
@@ -14399,6 +14458,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             lead_id = 0
         text = str(data.get("text") or "").strip()
         channel = str(data.get("channel") or "whatsapp").strip().lower()
+        form_is_voice = str(data.get("is_voice") or "").strip().lower() in {"1", "true", "yes"}
         reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
         reply_external = str(data.get("reply_external_id") or "").strip()
         reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
@@ -14427,10 +14487,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     drive_uuid = ""
     drive_version = ""
     attachment = None
+    is_voice = False
     if upload_raw:
-        is_voice = _looks_voice_upload(upload_name, upload_type)
+        is_voice = form_is_voice or _looks_voice_upload(upload_name, upload_type)
         if is_voice:
-            converted, conv_mime, conv_name = _ffmpeg_voice_to_mp3(upload_raw, upload_name)
+            converted, conv_mime, conv_name = _ffmpeg_voice_for_kommo(upload_raw, upload_name)
             if converted:
                 upload_raw = converted
                 upload_type = conv_mime
@@ -14465,26 +14526,43 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if not ok and reply_talk_id:
         kommo_text = text
         if upload_raw and not kommo_text:
-            if _looks_voice_upload(upload_name, upload_type):
-                kommo_text = VOICE_CAPTION_TEXT
+            if is_voice:
+                kommo_text = ""
             else:
                 kommo_text = upload_name or "Fayl"
         quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
         social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
         if channel == "whatsapp":
-            if reply_preview:
-                kommo_text = _with_quiet_quote(kommo_text, reply_preview)
-            kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                reply_talk_id,
-                kommo_text,
-                attachment,
-            )
-            if kommo_ok:
-                ok = True
-                last_error = ""
-                sent_text = kommo_text
-            elif kommo_error:
-                last_error = kommo_error
+            if is_voice:
+                # In WhatsApp, audio with any text caption is sent as a file/document card.
+                # Sending with empty text allows Kommo WhatsApp Lite to deliver it as a native PTT voice note.
+                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                    reply_talk_id,
+                    "",
+                    attachment,
+                )
+                if kommo_ok:
+                    ok = True
+                    last_error = ""
+                    sent_text = VOICE_CAPTION_TEXT
+                    if text:
+                        _send_kommo_talk_message(reply_talk_id, text)
+                elif kommo_error:
+                    last_error = kommo_error
+            else:
+                if reply_preview:
+                    kommo_text = _with_quiet_quote(kommo_text, reply_preview)
+                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
+                    reply_talk_id,
+                    kommo_text,
+                    attachment,
+                )
+                if kommo_ok:
+                    ok = True
+                    last_error = ""
+                    sent_text = kommo_text
+                elif kommo_error:
+                    last_error = kommo_error
         else:
             for quote_id in quote_ids[:2]:
                 kommo_ok, kommo_error, _status = _send_kommo_talk_message(
@@ -14534,7 +14612,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
-    tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name or text)
+    tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and is_voice else upload_name or text)
     if sent_via_cloud:
         # The app renders Kommo message types, so translate the Cloud API kind.
         local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
@@ -14556,11 +14634,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "direction": "outgoing",
         "text": tail_text,
         "created_at": int(_time_module.time()),
-        "message_type": "audio" if upload_raw and _looks_voice_upload(upload_name, upload_type) else "text",
+        "message_type": "audio" if upload_raw and is_voice else "text",
         "channel": channel,
         "author": employee_name_for_lead(lead),
         "delivery_status": "sent",
-        "file_name": "" if upload_raw and _looks_voice_upload(upload_name, upload_type) else upload_name,
+        "file_name": "" if upload_raw and is_voice else upload_name,
         "file_uuid": drive_uuid,
         "reply_to_message_id": reply_to_message_id or wa_quote_id,
         "reply_to_text": reply_preview,
