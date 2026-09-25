@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="291">
+    <meta name="pwa-build" content="292">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -1804,7 +1804,16 @@ function applySamilWorkspace(payload) {
             SAMIL_COMPLETION_PIPELINES.samil.label = payload.funnel_owner || FUNNEL_OWNER_NAME || SAMIL_COMPLETION_PIPELINES.samil.label;
         }
     }
-    samilDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
+    const nextDeals = Array.isArray(payload.deals) ? payload.deals.map(normalizeDeal) : [];
+    const nextIds = new Set(nextDeals.map(deal => String(deal && deal.id)));
+    (samilDeals || []).forEach(old => {
+        if(!old || !old.id || nextIds.has(String(old.id))) return;
+        const channel = String(old.chat_channel || old.inbox_channel || '').toLowerCase();
+        if(!(old.inbox_only || old.wa_line || channel === 'whatsapp' || old.last_client_message)) return;
+        if(typeof chatBelongsToViewer === 'function' && !chatBelongsToViewer(old)) return;
+        nextDeals.unshift(old);
+    });
+    samilDeals = nextDeals;
     samilDealsByStage = payload.deals_by_stage && typeof payload.deals_by_stage === 'object'
         ? Object.fromEntries(Object.entries(payload.deals_by_stage).map(([key, deals]) => [key, Array.isArray(deals) ? deals.map(normalizeDeal).filter(deal => !deal.inbox_only) : []]))
         : groupSamilDealsByStage(samilDeals);
@@ -5383,8 +5392,16 @@ function dealWaSenderPhone() {
 }
 function openChatCustomerPhone() {
     const deal = _dealViewState && _dealViewState.deal;
-    const list = deal && Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal && deal.phone ? [deal.phone] : []);
-    return String(list[0] || '');
+    const list = [];
+    const header = document.getElementById('deal-head-phone');
+    if(header && header.value) list.push(header.value);
+    if(deal && Array.isArray(deal.phones)) list.push.apply(list, deal.phones);
+    if(deal && deal.phone) list.push(deal.phone);
+    (_dealViewState && _dealViewState.messages || []).forEach(item => {
+        if(item && item.phone) list.push(item.phone);
+    });
+    const found = list.map(item => String(item || '').trim()).find(item => item.replace(/\D/g, '').length >= 9);
+    return found || '';
 }
 function keepSentChatVisible(leadId) {
     const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
@@ -5526,7 +5543,11 @@ function withLivePreview(rows, deal) {
     return base.concat([live]);
 }
 function showLivePreviewInOpenChat(deal) {
-    if(!_dealViewState || !deal || String(_dealViewState.id) !== String(deal.id)) return;
+    if(!_dealViewState || !deal) return;
+    const sameId = String(_dealViewState.id) === String(deal.id);
+    const openPhone = waPhoneKey(openChatCustomerPhone());
+    const samePhone = !!(openPhone && openPhone === waPhoneKey(deal.phone));
+    if(!sameId && !samePhone) return;
     const next = withLivePreview(_dealViewState.messages, deal);
     if(next.length === (_dealViewState.messages || []).length) return;
     _dealViewState.messages = next;
@@ -7310,6 +7331,7 @@ async function sendDealChatMessage(fileArg) {
                     document.querySelector('.wa-composer-field')?.classList.add('has-voice');
                 }
             }
+            keepSentChatVisible(leadId);
             toast(err && err.name === 'AbortError' ? 'Göndərmə gecikdi, yenidən basın' : (err.message || 'Göndərilmədi'), true);
         }
     } finally {
@@ -9009,9 +9031,18 @@ try {
 let _inboxFullAt = Date.now();
 let _inboxFullBusy = false;
 let _inboxResumeAt = 0;
+function dealByWaPhone(phone) {
+    const key = waPhoneKey(phone);
+    if(!key) return null;
+    return (samilDeals || []).find(item => {
+        const phones = [item && item.phone].concat(item && item.phones || []);
+        return phones.some(value => waPhoneKey(value) === key);
+    }) || null;
+}
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
+    if(!deal && row.phone) deal = dealByWaPhone(row.phone);
     if(!deal) {
         if(row.wa_line && viewerWaLine() && row.wa_line !== viewerWaLine()) return false;
         deal = {
@@ -9257,9 +9288,16 @@ async function pollInboxPulse() {
                 const nextId = event.replaced_by ? String(event.replaced_by) : '';
                 if(nextId) {
                     const from = (samilDeals || []).find(deal => String(deal.id) === String(event.lead_id));
-                    const exists = (samilDeals || []).some(deal => String(deal.id) === nextId);
-                    if(from && !exists) from.id = Number(nextId) || nextId;
-                    else samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
+                    const target = (samilDeals || []).find(deal => String(deal.id) === nextId);
+                    if(!target) return;
+                    if(from && from !== target && !target.last_client_message && from.last_client_message) {
+                        target.last_client_message = from.last_client_message;
+                        target.last_incoming_at = from.last_incoming_at;
+                        target.chat_at = from.chat_at || target.chat_at;
+                        target.wa_line = target.wa_line || from.wa_line;
+                        target.chat_channel = target.chat_channel || from.chat_channel || 'whatsapp';
+                    }
+                    if(from && from !== target) samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
                     if(openId === String(event.lead_id) && _dealViewState) {
                         _dealViewState.id = Number(nextId) || nextId;
                         if(_dealViewState.deal) _dealViewState.deal.id = _dealViewState.id;

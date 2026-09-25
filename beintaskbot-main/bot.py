@@ -12388,8 +12388,104 @@ def _phones_for_wa_lead(lead_id: int) -> list[str]:
     return phones
 
 
+def _real_wa_lead_id(lead_id: int) -> int:
+    try:
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return 0
+    if lid and lid < 9_000_000_000_000:
+        return lid
+    return 0
+
+
+def _lead_id_for_phone_anywhere(phone: str) -> int:
+    """Existing chat for this customer number, without asking Kommo."""
+    key = _wa_phone_key(phone)
+    if not key:
+        return 0
+    indexed = _lead_id_for_stored_phone(phone)
+    overview = _lead_id_from_overview_phone(phone)
+    scanned = 0
+    pending_hit = 0
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        for raw_key, rows in store.items():
+            if not str(raw_key).isdigit() or not isinstance(rows, list):
+                continue
+            try:
+                lid = int(raw_key)
+            except (TypeError, ValueError):
+                continue
+            matched = any(
+                isinstance(row, dict) and _wa_phone_key(row.get("phone")) == key
+                for row in rows
+            )
+            if not matched:
+                continue
+            if lid >= 9_000_000_000_000:
+                pending_hit = pending_hit or lid
+            elif not scanned:
+                scanned = lid
+    real = _real_wa_lead_id(scanned) or _real_wa_lead_id(overview) or _real_wa_lead_id(indexed)
+    if real:
+        return real
+    return pending_hit or indexed or overview or 0
+
+
+def _wa_thread_rows(lead_id: int) -> list[dict]:
+    """Messages of this chat plus any copy stored under the same customer number."""
+    primary = _sent_messages_for_lead(lead_id)
+    phones = {_wa_phone_key(row.get("phone")) for row in primary}
+    phones.discard("")
+    store = _load_sent_messages()
+    extra_ids: set[int] = set()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if isinstance(idx, dict):
+            for key, mapped in idx.items():
+                try:
+                    mid = int(mapped or 0)
+                except (TypeError, ValueError):
+                    continue
+                if mid == int(lead_id or 0):
+                    phones.add(str(key))
+        if phones:
+            for raw_key, rows in store.items():
+                if not str(raw_key).isdigit() or not isinstance(rows, list):
+                    continue
+                try:
+                    lid = int(raw_key)
+                except (TypeError, ValueError):
+                    continue
+                if any(isinstance(row, dict) and _wa_phone_key(row.get("phone")) in phones for row in rows):
+                    extra_ids.add(lid)
+            for phone in phones:
+                pending = _pending_wa_lead_id(phone)
+                if pending:
+                    extra_ids.add(pending)
+        merged = list(primary)
+        seen = {str(row.get("external_id") or row.get("id") or "") for row in merged}
+        canon = int(lead_id or 0)
+        for lid in extra_ids:
+            if lid == canon:
+                continue
+            bucket = store.get(str(lid))
+            if not isinstance(bucket, list):
+                continue
+            for row in bucket:
+                if not isinstance(row, dict):
+                    continue
+                token = str(row.get("external_id") or row.get("id") or "")
+                if token and token in seen:
+                    continue
+                if token:
+                    seen.add(token)
+                merged.append(dict(row))
+    return merged
+
+
 def _fast_cloud_lead(phone: str) -> int:
-    return _lead_id_for_stored_phone(phone) or _lead_id_from_overview_phone(phone)
+    return _lead_id_for_phone_anywhere(phone)
 
 
 def _pending_wa_lead_id(phone: str) -> int:
@@ -12624,6 +12720,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if not lead_id:
             logger.warning("WhatsApp incoming has no lead phone=%s", phone)
             continue
+        _remember_phone_lead(phone, lead_id)
         if kind == "reaction" and reaction_emoji and reaction_target_mid:
             _remember_reaction(lead_id, reaction_target_mid, reaction_emoji)
         if wamid and _already_have_wamid(lead_id, wamid):
@@ -14698,7 +14795,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         keep = _CHAT_TAIL_KEEP if tailish else limit
         viewer_line = _viewer_wa_line(chat_id)
         rows = [
-            item for item in _sent_messages_for_lead(lead_id)
+            item for item in _wa_thread_rows(lead_id)
             if _row_visible_on_line(item, viewer_line)
         ]
         rows.sort(key=lambda item: int(item.get("created_at") or 0))
@@ -15409,10 +15506,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
         known_phones = _phones_for_wa_lead(lead_id)
         hinted_customer = str(hinted_customer or "").strip()
-        if not known_phones and hinted_customer:
-            known_phones = [hinted_customer]
+        if hinted_customer and hinted_customer not in known_phones:
+            known_phones.insert(0, hinted_customer)
         if not known_phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+        _remember_phone_lead(known_phones[0], lead_id)
         lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
     else:
         lead, err = _authorized_deal_lead(chat_id, lead_id)
@@ -15600,7 +15698,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if sent_via_cloud:
         lid_int = int(lead.get("id") or lead_id)
         viewer_line = _viewer_wa_line(chat_id)
-        chat = [item for item in _sent_messages_for_lead(lid_int) if _row_visible_on_line(item, viewer_line)]
+        chat = [item for item in _wa_thread_rows(lid_int) if _row_visible_on_line(item, viewer_line)]
         chat.sort(key=lambda item: int(item.get("created_at") or 0))
         chat = chat[-20:]
         _apply_saved_replies(chat)
