@@ -353,7 +353,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790338331,
+    "at": 1790338396,
     "fields": [
       "messages"
     ]
@@ -1327,7 +1327,7 @@
       "media_url": "",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "sent",
+      "delivery_status": "delivered",
       "via_cloud": true
     }
   ]
