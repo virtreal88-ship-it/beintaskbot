@@ -11268,9 +11268,9 @@ def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str, phone_id: str = 
 
 
 def _wa_cloud_mark_read(wamid: str, typing: bool = False, phone_id: str = "") -> bool:
-    body: dict = {"status": "read", "message_id": str(wamid or "")}
     if typing:
-        body["typing_indicator"] = {"type": "text"}
+        return False
+    body: dict = {"status": "read", "message_id": str(wamid or "")}
     ok, _error, _wamid = _wa_cloud_post(body, phone_id)
     return ok
 
@@ -15551,13 +15551,13 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if use_cloud:
         if not is_funnel_chat(chat_id) and not is_admin(chat_id):
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
-        known_phones = _phones_for_wa_lead(lead_id)
         hinted_customer = str(hinted_customer or "").strip()
-        if hinted_customer and hinted_customer not in known_phones:
-            known_phones.insert(0, hinted_customer)
+        if hinted_customer:
+            known_phones = [hinted_customer]
+        else:
+            known_phones = await asyncio.to_thread(_phones_for_wa_lead, lead_id)
         if not known_phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
-        _remember_phone_lead(known_phones[0], lead_id)
         lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
     else:
         lead, err = _authorized_deal_lead(chat_id, lead_id)
@@ -15724,6 +15724,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
         sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
         _remember_sent_message(int(lead.get("id") or lead_id), sent_item)
+        _remember_phone_lead(str((lead.get("phones") or [""])[0] or ""), int(lead.get("id") or lead_id))
     sent_row = {
         "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
         "external_id": str(sent_wamid or ""),
@@ -15898,6 +15899,8 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
         lead_id = 0
     wamid = str(data.get("external_id") or data.get("wamid") or "").strip()
     typing = bool(data.get("typing"))
+    if typing:
+        return web.json_response({"success": True, "skipped": True})
     if not lead_id:
         return web.json_response({"success": True, "skipped": True})
     _record_user_seen(chat_id, lead_id)
@@ -17290,10 +17293,17 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: st
         body = f"{notice_phone}\n{body}"
     url = f"#chat-{int(lead_id)}"
     for uid in target_uids:
-        send_push_notification(uid, title, body, url, lead_id=int(lead_id))
+        send_push_notification(
+            uid, title, body, url,
+            lead_id=int(lead_id),
+            phone=notice_phone,
+            contact_name=str(name or "").strip(),
+            preview=str(preview or "")[:140],
+            wa_line=line,
+        )
 
 
-def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0):
+def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0, phone="", contact_name="", preview="", wa_line=""):
     """Send push notification to a user if subscribed."""
     sub = get_push_subscription(str(user_id))
     if not sub:
@@ -17305,6 +17315,10 @@ def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id
         "urgent": bool(urgent),
         "chat": bool(lead_id),
         "lead_id": int(lead_id or 0),
+        "phone": str(phone or ""),
+        "contact_name": str(contact_name or ""),
+        "preview": str(preview or ""),
+        "wa_line": str(wa_line or ""),
     })
     try:
         webpush(

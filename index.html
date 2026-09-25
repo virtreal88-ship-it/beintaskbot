@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="300">
+    <meta name="pwa-build" content="301">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -7779,7 +7779,6 @@ function paintDealViewModal(deal, readonly, opts) {
     if(input) input.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
     });
-    if(input) input.addEventListener('input', () => markDealChatRead(true));
     if(attachBtn && fileInput) {
         attachBtn.onclick = () => {
             if(_dealVoiceRec) { cancelDealVoice(); return; }
@@ -9429,10 +9428,33 @@ async function prewarmChat(leadId) {
         setTimeout(() => _prewarmingLeads.delete(lid), 8000);
     }
 }
+function showIncomingFromPush(data) {
+    const leadId = data && (data.leadId || data.lead_id);
+    if(!leadId) return;
+    const now = Math.floor(Date.now() / 1000);
+    const changed = applyInboxPulseRow({
+        id: leadId,
+        contact_name: data.contactName || data.contact_name || '',
+        phone: data.phone || '',
+        last_client_message: data.preview || '',
+        last_incoming_at: now,
+        chat_at: now,
+        chat_channel: 'whatsapp',
+        wa_line: data.waLine || data.wa_line || ''
+    });
+    if(changed) {
+        persistLocalSamilWorkspace();
+        if(document.getElementById('screen-chats')?.classList.contains('active') || _dealInboxMode) renderChatsList();
+        if(isViewingDealChat(leadId)) pollDealChat(true);
+        else markChatsUnread(leadId);
+        paintChatsUnreadBadge();
+    }
+    prewarmChat(leadId);
+}
 if('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', event => {
         if(event.data && event.data.type === 'CHAT_INCOMING' && event.data.leadId) {
-            prewarmChat(event.data.leadId);
+            showIncomingFromPush(event.data);
         }
     });
 }
@@ -10608,8 +10630,9 @@ if(navigator.serviceWorker) {
       _alarmAudio.play().catch(()=>{});
     }
     if(ev.data && ev.data.type === 'CHAT_INCOMING') {
+      showIncomingFromPush(ev.data);
       const deal = (samilDeals || []).find(item => String(item.id) === String(ev.data.leadId));
-      alertIncomingDeal(deal || {id: ev.data.leadId}, true);
+      alertIncomingDeal(deal || {id: ev.data.leadId, phone: ev.data.phone, contact_name: ev.data.contactName, last_client_message: ev.data.preview, chat_channel: 'whatsapp', wa_line: ev.data.waLine}, true);
     }
   });
 }

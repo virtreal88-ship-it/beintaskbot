@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-25-108';
+const CACHE_NAME = 'beintaskbot-v2026-09-25-109';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -76,10 +76,17 @@ self.addEventListener('push', e => {
   }
   e.waitUntil(
     self.registration.showNotification(data.title || 'Bein Systems', opts).then(() => {
-      return self.clients.matchAll({type: 'window'}).then(cls => {
+      return self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(cls => {
         cls.forEach(c => {
           if (data.urgent) c.postMessage({type: 'URGENT_ALARM'});
-          if (data.chat || data.lead_id) c.postMessage({type: 'CHAT_INCOMING', leadId: data.lead_id || ''});
+          if (data.chat || data.lead_id) c.postMessage({
+            type: 'CHAT_INCOMING',
+            leadId: data.lead_id || '',
+            phone: data.phone || '',
+            contactName: data.contact_name || '',
+            preview: data.preview || '',
+            waLine: data.wa_line || ''
+          });
         });
       });
     })
