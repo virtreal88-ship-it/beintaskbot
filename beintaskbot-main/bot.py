@@ -5547,6 +5547,7 @@ def record_lead_pulse_event(
     incoming_at: int = 0,
     wa_line: str = "",
     replaced_by: int = 0,
+    external_id: str = "",
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -5602,6 +5603,7 @@ def record_lead_pulse_event(
             "chat_channel": str(channel or ""),
             "wa_line": str(wa_line or ""),
             "replaced_by": int(replaced_by or 0),
+            "external_id": str(external_id or ""),
             "missing": bool(missing),
             "refresh": bool(refresh),
         })
@@ -6246,6 +6248,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
                 "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
+                "external_id": row.get("external_id") or "",
             })
     return {
         "success": True,
@@ -12610,10 +12613,24 @@ def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = Tru
 
 
 def _already_have_wamid(lead_id: int, wamid: str) -> bool:
-    wanted = str(wamid or "")
+    """True only when this exact message is already stored. A lookup error still accepts it."""
+    wanted = str(wamid or "").strip()
     if not wanted:
         return False
-    return any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id))
+    try:
+        if any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id)):
+            return True
+        store = _load_sent_messages()
+        with _wa_sent_lock:
+            for rows in store.values():
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
+                        return True
+    except Exception:
+        return False
+    return False
 
 
 def _update_cloud_status(wamid: str, status: str) -> None:
@@ -12759,6 +12776,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             contact_name=name or phone,
             phone=phone,
             wa_line=wa_line,
+            external_id=wamid,
         )
         _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
         if pending_id:
@@ -12917,13 +12935,15 @@ def _clean_body_text(text: str) -> str:
 
 def _delivery_rank(status: str) -> int:
     text = str(status or "").strip().lower()
-    if text in {"error", "failed", "undelivered", "4", "-1"}:
-        return 4
     if text in {"read", "seen", "viewed", "3"}:
-        return 3
+        return 5
     if text in {"delivered", "1", "2"}:
+        return 4
+    if text in {"sent", "0"}:
+        return 3
+    if text in {"sending", "pending"}:
         return 2
-    if text in {"sent", "sending", "0"}:
+    if text in {"error", "failed", "undelivered", "4", "-1"}:
         return 1
     return 0
 
