@@ -113,7 +113,7 @@
     "994102135102": 67455220,
     "994555555181": 75311001,
     "994503025040": 77967437,
-    "994505394934": 77784640,
+    "994505394934": 77784610,
     "994514571643": 77495455,
     "994553708106": 77967687,
     "994512339930": 77967713,
@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790344973,
+    "at": 1790345101,
     "fields": [
       "messages"
     ]
@@ -1631,6 +1631,28 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSMjY5RTJENjI4RTdFOEU3MkJEAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSMjY5RTJENjI4RTdFOEU3MkJEAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "18.00",
+      "message_type": "text",
+      "created_at": 1790345101,
+      "created": "25.09.2026 18:05",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "delivered",
+      "via_cloud": true
     }
   ],
   "78043333": [
