@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790354134,
+    "at": 1790354155,
     "fields": [
       "messages"
     ]
@@ -1393,6 +1393,29 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSQkM1NThBN0YxRkMyMjRFRTdEAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSQkM1NThBN0YxRkMyMjRFRTdEAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "994102135103",
+      "text": "35",
+      "message_type": "text",
+      "created_at": 1790354152,
+      "created": "25.09.2026 20:35",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU3QzE1MjgxNjZCRjMyMTNBQjAyQzdFMDI5RUY4MjUA",
+      "reply_to_text": "37",
+      "reply_to_author": "Support 03",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
     }
   ],
   "78023867": [
