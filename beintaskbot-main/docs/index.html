@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="289">
+    <meta name="pwa-build" content="290">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3625,7 +3625,7 @@ function audioWaitHtml(src, item) {
       <button type="button" class="wa-audio-speed" aria-label="Speed">1×</button>
     </div>
   </div>
-  <audio preload="metadata"${audioSrc}></audio>
+  <audio preload="auto"${audioSrc}></audio>
 </div>`;
 }
 function isChatPhotoText(text) {
@@ -3705,10 +3705,11 @@ async function loadMissingPhoto(wrap) {
     try {
         const direct = wrap.getAttribute('data-src') || '';
         let blob = null;
+        const cloud = direct.indexOf('/api/wa/media/') >= 0;
         try {
-            blob = await fetchMediaBlob(mediaLookupUrl(wrap, 'picture'));
+            blob = await fetchMediaBlob(cloud ? direct : mediaLookupUrl(wrap, 'picture'));
         } catch(_lookup) {
-            if(!direct) throw _lookup;
+            if(!direct || cloud) throw _lookup;
             blob = await fetchMediaBlob(direct);
         }
         const url = URL.createObjectURL(blob);
@@ -3792,6 +3793,15 @@ function bindAudioWait(root) {
         if(saved && !audio.src) {
             audio.src = saved;
             wrap.classList.add('ready');
+        }
+        const directSrc = wrap.getAttribute('data-src') || '';
+        if(directSrc.indexOf('/api/wa/media/') >= 0 && !saved) {
+            fetchMediaBlob(directSrc).then(blob => {
+                const url = URL.createObjectURL(blob);
+                _mediaBlobs.set(key, url);
+                if(!audio.src || audio.src === window.location.href) audio.src = url;
+                wrap.classList.add('ready');
+            }).catch(() => {});
         }
 
         function updateProgress(cur, dur) {
@@ -4141,7 +4151,7 @@ function dealMediaBlock(item, token) {
         return photoWaitHtml(src, item);
     }
     if(isCall) return audioWaitHtml(src, item);
-    if(type === 'video') return `<video controls preload="metadata" src="${safe}" style="max-width:240px;border-radius:12px;margin-top:6px"></video>`;
+    if(type === 'video') return `<video controls preload="auto" src="${safe}" style="max-width:240px;border-radius:12px;margin-top:6px"></video>`;
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
@@ -4393,12 +4403,26 @@ function isChatItemPinned(item) {
     if(!pinned || !item) return false;
     return String(pinned.id) === String(item.id || '');
 }
+function dealChatStatusLabel(item) {
+    if(!item || item.incoming || item.is_comment) return '';
+    const status = String(item.delivery_status || item.status || '').toLowerCase();
+    if(status === 'read' || status === 'seen') return 'Oxundu';
+    if(status === 'delivered') return 'Çatdırıldı';
+    if(status === 'failed' || status === 'error' || status === 'undelivered') return 'Göndərilmədi';
+    if(status === 'sending' || status === 'pending') return 'Göndərilir';
+    return 'Göndərildi';
+}
 function dealChatQuoteHtml(item) {
-    const text = String(item && item.reply_to_text || '').trim();
+    const replyId = String(item && item.reply_to_message_id || '').trim();
+    let text = String(item && item.reply_to_text || '').trim();
+    if(!text && replyId) {
+        const found = findChatMessageByRef(replyId, '');
+        text = found ? (dealChatReplyPreview(found) || 'Mesaj') : 'Mesaj';
+    }
     if(!text) return '';
-    const who = String(item.reply_to_author || '').trim();
-    const replyId = String(item.reply_to_message_id || '').trim();
-    const replyAttr = replyId ? ` data-reply-id="${escapeHtml(replyId)}"` : '';
+    const who = String((item && item.reply_to_author) || (text === 'Mesaj' ? '' : '') || '').trim();
+    const replyIdKept = replyId;
+    const replyAttr = replyIdKept ? ` data-reply-id="${escapeHtml(replyIdKept)}"` : '';
     return `<div class="chat-quote-in"${replyAttr} role="button">${who ? `<div class="chat-quote-who">${escapeHtml(who)}</div>` : ''}<div class="chat-quote-txt">${linkifyText(text)}</div></div>`;
 }
 function splitQuotePrefix(text) {
@@ -4943,8 +4967,11 @@ function showChatMsgMenu(x, y, item) {
     pop.id = 'chat-msg-ctx';
     pop.className = 'chats-ctx';
     const menuIcon = inner => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+    const statusLabel = dealChatStatusLabel(item);
     pop.innerHTML = `<button type="button" data-act="reply">${menuIcon('<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>')}Cavab</button>
         <button type="button" data-act="copy">${menuIcon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>')}Kopyala</button>
+        <button type="button" data-act="react">${menuIcon('<circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>')}Reaksiya</button>
+        ${statusLabel ? `<button type="button" data-act="status" disabled>${menuIcon('<polyline points="20 6 9 17 4 12"/>')}${escapeHtml(statusLabel)}</button>` : ''}
         <button type="button" data-act="pin">${menuIcon('<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>')}${isPinned ? 'Sabitdən çıxar' : 'Sabitlə'}</button>`;
     document.body.appendChild(pop);
     const left = Math.max(8, Math.min(x, window.innerWidth - pop.offsetWidth - 8));
@@ -4962,6 +4989,14 @@ function showChatMsgMenu(x, y, item) {
         event.stopPropagation();
         hideChatMsgMenu();
         copyChatMessage(item);
+    };
+    pop.querySelector('[data-act="react"]').onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const reactId = chatReactKey(item) || item.external_id || item.id;
+        const box = pop.getBoundingClientRect();
+        hideChatMsgMenu();
+        openChatReactionPicker({getBoundingClientRect: () => box}, reactId);
     };
     pop.querySelector('[data-act="pin"]').onclick = event => {
         event.preventDefault();
@@ -8554,6 +8589,20 @@ function rememberWaOutbox(phone, preview, sent) {
     saveWaOutbox([row].concat(rest));
     return row;
 }
+function viewerWaLine() {
+    if(IS_RUFAT) return 'rufat';
+    if(isAdmin) return 'nizami';
+    return '';
+}
+function chatBelongsToViewer(deal) {
+    const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
+    if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
+    const line = String((deal && deal.wa_line) || '');
+    const mine = viewerWaLine();
+    if(!mine) return false;
+    if(line) return line === mine;
+    return mine === 'rufat';
+}
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
@@ -8565,6 +8614,7 @@ function chatsInboxDeals() {
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
         if(!(preview || chatsIncomingAt(deal) || ['whatsapp','instagram','tiktok','facebook','telegram'].includes(channel))) return false;
+        if(!chatBelongsToViewer(deal)) return false;
         if(!q || usesKommoChatSearch()) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
@@ -8936,6 +8986,7 @@ function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
     if(!deal) {
+        if(row.wa_line && viewerWaLine() && row.wa_line !== viewerWaLine()) return false;
         deal = {
             id: row.id,
             contact_name: row.contact_name || '',
@@ -8945,6 +8996,7 @@ function applyInboxPulseRow(row) {
             last_incoming_at: Number(row.last_incoming_at || 0),
             chat_at: Number(row.chat_at || row.last_incoming_at || 0),
             chat_channel: row.chat_channel || 'whatsapp',
+            wa_line: row.wa_line || '',
             updated_at: Number(row.last_incoming_at || 0),
             inbox_only: true,
             tasks: []
@@ -8962,6 +9014,7 @@ function applyInboxPulseRow(row) {
     if(row.last_incoming_at) deal.last_incoming_at = Number(row.last_incoming_at) || deal.last_incoming_at;
     if(row.chat_at) deal.chat_at = Number(row.chat_at) || deal.chat_at;
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
+    if(row.wa_line) deal.wa_line = row.wa_line;
     return true;
 }
 

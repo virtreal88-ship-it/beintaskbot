@@ -5545,6 +5545,7 @@ def record_lead_pulse_event(
     missing: bool = False,
     refresh: bool = False,
     incoming_at: int = 0,
+    wa_line: str = "",
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -5598,6 +5599,7 @@ def record_lead_pulse_event(
             "last_client_message": str(preview or ""),
             "last_incoming_at": event_incoming_at,
             "chat_channel": str(channel or ""),
+            "wa_line": str(wa_line or ""),
             "missing": bool(missing),
             "refresh": bool(refresh),
         })
@@ -5855,6 +5857,7 @@ def _apply_inbox_incoming(
     pipeline_id: int = 0,
     contact_name: str = "",
     phone: str = "",
+    wa_line: str = "",
 ) -> bool:
     """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
     global _inbox_pulse_rev
@@ -5884,6 +5887,8 @@ def _apply_inbox_incoming(
             deal["chat_at"] = max(chat_at, int(created_at or 0))
             if channel and not str(deal.get("chat_channel") or "").strip():
                 deal["chat_channel"] = channel
+            if wa_line:
+                deal["wa_line"] = str(wa_line)
             if not event_pipe:
                 try:
                     event_pipe = int(deal.get("pipeline_id") or 0)
@@ -5904,6 +5909,7 @@ def _apply_inbox_incoming(
             "last_client_message": preview,
             "last_incoming_at": int(created_at or 0),
             "chat_channel": channel,
+            "wa_line": str(wa_line or ""),
             "missing": not found,
             "refresh": False,
         })
@@ -5994,7 +6000,67 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
     return placed
 
 
+def _viewer_wa_line(chat_id: int) -> str:
+    """WhatsApp line this person owns. Funnel membership does not grant a line."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return ""
+    if cid == int(RUFAT_CHAT_ID) or cid in RUFAT_COMPAT_CHAT_IDS:
+        return "rufat"
+    if is_admin(cid):
+        return "nizami"
+    return ""
+
+
+def _row_visible_on_line(row: dict, viewer_line: str) -> bool:
+    line = _message_wa_line(row)
+    if viewer_line not in {"rufat", "nizami"}:
+        return False
+    if not line:
+        return viewer_line == "rufat"
+    return line == viewer_line
+
+
+def _message_wa_line(row: dict) -> str:
+    phone_id = str((row or {}).get("phone_number_id") or "").strip()
+    if phone_id == str(NIZAMI_WA_PHONE_NUMBER_ID).strip():
+        return "nizami"
+    if phone_id:
+        return "rufat"
+    return ""
+
+
+def _lead_wa_line(lead_id: int) -> str:
+    rows = _sent_messages_for_lead(int(lead_id or 0))
+    for row in reversed(rows):
+        line = _message_wa_line(row)
+        if line:
+            return line
+    return "rufat" if rows else ""
+
+
+def _wa_line_for_phone_id(phone_number_id: str) -> str:
+    if str(phone_number_id or "").strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip():
+        return "nizami"
+    return "rufat" if str(phone_number_id or "").strip() else ""
+
+
 def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_user: bool = False) -> bool:
+    channel = str(row.get("chat_channel") or "")
+    line = str(row.get("wa_line") or "")
+    event_type = str(row.get("type") or "")
+    other_sources = {"instagram", "tiktok", "facebook", "telegram"}
+    is_wa = channel == "whatsapp" or line in {"rufat", "nizami"} or event_type in {"incoming_message", "deal_outgoing"}
+    if channel in other_sources:
+        return bool(is_admin_user)
+    if is_wa and (channel == "whatsapp" or line or event_type in {"incoming_message", "deal_outgoing"}):
+        if line == "nizami":
+            return bool(is_admin_user or int(user_pipeline) == int(NIZAMI_PIPELINE_ID))
+        if line == "rufat":
+            return int(user_pipeline) == int(RUFAT_PIPELINE_ID)
+        if channel == "whatsapp" or event_type in {"incoming_message", "deal_outgoing"}:
+            return False
     if is_admin_user:
         return True
     try:
@@ -6004,20 +6070,9 @@ def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_
         return False
     if lead_id and lead_id in visible:
         return True
-    channel = str(row.get("chat_channel") or "")
     nizami = int(NIZAMI_PIPELINE_ID)
-    rufat = int(RUFAT_PIPELINE_ID)
-    if channel == "whatsapp":
-        if not event_pipe or event_pipe == int(user_pipeline):
-            return True
-        if int(user_pipeline) == rufat and event_pipe in {rufat, int(SOVDELESMELER_PIPELINE_ID)}:
-            return True
-        if int(user_pipeline) == nizami and event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
-            return True
-    if int(user_pipeline) == nizami:
-        if event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
-            return True
-        return channel == "whatsapp"
+    if int(user_pipeline) == nizami and event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
+        return True
     return bool(event_pipe and event_pipe == int(user_pipeline))
 
 
@@ -6187,6 +6242,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "last_incoming_at": incoming_at,
                 "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
+                "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
             })
     return {
         "success": True,
@@ -9042,7 +9098,8 @@ def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
     if is_admin(chat_id):
         return True
     lid = int(lead.get("id") or 0)
-    if lid and _sent_messages_for_lead(lid):
+    viewer_line = _viewer_wa_line(chat_id)
+    if lid and viewer_line and any(_row_visible_on_line(row, viewer_line) for row in _sent_messages_for_lead(lid)):
         return True
     try:
         pipeline_id = int(lead.get("pipeline_id") or 0)
@@ -12081,6 +12138,9 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         deal["last_outgoing_at"] = outgoing_at
     if not str(deal.get("chat_channel") or "").strip():
         deal["chat_channel"] = "whatsapp"
+    line = _lead_wa_line(lid)
+    if line:
+        deal["wa_line"] = line
     stamps = [int(ts or 0), int(deal.get("last_incoming_at") or 0), int(deal.get("last_outgoing_at") or 0), int(deal.get("chat_at") or 0)]
     deal["chat_at"] = max(stamps)
     try:
@@ -12135,23 +12195,13 @@ def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
             rows = _sent_messages_for_lead(lid)
             if not any(row.get("incoming") for row in rows):
                 continue
+            line = _lead_wa_line(lid)
+            if int(pipeline_id) == int(RUFAT_PIPELINE_ID) and line != "rufat":
+                continue
+            if int(pipeline_id) == int(NIZAMI_PIPELINE_ID) and line != "nizami":
+                continue
             try:
                 lead = get_lead_details(lid)
-                lead_pipe = _lead_pipeline_id(lead)
-                if int(pipeline_id) == int(RUFAT_PIPELINE_ID):
-                    rufat_match = _lead_in_rufat_chats(lead) or any(
-                        str(row.get("phone_number_id") or "") != str(NIZAMI_WA_PHONE_NUMBER_ID)
-                        for row in rows
-                    )
-                    if not rufat_match and lead_pipe not in (int(RUFAT_PIPELINE_ID), int(SOVDELESMELER_PIPELINE_ID), 0):
-                        continue
-                elif int(pipeline_id) == int(NIZAMI_PIPELINE_ID):
-                    nizami_match = (lead_pipe in (int(NIZAMI_PIPELINE_ID), int(SOVDELESMELER_PIPELINE_ID), 0)) or any(
-                        str(row.get("phone_number_id") or "") == str(NIZAMI_WA_PHONE_NUMBER_ID)
-                        for row in rows
-                    )
-                    if not nizami_match:
-                        continue
                 preview, ts, _has = _cloud_last_for_lead(lid)
                 row = _overview_deal_from_cloud_lead(lead, preview, ts)
             except Exception as exc:
@@ -12197,6 +12247,32 @@ def _wa_cloud_media_fields(message: dict) -> dict:
         "file_name": filename,
         "media_url": f"/api/wa/media/{media_id}",
     }
+
+
+def _prefetch_cloud_media(message: dict) -> None:
+    """Pull Graph bytes into memory before the chat asks to play them."""
+    fields = _wa_cloud_media_fields(message)
+    media_id = str(fields.get("media_url") or "").rsplit("/", 1)[-1]
+    if not media_id.isdigit():
+        return
+    threading.Thread(target=_wa_download_graph_media, args=(media_id,), daemon=True).start()
+
+
+def _quote_from_stored(lead_id: int, reply_id: str) -> tuple[str, str, str]:
+    target = str(reply_id or "").strip()
+    if not target:
+        return "", "", ""
+    text = ""
+    author = ""
+    for row in _sent_messages_for_lead(int(lead_id or 0)):
+        ext = str(row.get("external_id") or "")
+        stored_id = str(row.get("id") or "")
+        if target not in {ext, stored_id} and target not in stored_id:
+            continue
+        text = str(row.get("text") or "")[:200]
+        author = str(row.get("author") or "")[:80]
+        break
+    return target, text, author
 
 
 def _wa_incoming_preview(message: dict) -> tuple[str, str]:
@@ -12371,6 +12447,7 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
     _rekey_wa_lead(pending, real)
     rows = _sent_messages_for_lead(real)
     newest = rows[-1] if rows else {}
+    wa_line = _wa_line_for_phone_id(sender_phone_id)
     record_lead_pulse_event(
         real,
         "incoming_message",
@@ -12379,9 +12456,10 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
         channel="whatsapp",
         contact_name=contact_name,
         phone=phone,
-        pipeline_id=int(NIZAMI_PIPELINE_ID) if str(sender_phone_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID),
+        pipeline_id=int(NIZAMI_PIPELINE_ID) if wa_line == "nizami" else int(RUFAT_PIPELINE_ID),
+        wa_line=wa_line,
     )
-    record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone)
+    record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone, wa_line=wa_line)
 
 
 def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True, sender_phone_id: str = "") -> int:
@@ -12498,7 +12576,7 @@ def _update_cloud_status(wamid: str, status: str) -> None:
     for lid in touched_leads:
         _invalidate_deal_chat_cache(lid)
         _overlay_tail_delivery(lid)
-        record_lead_pulse_event(lid, "deal_delivery", preview="", incoming_at=0)
+        record_lead_pulse_event(lid, "deal_delivery", preview="", incoming_at=0, channel="whatsapp", wa_line=_lead_wa_line(lid))
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
@@ -12548,7 +12626,10 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
         media_fields = _wa_cloud_media_fields(message)
+        _prefetch_cloud_media(message)
         target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
+        wa_line = _wa_line_for_phone_id(phone_number_id)
+        quote_id, quote_text, quote_author = _quote_from_stored(lead_id, reaction_target_mid or str(context.get("id") or ""))
         item = _sent_message_item(
             wamid=wamid,
             text=preview,
@@ -12556,7 +12637,9 @@ def _ingest_cloud_incoming(value: dict) -> None:
             message_type=str(media_fields.get("message_type") or kind),
             incoming=True,
             created_at=created,
-            reply_id=reaction_target_mid or str(context.get("id") or ""),
+            reply_id=quote_id,
+            reply_text=quote_text,
+            reply_author=quote_author,
             phone=phone,
             file_name=str(media_fields.get("file_name") or ""),
             media_url=str(media_fields.get("media_url") or ""),
@@ -12575,8 +12658,9 @@ def _ingest_cloud_incoming(value: dict) -> None:
             pipeline_id=target_pipe,
             contact_name=name or phone,
             phone=phone,
+            wa_line=wa_line,
         )
-        _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone)
+        _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
         if pending_id:
             threading.Thread(
                 target=_bind_pending_cloud_lead,
@@ -12585,7 +12669,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             ).start()
         else:
             try:
-                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe)
+                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line)
             except Exception:
                 pass
             threading.Thread(target=_patch_cloud_inbox_into_rufat_cache, daemon=True).start()
@@ -12622,7 +12706,9 @@ def _ingest_cloud_echoes(value: dict) -> None:
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
         media_fields = _wa_cloud_media_fields(message)
+        _prefetch_cloud_media(message)
         target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
+        wa_line = _wa_line_for_phone_id(phone_number_id)
         item = _sent_message_item(
             wamid=wamid,
             text=preview,
@@ -12640,11 +12726,11 @@ def _ingest_cloud_echoes(value: dict) -> None:
         _append_chat_tail(lead_id, item)
         try:
             _patch_cloud_inbox_into_rufat_cache()
-            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone, pipeline_id=target_pipe)
+            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone, pipeline_id=target_pipe, wa_line=wa_line)
         except Exception:
             pass
         _invalidate_deal_chat_cache(lead_id)
-        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0, channel="whatsapp", pipeline_id=target_pipe)
+        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0, channel="whatsapp", pipeline_id=target_pipe, wa_line=wa_line)
         logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
 
 
@@ -14607,7 +14693,11 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
             before = 0
         tailish = str(request.rel_url.query.get("preview") or "") == "1" or str(request.rel_url.query.get("tail") or "") == "1"
         keep = _CHAT_TAIL_KEEP if tailish else limit
-        rows = _sent_messages_for_lead(lead_id)
+        viewer_line = _viewer_wa_line(chat_id)
+        rows = [
+            item for item in _sent_messages_for_lead(lead_id)
+            if _row_visible_on_line(item, viewer_line)
+        ]
         rows.sort(key=lambda item: int(item.get("created_at") or 0))
         if before:
             older = [item for item in rows if int(item.get("created_at") or 0) < before]
@@ -15467,7 +15557,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if sent_via_cloud:
         # The app renders Kommo message types, so translate the Cloud API kind.
         local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
-        _remember_sent_message(int(lead.get("id") or lead_id), _sent_message_item(
+        sent_item = _sent_message_item(
             wamid=sent_wamid,
             text=tail_text,
             author=employee_name_for_lead(lead),
@@ -15478,7 +15568,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             reply_id=reply_to_message_id or wa_quote_id,
             reply_text=reply_preview,
             reply_author=reply_author,
-        ))
+        )
+        sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
+        _remember_sent_message(int(lead.get("id") or lead_id), sent_item)
     _append_chat_tail(int(lead.get("id") or lead_id), {
         "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
         "external_id": str(sent_wamid or ""),
@@ -15499,14 +15591,18 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     })
     if sent_via_cloud:
         lid_int = int(lead.get("id") or lead_id)
-        chat = _sent_messages_for_lead(lid_int)
+        viewer_line = _viewer_wa_line(chat_id)
+        chat = [item for item in _sent_messages_for_lead(lid_int) if _row_visible_on_line(item, viewer_line)]
         chat.sort(key=lambda item: int(item.get("created_at") or 0))
         chat = chat[-20:]
         _apply_saved_replies(chat)
         if reply_to_message_id:
             _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
         _invalidate_deal_chat_cache(lid_int)
-        record_lead_pulse_event(lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp")
+        record_lead_pulse_event(
+            lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp",
+            wa_line=_wa_line_for_phone_id(_wa_phone_id_for_digits(sender_digits)) or _lead_wa_line(lid_int),
+        )
         cloud_ready = _wa_cloud_ready(sender_digits)
         return web.json_response({
             "success": True,
@@ -15597,16 +15693,21 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     emoji = str(data.get("emoji") or "").strip()[:8]
     if not lead_id or not react_id:
         return web.json_response({"success": False, "error": "lead_id və mesaj id lazımdır"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
-    if err:
-        return err
-    lid = int(lead.get("id") or lead_id)
+    phones = _phones_for_wa_lead(lead_id)
+    lead = {"id": lead_id, "phone": phones[0] if phones else "", "phones": phones}
+    if not phones:
+        lead, err = _authorized_deal_lead(chat_id, lead_id)
+        if err:
+            return err
+        _ids, phones = _contact_ids_and_phones(lead)
+    lid = int((lead or {}).get("id") or lead_id)
     resolved = _wamid_for_react(lid, wamid, message_id, react_id)
     token, _env_phone = _wa_cloud_credentials()
     last_error = ""
     sender_phone_id = _wa_phone_id_for_digits(_hinted_wa_sender_digits(chat_id, data.get("sender_phone")))
     if token and sender_phone_id and resolved.lower().startswith("wamid"):
-        _ids, phones = _contact_ids_and_phones(lead)
+        if not phones:
+            phones = _phones_for_wa_lead(lid)
         if not phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
         for phone in phones:
@@ -17021,33 +17122,16 @@ async def handle_push_subscribe(request):
         logger.info(f"Push subscription saved for user {user_id}")
     return web.json_response({'success': True})
 
-def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: str = "") -> None:
+def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: str = "", phone_number_id: str = "") -> None:
     title = str(name or "").strip()
     notice_phone = _wa_display_number(phone)
-    target_uids: set[str] = set()
-
-    for pid, def_uids in [
-        (int(RUFAT_PIPELINE_ID), {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}),
-        (int(NIZAMI_PIPELINE_ID), {str(ADMIN_CHAT_ID)}),
-    ]:
-        overview = _personal_overview_cache.get(pid) or {}
-        for deal in overview.get("deals") or []:
-            try:
-                if int(deal.get("id") or 0) != int(lead_id):
-                    continue
-            except (TypeError, ValueError):
-                continue
-            if not title:
-                title = str(deal.get("contact_name") or "").strip()
-            if not notice_phone:
-                phones = deal.get("phones") if isinstance(deal.get("phones"), list) else []
-                raw = next((str(item or "").strip() for item in phones if str(item or "").strip()), "")
-                notice_phone = _wa_display_number(raw or deal.get("phone") or "")
-            target_uids.update(def_uids)
-            break
-
-    if not target_uids:
-        target_uids = {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS), str(ADMIN_CHAT_ID)}
+    line = _wa_line_for_phone_id(phone_number_id)
+    if line == "nizami":
+        target_uids = {str(ADMIN_CHAT_ID)}
+    elif line == "rufat":
+        target_uids = {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}
+    else:
+        target_uids = set()
 
     title = (title or notice_phone or "WhatsApp")[:80]
     body = " ".join(str(preview or "Yeni mesaj").split())[:140] or "Yeni mesaj"
