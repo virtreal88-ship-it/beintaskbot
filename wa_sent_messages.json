@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790345875,
+    "at": 1790345903,
     "fields": [
       "messages"
     ]
@@ -2193,6 +2193,30 @@
       "file_name": "",
       "delivery_status": "read",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0NTU2Njg0MDQ5FQIAEhggQTUxNEU4MTAxOTczNUMwNzJBN0E3MEJGNEMzMUY3NjgA",
+      "external_id": "wamid.HBgMOTk0NTU2Njg0MDQ5FQIAEhggQTUxNEU4MTAxOTczNUMwNzJBN0E3MEJGNEMzMUY3NjgA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "uniset",
+      "phone": "994556684049",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790345884,
+      "created": "25.09.2026 18:18",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "/api/wa/media/1346426667562031",
+      "file_uuid": "",
+      "file_name": "voice.ogg",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ]
 }
