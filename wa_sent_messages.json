@@ -1934,6 +1934,29 @@
       "delivery_status": "read",
       "via_cloud": true,
       "phone_number_id": "1352169527974549"
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNEFBQUMzQUNDMEVFOTZGQzY5AA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNEFBQUMzQUNDMEVFOTZGQzY5AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "994102135103",
+      "text": "1920",
+      "message_type": "text",
+      "created_at": 1790349682,
+      "created": "25.09.2026 19:21",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTUwNzMwRUIzNjgyNkUyMjAwRjEyMUNFRTA2RTM2MEIA",
+      "reply_to_text": "1919",
+      "reply_to_author": "Support 03",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
     }
   ],
   "78043333": [
