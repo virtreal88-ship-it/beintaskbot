@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790354309,
+    "at": 1790354337,
     "fields": [
       "messages"
     ]
@@ -1695,7 +1695,7 @@
       "media_url": "/api/wa/media/2262989597881702",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "sent",
+      "delivery_status": "read",
       "via_cloud": true,
       "phone_number_id": "1352169527974549"
     }
