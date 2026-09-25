@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="294">
+    <meta name="pwa-build" content="295">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -8476,7 +8476,7 @@ function watchIncomingChats(freshIds) {
     }
     fresh.forEach(deal => {
         if(!isViewingDealChat(deal.id)) markChatsUnread(deal.id);
-        alertIncomingDeal(deal, false);
+        alertIncomingDeal(deal, String(deal.chat_channel || deal.inbox_channel || '').toLowerCase() === 'whatsapp');
     });
     if(fresh.length) paintChatsUnreadBadge();
 }
@@ -9360,6 +9360,9 @@ async function pollInboxPulse() {
                     return;
                 }
                 if(openId === String(event.lead_id)) return;
+                const existing = (samilDeals || []).find(deal => String(deal.id) === String(event.lead_id));
+                const keptChannel = String(existing && (existing.chat_channel || existing.inbox_channel) || '').toLowerCase();
+                if(existing && (existing.inbox_only || existing.wa_line || keptChannel === 'whatsapp')) return;
                 const before = samilDeals.length;
                 samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
                 if(samilDeals.length !== before && chatsOpen) renderChatsList();
@@ -9367,7 +9370,7 @@ async function pollInboxPulse() {
             const openId = _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && events.some(event => event && String(event.lead_id) === openId)) pollDealChat(true);
                 if(events.length) {
-                    const uniqueLids = [...new Set(events.filter(e => e && !e.missing).map(e => e.lead_id).filter(Boolean))];
+                    const uniqueLids = [...new Set(events.filter(e => e && !e.missing && e.type !== 'incoming_message').map(e => e.lead_id).filter(Boolean))];
                     uniqueLids.forEach(lid => {
                         const ev = events.find(e => String(e.lead_id) === String(lid));
                         syncSingleDealIncremental(lid, ev);

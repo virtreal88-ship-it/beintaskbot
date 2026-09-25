@@ -5914,7 +5914,7 @@ def _apply_inbox_incoming(
             "last_incoming_at": int(created_at or 0),
             "chat_channel": channel,
             "wa_line": str(wa_line or ""),
-            "missing": not found,
+            "missing": bool(not found and channel != "whatsapp"),
             "refresh": False,
         })
         if len(_inbox_pulse_events) > 150:
@@ -6337,6 +6337,14 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     talk_id = 0
                 message_id = str(row.get("id") or row.get("msgid") or row.get("message_id") or "").strip()
                 if _incoming_message_seen(message_id):
+                    continue
+                if created_at and created_at < int(_time_module.time()) - 180:
+                    _capture_incoming_tail(
+                        entity_id if entity_type not in {"contact", "contacts", "1"} else (_cached_lead_id_for_contact(entity_id) or 0),
+                        preview, created_at, origin,
+                        talk_id=talk_id, message_id=message_id,
+                        media_url=media_url, file_uuid=file_uuid, message_type=mtype,
+                    )
                     continue
                 if entity_type in {"contact", "contacts", "1"}:
                     mapped = _cached_lead_id_for_contact(entity_id)
@@ -12402,37 +12410,13 @@ def _real_wa_lead_id(lead_id: int) -> int:
 
 
 def _lead_id_for_phone_anywhere(phone: str) -> int:
-    """Existing chat for this customer number, without asking Kommo."""
-    key = _wa_phone_key(phone)
-    if not key:
-        return 0
+    """Existing chat for this customer number, without scanning every stored message."""
     indexed = _lead_id_for_stored_phone(phone)
     overview = _lead_id_from_overview_phone(phone)
-    scanned = 0
-    pending_hit = 0
-    store = _load_sent_messages()
-    with _wa_sent_lock:
-        for raw_key, rows in store.items():
-            if not str(raw_key).isdigit() or not isinstance(rows, list):
-                continue
-            try:
-                lid = int(raw_key)
-            except (TypeError, ValueError):
-                continue
-            matched = any(
-                isinstance(row, dict) and _wa_phone_key(row.get("phone")) == key
-                for row in rows
-            )
-            if not matched:
-                continue
-            if lid >= 9_000_000_000_000:
-                pending_hit = pending_hit or lid
-            elif not scanned:
-                scanned = lid
-    real = _real_wa_lead_id(scanned) or _real_wa_lead_id(overview) or _real_wa_lead_id(indexed)
+    real = _real_wa_lead_id(indexed) or _real_wa_lead_id(overview)
     if real:
         return real
-    return pending_hit or indexed or overview or 0
+    return int(indexed or overview or 0)
 
 
 def _wa_thread_rows(lead_id: int) -> list[dict]:
@@ -12552,7 +12536,7 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
     wa_line = _wa_line_for_phone_id(sender_phone_id)
     record_lead_pulse_event(
         real,
-        "incoming_message",
+        "deal_update",
         preview=str(newest.get("text") or ""),
         incoming_at=int(newest.get("created_at") or 0),
         channel="whatsapp",
@@ -12560,6 +12544,7 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
         phone=phone,
         pipeline_id=int(NIZAMI_PIPELINE_ID) if wa_line == "nizami" else int(RUFAT_PIPELINE_ID),
         wa_line=wa_line,
+        external_id=str(newest.get("external_id") or ""),
     )
     record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone, wa_line=wa_line, replaced_by=real)
 
@@ -12612,22 +12597,23 @@ def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = Tru
     return int(lead_id or 0)
 
 
-def _already_have_wamid(lead_id: int, wamid: str) -> bool:
-    """True only when this exact message is already stored. A lookup error still accepts it."""
+def _already_have_wamid(lead_id: int, wamid: str, phone: str = "") -> bool:
+    """True only when this exact message is already stored for this customer. A lookup error still accepts it."""
     wanted = str(wamid or "").strip()
     if not wanted:
         return False
     try:
-        if any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id)):
-            return True
-        store = _load_sent_messages()
-        with _wa_sent_lock:
-            for rows in store.values():
-                if not isinstance(rows, list):
-                    continue
-                for row in rows:
-                    if isinstance(row, dict) and str(row.get("external_id") or "") == wanted:
-                        return True
+        lead_ids: list[int] = []
+        for raw in (lead_id, _lead_id_for_stored_phone(phone) if phone else 0, _pending_wa_lead_id(phone) if phone else 0):
+            try:
+                lid = int(raw or 0)
+            except (TypeError, ValueError):
+                lid = 0
+            if lid and lid not in lead_ids:
+                lead_ids.append(lid)
+        for lid in lead_ids:
+            if any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lid)):
+                return True
     except Exception:
         return False
     return False
@@ -12708,7 +12694,15 @@ def _ingest_cloud_incoming(value: dict) -> None:
     for status in value.get("statuses") or []:
         if isinstance(status, dict):
             _update_cloud_status(status.get("id"), status.get("status"))
-    for message in value.get("messages") or []:
+    messages = [row for row in (value.get("messages") or []) if isinstance(row, dict)]
+    for block in value.get("history") or []:
+        if not isinstance(block, dict):
+            continue
+        for thread in block.get("threads") or []:
+            if isinstance(thread, dict):
+                messages.extend(row for row in (thread.get("messages") or []) if isinstance(row, dict))
+    now_ts = int(_time_module.time())
+    for message in messages:
         if not isinstance(message, dict):
             continue
         wamid = str(message.get("id") or "")
@@ -12740,7 +12734,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
         _remember_phone_lead(phone, lead_id)
         if kind == "reaction" and reaction_emoji and reaction_target_mid:
             _remember_reaction(lead_id, reaction_target_mid, reaction_emoji)
-        if wamid and _already_have_wamid(lead_id, wamid):
+        if wamid and _already_have_wamid(lead_id, wamid, phone):
             continue
         media_fields = _wa_cloud_media_fields(message)
         _prefetch_cloud_media(message)
@@ -12766,6 +12760,9 @@ def _ingest_cloud_incoming(value: dict) -> None:
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
         _invalidate_deal_chat_cache(lead_id)
+        fresh = not created or created >= now_ts - 180
+        if not fresh:
+            continue
         record_lead_pulse_event(
             lead_id,
             "incoming_message",
@@ -12821,7 +12818,7 @@ def _ingest_cloud_echoes(value: dict) -> None:
         if not lead_id:
             logger.warning("WhatsApp echo has no lead phone=%s", phone)
             continue
-        if wamid and _already_have_wamid(lead_id, wamid):
+        if wamid and _already_have_wamid(lead_id, wamid, phone):
             continue
         media_fields = _wa_cloud_media_fields(message)
         _prefetch_cloud_media(message)
