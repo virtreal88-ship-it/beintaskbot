@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790340310,
+    "at": 1790340324,
     "fields": [
       "messages"
     ]
@@ -734,6 +734,28 @@
       "file_uuid": "",
       "file_name": "",
       "delivery_status": "",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSNUE2MUVFRjkyNjI0RkIxRDdFAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSNUE2MUVFRjkyNjI0RkIxRDdFAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "video",
+      "message_type": "text",
+      "created_at": 1790340324,
+      "created": "25.09.2026 16:45",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
       "via_cloud": true
     }
   ],
