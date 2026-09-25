@@ -70,5 +70,13 @@
       "p256dh": "BMRX5STZHJzyu-NQdFPA0VU_pe-ejFqmzbrqOlWmZs2q2aRcKH1SbADovHYZ7Ez7EJE71EfgFybtJgnXOnUbyGE",
       "auth": "cIydzBMUgJz6ebM_eMuBkA"
     }
+  },
+  "7920785774": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/ebiPBgGWLQY:APA91bHwA-a34zsQLC3ahqgY7WJNm4jqVaNRkcH4aXlgKDhfRCFe9HgUhlxZ7ggDANNa3fk43dGpS7vJTKZFat8SUkdFN1hcx3LV7AUVKfs-dAcun9a7Q8hmpD73HR572Gnd3nn2ujNo",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BJSGMEXDG_RZqiLewRC5JZCZxrXzujTFu1toOLEeQCJBcoQkwvs6wUddBKaZxWVEjl3sZd-OqMJUkvC9hm1Hc7I",
+      "auth": "3K74I4baq0hYHgiVMdbXvA"
+    }
   }
 }
