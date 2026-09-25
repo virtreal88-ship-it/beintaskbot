@@ -1675,6 +1675,29 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSRjM1NUQ4ODYyOERFREMxMjkzAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSRjM1NUQ4ODYyOERFREMxMjkzAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "994102135103",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790354332,
+      "created": "25.09.2026 20:38",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVFMzY5RTQ3NDQ2RTkxNkM4NDlEQjJCQjA1ODlFNkEA",
+      "reply_to_text": "🎤 Səs mesajı",
+      "reply_to_author": "Support 03",
+      "media_url": "/api/wa/media/2262989597881702",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
     }
   ],
   "78023867": [
