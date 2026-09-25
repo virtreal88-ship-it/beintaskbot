@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="298">
+    <meta name="pwa-build" content="297">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3641,10 +3641,6 @@ function audioWaitHtml(src, item) {
   <audio preload="auto"${audioSrc}></audio>
 </div>`;
 }
-function isVoiceCaptionText(text) {
-    const raw = String(text || '').replace(/^🎤\s*/, '').trim().toLowerCase();
-    return raw === 'səs mesajı' || raw === 'ses mesaji' || raw === 'voice message';
-}
 function isChatPhotoText(text) {
     const raw = String(text || '').trim();
     return isDealMediaNotice(raw) || /^(📷\s*)?şəkil(\s*\(.*\))?$/i.test(raw);
@@ -3858,7 +3854,6 @@ function discoverAudioDuration(audio) {
         else audio.addEventListener('loadedmetadata', run, {once: true});
     });
 }
-const _videoLoads = new Map();
 function bindVideoProgress(root) {
     (root || document).querySelectorAll('.wa-video-box').forEach(box => {
         if(box.dataset.bound) return;
@@ -3866,9 +3861,7 @@ function bindVideoProgress(root) {
         const video = box.querySelector('video');
         const pct = box.querySelector('.wa-video-pct');
         if(!video) return;
-        let fetching = false;
         const fail = () => {
-            if(fetching) return;
             box.classList.add('failed');
             if(pct) { pct.hidden = false; pct.textContent = 'Video açılmadı'; }
         };
@@ -3881,27 +3874,14 @@ function bindVideoProgress(root) {
         video.addEventListener('error', fail);
         const src = video.getAttribute('src') || '';
         if(src.indexOf('/api/wa/media/') < 0) return;
-        const arm = (url) => {
-            fetching = false;
-            if(!box.isConnected) return;
-            video.src = url;
-        };
-        const cached = _mediaBlobs.get('video|' + src);
-        if(cached) { arm(cached); return; }
-        fetching = true;
         video.removeAttribute('src');
-        let job = _videoLoads.get(src);
-        if(!job) {
-            job = fetchMediaBlob(src, n => {
-                if(pct && fetching && box.isConnected) { pct.hidden = false; pct.textContent = n + '%'; }
-            }).then(blob => {
-                const url = URL.createObjectURL(blob);
-                _mediaBlobs.set('video|' + src, url);
-                return url;
-            });
-            _videoLoads.set(src, job);
-        }
-        job.then(arm).catch(() => { fetching = false; fail(); });
+        try { video.load(); } catch(_e) {}
+        fetchMediaBlob(src, n => {
+            if(pct && !box.classList.contains('failed')) { pct.hidden = false; pct.textContent = n + '%'; }
+        }).then(blob => {
+            video.src = URL.createObjectURL(blob);
+            try { video.load(); } catch(_e) {}
+        }).catch(fail);
     });
 }
 function bindAudioWait(root) {
@@ -3927,23 +3907,12 @@ function bindAudioWait(root) {
         }
         const directSrc = wrap.getAttribute('data-src') || '';
         if(directSrc.indexOf('/api/wa/media/') >= 0 && !saved) {
-            wrap.classList.add('loading');
-            if(timeEl) timeEl.textContent = '0%';
-            fetchMediaBlob(directSrc, pct => {
-                if(wrap.classList.contains('playing')) return;
-                if(timeEl) timeEl.textContent = pct + '%';
-                if(bar) bar.style.width = pct + '%';
-            }).then(blob => {
+            fetchMediaBlob(directSrc).then(blob => {
                 const url = URL.createObjectURL(blob);
                 _mediaBlobs.set(key, url);
                 if(!audio.src || audio.src === window.location.href) audio.src = url;
-                wrap.classList.remove('loading');
                 wrap.classList.add('ready');
-                if(!wrap.classList.contains('playing')) {
-                    if(bar) bar.style.width = '0%';
-                    if(timeEl) timeEl.textContent = '0:00';
-                }
-            }).catch(() => { wrap.classList.remove('loading'); });
+            }).catch(() => {});
         }
 
         function updateProgress(cur, dur) {
@@ -3971,13 +3940,11 @@ function bindAudioWait(root) {
                     audio.pause();
                     return;
                 }
-                if(audio.src && audio.src !== window.location.href && !audio.error && (audio.readyState >= 1 || wrap.dataset.duration)) {
+                if(audio.src && audio.src !== window.location.href && !audio.error && audio.readyState >= 1) {
                     stopAllOtherAudios(audio);
-                    if(audio.ended) { try { audio.currentTime = 0; } catch(_e) {} }
                     if(!finiteAudioDuration(audio, wrap)) {
                         const found = await discoverAudioDuration(audio);
                         if(found) wrap.dataset.duration = String(found);
-                        try { audio.currentTime = 0; } catch(_e) {}
                     }
                     try { await audio.play(); } catch(_e) {}
                     return;
@@ -4527,8 +4494,8 @@ function dealChatItemHtml(item, token, readonly) {
     const reaction = item.my_reaction ? `<button type="button" class="chat-reaction" data-react-id="${escapeHtml(reactKey)}">${escapeHtml(item.my_reaction)}</button>` : '';
     let displayText = item.text || '';
     if(isChatAudioItem(item) || isChatPhotoItem(item)) {
-        if(isChatPhotoText(displayText) || isDealMediaNotice(displayText) || isVoiceCaptionText(displayText)) displayText = '';
-    } else if(isDealMediaNotice(displayText) || isVoiceCaptionText(displayText)) {
+        if(isChatPhotoText(displayText) || isDealMediaNotice(displayText)) displayText = '';
+    } else if(isDealMediaNotice(displayText)) {
         displayText = '';
     }
     const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(displayText || '').trim()) ? '' : linkifyText(displayText);
@@ -7497,7 +7464,7 @@ async function sendDealChatMessage(fileArg) {
             if(!aborted && input && !input.value) {
                 input.value = savedInputText;
             }
-            if(voiceNow && !aborted) {
+            if(voiceNow) {
                 const voiceBox = document.getElementById('deal-voice-preview');
                 const player = voiceBox && voiceBox.querySelector('audio');
                 if(voiceBox && player && _dealPendingFile && _dealPendingUrl) {
@@ -7505,8 +7472,6 @@ async function sendDealChatMessage(fileArg) {
                     voiceBox.hidden = false;
                     document.querySelector('.wa-composer-field')?.classList.add('has-voice');
                 }
-            } else if(voiceNow && aborted) {
-                clearDealPendingFile();
             }
             keepSentChatVisible(leadId);
             if(!aborted) toast(err.message || 'Göndərilmədi', true);
@@ -8517,12 +8482,7 @@ let _chatAlertMap = {};
 let _chatAlertSeeded = false;
 const _chatAlertLock = {};
 function isViewingDealChat(leadId) {
-    if(document.hidden || !_dealInboxMode || !_dealViewState) return false;
-    if(String(_dealViewState.id) === String(leadId)) return true;
-    const openDigits = waPhoneKey(openChatCustomerPhone());
-    const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
-    const digits = waDealDigits(deal);
-    return !!(openDigits && digits && openDigits === digits);
+    return !!(document.hasFocus() && !document.hidden && _dealInboxMode && _dealViewState && String(_dealViewState.id) === String(leadId));
 }
 function playIncomingChatSound() {
     try {
@@ -8635,8 +8595,7 @@ function watchIncomingChats(freshIds) {
         return;
     }
     fresh.forEach(deal => {
-        if(isViewingDealChat(deal.id)) markChatsSeen(deal.id);
-        else markChatsUnread(deal.id);
+        if(!isViewingDealChat(deal.id)) markChatsUnread(deal.id);
         alertIncomingDeal(deal, String(deal.chat_channel || deal.inbox_channel || '').toLowerCase() === 'whatsapp');
     });
     if(fresh.length) paintChatsUnreadBadge();
@@ -8873,11 +8832,10 @@ function preferWaDeal(a, b) {
     const bPending = Number(b && b.id) >= 9000000000000;
     const keep = aPending !== bPending ? (aPending ? b : a) : (chatsListAt(a) >= chatsListAt(b) ? a : b);
     const other = keep === a ? b : a;
-    if(Number(other.last_incoming_at || 0) >= Number(keep.last_incoming_at || 0) || chatsListAt(other) > chatsListAt(keep)) {
+    if(chatsListAt(other) > chatsListAt(keep)) {
         if(other.last_client_message) keep.last_client_message = other.last_client_message;
         if(other.last_incoming_at) keep.last_incoming_at = other.last_incoming_at;
-        keep.chat_at = Math.max(Number(keep.chat_at || 0), Number(other.chat_at || 0), Number(other.last_incoming_at || 0));
-        if(other.chat_channel) keep.chat_channel = keep.chat_channel || other.chat_channel;
+        keep.chat_at = Math.max(Number(keep.chat_at || 0), Number(other.chat_at || 0));
     }
     if(!keep.wa_line && other.wa_line) keep.wa_line = other.wa_line;
     if(!keep.contact_name && other.contact_name) keep.contact_name = other.contact_name;
