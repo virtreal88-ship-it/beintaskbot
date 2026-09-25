@@ -1262,5 +1262,29 @@
       "delivery_status": "read",
       "via_cloud": true
     }
+  ],
+  "75780295": [
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSM0RBMkQxMkY2NzlFQUJFRUNEAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSM0RBMkQxMkY2NzlFQUJFRUNEAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790337341,
+      "created": "25.09.2026 15:55",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "450557a8-558b-417d-949a-892dd44c41f7",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
+    }
   ]
 }
