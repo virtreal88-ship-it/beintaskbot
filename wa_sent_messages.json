@@ -352,7 +352,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790333135,
+    "at": 1790333144,
     "fields": [
       "messages"
     ]
@@ -990,7 +990,7 @@
       "media_url": "",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "delivered",
+      "delivery_status": "read",
       "via_cloud": true
     }
   ]
