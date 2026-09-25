@@ -1039,6 +1039,28 @@
       "file_name": "",
       "delivery_status": "",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAxFQIAERgSODFEQjkyQjg5RjFBQzNGNjg1AA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAxFQIAERgSODFEQjkyQjg5RjFBQzNGNjg1AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rüfət Həsənzadə",
+      "phone": "",
+      "text": "Salam . Adım *Rüfət Həsənzadə*. Sizi *BeinSystems* şirkətindən narahat edirəm.",
+      "message_type": "text",
+      "created_at": 1790334613,
+      "created": "25.09.2026 15:10",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ]
 }
