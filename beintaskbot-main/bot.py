@@ -28,6 +28,7 @@ import asyncio
 import uuid
 import threading
 import collections
+import random
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote
@@ -9488,33 +9489,51 @@ def _note_recording_src(note: dict) -> tuple[str, str]:
     return _extract_media_url(params), _extract_file_uuid(params)
 
 
-def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 3) -> list[dict]:
+_entity_notes_cache: dict[tuple[str, int, int], tuple[float, list[dict]]] = {}
+_entity_notes_lock = threading.Lock()
+_ENTITY_NOTES_TTL = 90.0
+
+
+def _fetch_entity_notes(entity_type: str, entity_id: int, pages: int = 1) -> list[dict]:
+    eid = int(entity_id or 0)
+    etype = str(entity_type or "leads")
+    if not eid:
+        return []
+    pages = max(1, min(int(pages or 1), 3))
+    cache_key = (etype, eid, pages)
+    now = _time_module.monotonic()
+    with _entity_notes_lock:
+        cached = _entity_notes_cache.get(cache_key)
+        if cached and (now - cached[0] < _ENTITY_NOTES_TTL):
+            return list(cached[1])
     rows: list[dict] = []
     for page in range(1, pages + 1):
         try:
             resp = _http.get(
-                f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{int(entity_id)}/notes",
+                f"{KOMMO_BASE_URL}/api/v4/{etype}/{eid}/notes",
                 headers=HEADERS,
-                params={"limit": 250, "page": page, "order[created_at]": "desc"},
+                params={"limit": 50, "page": page, "order[created_at]": "desc"},
                 timeout=10,
             )
         except Exception as exc:
-            logger.warning("Deal notes %s/%s failed: %s", entity_type, entity_id, exc)
+            logger.warning("Deal notes %s/%s failed: %s", etype, eid, exc)
             break
         if resp.status_code == 204:
             break
         if resp.status_code != 200:
-            logger.warning("Deal notes %s/%s status %s", entity_type, entity_id, resp.status_code)
+            logger.warning("Deal notes %s/%s status %s", etype, eid, resp.status_code)
             break
         notes = resp.json().get("_embedded", {}).get("notes", []) or []
         if not notes:
             break
         for note in notes:
-            formatted = _format_deal_note(note, entity_type)
+            formatted = _format_deal_note(note, etype)
             if formatted:
                 rows.append(formatted)
-        if len(notes) < 250:
+        if len(notes) < 50:
             break
+    with _entity_notes_lock:
+        _entity_notes_cache[cache_key] = (now, rows)
     return rows
 
 
@@ -9562,7 +9581,22 @@ def _fetch_open_tasks_for_entities(entity_ids: list[int]) -> list[dict]:
     return rows
 
 
+_lead_talks_cache: dict[int, tuple[float, list[dict]]] = {}
+_lead_talks_cache_lock = threading.Lock()
+_LEAD_TALKS_CACHE_TTL = 60.0
+_lead_open_talk: dict[int, int] = {}
+_last_talk_tail_check: dict[int, float] = {}
+
+
 def _fetch_talks(lead_id: int, contact_ids: list[int] | None = None, *, include_contacts: bool = True) -> list[dict]:
+    lid = int(lead_id or 0)
+    now = _time_module.monotonic()
+    if lid:
+        with _lead_talks_cache_lock:
+            cached = _lead_talks_cache.get(lid)
+            if cached and (now - cached[0] < _LEAD_TALKS_CACHE_TTL):
+                return list(cached[1])
+
     talks: dict[int, dict] = {}
 
     def _ingest(params: dict) -> None:
@@ -9581,12 +9615,22 @@ def _fetch_talks(lead_id: int, contact_ids: list[int] | None = None, *, include_
                 continue
             talks[talk_id] = talk
 
-    _ingest({"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 50})
-    if include_contacts:
+    if lid:
+        _ingest({"filter[entity_id][]": lid, "filter[entity_type]": "lead", "limit": 50})
+    if not talks and include_contacts:
         for contact_id in contact_ids or []:
             _ingest({"filter[entity_id][]": int(contact_id), "filter[entity_type]": "contact", "limit": 50})
+            if talks:
+                break
             _ingest({"filter[contact_id][]": int(contact_id), "limit": 50})
-    return list(talks.values())
+            if talks:
+                break
+
+    res = list(talks.values())
+    if lid and res:
+        with _lead_talks_cache_lock:
+            _lead_talks_cache[lid] = (now, res)
+    return res
 
 
 def _talk_is_open(talk: dict) -> bool:
@@ -10517,9 +10561,12 @@ def _ffmpeg_voice_for_kommo(raw: bytes, filename: str) -> tuple[bytes, str, str]
 
 
 def _generate_ptt_filename() -> str:
-    now_str = _time_module.strftime("%Y%m%d", _time_module.gmtime())
-    seq = random.randint(1, 9999)
-    return f"PTT-{now_str}-WA{seq:04d}.opus"
+    try:
+        now_str = _time_module.strftime("%Y%m%d", _time_module.gmtime())
+        seq = random.randint(1, 9999)
+        return f"PTT-{now_str}-WA{seq:04d}.opus"
+    except Exception:
+        return "voice.opus"
 
 
 def _is_mp3_bytes(raw: bytes) -> bool:
@@ -12544,6 +12591,7 @@ def _collect_deal_chat(
     sender_digits: str = "",
     employee_name: str = "",
     pages: int | None = None,
+    link_media: bool = True,
 ) -> tuple[list[dict], bool, int, bool, list[dict], str]:
     """Load a merged timeline from all messenger talks; channel is the send target."""
     try:
@@ -12657,6 +12705,10 @@ def _collect_deal_chat(
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
+    if not reply_talk_id and channels:
+        reply_talk_id = int(channels[0].get("talk_id") or 0)
+    if lid and reply_talk_id:
+        _lead_open_talk[lid] = reply_talk_id
     pages = page_count
     page_limit = max(1, min(int(limit or 20), 50))
     talk_has_more = False
@@ -12695,7 +12747,8 @@ def _collect_deal_chat(
         preview_tail = list(_chat_open_preview.get(lid) or [])
     for tail_item in preview_tail:
         _add_chat(tail_item)
-    _link_missing_chat_media(chat, lid, contact_ids)
+    if link_media:
+        _link_missing_chat_media(chat, lid, contact_ids)
     for item in chat:
         txt = str(item.get("text") or "")
         if _message_is_voice(item) or _looks_audio_name(str(item.get("file_name") or "")) or _looks_audio_name(str(item.get("media_url") or "")):
@@ -13312,16 +13365,31 @@ def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict]
     return rows, skipped
 
 
+_entity_files_cache: dict[tuple[str, int], tuple[float, list[dict]]] = {}
+_entity_files_lock = threading.Lock()
+_ENTITY_FILES_TTL = 90.0
+
+
 def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
+    eid = int(entity_id or 0)
+    etype = str(entity_type or "leads")
+    if not eid:
+        return []
+    cache_key = (etype, eid)
+    now = _time_module.monotonic()
+    with _entity_files_lock:
+        cached = _entity_files_cache.get(cache_key)
+        if cached and (now - cached[0] < _ENTITY_FILES_TTL):
+            return list(cached[1])
     try:
         resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{int(entity_id)}/files",
+            f"{KOMMO_BASE_URL}/api/v4/{etype}/{eid}/files",
             headers=HEADERS,
             params={"limit": 50},
             timeout=10,
         )
     except Exception as exc:
-        logger.warning("Deal files %s/%s failed: %s", entity_type, entity_id, exc)
+        logger.warning("Deal files %s/%s failed: %s", etype, eid, exc)
         return []
     if resp.status_code != 200:
         return []
@@ -13352,6 +13420,8 @@ def _fetch_entity_files_as_chat(entity_type: str, entity_id: int) -> list[dict]:
             "file_uuid": uuid,
             "file_name": name,
         })
+    with _entity_files_lock:
+        _entity_files_cache[cache_key] = (now, rows)
     return rows
 
 
@@ -13542,7 +13612,7 @@ _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
 _chat_open_preview: dict[int, list] = {}
 _deal_chat_cache_lock = threading.Lock()
 _DEAL_CHAT_CACHE_TTL = 3.0
-_chat_collect_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deal-chat")
+_chat_collect_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="deal-chat")
 
 
 def _invalidate_deal_chat_cache(lead_id: int = 0) -> None:
@@ -13558,7 +13628,7 @@ def _invalidate_deal_chat_cache(lead_id: int = 0) -> None:
             _deal_chat_cache.pop(key, None)
 
 
-_CHAT_TAIL_KEEP = 8
+_CHAT_TAIL_KEEP = 15
 _chat_tail_warmed: set[int] = set()
 _chat_tail_queue: list[int] = []
 _chat_tail_queued: set[int] = set()
@@ -13703,6 +13773,7 @@ def _capture_incoming_tail(
         "file_uuid": file_uuid,
     })
     if talk:
+        _lead_open_talk[lid] = talk
         _schedule_talk_tail_refresh(lid, talk, origin)
 
 
@@ -13822,6 +13893,7 @@ def _warm_one_chat_tail(lead_id: int) -> None:
         int(lead_id),
         _contact_ids_from_cached_deal(lead_id),
         limit=_CHAT_TAIL_KEEP,
+        link_media=False,
     )
     if page:
         _store_chat_tail(lead_id, page)
@@ -14067,6 +14139,101 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
             "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
             "side_ready": lid in _deal_side_cache,
         })
+    if str(request.rel_url.query.get("tail") or "") == "1":
+        lid = int(lead.get("id") or lead_id)
+        talk_id = _lead_open_talk.get(lid) or 0
+        if not talk_id:
+            with _deal_chat_cache_lock:
+                for m in reversed(_chat_open_preview.get(lid) or []):
+                    if m.get("talk_id"):
+                        try:
+                            talk_id = int(m["talk_id"])
+                        except (TypeError, ValueError):
+                            talk_id = 0
+                        if talk_id:
+                            break
+        if not talk_id:
+            with _lead_talks_cache_lock:
+                cached_talks = (_lead_talks_cache.get(lid) or (0, []))[1]
+            if cached_talks:
+                ranked = _ranked_reply_talk_ids(cached_talks)
+                if ranked:
+                    talk_id = ranked[0]
+        now = _time_module.monotonic()
+        last_check = _last_talk_tail_check.get(lid, 0)
+        if talk_id and (now - last_check >= 2.0):
+            _last_talk_tail_check[lid] = now
+            _lead_open_talk[lid] = talk_id
+            try:
+                raw_msgs, _, _ = await asyncio.get_running_loop().run_in_executor(
+                    _chat_collect_executor,
+                    lambda: _fetch_talk_messages(talk_id, pages=1, page_limit=10),
+                )
+                if raw_msgs:
+                    formatted_new: list[dict] = []
+                    emp_name = employee_name_for_lead(lead)
+                    for rm in raw_msgs:
+                        f = _format_chat_message(rm, channel)
+                        if f:
+                            f["channel"] = channel
+                            f["talk_id"] = talk_id
+                            if not f.get("incoming") and not f.get("is_bot"):
+                                author = str(f.get("author") or "")
+                                if channel == "whatsapp" or _is_generic_chat_author(author):
+                                    f["author"] = emp_name or author
+                            formatted_new.append(f)
+                    if formatted_new:
+                        with _deal_chat_cache_lock:
+                            cur_prev = list(_chat_open_preview.get(lid) or [])
+                            merged_tail = _merge_tail_rows(cur_prev, formatted_new)
+                            _chat_open_preview[lid] = merged_tail[-_CHAT_TAIL_KEEP:]
+                        _invalidate_deal_chat_cache(lid)
+            except Exception as exc:
+                logger.warning("Tail talk check failed for lead %s: %s", lid, exc)
+        elif not talk_id and (now - last_check >= 4.0):
+            _last_talk_tail_check[lid] = now
+            try:
+                discovered_talks = await asyncio.get_running_loop().run_in_executor(
+                    _chat_collect_executor,
+                    lambda: _fetch_talks(lid, contact_ids, include_contacts=False),
+                )
+                if discovered_talks:
+                    ranked = _ranked_reply_talk_ids(discovered_talks)
+                    if ranked:
+                        talk_id = ranked[0]
+                        _lead_open_talk[lid] = talk_id
+            except Exception:
+                pass
+
+        remembered: list = []
+        with _deal_chat_cache_lock:
+            remembered = list(_chat_open_preview.get(lid) or [])[-_CHAT_TAIL_KEEP:]
+            if not remembered:
+                for key, cached in _deal_chat_cache.items():
+                    if not key or key[0] != lid:
+                        continue
+                    rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
+                    if rows:
+                        remembered = list(rows)[-_CHAT_TAIL_KEEP:]
+                        break
+        _overlay_sent_delivery(remembered, lid)
+        cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+        return web.json_response({
+            "success": True,
+            "tail": True,
+            "chat": remembered,
+            "has_more": True,
+            "chat_blocked": False,
+            "channel": channel,
+            "channels": [],
+            "reply_talk_id": talk_id or 0,
+            "can_reply": bool(talk_id) or cloud_ready,
+            "cloud_ready": cloud_ready,
+            "bot_stopped": _is_lead_bot_stopped(lid),
+            "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
+            "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
+            "side_ready": lid in _deal_side_cache,
+        })
     cache_key = (int(lead.get("id") or lead_id), channel, int(before or 0), str(sender_digits or ""), int(limit))
     now = _time_module.monotonic()
     with _deal_chat_cache_lock:
@@ -14087,6 +14254,9 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         ),
     )
     cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+    lid = int(lead.get("id") or lead_id)
+    if reply_talk_id and lid:
+        _lead_open_talk[lid] = int(reply_talk_id)
     payload = {
         "success": True,
         "chat": chat,
