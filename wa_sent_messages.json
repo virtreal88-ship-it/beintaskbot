@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790342532,
+    "at": 1790342567,
     "fields": [
       "messages"
     ]
@@ -1701,6 +1701,28 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSOEJGQkREMTA4QkY0Njk5RkI1AA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSOEJGQkREMTA4QkY0Njk5RkI1AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rüfət Həsənzadə",
+      "phone": "",
+      "text": "ok",
+      "message_type": "text",
+      "created_at": 1790342562,
+      "created": "25.09.2026 17:22",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU3NEQ0RkFGRjFCQUNFMUZEMDIxRDJFNTM2NjA3MjMA",
+      "reply_to_text": "Yaxshi",
+      "reply_to_author": "Nizami",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "read",
+      "via_cloud": true
     }
   ],
   "70974946": [
