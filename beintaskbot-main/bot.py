@@ -5547,6 +5547,7 @@ def record_lead_pulse_event(
     incoming_at: int = 0,
     wa_line: str = "",
     replaced_by: int = 0,
+    external_id: str = "",
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -5602,6 +5603,7 @@ def record_lead_pulse_event(
             "chat_channel": str(channel or ""),
             "wa_line": str(wa_line or ""),
             "replaced_by": int(replaced_by or 0),
+            "external_id": str(external_id or ""),
             "missing": bool(missing),
             "refresh": bool(refresh),
         })
@@ -6246,6 +6248,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
                 "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
+                "external_id": row.get("external_id") or "",
             })
     return {
         "success": True,
@@ -11295,14 +11298,14 @@ def _wa_download_graph_media(media_id: str) -> tuple[bytes, str]:
     if not url:
         return b"", ""
     try:
-        blob = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=40)
+        blob = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=90)
     except Exception as exc:
         logger.warning("WhatsApp media download failed: %s", exc)
         return b"", ""
     raw = blob.content or b""
     if blob.status_code != 200 or not raw:
         return b"", ""
-    if len(raw) <= 12 * 1024 * 1024:
+    if len(raw) <= 16 * 1024 * 1024:
         if len(_WA_MEDIA_BYTES) >= 40:
             _WA_MEDIA_BYTES.pop(next(iter(_WA_MEDIA_BYTES)), None)
         _WA_MEDIA_BYTES[media_id] = (raw, mime)
@@ -12609,11 +12612,41 @@ def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = Tru
     return int(lead_id or 0)
 
 
-def _already_have_wamid(lead_id: int, wamid: str) -> bool:
-    wanted = str(wamid or "")
+_WA_SEEN_WAMIDS: set[str] | None = None
+
+
+def _claim_wamid(wamid: str) -> bool:
+    """Keep one copy of a WhatsApp message. False means it was already shown."""
+    wanted = str(wamid or "").strip()
     if not wanted:
-        return False
-    return any(str(row.get("external_id") or "") == wanted for row in _sent_messages_for_lead(lead_id))
+        return True
+    global _WA_SEEN_WAMIDS
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        if _WA_SEEN_WAMIDS is None:
+            raw = store.get("_seen_wamids")
+            seen = {str(item) for item in raw} if isinstance(raw, list) else set()
+            for rows in store.values():
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if isinstance(row, dict):
+                        ext = str(row.get("external_id") or "").strip()
+                        if ext:
+                            seen.add(ext)
+            _WA_SEEN_WAMIDS = seen
+        if wanted in _WA_SEEN_WAMIDS:
+            return False
+        _WA_SEEN_WAMIDS.add(wanted)
+        if len(_WA_SEEN_WAMIDS) > 3000:
+            _WA_SEEN_WAMIDS = set(list(_WA_SEEN_WAMIDS)[-2500:])
+        store["_seen_wamids"] = list(_WA_SEEN_WAMIDS)
+    _schedule_sent_messages_save()
+    return True
+
+
+def _already_have_wamid(lead_id: int, wamid: str) -> bool:
+    return not _claim_wamid(wamid)
 
 
 def _update_cloud_status(wamid: str, status: str) -> None:
@@ -12759,6 +12792,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             contact_name=name or phone,
             phone=phone,
             wa_line=wa_line,
+            external_id=wamid,
         )
         _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
         if pending_id:
@@ -12867,7 +12901,9 @@ def _process_whatsapp_payload(payload: dict) -> None:
                 if field != "smb_app_state_sync":
                     _ingest_cloud_echoes(value)
                 continue
-            if field in {"messages", "history", ""} or value.get("messages") or value.get("statuses"):
+            if field == "history":
+                continue
+            if field in {"messages", ""} or value.get("messages") or value.get("statuses"):
                 _ingest_cloud_incoming(value)
 
 
@@ -12917,13 +12953,15 @@ def _clean_body_text(text: str) -> str:
 
 def _delivery_rank(status: str) -> int:
     text = str(status or "").strip().lower()
-    if text in {"error", "failed", "undelivered", "4", "-1"}:
-        return 4
     if text in {"read", "seen", "viewed", "3"}:
-        return 3
+        return 5
     if text in {"delivered", "1", "2"}:
+        return 4
+    if text in {"sent", "0"}:
+        return 3
+    if text in {"sending", "pending"}:
         return 2
-    if text in {"sent", "sending", "0"}:
+    if text in {"error", "failed", "undelivered", "4", "-1"}:
         return 1
     return 0
 
