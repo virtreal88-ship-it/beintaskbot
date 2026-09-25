@@ -12173,11 +12173,43 @@ def _wa_incoming_preview(message: dict) -> tuple[str, str]:
     return kind or "Mesaj", kind or "text"
 
 
+def _lead_id_from_overview_phone(phone: str) -> int:
+    """Match a WhatsApp sender to a deal already loaded in memory. No Kommo request."""
+    key = _wa_phone_key(phone)
+    if not key:
+        return 0
+    for overview in _personal_overview_cache.values():
+        deals = overview.get("deals") if isinstance(overview, dict) else None
+        if not isinstance(deals, list):
+            continue
+        for deal in deals:
+            if not isinstance(deal, dict):
+                continue
+            phones = []
+            if deal.get("phone"):
+                phones.append(deal.get("phone"))
+            if isinstance(deal.get("phones"), list):
+                phones.extend(deal.get("phones"))
+            if not any(_wa_phone_key(item) == key for item in phones):
+                continue
+            try:
+                lid = int(deal.get("id") or 0)
+            except (TypeError, ValueError):
+                lid = 0
+            if lid:
+                return lid
+    return 0
+
+
 def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True) -> int:
     if use_stored:
         stored = _lead_id_for_stored_phone(phone)
-        if stored and get_lead_details(stored):
+        if stored:
             return stored
+    cached_lead = _lead_id_from_overview_phone(phone)
+    if cached_lead:
+        _remember_phone_lead(phone, cached_lead)
+        return cached_lead
     lead_ids: list[int] = []
     contacts = search_contact_by_phone(phone)
     name = str(contact_name or "").strip() or phone
@@ -12866,7 +12898,7 @@ def _collect_deal_chat(
         chat.append(item)
 
     _channel_hit = _WA_CHANNEL_CACHE.get(int(lid)) if wanted == "whatsapp" else None
-    if _channel_hit and _time_module.monotonic() - _channel_hit[0] < 90:
+    if wanted == "whatsapp":
         talks = []
     else:
         talks = _fetch_talks(lid, contact_ids, include_contacts=True)
@@ -14352,6 +14384,28 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         })
     if str(request.rel_url.query.get("tail") or "") == "1":
         lid = int(lead.get("id") or lead_id)
+        if channel == "whatsapp":
+            rows = _sent_messages_for_lead(lid)
+            rows.sort(key=lambda item: int(item.get("created_at") or 0))
+            remembered = rows[-_CHAT_TAIL_KEEP:]
+            _overlay_sent_delivery(remembered, lid)
+            cloud_ready = _wa_cloud_ready(sender_digits)
+            return web.json_response({
+                "success": True,
+                "tail": True,
+                "chat": remembered,
+                "has_more": len(rows) > _CHAT_TAIL_KEEP,
+                "chat_blocked": False,
+                "channel": channel,
+                "channels": [],
+                "reply_talk_id": 0,
+                "can_reply": cloud_ready,
+                "cloud_ready": cloud_ready,
+                "bot_stopped": _is_lead_bot_stopped(lid),
+                "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
+                "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
+                "side_ready": lid in _deal_side_cache,
+            })
         talk_id = _lead_open_talk.get(lid) or 0
         if not talk_id:
             with _deal_chat_cache_lock:
@@ -14882,7 +14936,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         return err
     sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
     use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
-    reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
+    if use_cloud:
+        reply_talk_id, reply_chat_id = 0, ""
+    else:
+        reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id and not use_cloud:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
     wa_quote_id = _first_wamid(reply_external, reply_to_message_id)
@@ -14915,7 +14972,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     sent_via_cloud = False
     sent_text = text
     sent_type = "text"
-    if use_cloud and (wa_quote_id or not want_quote):
+    cloud_quote = wa_quote_id if str(wa_quote_id or "").lower().startswith("wamid") else ""
+    if use_cloud:
         ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
             _deliver_via_cloud,
             lead,
@@ -14923,10 +14981,22 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             upload_raw,
             upload_name,
             upload_type,
-            wa_quote_id,
+            cloud_quote,
             sender_digits,
         )
         sent_via_cloud = ok
+        if not ok and cloud_quote and "24 saat" not in str(last_error or ""):
+            ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
+                _deliver_via_cloud,
+                lead,
+                text,
+                upload_raw,
+                upload_name,
+                upload_type,
+                "",
+                sender_digits,
+            )
+            sent_via_cloud = ok
     if not ok and reply_talk_id and channel != "whatsapp":
         kommo_text = text
         if upload_raw and not kommo_text:
@@ -15000,18 +15070,6 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                     sent_text = fallback_text
                 elif kommo_error and not last_error:
                     last_error = kommo_error
-    if not ok and use_cloud:
-        ok, last_error, sent_wamid, sent_type = await asyncio.to_thread(
-            _deliver_via_cloud,
-            lead,
-            text,
-            upload_raw,
-            upload_name,
-            upload_type,
-            wa_quote_id,
-            sender_digits,
-        )
-        sent_via_cloud = ok
     if not ok:
         detail = last_error
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():

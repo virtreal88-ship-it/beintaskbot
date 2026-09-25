@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="283">
+    <meta name="pwa-build" content="284">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -6237,7 +6237,7 @@ function startDealNoteInlineEdit(deal, btn) {
 }
 function startDealChatPolling() {
     stopDealChatPolling();
-    _dealChatPollTimer = setInterval(pollDealChat, 3500);
+    _dealChatPollTimer = setInterval(pollDealChat, 1500);
 }
 function bindDealChatThread() {
     const thread = document.getElementById('deal-chat-thread');
