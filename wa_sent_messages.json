@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790340380,
+    "at": 1790340386,
     "fields": [
       "messages"
     ]
@@ -1515,6 +1515,30 @@
     }
   ],
   "74547175": [
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhgWM0VCMDdGRkZDODZCMjI5N0ZGNjY3RQA=",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhgWM0VCMDdGRkZDODZCMjI5N0ZGNjY3RQA=",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "📷 Şəkil",
+      "message_type": "picture",
+      "created_at": 1790340236,
+      "created": "25.09.2026 16:43",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "/api/wa/media/2598358430635710",
+      "file_uuid": "",
+      "file_name": "photo.jpg",
+      "delivery_status": "",
+      "via_cloud": true
+    }
+  ],
+  "78043333": [
     {
       "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhgWM0VCMDdGRkZDODZCMjI5N0ZGNjY3RQA=",
       "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhgWM0VCMDdGRkZDODZCMjI5N0ZGNjY3RQA=",
