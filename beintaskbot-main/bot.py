@@ -6175,6 +6175,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             "stage_key": str(row.get("stage_key") or ""),
             "contact_name": deal.get("contact_name") or row.get("contact_name") or "",
             "phone": deal.get("phone") or row.get("phone") or "",
+            "missing": bool(row.get("missing")),
         })
         if lid not in seen_chats and (row.get("last_client_message") or row.get("chat_channel")):
             seen_chats.add(lid)
@@ -11338,11 +11339,32 @@ def _remember_sent_message(lead_id: int, item: dict) -> None:
         pass
 
 
+def _canonical_wa_lead_id(lead_id: int) -> int:
+    try:
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not lid:
+        return 0
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        alias = store.get("_lead_alias")
+        if isinstance(alias, dict):
+            try:
+                mapped = int(alias.get(str(lid)) or 0)
+            except (TypeError, ValueError):
+                mapped = 0
+            if mapped and mapped != lid:
+                return mapped
+    return lid
+
+
 def _sent_messages_for_lead(lead_id: int) -> list[dict]:
     try:
+        lid = _canonical_wa_lead_id(lead_id)
         store = _load_sent_messages()
         with _wa_sent_lock:
-            rows = store.get(str(int(lead_id or 0)))
+            rows = store.get(str(int(lid or 0)))
             if not isinstance(rows, list):
                 return []
             return [dict(row) for row in rows if isinstance(row, dict)]
@@ -12236,6 +12258,81 @@ def _lead_id_from_overview_phone(phone: str) -> int:
     return 0
 
 
+def _fast_cloud_lead(phone: str) -> int:
+    return _lead_id_for_stored_phone(phone) or _lead_id_from_overview_phone(phone)
+
+
+def _pending_wa_lead_id(phone: str) -> int:
+    digits = _wa_phone_key(phone)
+    if not digits.isdigit():
+        return 0
+    return 9_000_000_000_000 + int(digits[-12:])
+
+
+def _rekey_wa_lead(old_id: int, new_id: int) -> None:
+    try:
+        old = int(old_id or 0)
+        new = int(new_id or 0)
+    except (TypeError, ValueError):
+        return
+    if not old or not new or old == new:
+        return
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        alias = store.get("_lead_alias")
+        if not isinstance(alias, dict):
+            alias = {}
+            store["_lead_alias"] = alias
+        alias[str(old)] = new
+        old_rows = store.get(str(old))
+        if not isinstance(old_rows, list):
+            old_rows = []
+        new_rows = store.get(str(new))
+        if not isinstance(new_rows, list):
+            new_rows = []
+        seen = {str(row.get("external_id") or row.get("id") or "") for row in new_rows if isinstance(row, dict)}
+        for row in old_rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("external_id") or row.get("id") or "")
+            if key and key in seen:
+                continue
+            new_rows.append(row)
+        store[str(new)] = new_rows[-_WA_SENT_PER_LEAD:]
+        store.pop(str(old), None)
+    _schedule_sent_messages_save()
+
+
+def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str, pending_id: int) -> None:
+    try:
+        real_id = _resolve_cloud_lead(phone, contact_name, sender_phone_id=sender_phone_id)
+    except Exception as exc:
+        logger.warning("Background cloud lead resolve failed phone=%s: %s", phone, exc)
+        return
+    try:
+        real = int(real_id or 0)
+        pending = int(pending_id or 0)
+    except (TypeError, ValueError):
+        return
+    if not real or real == pending:
+        return
+    _remember_phone_lead(phone, real)
+    _rekey_wa_lead(pending, real)
+    rows = _sent_messages_for_lead(real)
+    newest = rows[-1] if rows else {}
+    record_lead_pulse_event(
+        real,
+        "incoming_message",
+        preview=str(newest.get("text") or ""),
+        incoming_at=int(newest.get("created_at") or 0),
+        channel="whatsapp",
+        contact_name=contact_name,
+        phone=phone,
+        pipeline_id=int(NIZAMI_PIPELINE_ID) if str(sender_phone_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID),
+    )
+    record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone)
+
+
 def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True, sender_phone_id: str = "") -> int:
     if use_stored:
         stored = _lead_id_for_stored_phone(phone)
@@ -12387,7 +12484,11 @@ def _ingest_cloud_incoming(value: dict) -> None:
         except (TypeError, ValueError):
             created = 0
         context = message.get("context") if isinstance(message.get("context"), dict) else {}
-        lead_id = _resolve_cloud_lead(phone, name, sender_phone_id=phone_number_id)
+        lead_id = _fast_cloud_lead(phone)
+        pending_id = 0
+        if not lead_id:
+            pending_id = _pending_wa_lead_id(phone)
+            lead_id = pending_id
         if not lead_id:
             logger.warning("WhatsApp incoming has no lead phone=%s", phone)
             continue
@@ -12413,11 +12514,6 @@ def _ingest_cloud_incoming(value: dict) -> None:
         item["target_pipeline"] = target_pipe
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
-        try:
-            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone)
-            _patch_cloud_inbox_into_rufat_cache()
-        except Exception:
-            pass
         _invalidate_deal_chat_cache(lead_id)
         record_lead_pulse_event(
             lead_id,
@@ -12426,10 +12522,22 @@ def _ingest_cloud_incoming(value: dict) -> None:
             incoming_at=created,
             channel="whatsapp",
             pipeline_id=target_pipe,
-            contact_name=name,
+            contact_name=name or phone,
             phone=phone,
         )
-        _notify_cloud_chat_incoming(lead_id, name, preview, phone)
+        _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone)
+        if pending_id:
+            threading.Thread(
+                target=_bind_pending_cloud_lead,
+                args=(phone, name, phone_number_id, pending_id),
+                daemon=True,
+            ).start()
+        else:
+            try:
+                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe)
+            except Exception:
+                pass
+            threading.Thread(target=_patch_cloud_inbox_into_rufat_cache, daemon=True).start()
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
         _WA_LAST_HOOK["lead"] = int(lead_id)

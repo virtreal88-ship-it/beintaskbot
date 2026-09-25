@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="288">
+    <meta name="pwa-build" content="289">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9164,11 +9164,17 @@ async function pollInboxPulse() {
 
             // Incremental sync for affected deals from webhook / bot action events
             if(!isFirstPulse) {
-                const events = Array.isArray(payload.events) ? payload.events : [];
-                const openId = _dealViewState ? String(_dealViewState.id) : '';
+            const events = Array.isArray(payload.events) ? payload.events : [];
+            events.forEach(event => {
+                if(!event || !event.missing || !event.lead_id) return;
+                const before = samilDeals.length;
+                samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
+                if(samilDeals.length !== before && chatsOpen) renderChatsList();
+            });
+            const openId = _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && events.some(event => event && String(event.lead_id) === openId)) pollDealChat(true);
                 if(events.length) {
-                    const uniqueLids = [...new Set(events.map(e => e && e.lead_id).filter(Boolean))];
+                    const uniqueLids = [...new Set(events.filter(e => e && !e.missing).map(e => e.lead_id).filter(Boolean))];
                     uniqueLids.forEach(lid => {
                         const ev = events.find(e => String(e.lead_id) === String(lid));
                         syncSingleDealIncremental(lid, ev);
