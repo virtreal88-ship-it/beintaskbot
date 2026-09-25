@@ -353,7 +353,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790337674,
+    "at": 1790337756,
     "fields": [
       "messages"
     ]
@@ -1305,7 +1305,7 @@
       "media_url": "",
       "file_uuid": "450557a8-558b-417d-949a-892dd44c41f7",
       "file_name": "",
-      "delivery_status": "delivered",
+      "delivery_status": "read",
       "via_cloud": true
     }
   ]
