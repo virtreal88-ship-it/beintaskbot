@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="286">
+    <meta name="pwa-build" content="287">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -809,8 +809,8 @@
     </div>
     <div class="sidebar-brand">
         <div class="sidebar-brand-text">
-            <h1>Bein Systems</h1>
-            <span>CRM</span>
+        <h1>Bein Systems</h1>
+        <span>CRM</span>
         </div>
     </div>
     <div class="sidebar-nav">
@@ -847,8 +847,8 @@
 <!-- HEADER (mobile/tablet only) -->
 <div id="mobile-header" class="text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
     <div class="flex items-center gap-2">
-        <div>
-            <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
+    <div>
+        <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
             <span class="text-[10px] text-gray-300">CRM Smart Assistant</span>
         </div>
     </div>
@@ -939,7 +939,7 @@
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                         </span>
-                    </div>
+        </div>
                     <div id="chats-search-wrap" class="search-expand">
                         <input id="chats-search" class="chats-search" type="search" placeholder="Axtar..." aria-label="Axtar" autocomplete="off">
                         <button type="button" class="search-close" aria-label="Bağla">×</button>
@@ -950,7 +950,7 @@
                     <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-pressed="true">Hamısı</button>
                     <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış <span id="chats-unread-count" class="chats-filter-count">0</span></button>
                     <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
-                </div>
+            </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
             <section id="chats-pane" class="chats-pane"></section>
@@ -5277,15 +5277,16 @@ function paintDealOlderBar() {
 }
 function scrollChatToBottom(thread, smooth) {
     if(!thread) return;
-    if(smooth) {
-        thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
-    } else {
+    const pin = () => {
+        if(!thread) return;
         thread.scrollTop = thread.scrollHeight;
-    }
-    requestAnimationFrame(() => {
-        if(thread) thread.scrollTop = thread.scrollHeight;
-        setTimeout(() => { if(thread) thread.scrollTop = thread.scrollHeight; }, 60);
-    });
+    };
+    pin();
+    if(smooth) thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
+    requestAnimationFrame(pin);
+    setTimeout(pin, 60);
+    setTimeout(pin, 180);
+    setTimeout(pin, 360);
 }
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
@@ -6263,13 +6264,13 @@ function bindDealChatThread() {
     thread.addEventListener('scroll', () => {
         if(!_dealViewState || _dealViewState.loading || _dealViewState.loadingOlder || _dealViewState.pinning) return;
         const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
-        if(gap < 60) {
+        if(gap < 80) {
             _dealViewState.anchored = true;
             _dealViewState.atBottom = true;
-        } else if(gap > 120) {
+        } else if(gap > 180) {
             _dealViewState.atBottom = false;
         }
-        if(_dealViewState.atBottom || gap < 120 || thread.scrollTop > 30) return;
+        if(_dealViewState.atBottom || thread.scrollTop < 120) return;
         loadOlderDealChat(true);
     });
 }
@@ -7583,6 +7584,7 @@ function paintDealViewModal(deal, readonly, opts) {
     bindDealChatThread();
     bindDealSideActions(deal);
     bindAudioWait(root);
+    scrollChatToBottom(document.getElementById('deal-chat-thread'), false);
     if(!readonly && !deal.outbox) {
         loadDealChatLatest();
         startDealChatPolling();

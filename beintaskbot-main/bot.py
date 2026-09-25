@@ -14395,18 +14395,33 @@ def _lead_contact_ids(lead: dict) -> list[int]:
 def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
     contact_ids: list[int] = []
     phones: list[str] = []
+
+    def _add(raw) -> None:
+        value = str(raw or "").strip()
+        if value and value not in phones:
+            phones.append(value)
+
+    if isinstance(lead, dict):
+        _add(lead.get("phone"))
+        extra = lead.get("phones")
+        if isinstance(extra, list):
+            for item in extra:
+                _add(item)
     for linked in (lead.get("_embedded") or {}).get("contacts") or []:
         if not isinstance(linked, dict):
             continue
         try:
             cid = int(linked.get("id"))
         except (TypeError, ValueError):
-            continue
-        contact_ids.append(cid)
-        full = get_contact_details(cid) or linked
-        for phone in _contact_phones(full):
-            if phone not in phones:
-                phones.append(phone)
+            cid = 0
+        if cid:
+            contact_ids.append(cid)
+        for phone in _contact_phones(linked):
+            _add(phone)
+        if cid and not phones:
+            full = get_contact_details(cid) or {}
+            for phone in _contact_phones(full):
+                _add(phone)
     return contact_ids, phones
 
 
@@ -16986,10 +17001,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    try:
-        await asyncio.to_thread(_process_whatsapp_payload, payload)
-    except Exception as exc:
-        logger.warning("WhatsApp webhook failed: %s", exc)
+    asyncio.create_task(asyncio.to_thread(_process_whatsapp_payload, payload))
     return web.Response(text="ok")
 
 
