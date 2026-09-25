@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="298">
+    <meta name="pwa-build" content="299">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -8907,6 +8907,12 @@ function collapseSamePhoneChats(deals) {
             return;
         }
         const at = index.get(digits);
+        const keptLine = String(out[at] && out[at].wa_line || '');
+        const nextLine = String(deal.wa_line || '');
+        if(keptLine && nextLine && keptLine !== nextLine) {
+            out.push(deal);
+            return;
+        }
         out[at] = preferWaDeal(out[at], deal);
     });
     return out;
@@ -9300,8 +9306,14 @@ function dealByWaPhone(phone) {
 }
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
+    const incomingLine = String(row.wa_line || '');
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
-    if(!deal && row.phone) deal = dealByWaPhone(row.phone);
+    if(!deal && row.phone) {
+        const byPhone = dealByWaPhone(row.phone);
+        const phoneLine = String(byPhone && byPhone.wa_line || '');
+        const otherLine = !!(incomingLine && phoneLine && incomingLine !== phoneLine);
+        if(byPhone && !otherLine) deal = byPhone;
+    }
     if(!deal) {
         if(row.wa_line && viewerWaLine() && row.wa_line !== viewerWaLine()) return false;
         deal = {
@@ -9490,7 +9502,9 @@ async function pollInboxPulse() {
         const payload = await response.json().catch(() => ({}));
         if(response.ok && payload.success) {
             const rev = Number(payload.rev || 0);
-            const isFirstPulse = (_inboxPulseRev === 0);
+            const prevRev = Number(_inboxPulseRev || 0);
+            const isFirstPulse = prevRev === 0;
+            const cursorAhead = prevRev > rev;
             _inboxPulseRev = rev;
             try { sessionStorage.setItem('crm_pulse_rev', String(rev)); } catch(_e) {}
 
@@ -9541,7 +9555,7 @@ async function pollInboxPulse() {
             uniqueWarm.slice(0, 5).forEach(lid => prewarmChat(lid));
 
             // Incremental sync for affected deals from webhook / bot action events
-            if(!isFirstPulse) {
+            if(!isFirstPulse && !cursorAhead) {
             const events = Array.isArray(payload.events) ? payload.events : [];
             events.forEach(event => {
                 if(!event || !event.missing || !event.lead_id) return;

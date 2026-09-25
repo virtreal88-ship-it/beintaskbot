@@ -6216,9 +6216,28 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
     with _inbox_pulse_lock:
         rev = int(_inbox_pulse_rev)
         asked = int(since_rev or 0)
-        if asked > rev:
-            asked = 0
-        fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > asked]
+        queued = list(_inbox_pulse_events)
+    # A browser counter ahead of this process means the worker restarted.
+    # Replaying the whole queue deletes a brand-new dialog and stalls replies.
+    # Hand back only the newest incoming chat per lead, then follow `rev`.
+    if asked > rev:
+        fresh = []
+        seen_ids: set[int] = set()
+        for row in reversed(queued):
+            if str(row.get("type") or "") != "incoming_message" or row.get("missing"):
+                continue
+            try:
+                lid = int(row.get("lead_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not lid or lid in seen_ids:
+                continue
+            if not (row.get("last_client_message") or row.get("chat_channel")):
+                continue
+            seen_ids.add(lid)
+            fresh.append(row)
+    else:
+        fresh = [row for row in queued if int(row.get("rev") or 0) > asked]
     chats = []
     events = []
     seen_chats: set[int] = set()
@@ -15554,13 +15573,15 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if use_cloud:
         if not is_funnel_chat(chat_id) and not is_admin(chat_id):
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
-        known_phones = _phones_for_wa_lead(lead_id)
         hinted_customer = str(hinted_customer or "").strip()
-        if hinted_customer and hinted_customer not in known_phones:
-            known_phones.insert(0, hinted_customer)
+        # The number in the chat header is enough. Do not scan stored chats
+        # or wait on Kommo before the WhatsApp call.
+        if hinted_customer:
+            known_phones = [hinted_customer]
+        else:
+            known_phones = await asyncio.to_thread(_phones_for_wa_lead, lead_id)
         if not known_phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
-        _remember_phone_lead(known_phones[0], lead_id)
         lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
     else:
         lead, err = _authorized_deal_lead(chat_id, lead_id)
@@ -15727,6 +15748,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
         sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
         _remember_sent_message(int(lead.get("id") or lead_id), sent_item)
+        _remember_phone_lead(str((lead.get("phones") or [""])[0] or ""), int(lead.get("id") or lead_id))
     sent_row = {
         "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
         "external_id": str(sent_wamid or ""),
