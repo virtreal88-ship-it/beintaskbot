@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="293">
+    <meta name="pwa-build" content="292">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -414,9 +414,6 @@
         .photo-wait.failed .photo-miss { display:block; }
         .photo-wait.loading .audio-spin { display:block; }
         .photo-wait.loading .photo-miss { display:none; }
-        .wa-video-wait { display:flex; align-items:center; gap:8px; min-width:180px; min-height:96px; margin-top:6px; padding:10px 12px; border-radius:12px; background:#0f172a; color:#fff; }
-        .wa-video-play { width:42px; height:42px; border:0; border-radius:50%; background:#25D366; color:#fff; font-size:16px; }
-        .wa-video-pct { font-size:13px; font-weight:700; }
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
@@ -3672,7 +3669,7 @@ function showCachedPhoto(wrap) {
     wrap.classList.remove('failed', 'loading');
     return true;
 }
-async function fetchMediaBlob(url, onProgress) {
+async function fetchMediaBlob(url) {
     try {
         const idbBlob = await idbGet('media', url);
         if(idbBlob && idbBlob.size > 0 && !String(idbBlob.type || '').startsWith('text/')) {
@@ -3694,26 +3691,7 @@ async function fetchMediaBlob(url, onProgress) {
     }
     const response = await fetch(url, {headers: authFetchHeaders()});
     if(!response.ok) throw new Error('fail');
-    const total = Number(response.headers.get('content-length') || 0);
-    let blob;
-    if(response.body && typeof onProgress === 'function') {
-        const reader = response.body.getReader();
-        const chunks = [];
-        let loaded = 0;
-        while(true) {
-            const step = await reader.read();
-            if(step.done) break;
-            chunks.push(step.value);
-            loaded += step.value.length;
-            const pct = total ? Math.min(99, Math.round(loaded * 100 / total)) : Math.min(95, 5 + Math.round(loaded / 150000));
-            onProgress(pct);
-        }
-        const typeHint = String(response.headers.get('content-type') || 'application/octet-stream').split(';')[0];
-        blob = new Blob(chunks, {type: typeHint});
-        onProgress(100);
-    } else {
-        blob = await response.blob();
-    }
+    const blob = await response.blob();
     const type = String(blob.type || '');
     if(!blob.size || type.startsWith('text/')) throw new Error('fail');
     if('caches' in window) {
@@ -3800,45 +3778,13 @@ function dropAudioCache(wrap, audio) {
         try { audio.removeAttribute('src'); audio.load(); } catch(_err) {}
     }
 }
-async function fetchAudioObjectUrl(wrap, onProgress) {
+async function fetchAudioObjectUrl(wrap) {
     const src = wrap.getAttribute('data-src') || mediaLookupUrl(wrap, 'audio');
-    const blob = await fetchMediaBlob(src, onProgress);
+    const blob = await fetchMediaBlob(src);
     return URL.createObjectURL(blob);
-}
-function bindVideoWait(root) {
-    (root || document).querySelectorAll('.wa-video-wait').forEach(wrap => {
-        if(wrap.dataset.bound) return;
-        wrap.dataset.bound = '1';
-        const pctEl = wrap.querySelector('.wa-video-pct');
-        const btn = wrap.querySelector('.wa-video-play');
-        if(!btn) return;
-        btn.onclick = async event => {
-            event.preventDefault();
-            event.stopPropagation();
-            if(wrap.dataset.loading === '1') return;
-            wrap.dataset.loading = '1';
-            try {
-                const blob = await fetchMediaBlob(wrap.getAttribute('data-src') || '', pct => {
-                    if(pctEl) pctEl.textContent = pct + '%';
-                });
-                const url = URL.createObjectURL(blob);
-                const video = document.createElement('video');
-                video.controls = true;
-                video.playsInline = true;
-                video.src = url;
-                video.style.cssText = 'max-width:240px;border-radius:12px;margin-top:6px';
-                wrap.replaceWith(video);
-                video.play().catch(() => {});
-            } catch(_err) {
-                wrap.dataset.loading = '';
-                if(pctEl) pctEl.textContent = 'Yenidən';
-            }
-        };
-    });
 }
 function bindAudioWait(root) {
     bindPhotoWait(root);
-    bindVideoWait(root);
     (root || document).querySelectorAll('.wa-audio-player, .audio-wait').forEach(wrap => {
         if(wrap.dataset.bound) return;
         wrap.dataset.bound = '1';
@@ -3910,16 +3856,13 @@ function bindAudioWait(root) {
                 stopAllOtherAudios(audio);
                 if(timeEl) {
                     wrap.dataset.prevTime = timeEl.textContent || '';
-                    timeEl.textContent = '0%';
+                    timeEl.textContent = 'Yüklənir...';
                 }
 
                 let url = _mediaBlobs.get(key) || '';
                 try {
                     if(!url) {
-                        url = await fetchAudioObjectUrl(wrap, pct => {
-                            if(timeEl) timeEl.textContent = pct + '%';
-                            if(bar) bar.style.width = pct + '%';
-                        });
+                        url = await fetchAudioObjectUrl(wrap);
                         _mediaBlobs.set(key, url);
                     }
                     audio.pause();
@@ -4217,7 +4160,7 @@ function dealMediaBlock(item, token) {
         return photoWaitHtml(src, item);
     }
     if(isCall) return audioWaitHtml(src, item);
-    if(type === 'video') return `<div class="wa-video-wait" data-src="${safe}"><button type="button" class="wa-video-play">▶</button><span class="wa-video-pct">0%</span></div>`;
+    if(type === 'video') return `<video controls preload="auto" src="${safe}" style="max-width:240px;border-radius:12px;margin-top:6px"></video>`;
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
@@ -4715,11 +4658,10 @@ function chatMessageKey(item) {
 }
 function deliveryRank(status) {
     const st = String(status || '').toLowerCase();
-    if(st === 'read' || st === 'seen' || st === '3') return 5;
-    if(st === 'delivered' || st === '1' || st === '2') return 4;
-    if(st === 'sent' || st === '0') return 3;
-    if(st === 'sending' || st === 'pending') return 2;
-    if(st === 'error' || st === 'failed' || st === 'undelivered' || st === '4' || st === '-1') return 1;
+    if(st === 'error' || st === 'failed' || st === 'undelivered' || st === '4' || st === '-1') return 4;
+    if(st === 'read' || st === 'seen' || st === '3') return 3;
+    if(st === 'delivered' || st === '1' || st === '2') return 2;
+    if(st === 'sent' || st === '0' || st === 'sending') return 1;
     return 0;
 }
 function cleanMessageText(text) {
@@ -5583,9 +5525,7 @@ function livePreviewRow(deal) {
         incoming: true,
         text,
         created_at: at || Math.floor(Date.now() / 1000),
-        channel: deal.chat_channel || 'whatsapp',
-        external_id: deal.last_wamid || '',
-        phone: deal.phone || ''
+        channel: deal.chat_channel || 'whatsapp'
     };
 }
 function withLivePreview(rows, deal) {
@@ -7377,8 +7317,7 @@ async function sendDealChatMessage(fileArg) {
         paintDealChatThread({stickBottom: true, force: false});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
-            if(err && err.name === 'AbortError') optimisticMsg.delivery_status = 'sent';
-            else optimisticMsg.delivery_status = 'error';
+            optimisticMsg.delivery_status = 'error';
             paintDealChatThread({stickBottom: false, force: true});
             if(input && !input.value) {
                 input.value = savedInputText;
@@ -7393,7 +7332,7 @@ async function sendDealChatMessage(fileArg) {
                 }
             }
             keepSentChatVisible(leadId);
-            if(!(err && err.name === 'AbortError')) toast(err.message || 'Göndərilmədi', true);
+            toast(err && err.name === 'AbortError' ? 'Göndərmə gecikdi, yenidən basın' : (err.message || 'Göndərilmədi'), true);
         }
     } finally {
         window.clearTimeout(slow);
@@ -9116,7 +9055,6 @@ function applyInboxPulseRow(row) {
             chat_at: Number(row.chat_at || row.last_incoming_at || 0),
             chat_channel: row.chat_channel || 'whatsapp',
             wa_line: row.wa_line || '',
-            last_wamid: row.external_id || '',
             updated_at: Number(row.last_incoming_at || 0),
             inbox_only: true,
             tasks: []
@@ -9135,7 +9073,6 @@ function applyInboxPulseRow(row) {
     if(row.chat_at) deal.chat_at = Number(row.chat_at) || deal.chat_at;
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
     if(row.wa_line) deal.wa_line = row.wa_line;
-    if(row.external_id) deal.last_wamid = row.external_id;
     return true;
 }
 
