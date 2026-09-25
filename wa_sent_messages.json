@@ -113,7 +113,7 @@
     "994102135102": 67455220,
     "994555555181": 75311001,
     "994503025040": 77967437,
-    "994505394934": 77784640,
+    "994505394934": 77784610,
     "994514571643": 77495455,
     "994553708106": 77967687,
     "994512339930": 77967713,
@@ -206,7 +206,7 @@
     "994703019609": 77992437,
     "994558219058": 70993268,
     "994702222181": 78005569,
-    "994102135103": 78022515,
+    "994102135103": 74547175,
     "994552158229": 77452293,
     "994508552988": 67407438,
     "994553566969": 76476261,
@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790364313,
+    "at": 1790364374,
     "fields": [
       "messages"
     ]
@@ -2067,6 +2067,30 @@
       "message_type": "text",
       "created_at": 1790357321,
       "created": "25.09.2026 21:28",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTUwMkFFMzYyRENDNzA0MTUwMjY4QUU0QzBDRDUxMzcA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTUwMkFFMzYyRENDNzA0MTUwMjY4QUU0QzBDRDUxMzcA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "1",
+      "message_type": "text",
+      "created_at": 1790364252,
+      "created": "25.09.2026 23:24",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
