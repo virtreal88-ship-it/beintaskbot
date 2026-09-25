@@ -5444,11 +5444,17 @@ function instantChatRows(deal, remembered) {
         preview: true
     }];
 }
-async function fetchDealChatTail() {
+async function fetchDealChatTail(isPolling = false) {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
-    const q = new URLSearchParams({lead_id: String(leadId), preview: '1', _ts: String(Date.now())});
+    const params = {lead_id: String(leadId), _ts: String(Date.now())};
+    if(isPolling) {
+        params.tail = '1';
+    } else {
+        params.preview = '1';
+    }
+    const q = new URLSearchParams(params);
     const channel = _dealViewState.channel || '';
     if(channel) q.set('channel', channel);
     const response = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
@@ -5572,6 +5578,16 @@ async function loadDealChatLatest() {
     _dealViewState.messages = hasRealInstant ? instant : [];
     paintDealChatThread({stickBottom: true});
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    if(!hasRealInstant) {
+        fetchDealChatTail(false).then(tail => {
+            if(tail && tail.success && !tail.stale && requestMatchesDeal(seq, deal && deal.id)) {
+                applyDealSidePreview(tail);
+                if(Array.isArray(tail.channels) && tail.channels.length) applyDealChannels(tail.channels);
+                const rows = Array.isArray(tail.chat) ? tail.chat.filter(row => row && !row.preview) : [];
+                if(rows.length) applyDealChatTail(seq, deal && deal.id, rows);
+            }
+        }).catch(() => {});
+    }
     let painted = false;
     try {
         const page = await fetchDealChatPage();
@@ -5625,7 +5641,8 @@ async function loadOlderDealChat(quiet) {
 }
 let _lastDealChatFullPoll = 0;
 async function pollDealChat(forceFull = false) {
-    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly || _dealViewState.loading) return;
+    if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly) return;
+    if(_dealViewState.loading && !forceFull) return;
     const seq = _dealViewState.seq;
     const now = Date.now();
     const shouldFull = forceFull || (now - _lastDealChatFullPoll > 10000);
@@ -5638,18 +5655,20 @@ async function pollDealChat(forceFull = false) {
                 return;
             }
         }
-        const d = await fetchDealChatTail();
+        const d = await fetchDealChatTail(true);
         if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
         applyDealSidePreview(d);
         _dealViewState.blocked = !!d.chat_blocked;
         applyChatDelivery(_dealViewState.messages, d.chat);
         dropMatchedLocalVoices(d.chat);
+        const prevCount = (_dealViewState.messages || []).length;
         _dealViewState.messages = dropTailStubs(mergeDealChat(_dealViewState.messages, d.chat, false));
         rememberOpenedChat(_dealViewState.id, _dealViewState.channel, _dealViewState.messages);
         if(Array.isArray(d.channels) && d.channels.length) applyDealChannels(d.channels);
         const thread = document.getElementById('deal-chat-thread');
         const nearBottom = thread ? (thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80) : true;
-        paintDealChatThread({stickBottom: nearBottom});
+        const hasNew = (_dealViewState.messages || []).length > prevCount;
+        paintDealChatThread({stickBottom: nearBottom || hasNew});
         markDealChatRead(false);
     } catch(_err) {}
 }
@@ -9061,7 +9080,7 @@ async function pollInboxPulse() {
                 if(chatsOpen) renderChatsList();
                 const freshIds = new Set((Array.isArray(payload.events) ? payload.events : []).filter(event => event && event.type === 'incoming_message').map(event => String(event.lead_id)));
                 watchIncomingChats(freshIds);
-                const openId = _dealInboxMode && _dealViewState ? String(_dealViewState.id) : '';
+                const openId = _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && rows.some(row => String(row.id) === openId)) pollDealChat(true);
             }
 
@@ -10114,7 +10133,7 @@ async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
   if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=286');
+    const reg = await navigator.serviceWorker.register('sw.js?v=287');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
