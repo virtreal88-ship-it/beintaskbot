@@ -1636,5 +1636,29 @@
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
     }
+  ],
+  "77967731": [
+    {
+      "id": "wa-wamid.HBgMOTk0NTE2NTIzMTU2FQIAERgSODA2NEUwMUUyRjIwNTdBOTVBAA==",
+      "external_id": "wamid.HBgMOTk0NTE2NTIzMTU2FQIAERgSODA2NEUwMUUyRjIwNTdBOTVBAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rasim Əsgərov",
+      "phone": "",
+      "text": "Salam . Adım *Rüfət Həsənzadə*. Sizi *BeinSystems* şirkətindən narahat edirəm.",
+      "message_type": "text",
+      "created_at": 1790341873,
+      "created": "25.09.2026 17:11",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
+    }
   ]
 }
