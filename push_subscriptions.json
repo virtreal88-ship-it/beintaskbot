@@ -7,14 +7,6 @@
       "auth": "Ej0kYt6UCbnDKTOjOZg9jg"
     }
   },
-  "7920785774": {
-    "endpoint": "https://fcm.googleapis.com/fcm/send/dllBNeElCZw:APA91bG08ZQb2Hdthn3bHRZq6eFRLSY6WMrD7a-dxDhpE08_Z3k0Hzo1K_E7Emw6Oqo7ksoQ0i9a24b61LIdwhFuH3On5pmR3TYV48jr_PxeZS884NWVFFwfY99_PhbWHz1LUVR04T-D",
-    "expirationTime": null,
-    "keys": {
-      "p256dh": "BJMqaaV81B_beSjALzhEHQVPZU-3b2Edwi1fnyAQGxCJkbxeZ6XnYM9KhdfymXBHUsZw5IVjlMN6OoP1uwqhRIs",
-      "auth": "YOSx_co7ksaqjzW0dk2jQA"
-    }
-  },
   "7329891614": {
     "endpoint": "https://fcm.googleapis.com/fcm/send/d6ZN8iJpM9E:APA91bH9VfZbqfUQ8-JZ7hmU9UJl09tsyjouwHk8zovQSLWbTMyW8D3lEeoTrENJf_ay-UARA3dch4ulNkCnMg7iRSvhtjjCS2yux84_vWDEN120zSpImUA5hMGIiuuhyOz1kbHhSTnH",
     "expirationTime": null,
