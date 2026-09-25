@@ -1,5 +1,5 @@
 {
-  "at": 1790317726.3580904,
+  "at": 1790321356.0230775,
   "rows": [
     {
       "name": "ilk_messag",
@@ -36,117 +36,6 @@
         "BODY",
         "FOOTER",
         "BUTTONS[URL,PHONE_NUMBER]"
-      ]
-    },
-    {
-      "name": "novyi_shablon_whatsapp_21_09_2026_13_07_xtoh4t",
-      "language": "az",
-      "category": "MARKETING",
-      "parameter_format": "POSITIONAL",
-      "header_format": "",
-      "header": "",
-      "header_vars": 0,
-      "header_names": [],
-      "body": "Salam.Sistemimiz *müxtəlif biznes sahələrinə uyğundur*. Hansı sahədə işlədəcəksiz? (ərzaq, geyim, topdan və s.)  əsas *ehtiyaclarınıza  uyğun* məlumat göndərim",
-      "body_vars": 0,
-      "body_names": [],
-      "buttons": [],
-      "cards": [
-        {
-          "index": 0,
-          "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/801008318_1361979462679660_3177430764524370087_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=nH3_FdwJsXEQ7kNvwE4gbL0&_nc_oc=Adp2SjCZ0mW2Jl0_DiLR4W3o-8Eq-Z_wAvun1mm0m5BEAAWE83by5p042fzqpxJOVhk&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=ih78-Vj8K17yZg0fcheMHg&oh=01_Q5Aa5gHDgFNgrhudS3lUA3mC0llqfrJcOwMz-yGJ-NQ8ZJPSVA&oe=6ADD90AE",
-          "body": "Magazalar ,Anbarlar və s.",
-          "body_vars": 0,
-          "body_names": [],
-          "buttons": [
-            {
-              "index": 0,
-              "type": "QUICK_REPLY",
-              "text": "Mağaza",
-              "vars": 0,
-              "names": [],
-              "needs_value": false
-            }
-          ]
-        },
-        {
-          "index": 1,
-          "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/800164880_2412114985989000_6188789566567780181_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=gPyKGPpltaAQ7kNvwGeR78k&_nc_oc=Ado2o1CkVWBVggSyFSKCwf5nFWHsc4NUNPO1-c5rvb42Ou60PfADkBPctvSlmZYBnYo&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=ih78-Vj8K17yZg0fcheMHg&oh=01_Q5Aa5gEgXja_gG_mnRYHy8Zde3CkawUfgVETqdH36md5-rMPrw&oe=6ADD9779",
-          "body": "Restoran,Cafe,Coffeshop,Playzone,Otel",
-          "body_vars": 0,
-          "body_names": [],
-          "buttons": [
-            {
-              "index": 0,
-              "type": "QUICK_REPLY",
-              "text": "Restoran",
-              "vars": 0,
-              "names": [],
-              "needs_value": false
-            }
-          ]
-        },
-        {
-          "index": 2,
-          "header_format": "IMAGE",
-          "header_link": "https://scontent.whatsapp.net/v/t61.29466-34/794411786_1807082133626109_8493046909241692822_n.jpg?ccb=1-7&_nc_sid=a80384&_nc_ohc=T0WtP8nZYnUQ7kNvwGVKyM2&_nc_oc=AdpSamazfr93Tzd_WKVBzMrVzNQagKWSkz31t3n8SDDbhLxWRcSF0-8rxI7-sfWFFQo&_nc_zt=3&_nc_ht=scontent.whatsapp.net&edm=AH51TzQEAAAA&_nc_gid=ih78-Vj8K17yZg0fcheMHg&oh=01_Q5Aa5gFlLIwNCJaz8rkxwdvIKcnUohOgb3UpI8LbU0oTjiHOxQ&oe=6ADD9996",
-          "body": "Anbar,Səyyar,İstehsalat və s.",
-          "body_vars": 0,
-          "body_names": [],
-          "buttons": [
-            {
-              "index": 0,
-              "type": "QUICK_REPLY",
-              "text": "Digər sahə",
-              "vars": 0,
-              "names": [],
-              "needs_value": false
-            }
-          ]
-        }
-      ],
-      "parts": [
-        "BODY",
-        "CAROUSEL:3:IMAGE"
-      ]
-    },
-    {
-      "name": "qiym_t_magaza_mdxz46",
-      "language": "ru",
-      "category": "MARKETING",
-      "parameter_format": "POSITIONAL",
-      "header_format": "",
-      "header": "",
-      "header_vars": 0,
-      "header_names": [],
-      "body": "Proqramımızın aylıq istifadə haqqı *50 azn* təşkil edir. Bu qiymətə satışların və anbarın idarə olunması, məhsul qalıqlarına nəzarət, minimum qalıq səviyyəsinə çatdıqda *təchizatçılar üçün sifarişlərin avtomatik formalaşdırılması*, borcların izlənməsi, mənfəət və satış hesabatları, müştərilər, əməkdaşlar və partnyorlar üçün *bonus və loyallıq sistemi*, mobil telefondan sistemə giriş, ani bildirişlər, fiskal kassalarla inteqrasiya, daimi texniki dəstək, proqramın mütəmadi yenilənməsi və məlumatların hər gün avtomatik ehtiyat nüsxəsinin (backup) yaradılması daxildir. \nQuraşdırılma, ilkin sazlama və əməkdaşların təlimi isə *250–300 AZN* təşkil edir (birdəfəlik).",
-      "body_vars": 0,
-      "body_names": [],
-      "buttons": [
-        {
-          "index": 0,
-          "type": "QUICK_REPLY",
-          "text": "Sifariş edirəm",
-          "vars": 0,
-          "names": [],
-          "needs_value": false
-        },
-        {
-          "index": 1,
-          "type": "QUICK_REPLY",
-          "text": "Görüş edək",
-          "vars": 0,
-          "names": [],
-          "needs_value": false
-        }
-      ],
-      "cards": [],
-      "parts": [
-        "BODY",
-        "FOOTER",
-        "BUTTONS[QUICK_REPLY,QUICK_REPLY]"
       ]
     }
   ]
