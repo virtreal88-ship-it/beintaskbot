@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790341896,
+    "at": 1790341901,
     "fields": [
       "messages"
     ]
@@ -1657,7 +1657,7 @@
       "media_url": "",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "sent",
+      "delivery_status": "delivered",
       "via_cloud": true
     }
   ]
