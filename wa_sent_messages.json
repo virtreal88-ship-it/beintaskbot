@@ -779,6 +779,28 @@
       "file_name": "video.mp4",
       "delivery_status": "",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSMTUzQ0MzOTA4REJEODNFRTY4AA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSMTUzQ0MzOTA4REJEODNFRTY4AA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Nizami Qasımov",
+      "phone": "",
+      "text": "ok",
+      "message_type": "text",
+      "created_at": 1790341609,
+      "created": "25.09.2026 17:06",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ],
   "78019517": [],
