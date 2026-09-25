@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790355689,
+    "at": 1790355696,
     "fields": [
       "messages"
     ]
@@ -1935,6 +1935,30 @@
       "delivery_status": "read",
       "via_cloud": true,
       "phone_number_id": "1352169527974549"
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVGMkQyRkFENDU2NjI2RjcxQkREMDY5OUY4NkEwODAA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVGMkQyRkFENDU2NjI2RjcxQkREMDY5OUY4NkEwODAA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "9",
+      "message_type": "text",
+      "created_at": 1790355690,
+      "created": "25.09.2026 21:01",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ],
   "78023867": [
