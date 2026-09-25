@@ -10230,9 +10230,11 @@ def _normalize_wa_number(phone: str) -> str:
 
 
 WA_CLOUD_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
-# Only the number that was migrated to the official WhatsApp Business Platform
-# goes through Cloud API; the rest keep using the Kommo chat integration.
+# Both business numbers are official WABA. Rüfət keeps the env phone id;
+# everyone else sends from the shared number.
 WA_CLOUD_SENDER_DIGITS = re.sub(r"\D", "", os.environ.get("WHATSAPP_CLOUD_SENDER", RUFAT_WHATSAPP_NUMBER))
+NIZAMI_WA_PHONE_NUMBER_ID = "1352169527974549"
+_wa_send_phone = threading.local()
 WA_WABA_ID = str(os.environ.get("WHATSAPP_WABA_ID") or "1603840074450579").strip()
 WA_VERIFY_TOKEN = str(
     os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
@@ -10254,23 +10256,48 @@ def _wa_cloud_credentials() -> tuple[str, str]:
     return str(token).strip(), str(phone_id).strip()
 
 
+def _wa_phone_ids() -> dict[str, str]:
+    ids = {re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER)): NIZAMI_WA_PHONE_NUMBER_ID}
+    rufat = re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
+    _token, env_id = _wa_cloud_credentials()
+    if rufat and env_id:
+        ids[rufat] = env_id
+    return ids
+
+
+def _wa_phone_id_for_digits(sender_digits: str = "") -> str:
+    ids = _wa_phone_ids()
+    wanted = re.sub(r"\D", "", str(sender_digits or ""))
+    rufat = re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
+    if wanted and wanted in ids:
+        return ids[wanted]
+    if wanted and wanted == rufat:
+        return ""
+    return ids.get(re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER)), "")
+
+
+def _wa_active_phone_id() -> str:
+    chosen = str(getattr(_wa_send_phone, "phone_id", "") or "").strip()
+    if chosen:
+        return chosen
+    _token, phone_id = _wa_cloud_credentials()
+    return phone_id or NIZAMI_WA_PHONE_NUMBER_ID
+
+
 def _kommo_external_send_denied(error: str) -> bool:
     return "Sending to external chats" in str(error or "")
 
 
 def _wa_cloud_configured() -> bool:
-    token, phone_id = _wa_cloud_credentials()
-    return bool(token and phone_id)
+    token, _phone_id = _wa_cloud_credentials()
+    return bool(token and _wa_phone_id_for_digits(""))
 
 
 def _wa_cloud_ready(sender_digits: str = "") -> bool:
-    token, phone_id = _wa_cloud_credentials()
-    if not token or not phone_id:
+    token, _phone_id = _wa_cloud_credentials()
+    if not token:
         return False
-    wanted = re.sub(r"\D", "", str(sender_digits or ""))
-    if not wanted or not WA_CLOUD_SENDER_DIGITS:
-        return True
-    return wanted == WA_CLOUD_SENDER_DIGITS
+    return bool(_wa_phone_id_for_digits(sender_digits))
 
 
 _WA_LAST_HOOK = {"at": 0, "fields": [], "in": 0, "lead": 0, "sub": ""}
@@ -10360,9 +10387,10 @@ def _wa_cloud_error_text(resp) -> str:
     return str(getattr(resp, "text", ""))[:240]
 
 
-def _wa_cloud_post(body: dict) -> tuple[bool, str, str]:
+def _wa_cloud_post(body: dict, phone_id: str = "") -> tuple[bool, str, str]:
     """POST to the Cloud API messages endpoint; returns ok, error and wamid."""
-    token, phone_id = _wa_cloud_credentials()
+    token, _env_phone = _wa_cloud_credentials()
+    phone_id = str(phone_id or _wa_active_phone_id() or "").strip()
     if not token or not phone_id:
         return False, "WhatsApp Cloud API konfiqurasiya olunmayıb.", ""
     url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/messages"
@@ -10391,9 +10419,10 @@ def _wa_cloud_post(body: dict) -> tuple[bool, str, str]:
     return False, detail or "WhatsApp mesajı göndərilmədi.", ""
 
 
-def _wa_cloud_upload_media(content: bytes, filename: str, mime: str) -> tuple[str, str]:
+def _wa_cloud_upload_media(content: bytes, filename: str, mime: str, phone_id: str = "") -> tuple[str, str]:
     """Upload media to Cloud API and return its media id."""
-    token, phone_id = _wa_cloud_credentials()
+    token, _env_phone = _wa_cloud_credentials()
+    phone_id = str(phone_id or _wa_active_phone_id() or "").strip()
     if not token or not phone_id:
         return "", "WhatsApp Cloud API konfiqurasiya olunmayıb."
     url = f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{phone_id}/media"
@@ -10676,7 +10705,7 @@ def _wa_cloud_media_kind(filename: str, content_type: str) -> str:
     return "document"
 
 
-def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str, str]:
+def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "", phone_id: str = "") -> tuple[bool, str, str]:
     to = _normalize_wa_number(phone)
     if len(to) < 8:
         return False, "WhatsApp nömrəsi tapılmadı.", ""
@@ -10685,7 +10714,7 @@ def _wa_cloud_send_text(phone: str, text: str, reply_to: str = "") -> tuple[bool
     quoted = str(reply_to or "").strip()
     if quoted:
         body["context"] = {"message_id": quoted}
-    return _wa_cloud_post(body)
+    return _wa_cloud_post(body, phone_id)
 
 
 _WA_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*(\d+)\s*\}\}")
@@ -11064,7 +11093,7 @@ def _wa_carousel_component(cards: list, supplied_cards: list) -> tuple[dict | No
     return {"type": "carousel", "cards": built}, ""
 
 
-def _wa_cloud_send_template(phone: str, spec: dict, values: dict) -> tuple[bool, str, str]:
+def _wa_cloud_send_template(phone: str, spec: dict, values: dict, phone_id: str = "") -> tuple[bool, str, str]:
     """Send an approved template; the only way to open a chat outside 24 hours."""
     to = _normalize_wa_number(phone)
     if len(to) < 8:
@@ -11072,8 +11101,10 @@ def _wa_cloud_send_template(phone: str, spec: dict, values: dict) -> tuple[bool,
     template_name = str((spec or {}).get("name") or "").strip()
     if not template_name:
         return False, "Şablon seçilməyib.", ""
+    _wa_send_phone.phone_id = str(phone_id or _wa_active_phone_id() or "")
     components, error = _wa_template_components(spec, values or {})
     if error:
+        _wa_send_phone.phone_id = ""
         return False, error, ""
     template: dict = {
         "name": template_name,
@@ -11088,12 +11119,15 @@ def _wa_cloud_send_template(phone: str, spec: dict, values: dict) -> tuple[bool,
         spec.get("header_format") or "-",
         ",".join(str(part.get("type") or "") for part in components) or "-",
     )
-    return _wa_cloud_post({
-        "recipient_type": "individual",
-        "to": to,
-        "type": "template",
-        "template": template,
-    })
+    try:
+        return _wa_cloud_post({
+            "recipient_type": "individual",
+            "to": to,
+            "type": "template",
+            "template": template,
+        }, phone_id)
+    finally:
+        _wa_send_phone.phone_id = ""
 
 
 def _wa_cloud_send_media(
@@ -11105,6 +11139,7 @@ def _wa_cloud_send_media(
     filename: str = "",
     reply_to: str = "",
     voice: bool = False,
+    phone_id: str = "",
 ) -> tuple[bool, str, str]:
     to = _normalize_wa_number(phone)
     if len(to) < 8:
@@ -11120,10 +11155,10 @@ def _wa_cloud_send_media(
     quoted = str(reply_to or "").strip()
     if quoted:
         body["context"] = {"message_id": quoted}
-    return _wa_cloud_post(body)
+    return _wa_cloud_post(body, phone_id)
 
 
-def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str) -> tuple[bool, str]:
+def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str, phone_id: str = "") -> tuple[bool, str]:
     to = _normalize_wa_number(phone)
     if len(to) < 8:
         return False, "WhatsApp nömrəsi tapılmadı."
@@ -11133,16 +11168,80 @@ def _wa_cloud_send_reaction(phone: str, wamid: str, emoji: str) -> tuple[bool, s
         "type": "reaction",
         # An empty emoji removes the reaction.
         "reaction": {"message_id": str(wamid or ""), "emoji": str(emoji or "")},
-    })
+    }, phone_id)
     return ok, error
 
 
-def _wa_cloud_mark_read(wamid: str, typing: bool = False) -> bool:
+def _wa_cloud_mark_read(wamid: str, typing: bool = False, phone_id: str = "") -> bool:
     body: dict = {"status": "read", "message_id": str(wamid or "")}
     if typing:
         body["typing_indicator"] = {"type": "text"}
-    ok, _error, _wamid = _wa_cloud_post(body)
+    ok, _error, _wamid = _wa_cloud_post(body, phone_id)
     return ok
+
+
+_WA_MEDIA_BYTES: dict[str, tuple[bytes, str]] = {}
+
+
+def _wa_download_graph_media(media_id: str) -> tuple[bytes, str]:
+    """Download one WABA attachment. The Graph URL expires, so the bytes are cached."""
+    media_id = str(media_id or "").strip()
+    cached = _WA_MEDIA_BYTES.get(media_id)
+    if cached:
+        return cached
+    token, _phone_id = _wa_cloud_credentials()
+    if not token or not media_id.isdigit():
+        return b"", ""
+    try:
+        meta = requests.get(
+            f"https://graph.facebook.com/{WA_CLOUD_API_VERSION}/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+    except Exception as exc:
+        logger.warning("WhatsApp media meta failed: %s", exc)
+        return b"", ""
+    if meta.status_code != 200:
+        logger.warning("WhatsApp media meta status %s", meta.status_code)
+        return b"", ""
+    try:
+        payload = meta.json() or {}
+    except Exception:
+        payload = {}
+    url = str(payload.get("url") or "")
+    mime = str(payload.get("mime_type") or "application/octet-stream").split(";")[0].strip()
+    if not url:
+        return b"", ""
+    try:
+        blob = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=40)
+    except Exception as exc:
+        logger.warning("WhatsApp media download failed: %s", exc)
+        return b"", ""
+    raw = blob.content or b""
+    if blob.status_code != 200 or not raw:
+        return b"", ""
+    if len(raw) <= 12 * 1024 * 1024:
+        if len(_WA_MEDIA_BYTES) >= 40:
+            _WA_MEDIA_BYTES.pop(next(iter(_WA_MEDIA_BYTES)), None)
+        _WA_MEDIA_BYTES[media_id] = (raw, mime)
+    return raw, mime
+
+
+async def handle_api_wa_media(request: web.Request) -> web.Response:
+    media_id = str(request.match_info.get("media_id") or "").strip()
+    if not media_id.isdigit():
+        return web.Response(status=400, text="Invalid media")
+    raw_chat_id = request.headers.get("X-TG-User-ID") or request.rel_url.query.get("uid") or ""
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return web.Response(status=401, text="Unauthorized")
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.Response(status=403, text="Forbidden")
+    raw, mime = await asyncio.to_thread(_wa_download_graph_media, media_id)
+    if not raw:
+        return web.Response(status=404, text="Media not found")
+    return web.Response(body=raw, content_type=mime or "application/octet-stream")
 
 
 def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:
@@ -11349,6 +11448,7 @@ def _sent_message_item(
     created_at: int = 0,
     phone: str = "",
     cards: list | None = None,
+    media_url: str = "",
 ) -> dict:
     created = int(created_at or _time_module.time())
     gallery = _wa_preview_cards(cards)
@@ -11368,7 +11468,7 @@ def _sent_message_item(
         "reply_to_message_id": str(reply_id or ""),
         "reply_to_text": str(reply_text or "")[:200],
         "reply_to_author": str(reply_author or "")[:80],
-        "media_url": "",
+        "media_url": str(media_url or ""),
         "file_uuid": str(file_uuid or ""),
         "file_name": str(file_name or ""),
         "delivery_status": "" if incoming else "sent",
@@ -11500,14 +11600,30 @@ def _lead_open_in_rufat_chats(lead: dict | None) -> bool:
 
 
 def _pick_existing_lead(lead_ids: list[int]) -> int:
+    """Attach a WhatsApp thread to the newest open deal, in any pipeline."""
+    best_open = 0
+    best_open_at = -1
     fallback = 0
+    fallback_at = -1
     for lid in lead_ids:
         details = get_lead_details(lid) or {}
-        if _lead_open_in_rufat_chats(details):
-            return int(lid)
-        if not fallback and _lead_in_rufat_chats(details):
+        if not details:
+            continue
+        try:
+            updated = int(details.get("updated_at") or details.get("created_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        try:
+            status_id = int(details.get("status_id") or 0)
+        except (TypeError, ValueError):
+            status_id = 0
+        if status_id not in {142, 143} and updated >= best_open_at:
+            best_open = int(lid)
+            best_open_at = updated
+        if updated >= fallback_at:
             fallback = int(lid)
-    return fallback
+            fallback_at = updated
+    return best_open or fallback
 
 
 def _search_lead_ids_by_phone(phone: str) -> list[int]:
@@ -11992,6 +12108,40 @@ def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
         logger.warning("Cloud inbox overlay failed: %s", exc)
 
 
+def _wa_cloud_media_fields(message: dict) -> dict:
+    """Graph media id served by this app, so the chat does not look in Kommo."""
+    kind = str((message or {}).get("type") or "").lower()
+    block_key = "audio" if kind in {"voice", "ptt"} else kind
+    block = message.get(block_key) if isinstance(message.get(block_key), dict) else {}
+    media_id = str(block.get("id") or "").strip()
+    if not media_id or not media_id.isdigit():
+        return {}
+    mime = str(block.get("mime_type") or "").lower()
+    filename = str(block.get("filename") or "").strip()
+    if kind == "image":
+        mtype = "picture"
+        filename = filename or ("photo.png" if "png" in mime else "photo.jpg")
+    elif kind == "sticker":
+        mtype = "sticker"
+        filename = filename or "sticker.webp"
+    elif kind in {"audio", "voice", "ptt"}:
+        mtype = "audio"
+        filename = filename or "voice.ogg"
+    elif kind == "video":
+        mtype = "video"
+        filename = filename or "video.mp4"
+    elif kind == "document":
+        mtype = "file"
+        filename = filename or "file"
+    else:
+        return {}
+    return {
+        "message_type": mtype,
+        "file_name": filename,
+        "media_url": f"/api/wa/media/{media_id}",
+    }
+
+
 def _wa_incoming_preview(message: dict) -> tuple[str, str]:
     kind = str((message or {}).get("type") or "text").lower()
     if kind == "text":
@@ -12026,10 +12176,8 @@ def _wa_incoming_preview(message: dict) -> tuple[str, str]:
 def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True) -> int:
     if use_stored:
         stored = _lead_id_for_stored_phone(phone)
-        if stored:
-            lead = get_lead_details(stored)
-            if _lead_in_rufat_chats(lead):
-                return stored
+        if stored and get_lead_details(stored):
+            return stored
     lead_ids: list[int] = []
     contacts = search_contact_by_phone(phone)
     name = str(contact_name or "").strip() or phone
@@ -12177,17 +12325,23 @@ def _ingest_cloud_incoming(value: dict) -> None:
             _remember_reaction(lead_id, reaction_target_mid, reaction_emoji)
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
-        _remember_sent_message(lead_id, _sent_message_item(
+        media_fields = _wa_cloud_media_fields(message)
+        item = _sent_message_item(
             wamid=wamid,
             text=preview,
             author=name,
-            message_type=kind,
+            message_type=str(media_fields.get("message_type") or kind),
             incoming=True,
             created_at=created,
             reply_id=reaction_target_mid or str(context.get("id") or ""),
             phone=phone,
-        ))
+            file_name=str(media_fields.get("file_name") or ""),
+            media_url=str(media_fields.get("media_url") or ""),
+        )
+        _remember_sent_message(lead_id, item)
+        _append_chat_tail(lead_id, item)
         try:
+            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone)
             _patch_cloud_inbox_into_rufat_cache()
         except Exception:
             pass
@@ -12224,16 +12378,23 @@ def _ingest_cloud_echoes(value: dict) -> None:
             continue
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
-        _remember_sent_message(lead_id, _sent_message_item(
+        media_fields = _wa_cloud_media_fields(message)
+        item = _sent_message_item(
             wamid=wamid,
             text=preview,
             author="",
-            message_type=kind,
+            message_type=str(media_fields.get("message_type") or kind),
             incoming=False,
             created_at=created,
-        ))
+            phone=phone,
+            file_name=str(media_fields.get("file_name") or ""),
+            media_url=str(media_fields.get("media_url") or ""),
+        )
+        _remember_sent_message(lead_id, item)
+        _append_chat_tail(lead_id, item)
         try:
             _patch_cloud_inbox_into_rufat_cache()
+            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone)
         except Exception:
             pass
         _invalidate_deal_chat_cache(lead_id)
@@ -12276,10 +12437,6 @@ def _process_whatsapp_payload(payload: dict) -> None:
                 continue
             if field in {"messages", "history", ""} or value.get("messages") or value.get("statuses"):
                 _ingest_cloud_incoming(value)
-                try:
-                    _rehome_orphaned_cloud_inbox()
-                except Exception as exc:
-                    logger.warning("Cloud inbox rehome after ingest failed: %s", exc)
 
 
 def _chat_item_key(item: dict) -> tuple:
@@ -12611,6 +12768,9 @@ def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int])
                 item["text"] = ""
 
 
+_WA_CHANNEL_CACHE: dict[int, tuple[float, list]] = {}
+
+
 def _collect_deal_chat(
     lid: int,
     contact_ids: list[int],
@@ -12705,7 +12865,11 @@ def _collect_deal_chat(
         seen_chat.add(key)
         chat.append(item)
 
-    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
+    _channel_hit = _WA_CHANNEL_CACHE.get(int(lid)) if wanted == "whatsapp" else None
+    if _channel_hit and _time_module.monotonic() - _channel_hit[0] < 90:
+        talks = []
+    else:
+        talks = _fetch_talks(lid, contact_ids, include_contacts=True)
     channels = _channels_from_talks(talks, sender_digits)
     if not channels:
         ranked = _ranked_reply_talk_ids(talks)
@@ -12734,6 +12898,19 @@ def _collect_deal_chat(
     for row in channels:
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
+    if not any(str(row.get("key") or "") == "whatsapp" for row in channels):
+        channels.insert(0, {
+            "key": "whatsapp",
+            "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
+            "talk_id": 0,
+            "chat_id": "",
+            "open": True,
+            "sender_phone": _wa_display_number(sender_digits),
+        })
+    if wanted == "whatsapp" and not (_channel_hit and _time_module.monotonic() - _channel_hit[0] < 90):
+        _WA_CHANNEL_CACHE[int(lid)] = (_time_module.monotonic(), list(channels))
+    elif wanted == "whatsapp" and _channel_hit:
+        channels = list(_channel_hit[1])
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
     if not reply_talk_id and channels:
         reply_talk_id = int(channels[0].get("talk_id") or 0)
@@ -12745,6 +12922,8 @@ def _collect_deal_chat(
     target_rows = [row for row in channels if str(row.get("key") or "") == wanted]
     if not target_rows and channels:
         target_rows = [channels[0]]
+    if wanted == "whatsapp":
+        target_rows = []
     for row in target_rows:
         talk_id = int(row.get("talk_id") or 0)
         chat_ref = str(row.get("chat_id") or "")
@@ -12769,16 +12948,17 @@ def _collect_deal_chat(
                         if channel_key == "whatsapp" or _is_generic_chat_author(author):
                             formatted["author"] = employee_name or author
                 _add_chat(formatted)
-    if not chat or chat_blocked:
+    if wanted != "whatsapp" and (not chat or chat_blocked):
         fallback_rows = _load_kommo_chat_fallback(lid, contact_ids, employee_name)
         for fb_item in fallback_rows:
             _add_chat(fb_item)
     with _deal_chat_cache_lock:
         preview_tail = list(_chat_open_preview.get(lid) or [])
-    for tail_item in preview_tail:
-        _add_chat(tail_item)
-    if link_media:
-        _link_missing_chat_media(chat, lid, contact_ids)
+    if wanted != "whatsapp":
+        for tail_item in preview_tail:
+            _add_chat(tail_item)
+        if link_media:
+            _link_missing_chat_media(chat, lid, contact_ids)
     for item in chat:
         txt = str(item.get("text") or "")
         if _message_is_voice(item) or _looks_audio_name(str(item.get("file_name") or "")) or _looks_audio_name(str(item.get("media_url") or "")):
@@ -12800,7 +12980,8 @@ def _collect_deal_chat(
         for item in chat
         if not item.get("incoming")
     ]
-    for item in _sent_messages_for_lead(lid):
+    cloud_rows = _sent_messages_for_lead(lid) if wanted == "whatsapp" else []
+    for item in cloud_rows:
         external = str(item.get("external_id") or "")
         cards = item.get("cards") if isinstance(item.get("cards"), list) else []
         text = str(item.get("text") or "")
@@ -14424,10 +14605,14 @@ def _deliver_via_cloud(
     filename: str,
     content_type: str,
     quote_id: str,
+    sender_digits: str = "",
 ) -> tuple[bool, str, str, str]:
     """Send one message through WhatsApp Cloud API; returns ok, error, wamid, type."""
+    phone_id = _wa_phone_id_for_digits(sender_digits)
+    _wa_send_phone.phone_id = phone_id
     _ids, phones = _contact_ids_and_phones(lead)
     if not phones:
+        _wa_send_phone.phone_id = ""
         return False, "Müştəri nömrəsi tapılmadı.", "", "text"
     kind = "text"
     media_id = ""
@@ -14438,15 +14623,17 @@ def _deliver_via_cloud(
         if kind == "audio":
             converted, conv_mime, conv_name, voice = _ffmpeg_voice_for_cloud(raw, filename)
             if not converted:
+                _wa_send_phone.phone_id = ""
                 return False, "Səs WhatsApp formatına çevrilmədi.", "", "audio"
             payload, mime, name = converted, conv_mime, conv_name
-        media_id, upload_error = _wa_cloud_upload_media(payload, name, mime)
+        media_id, upload_error = _wa_cloud_upload_media(payload, name, mime, phone_id)
         if not media_id:
+            _wa_send_phone.phone_id = ""
             return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind
     last_error = ""
     for phone in phones:
         if kind == "text":
-            ok, error, wamid = _wa_cloud_send_text(phone, text, quote_id)
+            ok, error, wamid = _wa_cloud_send_text(phone, text, quote_id, phone_id)
         else:
             ok, error, wamid = _wa_cloud_send_media(
                 phone,
@@ -14456,13 +14643,16 @@ def _deliver_via_cloud(
                 filename="" if voice else filename,
                 reply_to=quote_id,
                 voice=voice,
+                phone_id=phone_id,
             )
             if ok and voice and text:
                 _wa_cloud_send_text(phone, text)
         if ok:
+            _wa_send_phone.phone_id = ""
             return True, "", wamid, kind
         if error:
             last_error = error
+    _wa_send_phone.phone_id = ""
     return False, last_error or "WhatsApp mesajı göndərilmədi.", "", kind
 
 
@@ -14573,6 +14763,7 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
             "buttons": button_values,
             "cards": card_values,
         },
+        _wa_phone_id_for_digits(_wa_sender_digits_for_chat(chat_id)),
     )
     if not ok:
         return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
@@ -14733,9 +14924,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             upload_name,
             upload_type,
             wa_quote_id,
+            sender_digits,
         )
         sent_via_cloud = ok
-    if not ok and reply_talk_id:
+    if not ok and reply_talk_id and channel != "whatsapp":
         kommo_text = text
         if upload_raw and not kommo_text:
             if is_voice:
@@ -14817,6 +15009,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             upload_name,
             upload_type,
             wa_quote_id,
+            sender_digits,
         )
         sent_via_cloud = ok
     if not ok:
@@ -14929,14 +15122,15 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
         return err
     lid = int(lead.get("id") or lead_id)
     resolved = _wamid_for_react(lid, wamid, message_id, react_id)
-    token, phone_id = _wa_cloud_credentials()
+    token, _env_phone = _wa_cloud_credentials()
     last_error = ""
-    if token and phone_id and resolved.lower().startswith("wamid"):
+    sender_phone_id = _wa_phone_id_for_digits(_hinted_wa_sender_digits(chat_id, data.get("sender_phone")))
+    if token and sender_phone_id and resolved.lower().startswith("wamid"):
         _ids, phones = _contact_ids_and_phones(lead)
         if not phones:
             return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
         for phone in phones:
-            ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, resolved, emoji)
+            ok, error = await asyncio.to_thread(_wa_cloud_send_reaction, phone, resolved, emoji, sender_phone_id)
             if ok:
                 _remember_reaction(lid, resolved, emoji)
                 if message_id and message_id != resolved:
@@ -14953,12 +15147,6 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     _remember_reaction(lid, react_id, emoji)
     if message_id and message_id != react_id:
         _remember_reaction(lid, message_id, emoji)
-    if emoji:
-        sent, send_error = _send_gray_emoji_reply(chat_id, lead, data, emoji)
-        if sent:
-            return web.json_response({"success": True, "emoji": emoji, "sent": True})
-        if send_error:
-            last_error = send_error
     return web.json_response({"success": True, "emoji": emoji, "local": True, "warning": last_error})
 
 
@@ -14988,7 +15176,12 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
         return err
     if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
         return web.json_response({"success": True, "skipped": True})
-    ok = await asyncio.to_thread(_wa_cloud_mark_read, wamid, typing)
+    ok = await asyncio.to_thread(
+        _wa_cloud_mark_read,
+        wamid,
+        typing,
+        _wa_phone_id_for_digits(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))),
+    )
     return web.json_response({"success": bool(ok)})
 
 
@@ -16589,6 +16782,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook)
+    app_web.router.add_get("/api/wa/media/{media_id}", handle_api_wa_media)
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)

@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="282">
+    <meta name="pwa-build" content="283">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4141,6 +4141,7 @@ function dealMediaBlock(item, token) {
         return photoWaitHtml(src, item);
     }
     if(isCall) return audioWaitHtml(src, item);
+    if(type === 'video') return `<video controls preload="metadata" src="${safe}" style="max-width:240px;border-radius:12px;margin-top:6px"></video>`;
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
