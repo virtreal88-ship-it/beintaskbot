@@ -353,7 +353,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790338400,
+    "at": 1790338421,
     "fields": [
       "messages"
     ]
@@ -1349,7 +1349,7 @@
       "media_url": "",
       "file_uuid": "",
       "file_name": "",
-      "delivery_status": "delivered",
+      "delivery_status": "read",
       "via_cloud": true
     }
   ]
