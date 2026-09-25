@@ -10100,12 +10100,15 @@ def _upload_kommo_drive_bytes(filename: str, content: bytes, content_type: str) 
     file_size = len(content or b"")
     if file_size <= 0:
         return "", ""
+    effective_mime = content_type or "application/octet-stream"
+    if str(filename or "").lower().endswith(".opus") and effective_mime in {"audio/opus", "application/octet-stream"}:
+        effective_mime = "audio/ogg"
     auth_h = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
     drive_url = "https://drive-g.kommo.com"
     sess_resp = requests.post(
         f"{drive_url}/v1.0/sessions",
         headers={**auth_h, "Content-Type": "application/json"},
-        json={"file_name": filename, "file_size": file_size, "content_type": content_type or "application/octet-stream"},
+        json={"file_name": filename, "file_size": file_size, "content_type": effective_mime},
         timeout=12,
     )
     if sess_resp.status_code != 200:
@@ -10446,7 +10449,7 @@ def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str,
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
-                "-c:a", "aac", "-b:a", "64k", "-f", "mp4", m4a_path,
+                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "ipod", m4a_path,
             ],
         ]
         for cmd in m4a_cmds:
@@ -10467,49 +10470,56 @@ def _ffmpeg_voice_for_cloud(raw: bytes, filename: str) -> tuple[bytes, str, str,
 
 
 def _ffmpeg_voice_for_kommo(raw: bytes, filename: str) -> tuple[bytes, str, str]:
-    """Turn voice recording into M4A/AAC for native PTT voice notes in Kommo WhatsApp and universal browser playback."""
+    """Turn voice recording into WhatsApp-compatible PTT Ogg/Opus (.opus) voice note for Kommo WhatsApp."""
+    if _is_ogg_bytes(raw):
+        return raw, "audio/ogg", _generate_ptt_filename()
     suffix = os.path.splitext(str(filename or ""))[1].lower()
     if suffix not in {".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp4", ".mp3", ".wav"}:
         suffix = ".webm"
     src_path = ""
-    m4a_path = ""
+    opus_path = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as src:
             src.write(raw)
             src_path = src.name
-        m4a_path = src_path + ".m4a"
+        opus_path = src_path + ".opus"
         cmds = [
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", opus_path,
             ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "webm", "-i", src_path, "-vn", "-ac", "1", "-ar", "48000",
-                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+                "-c:a", "libopus", "-b:a", "32k", "-application", "voip", "-f", "ogg", opus_path,
             ],
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
-                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "mp4", m4a_path,
+                "-i", src_path, "-vn", "-c:a", "copy", "-f", "ogg", opus_path,
             ],
         ]
         for cmd in cmds:
-            data = _ffmpeg_run(cmd, m4a_path)
-            if data and len(data) > 64:
-                return data, "audio/mp4", "voice.m4a"
-        return raw, "audio/mp4", "voice.m4a"
+            data = _ffmpeg_run(cmd, opus_path)
+            if data and len(data) > 64 and _is_ogg_bytes(data):
+                return data, "audio/ogg", _generate_ptt_filename()
+        return raw, "audio/ogg", _generate_ptt_filename()
     except Exception as exc:
-        logger.warning("ffmpeg voice to m4a convert error: %s", exc)
-        return raw, "audio/mp4", "voice.m4a"
+        logger.warning("ffmpeg voice to opus convert error: %s", exc)
+        return raw, "audio/ogg", _generate_ptt_filename()
     finally:
-        for p in (src_path, m4a_path):
+        for p in (src_path, opus_path):
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
                 except Exception:
                     pass
+
+
+def _generate_ptt_filename() -> str:
+    now_str = _time_module.strftime("%Y%m%d", _time_module.gmtime())
+    seq = random.randint(1, 9999)
+    return f"PTT-{now_str}-WA{seq:04d}.opus"
 
 
 def _is_mp3_bytes(raw: bytes) -> bool:
@@ -10555,7 +10565,7 @@ def _ffmpeg_voice_to_mp3(raw: bytes, filename: str) -> tuple[bytes, str, str]:
             [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-i", src_path, "-vn", "-ac", "1", "-ar", "44100",
-                "-c:a", "aac", "-b:a", "64k", "-f", "mp4", m4a_path,
+                "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", "-f", "ipod", m4a_path,
             ],
         ]
         for cmd in m4a_cmds:
@@ -15352,14 +15362,14 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         file_name = str(request.rel_url.query.get("name") or picked_name)
         content_type = _sniff_media_type(audio_resp.content, audio_resp.headers.get("Content-Type") or "", src, file_name)
         body_bytes = audio_resp.content
-        if _is_ogg_bytes(body_bytes) or content_type == "audio/ogg":
+        if _is_ogg_bytes(body_bytes) or content_type in {"audio/ogg", "audio/opus"} or str(file_name or "").lower().endswith((".ogg", ".opus", ".oga")):
             cache_k = file_uuid or src
             if cache_k and cache_k in _OLD_OGG_MP3_CACHE:
                 body_bytes = _OLD_OGG_MP3_CACHE[cache_k]
                 content_type = "audio/mpeg"
             else:
                 try:
-                    mp3_data, mp3_mime, _ = _ffmpeg_voice_to_mp3(body_bytes, "voice.ogg")
+                    mp3_data, mp3_mime, _ = _ffmpeg_voice_to_mp3(body_bytes, file_name or "voice.ogg")
                     if mp3_data and len(mp3_data) > 64:
                         body_bytes = mp3_data
                         content_type = mp3_mime
@@ -15368,7 +15378,7 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
                                 _OLD_OGG_MP3_CACHE.pop(next(iter(_OLD_OGG_MP3_CACHE)), None)
                             _OLD_OGG_MP3_CACHE[cache_k] = mp3_data
                 except Exception as _conv_err:
-                    logger.warning("Old ogg to mp3 on-the-fly convert failed: %s", _conv_err)
+                    logger.warning("Old ogg/opus to mp3 on-the-fly convert failed: %s", _conv_err)
         return _media_bytes_response(request, body_bytes, content_type)
     except Exception as exc:
         logger.warning("Deal media proxy failed: %s", exc)

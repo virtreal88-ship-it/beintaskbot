@@ -7082,7 +7082,7 @@ async function sendDealChatMessage(fileArg) {
         incoming: false,
         text: text || (voiceNow ? '🎤 Səs mesajı' : (file ? (file.name || 'Fayl') : '')),
         message_type: voiceNow ? 'audio' : (file && /^image\//i.test(file.type) ? 'picture' : (file ? 'file' : 'text')),
-        file_name: voiceNow ? 'voice.m4a' : (file ? (file.name || '') : ''),
+        file_name: voiceNow ? 'voice.opus' : (file ? (file.name || '') : ''),
         media_url: _dealPendingUrl || localBlobUrl,
         created_at: Math.floor(Date.now() / 1000),
         delivery_status: 'sending',
