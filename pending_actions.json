@@ -1,5 +1,33 @@
 [
   {
+    "id": "399ef594",
+    "type": "assign_executor",
+    "created_at": "2026-09-25T09:19:04.773051+04:00",
+    "resolved": false,
+    "data": {
+      "contact_name": "safco",
+      "phone": "+994 70 701 02 07",
+      "lead_id": 76708861,
+      "task_text": "Salam. Bizim maqazine bir emekdash gonderilsin zehmet olmasa. Yerinde bizim problemlerin hell olunmasina komeklik etsin. Xahish olunur. Perakende satishla bagli muraciet etmishem hele bir musbet cavab ala bilmemishem.",
+      "deadline": "25.09.2026 09:17",
+      "sender_name": "Asya Agayeva",
+      "assignee_name_raw": "Nizami Qasımov",
+      "stage_name": "",
+      "link": "https://texnikidestek50.kommo.com/leads/detail/76708861",
+      "conf_key": "a075cc0b",
+      "creator_chat_id": 6596538872
+    },
+    "options": [
+      "Rüfət",
+      "Soltan",
+      "Hüseyn",
+      "Rasim",
+      "Texniki",
+      "Özüm",
+      "Rədd et"
+    ]
+  },
+  {
     "id": "b84be067",
     "type": "change_stage",
     "created_at": "2026-09-22T21:22:44.480802+04:00",
