@@ -11336,7 +11336,27 @@ async def handle_api_wa_media(request: web.Request) -> web.Response:
     raw, mime = await asyncio.to_thread(_wa_download_graph_media, media_id)
     if not raw:
         return web.Response(status=404, text="Media not found")
-    return web.Response(body=raw, content_type=mime or "application/octet-stream")
+    mime = mime or "application/octet-stream"
+    total = len(raw)
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=86400"}
+    range_header = str(request.headers.get("Range") or "")
+    if range_header.startswith("bytes="):
+        spec = range_header.split("=", 1)[1].split(",", 1)[0].strip()
+        start_s, _sep, end_s = spec.partition("-")
+        try:
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else total - 1
+        except ValueError:
+            start, end = 0, total - 1
+        if start < 0 or start >= total:
+            return web.Response(status=416, headers={"Content-Range": f"bytes */{total}"})
+        end = min(end, total - 1)
+        chunk = raw[start:end + 1]
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+        headers["Content-Length"] = str(len(chunk))
+        return web.Response(status=206, body=chunk, content_type=mime, headers=headers)
+    headers["Content-Length"] = str(total)
+    return web.Response(body=raw, content_type=mime, headers=headers)
 
 
 def _send_whatsapp_cloud_text(phone: str, text: str, reply_to: str = "") -> tuple[bool, str]:

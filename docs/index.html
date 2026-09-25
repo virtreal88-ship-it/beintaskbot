@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="296">
+    <meta name="pwa-build" content="297">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -406,6 +406,8 @@
         .wa-audio-speed:active, .wa-audio-speed.on { background:rgba(0,0,0,.1); }
         .wa-video-box { position:relative; display:inline-block; }
         .wa-video-pct { position:absolute; left:8px; bottom:8px; background:rgba(15,23,42,.72); color:#fff; border-radius:8px; padding:2px 6px; font-size:12px; font-weight:700; }
+        .wa-video-box.failed video { display:none; }
+        .wa-video-box.failed .wa-video-pct { position:static; display:inline-block; margin-top:6px; }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
         .photo-wait img.deal-zoom { margin:0; opacity:0; }
         .photo-wait .audio-spin { position:absolute; width:16px; height:16px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
@@ -3652,8 +3654,10 @@ function isChatPhotoItem(item) {
 }
 function photoWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    const img = src ? `<img class="deal-zoom" src="${escapeHtml(src)}" alt="">` : '';
-    return `<span class="photo-wait${src ? '' : ' failed'}"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span>${img}<button type="button" class="photo-miss">Yüklə</button></span>`;
+    const cloud = String(src || '').indexOf('/api/wa/media/') >= 0;
+    const img = src && !cloud ? `<img class="deal-zoom" src="${escapeHtml(src)}" alt="">` : '';
+    const state = !src ? ' failed' : (cloud ? ' loading' : '');
+    return `<span class="photo-wait${state}"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span>${img}<button type="button" class="photo-miss">Yüklə</button></span>`;
 }
 function showCachedPhoto(wrap) {
     const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'picture'));
@@ -3779,12 +3783,15 @@ function bindPhotoWait(root) {
             else if(img.complete) fail();
         }
         const button = wrap.querySelector('.photo-miss');
-        if(!button) return;
-        button.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            loadMissingPhoto(wrap);
-        });
+        if(button) {
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                loadMissingPhoto(wrap);
+            });
+        }
+        const direct = wrap.getAttribute('data-src') || '';
+        if(direct.indexOf('/api/wa/media/') >= 0 && !wrap.classList.contains('ready')) loadMissingPhoto(wrap);
     });
 }
 function dropAudioCache(wrap, audio) {
@@ -3803,27 +3810,78 @@ async function fetchAudioObjectUrl(wrap, onProgress) {
     const blob = await fetchMediaBlob(src, onProgress);
     return URL.createObjectURL(blob);
 }
+function finiteAudioDuration(audio, wrap) {
+    const d = Number(audio && audio.duration);
+    if(Number.isFinite(d) && d > 0 && d < 1e5) return d;
+    const saved = Number(wrap && wrap.dataset.duration || 0);
+    if(saved > 0) return saved;
+    try {
+        if(audio && audio.seekable && audio.seekable.length) {
+            const end = Number(audio.seekable.end(audio.seekable.length - 1));
+            if(Number.isFinite(end) && end > 0 && end < 1e5) return end;
+        }
+    } catch(_e) {}
+    return 0;
+}
+function discoverAudioDuration(audio) {
+    const known = Number(audio && audio.duration);
+    if(Number.isFinite(known) && known > 0 && known < 1e5) return Promise.resolve(known);
+    return new Promise(resolve => {
+        const run = () => {
+            let settled = false;
+            const finish = (value) => {
+                if(settled) return;
+                settled = true;
+                audio.removeEventListener('durationchange', onDur);
+                audio.removeEventListener('timeupdate', onTime);
+                const next = Number(value);
+                resolve(Number.isFinite(next) && next > 0 && next < 1e5 ? next : 0);
+            };
+            const onDur = () => finish(audio.duration);
+            const onTime = () => {
+                const next = Number(audio.duration);
+                if(Number.isFinite(next) && next > 0 && next < 1e5) {
+                    try { audio.currentTime = 0; } catch(_e) {}
+                    finish(next);
+                }
+            };
+            audio.addEventListener('durationchange', onDur);
+            audio.addEventListener('timeupdate', onTime);
+            try { audio.currentTime = 1e101; } catch(_e) { finish(0); return; }
+            setTimeout(() => finish(audio.duration), 1200);
+        };
+        if(audio.readyState >= 1) run();
+        else audio.addEventListener('loadedmetadata', run, {once: true});
+    });
+}
 function bindVideoProgress(root) {
     (root || document).querySelectorAll('.wa-video-box').forEach(box => {
         if(box.dataset.bound) return;
         box.dataset.bound = '1';
         const video = box.querySelector('video');
         const pct = box.querySelector('.wa-video-pct');
-        if(!video || !pct) return;
-        const paint = () => {
-            let ratio = 0;
-            if(video.duration && video.buffered && video.buffered.length) {
-                ratio = video.buffered.end(video.buffered.length - 1) / video.duration;
-            } else if(video.readyState >= 2) {
-                ratio = 1;
-            }
-            const n = Math.max(0, Math.min(100, Math.round(ratio * 100)));
-            pct.textContent = n + '%';
-            if(n >= 99 || video.readyState >= 3) pct.hidden = true;
+        if(!video) return;
+        const fail = () => {
+            box.classList.add('failed');
+            if(pct) { pct.hidden = false; pct.textContent = 'Video açılmadı'; }
         };
-        video.addEventListener('progress', paint);
-        video.addEventListener('loadeddata', paint);
-        video.addEventListener('canplay', paint);
+        const ready = () => {
+            box.classList.remove('failed');
+            if(pct) pct.hidden = true;
+        };
+        video.addEventListener('canplay', ready);
+        video.addEventListener('loadeddata', ready);
+        video.addEventListener('error', fail);
+        const src = video.getAttribute('src') || '';
+        if(src.indexOf('/api/wa/media/') < 0) return;
+        video.removeAttribute('src');
+        try { video.load(); } catch(_e) {}
+        fetchMediaBlob(src, n => {
+            if(pct && !box.classList.contains('failed')) { pct.hidden = false; pct.textContent = n + '%'; }
+        }).then(blob => {
+            video.src = URL.createObjectURL(blob);
+            try { video.load(); } catch(_e) {}
+        }).catch(fail);
     });
 }
 function bindAudioWait(root) {
@@ -3858,7 +3916,8 @@ function bindAudioWait(root) {
         }
 
         function updateProgress(cur, dur) {
-            const d = (dur && !isNaN(dur) && dur > 0) ? dur : 0;
+            const given = Number(dur);
+            const d = (Number.isFinite(given) && given > 0 && given < 1e5) ? given : finiteAudioDuration(audio, wrap);
             const c = (cur && !isNaN(cur) && cur >= 0) ? cur : 0;
             const pct = d > 0 ? Math.min(1, Math.max(0, c / d)) : 0;
             const pctStr = (pct * 100) + '%';
@@ -3883,6 +3942,10 @@ function bindAudioWait(root) {
                 }
                 if(audio.src && audio.src !== window.location.href && !audio.error && audio.readyState >= 1) {
                     stopAllOtherAudios(audio);
+                    if(!finiteAudioDuration(audio, wrap)) {
+                        const found = await discoverAudioDuration(audio);
+                        if(found) wrap.dataset.duration = String(found);
+                    }
                     try { await audio.play(); } catch(_e) {}
                     return;
                 }
@@ -3914,7 +3977,9 @@ function bindAudioWait(root) {
                     }
                     audio.pause();
                     audio.src = url;
-                    audio.currentTime = 0;
+                    const found = await discoverAudioDuration(audio);
+                    if(found) wrap.dataset.duration = String(found);
+                    try { audio.currentTime = 0; } catch(_e) {}
                     wrap.classList.remove('loading');
                     wrap.classList.add('ready');
                     stopAllOtherAudios(audio);
@@ -3936,13 +4001,27 @@ function bindAudioWait(root) {
             });
         }
 
+        const stopTick = () => {
+            if(wrap._tick) { cancelAnimationFrame(wrap._tick); wrap._tick = 0; }
+        };
+        const startTick = () => {
+            stopTick();
+            const frame = () => {
+                if(audio.paused) return;
+                updateProgress(audio.currentTime, finiteAudioDuration(audio, wrap));
+                wrap._tick = requestAnimationFrame(frame);
+            };
+            wrap._tick = requestAnimationFrame(frame);
+        };
         audio.addEventListener('play', () => {
             stopAllOtherAudios(audio);
             wrap.classList.remove('loading');
             wrap.classList.add('ready', 'playing');
+            startTick();
         });
         audio.addEventListener('pause', () => {
             wrap.classList.remove('playing');
+            stopTick();
         });
         audio.addEventListener('ended', () => {
             wrap.classList.remove('playing');
@@ -8205,27 +8284,55 @@ function chatsListAt(deal) {
 function chatsOutgoingAt(deal) {
     return Number((deal && deal.last_outgoing_at) || 0);
 }
+function hiddenPhoneKey(phone) {
+    const digits = waPhoneDigits(phone);
+    return digits ? ('p:' + digits) : '';
+}
+function hiddenStoredAt(stored) {
+    return stored && typeof stored === 'object' ? Number(stored.at || 0) : 0;
+}
 function pruneChatsHidden(deals) {
     const hidden = getChatsHidden();
     let changed = false;
     (deals || []).forEach(deal => {
         if(!deal || !deal.id) return;
-        const id = String(deal.id);
-        if(!Object.prototype.hasOwnProperty.call(hidden, id)) return;
-        const stored = hidden[id];
-        const storedAt = stored && typeof stored === 'object' ? Number(stored.at || 0) : 0;
-        const storedText = stored && typeof stored === 'object' ? String(stored.text || '') : String(stored || '');
         const incomingAt = chatsIncomingAt(deal);
-        const text = chatsHideText(deal);
-        const newerIncoming = incomingAt && incomingAt > storedAt;
-        const newerText = text && text !== storedText && (!storedAt || !incomingAt || incomingAt >= storedAt);
-        if(newerIncoming || newerText) {
-            delete hidden[id];
-            changed = true;
-        }
+        const phone = (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone;
+        [String(deal.id), hiddenPhoneKey(phone)].forEach(key => {
+            if(!key || !Object.prototype.hasOwnProperty.call(hidden, key)) return;
+            const storedAt = hiddenStoredAt(hidden[key]);
+            if(incomingAt && storedAt && incomingAt > storedAt) {
+                delete hidden[key];
+                changed = true;
+            }
+        });
     });
     if(changed) saveChatsHidden(hidden);
     return hidden;
+}
+function isChatRowHidden(deal, hidden) {
+    if(!deal || !deal.id) return false;
+    const bag = hidden || getChatsHidden();
+    const incomingAt = chatsIncomingAt(deal);
+    const digits = waPhoneDigits((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone);
+    const keys = [String(deal.id)];
+    if(digits) keys.push('p:' + digits);
+    for(let i = 0; i < keys.length; i += 1) {
+        const stored = bag[keys[i]];
+        if(!stored) continue;
+        const storedAt = hiddenStoredAt(stored);
+        if(incomingAt && storedAt && incomingAt > storedAt) continue;
+        return true;
+    }
+    if(!digits) return false;
+    return (samilDeals || []).some(other => {
+        if(!other || String(other.id) === String(deal.id)) return false;
+        const stored = bag[String(other.id)];
+        if(!stored) return false;
+        if(waPhoneDigits((Array.isArray(other.phones) && other.phones[0]) || other.phone) !== digits) return false;
+        const storedAt = hiddenStoredAt(stored);
+        return !(incomingAt && storedAt && incomingAt > storedAt);
+    });
 }
 function unhideInboxChat(leadId) {
     const id = String(leadId || '');
@@ -8240,7 +8347,9 @@ function hideInboxChat(leadId) {
     if(!id) return;
     const deal = (samilDeals || []).find(item => String(item.id) === id);
     const hidden = getChatsHidden();
-    hidden[id] = {at: chatsIncomingAt(deal), text: chatsHideText(deal)};
+    const digits = waPhoneDigits((deal && Array.isArray(deal.phones) && deal.phones[0]) || (deal && deal.phone) || '');
+    hidden[id] = {at: chatsIncomingAt(deal), text: chatsHideText(deal), phone: digits};
+    if(digits) hidden['p:' + digits] = hidden[id];
     saveChatsHidden(hidden);
     if(_dealInboxMode && _dealViewState && String(_dealViewState.id) === id) {
         closeInboxChat();
@@ -8298,10 +8407,10 @@ function markChatsUnread(leadId) {
 function chatsIsUnread(deal, seen) {
     if(!deal || !deal.id) return false;
     const store = seen || getChatsSeen();
+    if(store['unread_' + String(deal.id)]) return true;
     const incomingAt = chatsIncomingAt(deal);
     const lastSeen = Number(store[String(deal.id)] || 0);
     if(incomingAt && lastSeen >= incomingAt) return false;
-    if(store['unread_' + String(deal.id)]) return true;
     const outgoingAt = chatsOutgoingAt(deal);
     if(outgoingAt && incomingAt && outgoingAt >= incomingAt) return false;
     if(incomingAt && incomingAt > lastSeen) return true;
@@ -8715,14 +8824,59 @@ function chatBelongsToViewer(deal) {
     if(line && line !== mine) return false;
     return true;
 }
+function waDealDigits(deal) {
+    return waPhoneDigits((deal && Array.isArray(deal.phones) && deal.phones[0]) || (deal && deal.phone) || '');
+}
+function preferWaDeal(a, b) {
+    const aPending = Number(a && a.id) >= 9000000000000;
+    const bPending = Number(b && b.id) >= 9000000000000;
+    const keep = aPending !== bPending ? (aPending ? b : a) : (chatsListAt(a) >= chatsListAt(b) ? a : b);
+    const other = keep === a ? b : a;
+    if(chatsListAt(other) > chatsListAt(keep)) {
+        if(other.last_client_message) keep.last_client_message = other.last_client_message;
+        if(other.last_incoming_at) keep.last_incoming_at = other.last_incoming_at;
+        keep.chat_at = Math.max(Number(keep.chat_at || 0), Number(other.chat_at || 0));
+    }
+    if(!keep.wa_line && other.wa_line) keep.wa_line = other.wa_line;
+    if(!keep.contact_name && other.contact_name) keep.contact_name = other.contact_name;
+    if(!keep.phone && other.phone) keep.phone = other.phone;
+    const seen = getChatsSeen();
+    if(seen['unread_' + other.id] && !seen['unread_' + keep.id]) {
+        seen['unread_' + keep.id] = 1;
+        const incoming = chatsIncomingAt(keep) || Math.floor(Date.now() / 1000);
+        if(Number(seen[keep.id] || 0) >= incoming) seen[keep.id] = Math.max(0, incoming - 1);
+        saveChatsSeen(seen);
+    }
+    return keep;
+}
+function collapseSamePhoneChats(deals) {
+    const out = [];
+    const index = new Map();
+    (deals || []).forEach(deal => {
+        const channel = String(deal && (deal.chat_channel || deal.inbox_channel) || '').toLowerCase();
+        const digits = waDealDigits(deal);
+        if(!digits || (channel && channel !== 'whatsapp' && !(deal && deal.wa_line))) {
+            out.push(deal);
+            return;
+        }
+        if(!index.has(digits)) {
+            index.set(digits, out.length);
+            out.push(deal);
+            return;
+        }
+        const at = index.get(digits);
+        out[at] = preferWaDeal(out[at], deal);
+    });
+    return out;
+}
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const hidden = pruneChatsHidden(samilDeals);
     const knownPhones = new Set();
     const deals = (samilDeals || []).filter(deal => {
-        const digits = waPhoneDigits((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone);
+        const digits = waDealDigits(deal);
         if(digits) knownPhones.add(digits);
-        if(Object.prototype.hasOwnProperty.call(hidden, String(deal.id))) return false;
+        if(isChatRowHidden(deal, hidden)) return false;
         const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
         if(!(preview || chatsIncomingAt(deal) || ['whatsapp','instagram','tiktok','facebook','telegram'].includes(channel))) return false;
@@ -8743,7 +8897,7 @@ function chatsInboxDeals() {
         }
         deals.push(row);
     });
-    return deals.sort((a, b) => {
+    return collapseSamePhoneChats(deals).sort((a, b) => {
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
@@ -9306,11 +9460,11 @@ async function pollInboxPulse() {
                 const localSeen = getChatsSeen();
                 let seenUpdated = false;
                 Object.entries(payload.seen).forEach(([k, sTs]) => {
+                    if(localSeen['unread_' + k]) return;
                     const serverSeenTs = Number(sTs || 0);
                     const currentLocalTs = Number(localSeen[k] || 0);
                     if(serverSeenTs > currentLocalTs) {
                         localSeen[k] = serverSeenTs;
-                        delete localSeen['unread_' + k];
                         seenUpdated = true;
                     }
                 });
