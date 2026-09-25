@@ -98,7 +98,7 @@
     "994518045885": 77486047,
     "994504071030": 77446477,
     "994506459111": 77112065,
-    "994554591103": 77470427,
+    "994554591103": 77470409,
     "994503894151": 76276625,
     "994552000048": 77149665,
     "994707975737": 77107445,
@@ -164,7 +164,7 @@
     "994552003327": 77122997,
     "994553160909": 71058485,
     "994515550729": 75281217,
-    "994502072240": 78023867,
+    "994502072240": 58997950,
     "994605200004": 65100640,
     "994519992111": 67336164,
     "994554336609": 72273445,
@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790343208,
+    "at": 1790343239,
     "fields": [
       "messages"
     ]
@@ -1867,6 +1867,30 @@
       "file_name": "",
       "delivery_status": "delivered",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAxFQIAEhgWM0VCMDkyNkU5QzE4OEM1MEI5NTFENgA=",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAxFQIAEhgWM0VCMDkyNkU5QzE4OEM1MEI5NTFENgA=",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Texniki Destek",
+      "phone": "994102135101",
+      "text": "yaxşı",
+      "message_type": "text",
+      "created_at": 1790343120,
+      "created": "25.09.2026 17:32",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ],
   "77967731": [
