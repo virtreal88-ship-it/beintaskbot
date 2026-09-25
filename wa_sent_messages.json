@@ -206,7 +206,7 @@
     "994703019609": 77992437,
     "994558219058": 70993268,
     "994702222181": 78005569,
-    "994102135103": 74547175,
+    "994102135103": 78022515,
     "994552158229": 77452293,
     "994508552988": 67407438,
     "994553566969": 76476261,
@@ -1299,6 +1299,29 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNjYxQ0JGQUJCRjAxQjIzODJBAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNjYxQ0JGQUJCRjAxQjIzODJBAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "994102135103",
+      "text": "34",
+      "message_type": "text",
+      "created_at": 1790354075,
+      "created": "25.09.2026 20:34",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTU5QjQyMzEwNDNFOEI3OTExQTBBNEE4N0I0NjUyQUUA",
+      "reply_to_text": "2033",
+      "reply_to_author": "Support 03",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
     }
   ],
   "78023867": [
