@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="295">
+    <meta name="pwa-build" content="296">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5568,13 +5568,14 @@ function livePreviewRow(deal) {
     const text = chatNoticeText(dealLastClientMessage(deal));
     const at = Number(chatsIncomingAt(deal) || 0);
     if(!text || !deal) return null;
+    const wamid = String(deal.last_wamid || '').trim();
     return {
-        id: 'live-' + deal.id + '-' + at,
+        id: wamid || ('live-' + deal.id + '-' + at),
         incoming: true,
         text,
         created_at: at || Math.floor(Date.now() / 1000),
         channel: deal.chat_channel || 'whatsapp',
-        external_id: deal.last_wamid || '',
+        external_id: wamid,
         phone: deal.phone || ''
     };
 }
@@ -5582,13 +5583,20 @@ function withLivePreview(rows, deal) {
     const base = Array.isArray(rows) ? rows.slice() : [];
     const live = livePreviewRow(deal);
     if(!live) return base;
-    const same = base.some(row => {
+    const sameIndex = base.findIndex(row => {
         if(live.external_id && String(row && row.external_id || '') === live.external_id) return true;
         const text = String(row && row.text || '').trim();
         const ts = Number(row && row.created_at || 0);
         return text === live.text && (!ts || !live.created_at || Math.abs(ts - live.created_at) < 180);
     });
-    if(same) return base;
+    if(sameIndex >= 0) {
+        const row = base[sameIndex];
+        if(row && live.external_id && !String(row.external_id || '').toLowerCase().startsWith('wamid')) {
+            row.external_id = live.external_id;
+            if(String(row.id || '').startsWith('live-')) row.id = live.external_id;
+        }
+        return base;
+    }
     const newest = base.reduce((max, row) => Math.max(max, Number(row && row.created_at || 0)), 0);
     if(newest && live.created_at && live.created_at + 2 < newest) return base;
     return base.concat([live]);
@@ -5599,8 +5607,10 @@ function showLivePreviewInOpenChat(deal) {
     const openPhone = waPhoneKey(openChatCustomerPhone());
     const samePhone = !!(openPhone && openPhone === waPhoneKey(deal.phone));
     if(!sameId && !samePhone) return;
+    const prevIds = (_dealViewState.messages || []).map(row => String(row && row.external_id || '')).join('\n');
     const next = withLivePreview(_dealViewState.messages, deal);
-    if(next.length === (_dealViewState.messages || []).length) return;
+    const nextIds = next.map(row => String(row && row.external_id || '')).join('\n');
+    if(next.length === (_dealViewState.messages || []).length && prevIds === nextIds) return;
     _dealViewState.messages = next;
     _dealViewState.loading = false;
     paintDealChatThread({stickBottom: true, force: true});
@@ -7368,10 +7378,11 @@ async function sendDealChatMessage(fileArg) {
         paintDealChatThread({stickBottom: true, force: false});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
-            if(err && err.name === 'AbortError') optimisticMsg.delivery_status = 'sent';
+            const aborted = !!(err && err.name === 'AbortError');
+            if(aborted) optimisticMsg.delivery_status = 'sent';
             else optimisticMsg.delivery_status = 'error';
             paintDealChatThread({stickBottom: false, force: true});
-            if(input && !input.value) {
+            if(!aborted && input && !input.value) {
                 input.value = savedInputText;
             }
             if(voiceNow) {
@@ -7384,7 +7395,7 @@ async function sendDealChatMessage(fileArg) {
                 }
             }
             keepSentChatVisible(leadId);
-            if(!(err && err.name === 'AbortError')) toast(err.message || 'Göndərilmədi', true);
+            if(!aborted) toast(err.message || 'Göndərilmədi', true);
         }
     } finally {
         window.clearTimeout(slow);

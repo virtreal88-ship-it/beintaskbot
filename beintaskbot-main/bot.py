@@ -5862,6 +5862,7 @@ def _apply_inbox_incoming(
     contact_name: str = "",
     phone: str = "",
     wa_line: str = "",
+    external_id: str = "",
 ) -> bool:
     """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
     global _inbox_pulse_rev
@@ -5914,6 +5915,7 @@ def _apply_inbox_incoming(
             "last_incoming_at": int(created_at or 0),
             "chat_channel": channel,
             "wa_line": str(wa_line or ""),
+            "external_id": str(external_id or ""),
             "missing": bool(not found and channel != "whatsapp"),
             "refresh": False,
         })
@@ -12420,12 +12422,16 @@ def _lead_id_for_phone_anywhere(phone: str) -> int:
 
 
 def _wa_thread_rows(lead_id: int) -> list[dict]:
-    """Messages of this chat plus any copy stored under the same customer number."""
-    primary = _sent_messages_for_lead(lead_id)
+    """Messages of this chat and the same customer number. Does not walk every other chat."""
+    try:
+        canon = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return []
+    primary = _sent_messages_for_lead(canon)
     phones = {_wa_phone_key(row.get("phone")) for row in primary}
     phones.discard("")
+    extra_ids: list[int] = []
     store = _load_sent_messages()
-    extra_ids: set[int] = set()
     with _wa_sent_lock:
         idx = store.get(_WA_PHONE_LEADS_KEY)
         if isinstance(idx, dict):
@@ -12434,40 +12440,44 @@ def _wa_thread_rows(lead_id: int) -> list[dict]:
                     mid = int(mapped or 0)
                 except (TypeError, ValueError):
                     continue
-                if mid == int(lead_id or 0):
-                    phones.add(str(key))
-        if phones:
-            for raw_key, rows in store.items():
-                if not str(raw_key).isdigit() or not isinstance(rows, list):
-                    continue
+                phone_key = _wa_phone_key(key)
+                if mid == canon and phone_key:
+                    phones.add(phone_key)
+                elif phone_key in phones and mid and mid != canon:
+                    extra_ids.append(mid)
+        alias = store.get("_lead_alias")
+        if isinstance(alias, dict):
+            for raw_old, raw_new in alias.items():
                 try:
-                    lid = int(raw_key)
+                    old = int(raw_old)
+                    new = int(raw_new or 0)
                 except (TypeError, ValueError):
                     continue
-                if any(isinstance(row, dict) and _wa_phone_key(row.get("phone")) in phones for row in rows):
-                    extra_ids.add(lid)
-            for phone in phones:
-                pending = _pending_wa_lead_id(phone)
-                if pending:
-                    extra_ids.add(pending)
-        merged = list(primary)
-        seen = {str(row.get("external_id") or row.get("id") or "") for row in merged}
-        canon = int(lead_id or 0)
-        for lid in extra_ids:
-            if lid == canon:
+                if new == canon and old:
+                    extra_ids.append(old)
+                elif old == canon and new:
+                    extra_ids.append(new)
+    for phone in list(phones):
+        pending = _pending_wa_lead_id(phone)
+        if pending:
+            extra_ids.append(pending)
+        indexed = _lead_id_for_stored_phone(phone)
+        if indexed:
+            extra_ids.append(int(indexed))
+    merged = list(primary)
+    seen = {str(row.get("external_id") or row.get("id") or "") for row in merged}
+    seen_ids = {canon}
+    for lid in extra_ids:
+        if not lid or lid in seen_ids:
+            continue
+        seen_ids.add(lid)
+        for row in _sent_messages_for_lead(lid):
+            token = str(row.get("external_id") or row.get("id") or "")
+            if token and token in seen:
                 continue
-            bucket = store.get(str(lid))
-            if not isinstance(bucket, list):
-                continue
-            for row in bucket:
-                if not isinstance(row, dict):
-                    continue
-                token = str(row.get("external_id") or row.get("id") or "")
-                if token and token in seen:
-                    continue
-                if token:
-                    seen.add(token)
-                merged.append(dict(row))
+            if token:
+                seen.add(token)
+            merged.append(row)
     return merged
 
 
@@ -12784,7 +12794,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
             ).start()
         else:
             try:
-                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line)
+                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line, external_id=wamid)
             except Exception:
                 pass
             threading.Thread(target=_patch_cloud_inbox_into_rufat_cache, daemon=True).start()
@@ -15694,7 +15704,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
         sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
         _remember_sent_message(int(lead.get("id") or lead_id), sent_item)
-    _append_chat_tail(int(lead.get("id") or lead_id), {
+    sent_row = {
         "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
         "external_id": str(sent_wamid or ""),
         "incoming": False,
@@ -15711,13 +15721,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "reply_to_message_id": reply_to_message_id or wa_quote_id,
         "reply_to_text": reply_preview,
         "reply_to_author": reply_author,
-    })
+    }
+    _append_chat_tail(int(lead.get("id") or lead_id), sent_row)
     if sent_via_cloud:
         lid_int = int(lead.get("id") or lead_id)
-        viewer_line = _viewer_wa_line(chat_id)
-        chat = [item for item in _wa_thread_rows(lid_int) if _row_visible_on_line(item, viewer_line)]
-        chat.sort(key=lambda item: int(item.get("created_at") or 0))
-        chat = chat[-20:]
+        chat = [sent_row]
         _apply_saved_replies(chat)
         if reply_to_message_id:
             _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
