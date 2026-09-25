@@ -5546,6 +5546,7 @@ def record_lead_pulse_event(
     refresh: bool = False,
     incoming_at: int = 0,
     wa_line: str = "",
+    replaced_by: int = 0,
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -5600,6 +5601,7 @@ def record_lead_pulse_event(
             "last_incoming_at": event_incoming_at,
             "chat_channel": str(channel or ""),
             "wa_line": str(wa_line or ""),
+            "replaced_by": int(replaced_by or 0),
             "missing": bool(missing),
             "refresh": bool(refresh),
         })
@@ -6018,7 +6020,7 @@ def _row_visible_on_line(row: dict, viewer_line: str) -> bool:
     if viewer_line not in {"rufat", "nizami"}:
         return False
     if not line:
-        return viewer_line == "rufat"
+        return True
     return line == viewer_line
 
 
@@ -6037,7 +6039,7 @@ def _lead_wa_line(lead_id: int) -> str:
         line = _message_wa_line(row)
         if line:
             return line
-    return "rufat" if rows else ""
+    return ""
 
 
 def _wa_line_for_phone_id(phone_number_id: str) -> str:
@@ -6231,6 +6233,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             "contact_name": deal.get("contact_name") or row.get("contact_name") or "",
             "phone": deal.get("phone") or row.get("phone") or "",
             "missing": bool(row.get("missing")),
+            "replaced_by": int(row.get("replaced_by") or 0),
         })
         if lid not in seen_chats and (row.get("last_client_message") or row.get("chat_channel")):
             seen_chats.add(lid)
@@ -12459,7 +12462,7 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
         pipeline_id=int(NIZAMI_PIPELINE_ID) if wa_line == "nizami" else int(RUFAT_PIPELINE_ID),
         wa_line=wa_line,
     )
-    record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone, wa_line=wa_line)
+    record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone, wa_line=wa_line, replaced_by=real)
 
 
 def _resolve_cloud_lead(phone: str, contact_name: str, *, use_stored: bool = True, sender_phone_id: str = "") -> int:
@@ -15339,7 +15342,9 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     reply_author = ""
     hinted_talk = 0
     hinted_sender = ""
+    hinted_customer = ""
     form_is_voice = False
+    data = {}
     ctype = str(request.content_type or "")
     if ctype.startswith("multipart/"):
         form = await request.post()
@@ -15355,6 +15360,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
         reply_author = str(form.get("reply_to_author") or "").strip()[:80]
         hinted_sender = str(form.get("sender_phone") or "")
+        hinted_customer = str(form.get("customer_phone") or "")
         try:
             hinted_talk = int(form.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -15385,6 +15391,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
         reply_author = str(data.get("reply_to_author") or "").strip()[:80]
         hinted_sender = str(data.get("sender_phone") or "")
+        hinted_customer = str(data.get("customer_phone") or "")
         try:
             hinted_talk = int(data.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -15401,12 +15408,12 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not is_funnel_chat(chat_id) and not is_admin(chat_id):
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
         known_phones = _phones_for_wa_lead(lead_id)
-        if known_phones:
-            lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
-        else:
-            lead, err = _authorized_deal_lead(chat_id, lead_id)
-            if err:
-                return err
+        hinted_customer = str(hinted_customer or "").strip()
+        if not known_phones and hinted_customer:
+            known_phones = [hinted_customer]
+        if not known_phones:
+            return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
+        lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
     else:
         lead, err = _authorized_deal_lead(chat_id, lead_id)
         if err:
@@ -15568,6 +15575,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             reply_id=reply_to_message_id or wa_quote_id,
             reply_text=reply_preview,
             reply_author=reply_author,
+            phone=str((lead.get("phones") or [""])[0] or ""),
         )
         sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
         _remember_sent_message(int(lead.get("id") or lead_id), sent_item)

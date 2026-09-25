@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="290">
+    <meta name="pwa-build" content="291">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5381,6 +5381,24 @@ function dealWaSenderPhone() {
     if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return '+994102135105';
     return '+994502072240';
 }
+function openChatCustomerPhone() {
+    const deal = _dealViewState && _dealViewState.deal;
+    const list = deal && Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal && deal.phone ? [deal.phone] : []);
+    return String(list[0] || '');
+}
+function keepSentChatVisible(leadId) {
+    const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
+    const line = viewerWaLine();
+    const now = Math.floor(Date.now() / 1000);
+    if(deal) {
+        if(line) deal.wa_line = line;
+        deal.chat_channel = deal.chat_channel || 'whatsapp';
+        deal.chat_at = Math.max(Number(deal.chat_at || 0), now);
+        deal.last_outgoing_at = now;
+    }
+    unhideInboxChat(leadId);
+    if(document.getElementById('screen-chats')?.classList.contains('active') || _dealInboxMode) renderChatsList();
+}
 function paintDealChannels(channels, active) {
     const bars = document.querySelectorAll('.deal-chat-channels');
     if(!bars.length) return;
@@ -7202,6 +7220,8 @@ async function sendDealChatMessage(fileArg) {
         clearDealChatReply();
     }
 
+    const ctrl = new AbortController();
+    const slow = window.setTimeout(() => ctrl.abort(), 20000);
     try {
         let r;
         if(file) {
@@ -7217,18 +7237,22 @@ async function sendDealChatMessage(fileArg) {
             if(talkId) form.append('talk_id', String(talkId));
             const senderPhone = dealWaSenderPhone();
             if(senderPhone) form.append('sender_phone', senderPhone);
+            const customerPhone = openChatCustomerPhone();
+            if(customerPhone) form.append('customer_phone', customerPhone);
             const sendFilename = voiceNow ? (file.name || 'voice.ogg') : (file.name || 'file');
             form.append('file', file, sendFilename);
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
                 headers: {'X-TG-User-ID': CURRENT_USER_ID},
-                body: form
+                body: form,
+                signal: ctrl.signal
             });
         } else {
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor, reply_external_id: replyExternal, talk_id: talkId, sender_phone: dealWaSenderPhone()})
+                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor, reply_external_id: replyExternal, talk_id: talkId, sender_phone: dealWaSenderPhone(), customer_phone: openChatCustomerPhone()}),
+                signal: ctrl.signal
             });
         }
         const d = await r.json().catch(() => ({}));
@@ -7240,6 +7264,7 @@ async function sendDealChatMessage(fileArg) {
         }
 
         optimisticMsg.delivery_status = 'sent';
+        keepSentChatVisible(leadId);
         clearDealPendingFile();
 
         const serverChat = Array.isArray(d.chat) ? d.chat : [];
@@ -7285,9 +7310,10 @@ async function sendDealChatMessage(fileArg) {
                     document.querySelector('.wa-composer-field')?.classList.add('has-voice');
                 }
             }
-            toast(err.message || 'Göndərilmədi', true);
+            toast(err && err.name === 'AbortError' ? 'Göndərmə gecikdi, yenidən basın' : (err.message || 'Göndərilmədi'), true);
         }
     } finally {
+        window.clearTimeout(slow);
         _dealChatSending = false;
         if(field) field.classList.remove('sending');
         if(btn) btn.disabled = false;
@@ -8600,8 +8626,9 @@ function chatBelongsToViewer(deal) {
     const line = String((deal && deal.wa_line) || '');
     const mine = viewerWaLine();
     if(!mine) return false;
-    if(line) return line === mine;
-    return mine === 'rufat';
+    if(_dealInboxMode && _dealViewState && String(deal.id) === String(_dealViewState.id)) return true;
+    if(line && line !== mine) return false;
+    return true;
 }
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
@@ -9052,8 +9079,14 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
         let oldStageKey = '';
         const idx = (samilDeals || []).findIndex(d => String(d.id) === key);
         if(idx !== -1) {
-            oldStageKey = samilDeals[idx].stage_key;
-            samilDeals[idx] = Object.assign({}, samilDeals[idx], freshDeal);
+            const prev = samilDeals[idx];
+            oldStageKey = prev.stage_key;
+            if(!freshDeal.wa_line && prev.wa_line) freshDeal.wa_line = prev.wa_line;
+            if(!freshDeal.chat_channel && prev.chat_channel) freshDeal.chat_channel = prev.chat_channel;
+            if(!freshDeal.last_client_message && prev.last_client_message) freshDeal.last_client_message = prev.last_client_message;
+            if(!freshDeal.last_incoming_at && prev.last_incoming_at) freshDeal.last_incoming_at = prev.last_incoming_at;
+            if(!freshDeal.chat_at && prev.chat_at) freshDeal.chat_at = prev.chat_at;
+            samilDeals[idx] = Object.assign({}, prev, freshDeal);
         } else {
             samilDeals.unshift(freshDeal);
         }
@@ -9220,6 +9253,21 @@ async function pollInboxPulse() {
             const events = Array.isArray(payload.events) ? payload.events : [];
             events.forEach(event => {
                 if(!event || !event.missing || !event.lead_id) return;
+                const openId = _dealViewState ? String(_dealViewState.id) : '';
+                const nextId = event.replaced_by ? String(event.replaced_by) : '';
+                if(nextId) {
+                    const from = (samilDeals || []).find(deal => String(deal.id) === String(event.lead_id));
+                    const exists = (samilDeals || []).some(deal => String(deal.id) === nextId);
+                    if(from && !exists) from.id = Number(nextId) || nextId;
+                    else samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
+                    if(openId === String(event.lead_id) && _dealViewState) {
+                        _dealViewState.id = Number(nextId) || nextId;
+                        if(_dealViewState.deal) _dealViewState.deal.id = _dealViewState.id;
+                    }
+                    if(chatsOpen || _dealInboxMode) renderChatsList();
+                    return;
+                }
+                if(openId === String(event.lead_id)) return;
                 const before = samilDeals.length;
                 samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== String(event.lead_id));
                 if(samilDeals.length !== before && chatsOpen) renderChatsList();
