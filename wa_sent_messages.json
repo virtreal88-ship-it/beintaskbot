@@ -353,7 +353,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790337602,
+    "at": 1790337674,
     "fields": [
       "messages"
     ]
@@ -667,6 +667,28 @@
       "file_uuid": "ff16af97-a060-44a2-9012-7b7abfc6e9be",
       "file_name": "",
       "delivery_status": "failed",
+      "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU0OERERDlBRDRFODk3MzYxMUU2OTc4QTcyNDkzMUYA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAEhggQTU0OERERDlBRDRFODk3MzYxMUU2OTc4QTcyNDkzMUYA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Oneline SOFT",
+      "phone": "994102135104",
+      "text": "Gəlir",
+      "message_type": "text",
+      "created_at": 1790337616,
+      "created": "25.09.2026 16:00",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
       "via_cloud": true
     }
   ],
