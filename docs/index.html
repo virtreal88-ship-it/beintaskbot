@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="285">
+    <meta name="pwa-build" content="286">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -361,8 +361,8 @@
         .deal-sum-btn.loading svg { visibility:hidden; }
         .deal-sum-btn.loading::after { content:''; position:absolute; inset:8px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:600; padding:0; }
-        .wa-composer-field.sending textarea { color:transparent; }
-        .wa-composer-field.sending::after { content:''; position:absolute; left:42px; top:50%; width:14px; height:14px; margin-top:-7px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; z-index:3; }
+        .wa-composer-field.sending textarea { color:inherit; }
+        .wa-composer-field.sending::after { display:none; }
         .audio-wait { position:relative; margin-top:6px; display:flex; align-items:center; gap:6px; min-width:240px; max-width:100%; width:100%; }
         .deal-chat-row.has-audio { min-width:min(280px, 92vw); }
         .wa-audio-player { position:relative; margin-top:4px; display:flex; align-items:center; gap:8px; min-width:240px; max-width:100%; width:100%; padding:2px 0; user-select:none; -webkit-user-select:none; }
@@ -2071,7 +2071,7 @@ async function initApp() {
     startAppPulse();
     if(HAS_CHATS) await switchTab('tab-chats', false);
     else await openNotifications();
-    applyHashRoute({skipChat: true});
+    applyHashRoute();
     await maybeOpenSharedDeal();
 }
 
@@ -4257,11 +4257,11 @@ function dealChatWhen(item) {
 function dealChatTicks(item) {
     if(!item || item.incoming || item.is_comment) return '';
     const st = String(item.delivery_status || item.status || 'sent').toLowerCase();
-    if(st === 'sending' || st === 'pending' || st === '0') return '<span class="wa-ticks sending" title="Göndərilir">🕒</span><span class="wa-state">Göndərilir</span>';
-    if(st === 'read' || st === 'seen' || st === '3') return '<span class="wa-ticks read" title="Oxundu">✓✓</span><span class="wa-state">Oxundu</span>';
-    if(st === 'delivered' || st === '1' || st === '2') return '<span class="wa-ticks delivered" title="Çatdırıldı">✓✓</span><span class="wa-state">Çatdırıldı</span>';
+    if(st === 'sending' || st === 'pending' || st === '0') return '<span class="wa-ticks sending" title="Göndərilir">🕒</span>';
+    if(st === 'read' || st === 'seen' || st === '3') return '<span class="wa-ticks read" title="Oxundu">✓✓</span>';
+    if(st === 'delivered' || st === '1' || st === '2') return '<span class="wa-ticks delivered" title="Çatdırıldı">✓✓</span>';
     if(st === 'error' || st === 'failed' || st === 'undelivered') return '<span class="wa-ticks failed" title="Çatdırılmadı">✕</span><span class="wa-state failed">Çatdırılmadı</span>';
-    return '<span class="wa-ticks" title="Göndərildi">✓</span><span class="wa-state">Göndərildi</span>';
+    return '<span class="wa-ticks" title="Göndərildi">✓</span>';
 }
 function isDealDecryptNotice(text) {
     const folded = String(text || '').toLowerCase();
@@ -4540,12 +4540,11 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
     const deal = _dealViewState && _dealViewState.deal;
     const rows = dealTimelineMessages(chat, deal);
     if(loading && !(Array.isArray(chat) && chat.length)) {
-        return '<div class="wa-preloader"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>';
+        return '';
     }
     if(rows.length) {
         let lastDay = '';
-        const spin = loading ? '<div class="wa-preloader wa-preloader-more"><span class="yt-spin" aria-label="Çat yüklənir"></span></div>' : '';
-        return spin + rows.map(item => {
+        return rows.map(item => {
             const day = dealChatDayKey(item);
             let pill = '';
             if(day && day !== lastDay) {
@@ -4558,7 +4557,7 @@ function dealChatRowsHtml(chat, token, blocked, loading) {
     if(blocked) {
         return '<div style="font-size:12px;color:#b45309;line-height:1.45;padding:12px">Kommo çatın mətnini API-yə vermir. External chat history hüququ lazımdır.</div>';
     }
-    return '<div class="wa-preloader">Çat yoxdur</div>';
+    return '';
 }
 function isDealSystemNoise(text) {
     const folded = String(text || '').toLowerCase();
@@ -5276,6 +5275,18 @@ function paintDealOlderBar() {
     const olderBtn = document.getElementById('deal-chat-older');
     if(olderBtn) olderBtn.onclick = () => loadOlderDealChat();
 }
+function scrollChatToBottom(thread, smooth) {
+    if(!thread) return;
+    if(smooth) {
+        thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
+    } else {
+        thread.scrollTop = thread.scrollHeight;
+    }
+    requestAnimationFrame(() => {
+        if(thread) thread.scrollTop = thread.scrollHeight;
+        setTimeout(() => { if(thread) thread.scrollTop = thread.scrollHeight; }, 60);
+    });
+}
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread || !_dealViewState) return;
@@ -5291,12 +5302,9 @@ function paintDealChatThread(opts) {
     paintDealPinBar();
     paintDealOlderBar();
     if(stickBottom) {
-        if(opts && opts.smooth) {
-            thread.scrollTo({ top: thread.scrollHeight, behavior: 'smooth' });
-        } else {
-            thread.scrollTop = thread.scrollHeight;
-        }
+        scrollChatToBottom(thread, opts && opts.smooth);
         _dealViewState.anchored = true;
+        _dealViewState.atBottom = true;
     } else {
         thread.scrollTop = thread.scrollHeight - prevHeight + prevTop;
     }
@@ -6255,13 +6263,13 @@ function bindDealChatThread() {
     thread.addEventListener('scroll', () => {
         if(!_dealViewState || _dealViewState.loading || _dealViewState.loadingOlder || _dealViewState.pinning) return;
         const gap = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
-        if(gap < 48) {
+        if(gap < 60) {
             _dealViewState.anchored = true;
             _dealViewState.atBottom = true;
-        } else if(gap > 140) {
+        } else if(gap > 120) {
             _dealViewState.atBottom = false;
         }
-        if(!_dealViewState.anchored || gap < 80 || thread.scrollTop > 48) return;
+        if(_dealViewState.atBottom || gap < 120 || thread.scrollTop > 30) return;
         loadOlderDealChat(true);
     });
 }
@@ -6816,7 +6824,7 @@ async function sendWaTemplate(options) {
     if(!tpl) { toast('Şablon seçin', true); return; }
     const phoneInput = document.getElementById('wa-tpl-phone');
     const phone = waTplPhoneDigits();
-    if(phoneInput && waPhoneDigits(phone).length < 12) { toast('Nömrəni yazın', true); return; }
+    if(phoneInput && waPhoneDigits(phone).length < 9) { toast('Nömrəni yazın', true); return; }
     const format = String(tpl.header_format || '').toUpperCase();
     if(format === 'LOCATION') { toast('Bu şablon ünvan başlığı tələb edir', true); return; }
     const media = document.getElementById('wa-tpl-media');
@@ -6862,6 +6870,7 @@ async function sendWaTemplate(options) {
             body: JSON.stringify({
                 lead_id: options.leadId || 0,
                 phone,
+                sender_phone: chatsSelectedDigits(),
                 template: tpl.name,
                 language: tpl.language,
                 params: bodyParams,
@@ -8439,9 +8448,10 @@ function showSentTemplate(options, phone, text, wamid, cards, createdLeadId) {
     const leadId = (options && options.leadId) || createdLeadId;
     let deal = leadId ? (samilDeals || []).find(item => String(item.id) === String(leadId)) : findDealByWaPhone(phone);
     if(!deal && leadId && _dealViewState && String(_dealViewState.id) === String(leadId)) deal = _dealViewState.deal;
-    if(!deal && createdLeadId) {
+    if(!deal) {
+        const fallbackId = Number(leadId || createdLeadId) || (leadId || createdLeadId || ('wa-' + waPhoneDigits(phone)));
         deal = {
-            id: Number(createdLeadId) || createdLeadId,
+            id: fallbackId,
             name: phone || 'Yeni müştəri',
             contact_name: phone || 'Yeni müştəri',
             phone: phone,
@@ -9178,7 +9188,23 @@ try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch
 async function openInboxChat(leadId) {
     let deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
     if(!deal) deal = loadWaOutbox().find(item => String(item.id) === String(leadId));
-    if(!deal) return;
+    if(!deal && CURRENT_USER_ID) {
+        try {
+            const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(leadId), {
+                headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            });
+            const d = await r.json().catch(() => ({}));
+            if(d && d.deal) {
+                deal = d.deal;
+                if(!samilDeals.some(x => String(x.id) === String(deal.id))) {
+                    samilDeals.unshift(deal);
+                }
+            }
+        } catch(_e) {}
+    }
+    if(!deal) {
+        deal = { id: leadId, name: 'Çat #' + leadId, contact_name: 'Çat #' + leadId, chat_channel: 'whatsapp' };
+    }
     _chatSlideSeq += 1;
     markChatsSeen(deal.id);
     closeDealInfoDrawer();

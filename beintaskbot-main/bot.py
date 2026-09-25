@@ -6006,10 +6006,18 @@ def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_
         return True
     channel = str(row.get("chat_channel") or "")
     nizami = int(NIZAMI_PIPELINE_ID)
+    rufat = int(RUFAT_PIPELINE_ID)
+    if channel == "whatsapp":
+        if not event_pipe or event_pipe == int(user_pipeline):
+            return True
+        if int(user_pipeline) == rufat and event_pipe in {rufat, int(SOVDELESMELER_PIPELINE_ID)}:
+            return True
+        if int(user_pipeline) == nizami and event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
+            return True
     if int(user_pipeline) == nizami:
         if event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
             return True
-        return channel == "whatsapp" and bool(event_pipe)
+        return channel == "whatsapp"
     return bool(event_pipe and event_pipe == int(user_pipeline))
 
 
@@ -9032,11 +9040,17 @@ def parse_deal_share_token(token: str) -> int | None:
 def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
     if is_admin(chat_id):
         return True
+    lid = int(lead.get("id") or 0)
+    if lid and _sent_messages_for_lead(lid):
+        return True
     try:
         pipeline_id = int(lead.get("pipeline_id") or 0)
     except (TypeError, ValueError):
         return False
     if pipeline_id not in all_personal_pipeline_ids():
+        owner = get_funnel_owner(chat_id)
+        if owner and int(owner.get("pipeline_id") or 0) == int(NIZAMI_PIPELINE_ID):
+            return True
         return False
     owner = get_funnel_owner(chat_id)
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
@@ -12101,10 +12115,21 @@ def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
                 continue
             try:
                 lead = get_lead_details(lid)
-                if int(pipeline_id) == int(RUFAT_PIPELINE_ID) and not _lead_in_rufat_chats(lead):
-                    continue
-                if int(pipeline_id) == int(NIZAMI_PIPELINE_ID) and int(lead.get("pipeline_id") or 0) != int(NIZAMI_PIPELINE_ID):
-                    continue
+                lead_pipe = _lead_pipeline_id(lead)
+                if int(pipeline_id) == int(RUFAT_PIPELINE_ID):
+                    rufat_match = _lead_in_rufat_chats(lead) or any(
+                        str(row.get("phone_number_id") or "") != str(NIZAMI_WA_PHONE_NUMBER_ID)
+                        for row in rows
+                    )
+                    if not rufat_match and lead_pipe not in (int(RUFAT_PIPELINE_ID), int(SOVDELESMELER_PIPELINE_ID), 0):
+                        continue
+                elif int(pipeline_id) == int(NIZAMI_PIPELINE_ID):
+                    nizami_match = (lead_pipe in (int(NIZAMI_PIPELINE_ID), int(SOVDELESMELER_PIPELINE_ID), 0)) or any(
+                        str(row.get("phone_number_id") or "") == str(NIZAMI_WA_PHONE_NUMBER_ID)
+                        for row in rows
+                    )
+                    if not nizami_match:
+                        continue
                 preview, ts, _has = _cloud_last_for_lead(lid)
                 row = _overview_deal_from_cloud_lead(lead, preview, ts)
             except Exception as exc:
@@ -12371,6 +12396,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
         media_fields = _wa_cloud_media_fields(message)
+        target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
         item = _sent_message_item(
             wamid=wamid,
             text=preview,
@@ -12383,6 +12409,8 @@ def _ingest_cloud_incoming(value: dict) -> None:
             file_name=str(media_fields.get("file_name") or ""),
             media_url=str(media_fields.get("media_url") or ""),
         )
+        item["phone_number_id"] = phone_number_id
+        item["target_pipeline"] = target_pipe
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
         try:
@@ -12391,7 +12419,16 @@ def _ingest_cloud_incoming(value: dict) -> None:
         except Exception:
             pass
         _invalidate_deal_chat_cache(lead_id)
-        record_lead_pulse_event(lead_id, "incoming_message", preview=preview, incoming_at=created)
+        record_lead_pulse_event(
+            lead_id,
+            "incoming_message",
+            preview=preview,
+            incoming_at=created,
+            channel="whatsapp",
+            pipeline_id=target_pipe,
+            contact_name=name,
+            phone=phone,
+        )
         _notify_cloud_chat_incoming(lead_id, name, preview, phone)
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
@@ -12426,6 +12463,7 @@ def _ingest_cloud_echoes(value: dict) -> None:
         if wamid and _already_have_wamid(lead_id, wamid):
             continue
         media_fields = _wa_cloud_media_fields(message)
+        target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
         item = _sent_message_item(
             wamid=wamid,
             text=preview,
@@ -12437,15 +12475,17 @@ def _ingest_cloud_echoes(value: dict) -> None:
             file_name=str(media_fields.get("file_name") or ""),
             media_url=str(media_fields.get("media_url") or ""),
         )
+        item["phone_number_id"] = phone_number_id
+        item["target_pipeline"] = target_pipe
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
         try:
             _patch_cloud_inbox_into_rufat_cache()
-            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone)
+            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone, pipeline_id=target_pipe)
         except Exception:
             pass
         _invalidate_deal_chat_cache(lead_id)
-        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0)
+        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0, channel="whatsapp", pipeline_id=target_pipe)
         logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
 
 
@@ -14895,13 +14935,14 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
             _ids, phones = _contact_ids_and_phones(lead)
             phone = phones[0] if phones else ""
     elif phone:
-        try:
-            resolved_lead_id = _resolve_cloud_lead(phone, "")
-            if resolved_lead_id:
-                lead = get_lead_details(resolved_lead_id)
-                lead_id = resolved_lead_id
-        except Exception as exc:
-            logger.warning("Could not resolve cloud lead for template phone=%s: %s", phone, exc)
+        cached_lid = _lead_id_for_stored_phone(phone) or _lead_id_from_overview_phone(phone)
+        if cached_lid:
+            lead_id = cached_lid
+            lead = get_lead_details(cached_lid)
+
+    sender_digits = _hinted_wa_sender_digits(chat_id, data.get("sender_phone"))
+    sender_phone_id = _wa_phone_id_for_digits(sender_digits) or _wa_phone_id_for_digits(_wa_sender_digits_for_chat(chat_id))
+
     if not _normalize_wa_number(phone):
         return web.json_response({"success": False, "error": "Nömrə tapılmadı."}, status=400)
     ok, error, wamid = await asyncio.to_thread(
@@ -14915,7 +14956,7 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
             "buttons": button_values,
             "cards": card_values,
         },
-        _wa_phone_id_for_digits(_wa_sender_digits_for_chat(chat_id)),
+        sender_phone_id,
     )
     if not ok:
         return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
@@ -14931,23 +14972,35 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     if not author:
         author = "Menecer"
     sent_item = _sent_message_item(wamid=wamid, text=preview, author=author, cards=preview_cards)
+    tail = {
+        "id": f"sent-{wamid or uuid.uuid4().hex}",
+        "external_id": str(wamid or ""),
+        "incoming": False,
+        "direction": "outgoing",
+        "text": preview,
+        "created_at": int(_time_module.time()),
+        "message_type": "carousel" if preview_cards else "text",
+        "channel": "whatsapp",
+        "author": author,
+        "delivery_status": "sent",
+    }
+    if preview_cards:
+        tail["cards"] = preview_cards
     if lid:
         _remember_sent_message(lid, sent_item)
-        tail = {
-            "id": f"sent-{wamid or uuid.uuid4().hex}",
-            "external_id": str(wamid or ""),
-            "incoming": False,
-            "direction": "outgoing",
-            "text": preview,
-            "created_at": int(_time_module.time()),
-            "message_type": "carousel" if preview_cards else "text",
-            "channel": "whatsapp",
-            "author": author,
-            "delivery_status": "sent",
-        }
-        if preview_cards:
-            tail["cards"] = preview_cards
         _append_chat_tail(lid, tail)
+    elif phone:
+        def _bg_link_template_lead():
+            try:
+                bg_lid = _resolve_cloud_lead(phone, "", sender_phone_id=sender_phone_id)
+                if bg_lid:
+                    _remember_phone_lead(phone, bg_lid)
+                    _remember_sent_message(bg_lid, sent_item)
+                    _append_chat_tail(bg_lid, tail)
+                    _patch_cloud_inbox_into_rufat_cache()
+            except Exception as e:
+                logger.warning("Background template lead creation failed: %s", e)
+        asyncio.create_task(asyncio.to_thread(_bg_link_template_lead))
     return web.json_response({
         "success": True,
         "lead_id": lid,
