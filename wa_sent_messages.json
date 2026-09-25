@@ -1420,5 +1420,29 @@
       "delivery_status": "",
       "via_cloud": true
     }
+  ],
+  "78012075": [
+    {
+      "id": "wa-wamid.HBgMNDQ3NzEwMTczNzM2FQIAERgSMzY2NDVDOTI5MUFBNzYwNjlCAA==",
+      "external_id": "wamid.HBgMNDQ3NzEwMTczNzM2FQIAERgSMzY2NDVDOTI5MUFBNzYwNjlCAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rüfət Həsənzadə",
+      "phone": "",
+      "text": "ilk_messag",
+      "message_type": "text",
+      "created_at": 1790339911,
+      "created": "25.09.2026 16:38",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
+    }
   ]
 }
