@@ -6215,7 +6215,10 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             visible[lid] = deal
     with _inbox_pulse_lock:
         rev = int(_inbox_pulse_rev)
-        fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
+        asked = int(since_rev or 0)
+        if asked > rev:
+            asked = 0
+        fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > asked]
     chats = []
     events = []
     seen_chats: set[int] = set()
