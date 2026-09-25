@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790345835,
+    "at": 1790345848,
     "fields": [
       "messages"
     ]
@@ -2171,6 +2171,28 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0NTU2Njg0MDQ5FQIAERgSMzA4QURCRjcyQkMzM0QxOUNEAA==",
+      "external_id": "wamid.HBgMOTk0NTU2Njg0MDQ5FQIAERgSMzA4QURCRjcyQkMzM0QxOUNEAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "",
+      "text": "akuldu , dine ?",
+      "message_type": "text",
+      "created_at": 1790345850,
+      "created": "25.09.2026 18:17",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ]
 }
