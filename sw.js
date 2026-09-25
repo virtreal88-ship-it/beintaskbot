@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-25-092';
+const CACHE_NAME = 'beintaskbot-v2026-09-25-093';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -19,7 +19,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
 
   // Cache media files (photos, audio notes, attachments)
-  if (url.pathname === '/api/deal/file') {
+  if (url.pathname === '/api/deal/file' || url.pathname.startsWith('/api/wa/media/')) {
     e.respondWith(
       caches.open(MEDIA_CACHE_NAME).then(async cache => {
         const cached = await cache.match(e.request);

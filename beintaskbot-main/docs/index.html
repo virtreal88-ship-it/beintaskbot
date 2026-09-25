@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="284">
+    <meta name="pwa-build" content="285">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4728,7 +4728,10 @@ function mergeDealChat(existing, incoming, atStart) {
                 delivery_status: keepStatus || item.delivery_status || current.delivery_status,
                 local: false,
                 cards: (Array.isArray(item.cards) && item.cards.length) ? item.cards : current.cards,
-                message_type: (item.message_type && item.message_type !== 'text') ? item.message_type : (current.message_type || item.message_type)
+                message_type: (item.message_type && item.message_type !== 'text') ? item.message_type : (current.message_type || item.message_type),
+                media_url: item.media_url || current.media_url,
+                file_uuid: item.file_uuid || current.file_uuid,
+                file_name: item.file_name || current.file_name
             });
             return;
         }
@@ -5408,7 +5411,7 @@ function getRememberedChat(leadId, channel) {
         return _openedChatCache[defaultKey];
     }
     try {
-        const raw = sessionStorage.getItem('deal_chat_cache_' + leadId);
+        const raw = localStorage.getItem('deal_chat_cache_' + leadId) || sessionStorage.getItem('deal_chat_cache_' + leadId);
         if(raw) {
             const parsed = JSON.parse(raw);
             if(Array.isArray(parsed) && parsed.length) {
@@ -5429,12 +5432,13 @@ function rememberOpenedChat(leadId, channel, messages) {
     _openedChatCache[openedChatCacheKey(leadId, channel)] = rows;
     _openedChatCache[openedChatCacheKey(leadId, '')] = rows;
     try {
+        localStorage.setItem('deal_chat_cache_' + leadId, JSON.stringify(rows.slice(-10)));
         sessionStorage.setItem('deal_chat_cache_' + leadId, JSON.stringify(rows));
     } catch(_e) {}
     idbSet('chats', String(leadId), rows).catch(() => {});
 }
 function instantChatRows(deal, remembered) {
-    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-15);
+    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-10);
     const text = chatNoticeText(dealLastClientMessage(deal));
     if(!text || !deal) return [];
     return [{
@@ -5519,13 +5523,16 @@ async function loadMobileBaxishChat() {
     const remembered = getRememberedChat(_dealViewState.id, _dealViewState.channel || '');
     const instant = instantChatRows(deal, remembered);
     const hasRealInstant = instant.some(row => row && !row.preview);
+    const curHasReal = (_dealViewState.messages || []).some(row => row && !row.preview);
     _dealViewState.fullReady = false;
     _dealViewState.atBottom = true;
-    _dealViewState.loading = !hasRealInstant;
-    _dealViewState.messages = hasRealInstant ? instant : [];
-    paintDealChatThread({stickBottom: true});
+    _dealViewState.loading = !hasRealInstant && !curHasReal;
+    if(!curHasReal) {
+        _dealViewState.messages = hasRealInstant ? instant : [];
+        paintDealChatThread({stickBottom: true});
+    }
     idbGet('chats', String(_dealViewState.id)).then(idbRows => {
-        if(!requestMatchesDeal(seq, deal && deal.id) || hasRealInstant) return;
+        if(!requestMatchesDeal(seq, deal && deal.id) || hasRealInstant || curHasReal) return;
         if(!Array.isArray(idbRows) || !idbRows.length) return;
         _openedChatCache[openedChatCacheKey(_dealViewState.id, _dealViewState.channel || '')] = idbRows;
         _dealViewState.messages = idbRows;
@@ -5573,13 +5580,16 @@ async function loadDealChatLatest() {
     }
     const instant = instantChatRows(deal, remembered);
     const hasRealInstant = instant.some(row => row && !row.preview);
+    const curHasReal = (_dealViewState.messages || []).some(row => row && !row.preview);
     _dealViewState.fullReady = false;
     _dealViewState.atBottom = true;
-    _dealViewState.loading = !hasRealInstant;
-    _dealViewState.messages = hasRealInstant ? instant : [];
-    paintDealChatThread({stickBottom: true});
+    _dealViewState.loading = !hasRealInstant && !curHasReal;
+    if(!curHasReal) {
+        _dealViewState.messages = hasRealInstant ? instant : [];
+        paintDealChatThread({stickBottom: true});
+    }
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    if(!hasRealInstant) {
+    if(!hasRealInstant && !curHasReal) {
         fetchDealChatTail(false).then(tail => {
             if(tail && tail.success && !tail.stale && requestMatchesDeal(seq, deal && deal.id)) {
                 applyDealSidePreview(tail);
@@ -7163,6 +7173,13 @@ async function sendDealChatMessage(fileArg) {
         clearDealPendingFile();
 
         const serverChat = Array.isArray(d.chat) ? d.chat : [];
+        if(voiceNow && localBlobUrl && serverChat.length) {
+            const serverVoice = serverChat.slice().reverse().find(m => m && !m.incoming && (isChatAudioItem(m) || String(m.message_type || '').toLowerCase() === 'audio'));
+            if(serverVoice) {
+                const sKey = 'audio|' + leadId + '|' + (serverVoice.id || '') + '|' + (serverVoice.created_at || '');
+                _mediaBlobs.set(sKey, localBlobUrl);
+            }
+        }
         applyChatDelivery(_dealViewState.messages, serverChat);
         dropMatchedLocalVoices(serverChat);
         const kept = (_dealViewState.messages || []).filter(row => row && !row.preview);
@@ -7206,7 +7223,7 @@ async function sendDealChatMessage(fileArg) {
         if(btn) btn.disabled = false;
     }
 }
-function dealWorkspaceHtml(deal, token, readonly, opts) {
+function dealWorkspaceHtml(deal, token, readonly, opts, initialMessages) {
     const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
     const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
     const notesHtml = dealNotesListHtml(deal, readonly);
@@ -7276,7 +7293,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts) {
                     <button type="button" class="chat-pin-clear" id="deal-pin-clear" title="Sabitdən çıxar">×</button>
                 </div>
                 <div id="deal-chat-older-bar" class="wa-older" hidden></div>
-                <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml([], token, false, !readonly)}</div>
+                <div id="deal-chat-thread" class="wa-thread">${dealChatRowsHtml(initialMessages || [], token, false, !readonly && !(initialMessages && initialMessages.length))}</div>
                 ${composer}
             </section>
             <aside class="deal-side" id="deal-info-side">${dealInfoBodyHtml(deal, readonly)}</aside>
@@ -7316,6 +7333,13 @@ function paintDealViewModal(deal, readonly, opts) {
     const token = deal.share_token || '';
     _dealChatSeq += 1;
     _dealInboxMode = inbox;
+    let initialRemembered = getRememberedChat(deal.id, '') || [];
+    if((!initialRemembered || !initialRemembered.length) && deal.outbox && Array.isArray(deal.chat)) {
+        initialRemembered = deal.chat.slice();
+    }
+    const initialInstant = instantChatRows(deal, initialRemembered);
+    const hasInitialInstant = initialInstant.some(row => row && !row.preview);
+    const initMessages = hasInitialInstant ? initialInstant : (deal.outbox && Array.isArray(deal.chat) ? deal.chat.slice() : []);
     _dealViewState = {
         id: deal.id,
         token,
@@ -7323,12 +7347,12 @@ function paintDealViewModal(deal, readonly, opts) {
         readonly: !!readonly,
         replyTo: null,
         deal,
-        messages: deal.outbox && Array.isArray(deal.chat) ? deal.chat.slice() : [],
+        messages: initMessages,
         channels: [],
         channel: '',
         channelPicked: false,
         has_more: !deal.outbox,
-        loading: !readonly && !deal.outbox,
+        loading: !readonly && !deal.outbox && !hasInitialInstant,
         loadingOlder: false,
         blocked: false,
         snapshotLoaded: false,
@@ -7339,7 +7363,7 @@ function paintDealViewModal(deal, readonly, opts) {
     if(inbox) {
         const pane = document.getElementById('chats-pane');
         if(!pane) return;
-        pane.innerHTML = dealWorkspaceHtml(deal, token, readonly, {inbox: true});
+        pane.innerHTML = dealWorkspaceHtml(deal, token, readonly, {inbox: true}, initMessages);
         document.body.classList.add('chat-open');
         document.getElementById('chats-app')?.classList.add('chat-open');
         root = pane;
@@ -7378,7 +7402,7 @@ function paintDealViewModal(deal, readonly, opts) {
         const modal = document.createElement('div');
         modal.id = 'deal-view-modal';
         modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#efeae2;display:flex;padding:0;will-change:transform';
-        modal.innerHTML = dealWorkspaceHtml(deal, token, readonly);
+        modal.innerHTML = dealWorkspaceHtml(deal, token, readonly, null, initMessages);
         document.body.classList.add('deal-modal-open', 'chat-open');
         document.body.appendChild(modal);
         root = modal;
