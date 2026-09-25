@@ -646,6 +646,28 @@
       "file_name": "",
       "delivery_status": "",
       "via_cloud": true
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSODBFRTgwQTNBQkJFRDk4NENFAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTA0FQIAERgSODBFRTgwQTNBQkJFRDk4NENFAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "Rüfət Həsənzadə",
+      "phone": "",
+      "text": "🎤 Səs mesajı",
+      "message_type": "audio",
+      "created_at": 1790337021,
+      "created": "25.09.2026 15:50",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "ff16af97-a060-44a2-9012-7b7abfc6e9be",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true
     }
   ],
   "78019517": [],
