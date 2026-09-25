@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="287">
+    <meta name="pwa-build" content="288">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4749,7 +4749,7 @@ function dropTailStubs(rows) {
     const isStub = row => {
         if(!row) return false;
         const id = String(row.id || '');
-        return !!row.local || id.startsWith('local-') || id.startsWith('sent-') || id.startsWith('hook-') || id.startsWith('preview-');
+        return !!row.local || id.startsWith('local-') || id.startsWith('sent-') || id.startsWith('hook-') || id.startsWith('preview-') || id.startsWith('live-');
     };
     const real = list.filter(row => row && !isStub(row));
     return list.filter(row => {
@@ -5389,7 +5389,7 @@ async function fetchDealChatPage(before) {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
-    const channel = _dealViewState.channel || '';
+    const channel = _dealViewState.channel || 'whatsapp';
     const isMobile = window.innerWidth <= 800 || window.matchMedia('(max-width: 1023px)').matches;
     const limit = before ? '20' : (isMobile ? '12' : '15');
     const q = new URLSearchParams({lead_id: String(leadId), limit, _ts: String(Date.now())});
@@ -5446,17 +5446,43 @@ function rememberOpenedChat(leadId, channel, messages) {
     } catch(_e) {}
     idbSet('chats', String(leadId), rows).catch(() => {});
 }
-function instantChatRows(deal, remembered) {
-    if(Array.isArray(remembered) && remembered.length) return remembered.slice(-10);
+function livePreviewRow(deal) {
     const text = chatNoticeText(dealLastClientMessage(deal));
-    if(!text || !deal) return [];
-    return [{
-        id: 'preview-' + deal.id,
+    const at = Number(chatsIncomingAt(deal) || 0);
+    if(!text || !deal) return null;
+    return {
+        id: 'live-' + deal.id + '-' + at,
         incoming: true,
         text,
-        created_at: Number(chatsIncomingAt(deal) || 0),
-        preview: true
-    }];
+        created_at: at || Math.floor(Date.now() / 1000),
+        channel: deal.chat_channel || 'whatsapp'
+    };
+}
+function withLivePreview(rows, deal) {
+    const base = Array.isArray(rows) ? rows.slice() : [];
+    const live = livePreviewRow(deal);
+    if(!live) return base;
+    const same = base.some(row => {
+        const text = String(row && row.text || '').trim();
+        const ts = Number(row && row.created_at || 0);
+        return text === live.text && (!ts || !live.created_at || Math.abs(ts - live.created_at) < 180);
+    });
+    if(same) return base;
+    const newest = base.reduce((max, row) => Math.max(max, Number(row && row.created_at || 0)), 0);
+    if(newest && live.created_at && live.created_at + 2 < newest) return base;
+    return base.concat([live]);
+}
+function showLivePreviewInOpenChat(deal) {
+    if(!_dealViewState || !deal || String(_dealViewState.id) !== String(deal.id)) return;
+    const next = withLivePreview(_dealViewState.messages, deal);
+    if(next.length === (_dealViewState.messages || []).length) return;
+    _dealViewState.messages = next;
+    _dealViewState.loading = false;
+    paintDealChatThread({stickBottom: true, force: true});
+}
+function instantChatRows(deal, remembered) {
+    const base = Array.isArray(remembered) && remembered.length ? remembered.slice(-30) : [];
+    return withLivePreview(base, deal);
 }
 async function fetchDealChatTail(isPolling = false) {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
@@ -5469,8 +5495,7 @@ async function fetchDealChatTail(isPolling = false) {
         params.preview = '1';
     }
     const q = new URLSearchParams(params);
-    const channel = _dealViewState.channel || '';
-    if(channel) q.set('channel', channel);
+    q.set('channel', _dealViewState.channel || 'whatsapp');
     const response = await fetch(API_BASE + '/api/deal/chat?' + q.toString(), {
         cache: 'no-store',
         headers: {'X-TG-User-ID': CURRENT_USER_ID}
@@ -8933,6 +8958,7 @@ function applyInboxPulseRow(row) {
         if(!Array.isArray(deal.phones) || !deal.phones.length) deal.phones = [row.phone];
     }
     if(row.last_client_message) deal.last_client_message = row.last_client_message;
+    showLivePreviewInOpenChat(deal);
     if(row.last_incoming_at) deal.last_incoming_at = Number(row.last_incoming_at) || deal.last_incoming_at;
     if(row.chat_at) deal.chat_at = Number(row.chat_at) || deal.chat_at;
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;

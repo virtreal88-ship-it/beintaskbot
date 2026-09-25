@@ -14435,6 +14435,55 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower() or "whatsapp"
+    if channel == "whatsapp" and (is_funnel_chat(chat_id) or is_admin(chat_id)):
+        sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
+        try:
+            limit = max(1, min(int(request.rel_url.query.get("limit") or 20), 50))
+        except (TypeError, ValueError):
+            limit = 20
+        try:
+            before = int(request.rel_url.query.get("before") or 0)
+        except (TypeError, ValueError):
+            before = 0
+        tailish = str(request.rel_url.query.get("preview") or "") == "1" or str(request.rel_url.query.get("tail") or "") == "1"
+        keep = _CHAT_TAIL_KEEP if tailish else limit
+        rows = _sent_messages_for_lead(lead_id)
+        rows.sort(key=lambda item: int(item.get("created_at") or 0))
+        if before:
+            older = [item for item in rows if int(item.get("created_at") or 0) < before]
+            page = older[-keep:] if older else []
+            has_more = len(older) > keep
+        else:
+            page = rows[-keep:] if rows else []
+            has_more = len(rows) > keep
+        _apply_saved_replies(page)
+        _overlay_sent_delivery(page, lead_id)
+        cloud_ready = _wa_cloud_ready(sender_digits)
+        return web.json_response({
+            "success": True,
+            "preview": str(request.rel_url.query.get("preview") or "") == "1",
+            "tail": str(request.rel_url.query.get("tail") or "") == "1",
+            "chat": page,
+            "has_more": has_more,
+            "chat_blocked": False,
+            "channel": "whatsapp",
+            "channels": [{
+                "key": "whatsapp",
+                "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
+                "talk_id": 0,
+                "chat_id": "",
+                "open": True,
+                "sender_phone": _wa_display_number(sender_digits),
+            }],
+            "reply_talk_id": 0,
+            "can_reply": cloud_ready,
+            "cloud_ready": cloud_ready,
+            "bot_stopped": _is_lead_bot_stopped(lead_id),
+            "last_note": (_deal_side_cache.get(lead_id) or {}).get("note"),
+            "last_task": (_deal_side_cache.get(lead_id) or {}).get("task"),
+            "side_ready": lead_id in _deal_side_cache,
+        })
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
