@@ -1769,6 +1769,29 @@
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
       "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNTgyREY5Mjc5RjA0NENBMzVBAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNTgyREY5Mjc5RjA0NENBMzVBAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "",
+      "text": "ок",
+      "message_type": "text",
+      "created_at": 1790348241,
+      "created": "25.09.2026 18:57",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "sent",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
     }
   ],
   "78043333": [
