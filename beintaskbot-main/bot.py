@@ -11412,6 +11412,16 @@ def _schedule_sent_messages_save() -> None:
     timer.start()
 
 
+def _persist_cloud_outgoing(lead_id: int, sent_item: dict, phone: str, sent_row: dict) -> None:
+    """Store a WhatsApp reply after the Cloud API has already accepted it."""
+    try:
+        _remember_sent_message(int(lead_id), sent_item)
+        _remember_phone_lead(phone, int(lead_id))
+        _append_chat_tail(int(lead_id), sent_row)
+    except Exception as exc:
+        logger.warning("WhatsApp sent row was not stored lead=%s: %s", lead_id, exc)
+
+
 def _remember_sent_message(lead_id: int, item: dict) -> None:
     """Keep messages we sent through Cloud API; Kommo does not mirror them back."""
     key = str(int(lead_id or 0))
@@ -15487,6 +15497,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     hinted_talk = 0
     hinted_sender = ""
     hinted_customer = ""
+    incoming_phone = ""
     form_is_voice = False
     data = {}
     ctype = str(request.content_type or "")
@@ -15505,6 +15516,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_author = str(form.get("reply_to_author") or "").strip()[:80]
         hinted_sender = str(form.get("sender_phone") or "")
         hinted_customer = str(form.get("customer_phone") or "")
+        incoming_phone = str(form.get("incoming_phone") or "")
         try:
             hinted_talk = int(form.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -15536,6 +15548,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_author = str(data.get("reply_to_author") or "").strip()[:80]
         hinted_sender = str(data.get("sender_phone") or "")
         hinted_customer = str(data.get("customer_phone") or "")
+        incoming_phone = str(data.get("incoming_phone") or "")
         try:
             hinted_talk = int(data.get("talk_id") or 0)
         except (TypeError, ValueError):
@@ -15552,7 +15565,13 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not is_funnel_chat(chat_id) and not is_admin(chat_id):
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
         hinted_customer = str(hinted_customer or "").strip()
-        if hinted_customer:
+        incoming_phone = str(incoming_phone or "").strip()
+        header_digits = re.sub(r"\D", "", hinted_customer)[-9:]
+        incoming_digits = re.sub(r"\D", "", incoming_phone)[-9:]
+        header_matches = len(header_digits) >= 9 and header_digits == incoming_digits
+        if incoming_phone and not header_matches:
+            known_phones = [incoming_phone]
+        elif hinted_customer and (header_matches or not incoming_phone):
             known_phones = [hinted_customer]
         else:
             known_phones = await asyncio.to_thread(_phones_for_wa_lead, lead_id)
@@ -15626,6 +15645,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                 sender_digits,
             )
             sent_via_cloud = ok
+        if ok and not str(sent_wamid or "").lower().startswith("wamid"):
+            ok = False
+            sent_via_cloud = False
+            if not last_error:
+                last_error = "WhatsApp mesajı göndərilmədi."
     if not ok and reply_talk_id and channel != "whatsapp":
         kommo_text = text
         if upload_raw and not kommo_text:
@@ -15723,8 +15747,6 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             phone=str((lead.get("phones") or [""])[0] or ""),
         )
         sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
-        _remember_sent_message(int(lead.get("id") or lead_id), sent_item)
-        _remember_phone_lead(str((lead.get("phones") or [""])[0] or ""), int(lead.get("id") or lead_id))
     sent_row = {
         "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
         "external_id": str(sent_wamid or ""),
@@ -15743,13 +15765,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "reply_to_text": reply_preview,
         "reply_to_author": reply_author,
     }
-    _append_chat_tail(int(lead.get("id") or lead_id), sent_row)
     if sent_via_cloud:
         lid_int = int(lead.get("id") or lead_id)
         chat = [sent_row]
-        _apply_saved_replies(chat)
-        if reply_to_message_id:
-            _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
+        customer_phone = str((lead.get("phones") or [""])[0] or "")
+        asyncio.create_task(asyncio.to_thread(_persist_cloud_outgoing, lid_int, sent_item, customer_phone, sent_row))
         _invalidate_deal_chat_cache(lid_int)
         record_lead_pulse_event(
             lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp",
@@ -15775,6 +15795,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             "delivery_status": "sent",
             "media_url": cloud_media_url,
         })
+    _append_chat_tail(int(lead.get("id") or lead_id), sent_row)
     contact_ids = _lead_contact_ids(lead)
     chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
         int(lead.get("id") or lead_id),

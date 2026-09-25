@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="301">
+    <meta name="pwa-build" content="302">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5517,6 +5517,15 @@ function dealWaSenderPhone() {
     if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return '+994102135105';
     return '+994502072240';
 }
+function openChatIncomingPhone() {
+    const list = (_dealViewState && _dealViewState.messages) || [];
+    for(let i = list.length - 1; i >= 0; i -= 1) {
+        const item = list[i];
+        if(!item || !item.incoming || !item.phone) continue;
+        if(String(item.phone).replace(/\D/g, '').length >= 9) return String(item.phone).trim();
+    }
+    return '';
+}
 function openChatCustomerPhone() {
     const deal = _dealViewState && _dealViewState.deal;
     const list = [];
@@ -7400,6 +7409,8 @@ async function sendDealChatMessage(fileArg) {
             if(senderPhone) form.append('sender_phone', senderPhone);
             const customerPhone = openChatCustomerPhone();
             if(customerPhone) form.append('customer_phone', customerPhone);
+            const incomingPhone = openChatIncomingPhone();
+            if(incomingPhone) form.append('incoming_phone', incomingPhone);
             const sendFilename = voiceNow ? (file.name || 'voice.ogg') : (file.name || 'file');
             form.append('file', file, sendFilename);
             r = await fetch(API_BASE + '/api/deal/chat/send', {
@@ -7412,13 +7423,15 @@ async function sendDealChatMessage(fileArg) {
             r = await fetch(API_BASE + '/api/deal/chat/send', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor, reply_external_id: replyExternal, talk_id: talkId, sender_phone: dealWaSenderPhone(), customer_phone: openChatCustomerPhone()}),
+                body: JSON.stringify({lead_id: leadId, text, channel, reply_to_message_id: replyId, reply_to_text: replyText, reply_to_author: replyAuthor, reply_external_id: replyExternal, talk_id: talkId, sender_phone: dealWaSenderPhone(), customer_phone: openChatCustomerPhone(), incoming_phone: openChatIncomingPhone()}),
                 signal: ctrl.signal
             });
         }
         const d = await r.json().catch(() => ({}));
         if(!requestMatchesDeal(seq, leadId)) return;
-        if(!r.ok || !d.success) {
+        const serverChat = Array.isArray(d.chat) ? d.chat : [];
+        const waAccepted = channel !== 'whatsapp' || serverChat.some(row => String(row && row.external_id || '').toLowerCase().startsWith('wamid'));
+        if(!r.ok || !d.success || !waAccepted) {
             const sameDetail = String(d.detail || '').trim() === String(d.error || '').trim();
             const detail = isAdmin && d.detail && !sameDetail ? ` (${String(d.detail).slice(0, 160)})` : '';
             throw new Error((d.error || 'Göndərilmədi') + detail);
@@ -7428,7 +7441,6 @@ async function sendDealChatMessage(fileArg) {
         keepSentChatVisible(leadId);
         clearDealPendingFile();
 
-        const serverChat = Array.isArray(d.chat) ? d.chat : [];
         if(voiceNow && localBlobUrl && serverChat.length) {
             const serverVoice = serverChat.slice().reverse().find(m => m && !m.incoming && (isChatAudioItem(m) || String(m.message_type || '').toLowerCase() === 'audio'));
             if(serverVoice) {
@@ -7457,11 +7469,9 @@ async function sendDealChatMessage(fileArg) {
         paintDealChatThread({stickBottom: true, force: false});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
-            const aborted = !!(err && err.name === 'AbortError');
-            if(aborted) optimisticMsg.delivery_status = 'sent';
-            else optimisticMsg.delivery_status = 'error';
+            optimisticMsg.delivery_status = 'error';
             paintDealChatThread({stickBottom: false, force: true});
-            if(!aborted && input && !input.value) {
+            if(input && !input.value) {
                 input.value = savedInputText;
             }
             if(voiceNow) {
@@ -7474,7 +7484,7 @@ async function sendDealChatMessage(fileArg) {
                 }
             }
             keepSentChatVisible(leadId);
-            if(!aborted) toast(err.message || 'Göndərilmədi', true);
+            toast((err && err.name === 'AbortError') ? 'Mesaj göndərilmədi.' : (err.message || 'Göndərilmədi'), true);
         }
     } finally {
         window.clearTimeout(slow);
