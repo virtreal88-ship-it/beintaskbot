@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790350175,
+    "at": 1790350182,
     "fields": [
       "messages"
     ]
@@ -981,6 +981,10 @@
     },
     "70974946": {
       "wamid.HBgMOTk0MTAyMTM1MTAxFQIAERgSNEFCMDExRUY5QzA4REYxQUIzAA==": "🙏"
+    },
+    "74547175": {
+      "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVCNTU2MUUwQjlCMjAxREYwRjYxRTAxQjU0OTA4MkEA": "👍",
+      "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVCNTU2MUUwQjlCMjAxREYwRjYxRTAxQjU0OTA4MkEA": "👍"
     }
   },
   "78022515": [
