@@ -778,6 +778,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                         f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {_task_desc}\n\ud83d\udc64 {_client}\n\ud83d\udd17 {_link}",
                         parse_mode="Markdown", disable_web_page_preview=True))
                     send_push_notification(str(_new_chat), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client} - {_task_desc}')
+                    remember_staff_notice(_new_chat, "new_task", "Yeni tapşırıq!", f"{_client} - {_task_desc}", int(action_data.get("lead_id") or 0))
                 except: pass
         # Route Rüfət to his personal pipeline/sorğular; keep existing routing for others.
         _lead_id_exec = action_data.get("lead_id")
@@ -917,6 +918,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                         f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae}\n\ud83d\udd17 {_link_ae}",
                         parse_mode="Markdown", disable_web_page_preview=True))
                     send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}')
+                    remember_staff_notice(_target_chat_ae, "new_task", "Yeni tapşırıq!", f"{_client_ae} - {task_text}", int(action_data.get("lead_id") or 0))
                 except: pass
             # Route the deal after assignment. Rüfət must always receive it in
             # his own pipeline at the exact `sorgular` stage.
@@ -1877,6 +1879,10 @@ def move_lead_to_icraci(lead_id, assignee_name: str) -> bool:
         try:
             invalidate_rufat_overview_cache()
         except NameError:
+            pass
+        try:
+            notice_deal_entered(int(lead_id), int(pipeline_id), name=str(assignee_name or ""))
+        except Exception:
             pass
     return ok
 
@@ -3750,6 +3756,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                                     disable_web_page_preview=True
                                 )
                                 send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{result['contact_name']} - {result['task_text']}")
+                                remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {result['task_text']}", int(result.get("lead_id") or 0))
                             except:
                                 pass
                     return msg
@@ -4221,6 +4228,7 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
                         parse_mode="Markdown", disable_web_page_preview=True
                     )
                     send_push_notification(str(assignee_chat), '📋 Yeni tapşırıq!', f"{contact_name} - {task_text}")
+                    remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{contact_name} - {task_text}", int(entity_id or 0) if entity_type == "leads" else 0)
                     tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if tid and sent_a:
                         store_message_task(assignee_chat, sent_a.message_id, int(tid), task_text, entity_id=entity_id, entity_type=entity_type, phone=phone)
@@ -4411,6 +4419,7 @@ async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_T
                         disable_web_page_preview=True
                     )
                     send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{pending['contact_name']} - {pending['task_text']}")
+                    remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{pending['contact_name']} - {pending['task_text']}", int(pending.get("lead_id") or pending.get("entity_id") or 0))
                     task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if task_id and sent_msg:
                         store_message_task(assignee_chat, sent_msg.message_id, int(task_id), pending["task_text"],
@@ -6123,6 +6132,7 @@ async def _hydrate_inbox_lead(
     )
     _invalidate_deal_chat_cache(int(lead_id))
     record_lead_pulse_event(int(lead_id), "incoming_message", preview=preview, incoming_at=created_at)
+    notice_knock(int(lead_id), preview, pipe, name)
 
 
 async def _hydrate_inbox_contact(
@@ -6268,6 +6278,16 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
     }
 
 
+async def handle_api_notices(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    bucket_id = _notice_bucket_id(int(chat_id))
+    with _staff_notice_lock:
+        rows = list(_staff_notices.get(bucket_id, []))
+    return web.json_response({"success": True, "notices": rows})
+
+
 async def handle_api_chats_pulse(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -6309,6 +6329,15 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         except:
                             pass
                     record_lead_pulse_event(wh_lid, f"deal_{ev_kind}", pipeline_id=wh_pipe)
+                    if ev_kind in {"status", "add"} and wh_pipe:
+                        old_pipe = 0
+                        old_key = f"leads[{ev_kind}][{m.group(2)}][old_pipeline_id]"
+                        if old_key in data:
+                            try:
+                                old_pipe = int(data[old_key])
+                            except (TypeError, ValueError):
+                                old_pipe = 0
+                        notice_deal_entered(wh_lid, wh_pipe, old_pipe)
                 except:
                     pass
         incoming_rows = [
@@ -6370,6 +6399,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                             asyncio.create_task(_hydrate_inbox_lead(
                                 mapped, preview, created_at, origin, talk_id, message_id,
                             ))
+                        else:
+                            notice_knock(mapped, preview)
                         continue
                     asyncio.create_task(_hydrate_inbox_contact(
                         entity_id, preview, created_at, origin, talk_id, message_id,
@@ -6388,6 +6419,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     asyncio.create_task(_hydrate_inbox_lead(
                         entity_id, preview, created_at, origin, talk_id, message_id,
                     ))
+                else:
+                    notice_knock(entity_id, preview)
             return web.Response(status=200, text="OK")
         is_task_event = any(k.startswith(("tasks[", "task[")) for k in data.keys())
         has_lead_event = any(k.startswith(("leads[status][0]", "leads[add][0]")) for k in data.keys())
@@ -6924,6 +6957,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         f"📋 Yeni tapşırıq ({creator}):\n\n📝 {text}\n👤 {executor}\n⏰ {dl}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
                     )
                     send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
+                    remember_staff_notice(executor_chat, "new_task", "Yeni tapşırıq!", f"{creator} → {text[:80]}", int(lead_id or 0))
             invalidate_rufat_overview_cache()
             if result:
                 record_lead_pulse_event(lead_id, "deal_add_task")
@@ -7341,6 +7375,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             )
                         except: pass
                         send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
+                        remember_staff_notice(target_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {display_text}", int(result.get("entity_id") or 0) if result.get("entity_type") == "leads" else 0)
                 return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
             return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
         elif action == "stage":
@@ -7695,9 +7730,19 @@ async def handle_api_action(request: web.Request) -> web.Response:
             task_type_id = int(task_data.get("task_type_id", 1) or 1)
             task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
             samil_completion_stage = None
-            if is_funnel_chat(chat_id) and not is_admin(chat_id):
-                selected_pipeline = str(data.get("completion_pipeline", "")).strip()
-                selected_stage = str(data.get("completion_stage", "")).strip()
+            selected_pipeline = str(data.get("completion_pipeline", "")).strip()
+            selected_stage = str(data.get("completion_stage", "")).strip()
+            if _salary_funnel_user(chat_id):
+                owner = get_funnel_owner(chat_id)
+                if owner:
+                    selected_pipeline = "samil"
+                    selected_stage = "ugurlu"
+                    samil_completion_stage = (
+                        int(owner["pipeline_id"]),
+                        142,
+                        owner["stage_names"].get(142) or "Uğurla tamamlandı",
+                    )
+            elif is_funnel_chat(chat_id) and not is_admin(chat_id):
                 lead_pipeline_id = None
                 if lead_id:
                     try:
@@ -16623,20 +16668,16 @@ async def handle_api_deal_public(request: web.Request) -> web.Response:
     lead_id = parse_deal_share_token(request.rel_url.query.get("k") or "")
     if not lead_id:
         return web.json_response({"success": False, "error": "Link etibarsızdır və ya müddəti bitib"}, status=403)
-    lead = get_lead_details(int(lead_id))
-    deal = build_deal_view_payload(lead_id, lead, require_personal=False)
+    try:
+        lead = get_lead_details(int(lead_id))
+        deal = build_deal_view_payload(lead_id, lead, require_personal=False)
+    except Exception as exc:
+        logger.warning("Public deal %s failed: %s", lead_id, exc)
+        return web.json_response({"success": False, "error": "Sövdələşmə açılmadı"}, status=502)
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
-    contact_ids = _lead_contact_ids(lead or {})
-    chat, chat_blocked, _reply_talk_id, _has_more, _channels, _channel = _collect_deal_chat(
-        int(lead_id),
-        contact_ids,
-        limit=50,
-        pages=3,
-        employee_name=employee_name_for_lead(lead),
-    )
-    deal["chat"] = chat
-    deal["chat_blocked"] = chat_blocked
+    deal["chat"] = []
+    deal["chat_blocked"] = False
     deal.pop("kommo_link", None)
     deal.pop("can_reply", None)
     return web.json_response({"success": True, "deal": deal, "readonly": True})
@@ -17562,6 +17603,136 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: st
         )
 
 
+_SALARY_FUNNEL_IDS = {
+    int(RUFAT_CHAT_ID), 7962757442, int(HUSEYN_CHAT_ID), int(RASIM_CHAT_ID), int(ADMIN_CHAT_ID),
+}
+_staff_notices: dict[str, list] = {}
+_staff_notice_keys: set[str] = set()
+_staff_notice_lock = threading.Lock()
+
+
+def _salary_funnel_user(chat_id) -> bool:
+    try:
+        return int(chat_id) in _SALARY_FUNNEL_IDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _notice_bucket_id(chat_id: int) -> str:
+    if int(chat_id) in RUFAT_COMPAT_CHAT_IDS:
+        return str(int(RUFAT_CHAT_ID))
+    return str(int(chat_id))
+
+
+def _chat_for_pipeline(pipeline_id: int) -> int:
+    mapping = {
+        int(RUFAT_PIPELINE_ID): int(RUFAT_CHAT_ID),
+        int(HUSEYN_PIPELINE_ID): int(HUSEYN_CHAT_ID),
+        int(RASIM_PIPELINE_ID): int(RASIM_CHAT_ID),
+        int(NIZAMI_PIPELINE_ID): int(ADMIN_CHAT_ID),
+    }
+    try:
+        return int(mapping.get(int(pipeline_id or 0), 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _owner_chat_for_lead(lead_id: int) -> int:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return 0
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if isinstance(deal, dict) and int(deal.get("id") or 0) == lid:
+                try:
+                    return _chat_for_pipeline(int(deal.get("pipeline_id") or 0))
+                except (TypeError, ValueError):
+                    return 0
+    return 0
+
+
+def remember_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: int = 0) -> None:
+    """Store a Bildiriş row. Salary only keeps a task assigned by someone else."""
+    try:
+        cid = int(chat_id)
+        lead = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return
+    if not cid:
+        return
+    if kind != "new_task" and _salary_funnel_user(cid):
+        return
+    text = " ".join(str(body or "").split())[:180]
+    row = {
+        "id": f"{int(_time_module.time())}:{cid}:{kind}:{lead}",
+        "kind": str(kind or "notice"),
+        "title": str(title or "Bildiriş")[:80],
+        "body": text,
+        "lead_id": lead,
+        "at": int(_time_module.time()),
+    }
+    bucket_id = _notice_bucket_id(cid)
+    with _staff_notice_lock:
+        if kind in {"new_deal", "due_soon", "overdue"}:
+            key = f"{bucket_id}:{kind}:{lead}:{text}"
+            if key in _staff_notice_keys:
+                return
+            _staff_notice_keys.add(key)
+            if len(_staff_notice_keys) > 4000:
+                _staff_notice_keys.clear()
+        bucket = _staff_notices.setdefault(bucket_id, [])
+        if kind == "knock" and bucket:
+            prev = bucket[0]
+            if prev.get("kind") == "knock" and int(prev.get("lead_id") or 0) == lead and prev.get("body") == text and int(_time_module.time()) - int(prev.get("at") or 0) < 90:
+                return
+        bucket.insert(0, row)
+        del bucket[80:]
+
+
+def emit_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: int = 0) -> None:
+    if kind != "new_task" and _salary_funnel_user(chat_id):
+        return
+    before = 0
+    try:
+        bucket_id = _notice_bucket_id(int(chat_id))
+    except (TypeError, ValueError):
+        return
+    with _staff_notice_lock:
+        before = len(_staff_notices.get(bucket_id, []))
+    remember_staff_notice(chat_id, kind, title, body, lead_id)
+    with _staff_notice_lock:
+        after = len(_staff_notices.get(bucket_id, []))
+    if after == before:
+        return
+    url = f"#deal-{int(lead_id)}" if lead_id else "#chats"
+    send_push_notification(str(chat_id), title, body, url=url)
+
+
+def notice_deal_entered(lead_id: int, pipeline_id: int, old_pipeline_id: int = 0, name: str = "") -> None:
+    try:
+        pipe = int(pipeline_id or 0)
+        old = int(old_pipeline_id or 0)
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return
+    if not lid or not pipe or (old and old == pipe):
+        return
+    chat_id = _chat_for_pipeline(pipe)
+    if not chat_id:
+        return
+    emit_staff_notice(chat_id, "new_deal", "Yeni sövdələşmə", str(name or f"#{lid}"), lid)
+
+
+def notice_knock(lead_id: int, preview: str, pipeline_id: int = 0, name: str = "") -> None:
+    chat_id = _chat_for_pipeline(pipeline_id) if pipeline_id else _owner_chat_for_lead(lead_id)
+    if not chat_id:
+        return
+    emit_staff_notice(chat_id, "knock", str(name or "Yeni mesaj"), str(preview or "Yeni mesaj"), int(lead_id or 0))
+
+
 def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0, phone="", contact_name="", preview="", wa_line=""):
     """Send push notification to a user if subscribed."""
     sub = get_push_subscription(str(user_id))
@@ -17769,6 +17940,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
+    app_web.router.add_get("/api/notices", handle_api_notices)
     app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_post("/webhook/whatsapp", handle_whatsapp_webhook)
     app_web.router.add_get("/api/wa/media/{media_id}", handle_api_wa_media)
@@ -17949,11 +18121,13 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         if not responsible_id:
             continue
         chat_id = get_chat_id_for_kommo_user(responsible_id)
-        if not chat_id:
+        if not chat_id or _salary_funnel_user(chat_id):
             continue
         task_text = t.get("text", "Tapşırıq")
         entity_id = t.get("entity_id")
         entity_type = t.get("entity_type", "leads")
+        _due_lead = int(entity_id or 0) if entity_type == "leads" else 0
+        remember_staff_notice(chat_id, "due_soon", "15 dəq qalıb!", f"{task_text}", _due_lead)
         client_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
         client_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
         dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
@@ -18002,9 +18176,11 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
             continue
         _overdue_notified_tasks[task_id] = now_ts
         chat_id = get_chat_id_for_kommo_user(responsible_id)
-        if not chat_id:
+        if not chat_id or _salary_funnel_user(chat_id):
             continue
         task_text = t.get("text", "Tapşırıq")
+        _over_lead = int(t.get("entity_id") or 0) if t.get("entity_type", "leads") == "leads" else 0
+        remember_staff_notice(chat_id, "overdue", "Vaxt keçib!", task_text, _over_lead)
         keyboard = [
             [
                 InlineKeyboardButton("✅ İcra olundu", callback_data=f"overdue_{task_id}_done"),
@@ -18051,11 +18227,49 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
         1289510272: "S\u0259rmay\u0259 \u018fhm\u0259dsoy",
         6596538872: "Asya Agayeva",
         1142054888: "Nuran\u0259 \u015eirinova",
+        ADMIN_CHAT_ID: "Nizami Qasımov",
     }
     for emp_chat_id, emp_name in _DIGEST_EMPLOYEES.items():
         emp_status = TG_TO_STATUS_ID.get(emp_chat_id)
-        # Filter tasks: linked to leads on this employee's stage
+        owner = get_funnel_owner(emp_chat_id)
+        funnel_leads = set()
+        if owner:
+            try:
+                _own_resp = _http.get(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    headers=HEADERS,
+                    params={"filter[pipeline_id]": int(owner["pipeline_id"]), "limit": 250},
+                    timeout=15,
+                )
+                if _own_resp.status_code == 200:
+                    funnel_leads = {
+                        int(row.get("id") or 0)
+                        for row in _own_resp.json().get("_embedded", {}).get("leads", [])
+                        if row.get("id")
+                    }
+            except Exception:
+                funnel_leads = set()
+        # Filter tasks: own funnel, otherwise the employee's Gözləmə column.
         emp_tasks = []
+        if owner:
+            for t in all_tasks:
+                if t.get("entity_type", "leads") == "leads" and int(t.get("entity_id") or 0) in funnel_leads:
+                    emp_tasks.append(t)
+            msg = ""
+            if emp_tasks:
+                msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131* \u2014 bug\u00fcnk\u00fc tap\u015f\u0131r\u0131qlar ({len(emp_tasks)}):\n\n"
+                for i, t in enumerate(emp_tasks, 1):
+                    dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
+                    task_text = re.sub(r'^\[.*?\]\s*', '', t.get('text', ''))
+                    msg += f"{i}. \u23f0 {dt.strftime('%H:%M')} \u2014 {task_text[:50]}\n"
+                msg += f"\n\ud83d\udcca C\u0259mi: {len(emp_tasks)}"
+            else:
+                msg = f"\u2600\ufe0f *S\u0259h\u0259r hesabat\u0131*\n\n\u2728 Bu g\u00fcn \u00fc\u00e7\u00fcn tap\u015f\u0131r\u0131q yoxdur!"
+            try:
+                await context.bot.send_message(emp_chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
+            except Exception:
+                pass
+            continue
         for t in all_tasks:
             t_entity_id = t.get("entity_id")
             t_entity_type = t.get("entity_type", "leads")
@@ -18086,8 +18300,6 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(emp_chat_id, msg, parse_mode="Markdown", disable_web_page_preview=True)
         except:
             pass
-    # Admin does NOT receive morning digest
-
 _qiymet_reminded_today: dict = {}  # lead_id -> date string
 
 async def check_stuck_deals(context: ContextTypes.DEFAULT_TYPE):

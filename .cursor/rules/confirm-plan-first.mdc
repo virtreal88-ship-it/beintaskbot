@@ -1,0 +1,18 @@
+---
+description: Propose a plan and wait for virt to confirm before implementing
+alwaysApply: true
+---
+
+# Plan first, then implement
+
+When virt sends a task (feature, fix, refactor, UI change, deploy, commit, or multi-step work):
+
+1. Reply with a short action plan only. Do not edit files, run destructive commands, or start implementation in that turn.
+2. The plan must list: what will change, which files/surfaces, what will not change (especially APIs/business logic unless asked), and how success is checked.
+3. Wait for explicit confirmation (ok, да, razı, ləğv etmə, proceed, and similar). If virt asks to change the plan, revise the plan and wait again.
+4. After confirmation, implement exactly the agreed plan. If new scope appears, stop and re-confirm. When the agreed work is done, commit on `main` and `git push origin main` (never `data`).
+
+Exceptions (no plan wait):
+- Clarifying questions, explanations, or reading to answer a question
+- Tiny follow-ups virt already approved in the same thread (“да, коммить”, “поправь этот баг как в плане”)
+- Direct process instructions like this rule

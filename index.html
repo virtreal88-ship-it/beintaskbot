@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="322">
+    <meta name="pwa-build" content="323">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -1352,6 +1352,8 @@ const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
 const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
 const HAS_CHATS = ['6824377548','7962757442','1628569350'].includes(CURRENT_USER_ID);
+const HAS_NOTICES = ['6824377548','7962757442','1628569350','7329891614','7920785774','7262243946','1289510272','6596538872','1142054888'].includes(CURRENT_USER_ID);
+const SALARY_COMPLETE_IDS = ['6824377548','7962757442','7329891614','7920785774','1628569350'];
 const CHAT_SENDER_LINES = [
     {digits:'994102135105', label:'Rüfət'},
     {digits:'994502072240', label:'Nizami'}
@@ -1431,9 +1433,9 @@ function applySamilUi() {
     const mobileDeals = document.getElementById('tab-samil-deals');
     if(mobileDeals) mobileDeals.style.display = 'flex';
     const sideChats = document.getElementById('side-tab-chats');
-    if(sideChats) sideChats.style.display = HAS_CHATS ? 'flex' : 'none';
+    if(sideChats) sideChats.style.display = HAS_NOTICES ? 'flex' : 'none';
     const mobileChats = document.getElementById('tab-chats');
-    if(mobileChats) mobileChats.style.display = HAS_CHATS ? 'flex' : 'none';
+    if(mobileChats) mobileChats.style.display = HAS_NOTICES ? 'flex' : 'none';
     paintMobileTabBar();
 }
 const CACHE_KEY = 'cached_tasks_' + CURRENT_USER_ID;
@@ -2062,7 +2064,7 @@ function setPendingTabVisible() {
 }
 const MOBILE_TAB_ORDER = ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'];
 function mobileTabWanted(id) {
-    if(id === 'tab-chats') return HAS_CHATS;
+    if(id === 'tab-chats') return HAS_NOTICES;
     if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
     if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
     if(id === 'tab-hesabat') return !isAdmin;
@@ -2125,6 +2127,11 @@ function setSidebarActive(tabId) {
 
 function applyHashRoute(opts) {
     if(window.location.hash === '#pending' && isAdmin) switchTab('tab-pending', false);
+    const dealMatch = String(window.location.hash || '').match(/^#deal-(\d+)/);
+    if(dealMatch) {
+        openDealViewById(dealMatch[1]);
+        return;
+    }
     const chatMatch = String(window.location.hash || '').match(/^#chat-(\d+)/);
     if(chatMatch && HAS_CHATS) {
         if(opts && opts.skipChat) {
@@ -2516,8 +2523,9 @@ function submitTask() {
             doFetch(payload, 'edit-submit-btn');
         }
     } else {
+        const besideDeal = _creatingTaskDeal && _dealViewState && String(_dealViewState.id) === String(_creatingTaskDeal.id) ? _creatingTaskDeal : null;
         const phone = document.getElementById('search-phone').value.trim();
-        if(!phone || phone.replace(/\D/g,'').length < 7) { toast('Telefon nömrəsini daxil edin!', true); return; }
+        if(!besideDeal && (!phone || phone.replace(/\D/g,'').length < 7)) { toast('Telefon nömrəsini daxil edin!', true); return; }
         gd.phone = phone;
         if(!gd.assigneeName || !textInput || !gd.deadline) { toast('Bütün sahələri doldurun!', true); return; }
         const tsel = document.getElementById('task-type-select');
@@ -2525,11 +2533,16 @@ function submitTask() {
         const clientNameEl = document.getElementById('task-client-name');
         const clientName = clientNameEl ? clientNameEl.value.trim() : '';
         let newPayload = {action: 'task', phone: gd.phone, text: textInput, assigneeName: gd.assigneeName, deadline: gd.deadline, task_type: taskType, client_name: clientName};
+        if(besideDeal) {
+            newPayload.entity_id = besideDeal.id;
+            newPayload.entity_type = 'leads';
+            newPayload.lead_id = besideDeal.id;
+        }
         const prioritySelect = document.getElementById('task-priority');
         if(prioritySelect && prioritySelect.value) newPayload.priority = prioritySelect.value;
         currentEditScreen = 'screen-create';
-        if(_creatingTaskDeal && _dealViewState && String(_dealViewState.id) === String(_creatingTaskDeal.id)) {
-            submitTaskBesideDeal(newPayload, _creatingTaskDeal);
+        if(besideDeal) {
+            submitTaskBesideDeal(newPayload, besideDeal);
             return;
         }
         doFetch(newPayload, 'task-submit-btn');
@@ -5571,7 +5584,7 @@ function scrollChatToBottom(thread, smooth) {
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread || !_dealViewState) return;
-    if(thread.querySelector('#deal-history-list')) return;
+    if(document.querySelector('#deal-history-list')) return;
     const playing = Array.from(thread.querySelectorAll('audio')).find(el => !el.paused && !el.ended);
     if(playing && !(opts && opts.force)) return;
     const stickBottom = !opts || opts.stickBottom !== false;
@@ -6342,9 +6355,6 @@ async function ensureDealSnapshotLoaded(deal, readonly) {
                     bindDealSideActions(d);
                 });
             }
-            if(_dealViewState && String(_dealViewState.id) === leadId && !_dealViewState.loading) {
-                paintDealChatThread({stickBottom: false});
-            }
             return merged;
         } catch(err) {
             console.warn('Failed to load deal snapshot:', err);
@@ -6413,7 +6423,6 @@ function bindDealSideActions(deal) {
                 deal.notes.unshift({id: d && d.note_id, text, created: now, entity_type:'leads', entity_id: deal.id});
             }
             bindDealSideActions(deal);
-            if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd əlavə edildi');
         } catch(err) { toast(err.message || 'Qeyd göndərilmədi', true); }
         finally { noteBtn.disabled = false; noteBtn.classList.remove('busy'); }
@@ -6433,7 +6442,6 @@ function bindDealSideActions(deal) {
             dropNote(deal);
             if(_dealViewState && _dealViewState.deal !== deal) dropNote(_dealViewState.deal);
             row?.remove();
-            if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd silindi');
             samilDealAction({action:'deal_delete_note', lead_id: deal.id, note_id: noteId, entity_type: entityType, entity_id: entityId, note_type: noteType}).catch(err => {
                 toast(err.message || 'Qeyd silinmədi', true);
@@ -6618,7 +6626,6 @@ function startDealNoteInlineEdit(deal, btn) {
             body.innerHTML = linkifyText(text);
             const note = (deal.notes || []).find(item => String(item.id) === String(btn.getAttribute('data-note-id')));
             if(note) note.text = text;
-            if(_dealViewState) paintDealChatThread({stickBottom: false});
             toast('Qeyd yeniləndi');
         } catch(err) {
             body.innerHTML = linkifyText(original);
@@ -8171,7 +8178,10 @@ function renderSamilDeals() {
     container.className = 'samil-kanban-board';
     container.innerHTML = stagesToRender.map(([key, label]) => {
         const deals = dealsForStage(key);
-        const cardsHtml = deals.length ? deals.map(deal => {
+        const waitingColumn = key === 'cavab_gozlenilir' && !samilWorkspaceLoadedAt && !deals.length;
+        const cardsHtml = waitingColumn
+            ? '<div class="samil-empty-column"><span class="yt-spin" aria-label="Yüklənir"></span></div>'
+            : (deals.length ? deals.map(deal => {
             const dealTitle = escapeHtml(dealCardTitle(deal));
             const clientName = escapeHtml(deal.contact_name || '—');
             const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
@@ -8212,7 +8222,7 @@ function renderSamilDeals() {
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
-        }).join('') : '<div class="samil-empty-column">Bu mərhələdə sövdələşmə yoxdur.</div>';
+        }).join('') : '<div class="samil-empty-column">Bu mərhələdə sövdələşmə yoxdur.</div>');
         return `<section class="samil-kanban-column ${samilStageFilter === key ? 'active-column' : ''}" data-stage-column="${key}">
             <div class="samil-kanban-header">
                 <div class="flex items-center justify-between gap-2">
@@ -9326,10 +9336,55 @@ async function openSearchedChat(leadId) {
     }
     await openInboxChat(deal.id);
 }
+let _staffNotices = [];
+function noticeTimeLabel(stamp) {
+    const n = Number(stamp || 0);
+    if(!n) return '';
+    const d = new Date(n * 1000);
+    const p = v => String(v).padStart(2, '0');
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function renderNoticeRows() {
+    const box = document.getElementById('chats-rows');
+    if(!box) return;
+    const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
+    const rows = (_staffNotices || []).filter(row => {
+        if(!q) return true;
+        return String(row.title || '').toLowerCase().includes(q) || String(row.body || '').toLowerCase().includes(q);
+    });
+    if(!rows.length) {
+        box.innerHTML = '<div class="chats-empty-list">Bildiriş yoxdur</div>';
+        return;
+    }
+    box.innerHTML = rows.map(row => `<div class="chats-row" role="button" tabindex="0" data-lead="${escapeHtml(String(row.lead_id || ''))}">
+        <span class="chats-row-main">
+            <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(row.title || 'Bildiriş')}</span><span class="chats-row-time">${escapeHtml(noticeTimeLabel(row.at))}</span></span>
+            <span class="chats-row-bottom"><span class="chats-row-preview">${escapeHtml(row.body || '')}</span></span>
+        </span>
+    </div>`).join('');
+    box.onclick = (event) => {
+        const row = event.target.closest('[data-lead]');
+        if(!row) return;
+        const leadId = row.getAttribute('data-lead');
+        if(leadId && leadId !== '0') openDealViewById(leadId);
+    };
+}
+async function loadStaffNotices() {
+    if(!CURRENT_USER_ID) return;
+    try {
+        const response = await fetch(API_BASE + '/api/notices', {cache:'no-store', headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+        const payload = await response.json().catch(() => ({}));
+        if(response.ok && payload.success) _staffNotices = Array.isArray(payload.notices) ? payload.notices : [];
+    } catch(_err) {}
+    if(document.getElementById('screen-chats')?.classList.contains('active')) renderNoticeRows();
+}
 function renderChatsList() {
     const box = document.getElementById('chats-rows');
     const pane = document.getElementById('chats-pane');
     if(!box) return;
+    renderNoticeRows();
+    if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
+    return;
     fillChatsLineSelect();
     let deals = chatsInboxDeals();
     const seen = seedChatsSeen(deals);
@@ -9666,7 +9721,7 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
         if(_dealViewState && String(_dealViewState.id) === key) {
             _dealViewState.deal = mergeDealSnapshot(_dealViewState.deal, freshDeal);
             applyDealSide(_dealViewState.deal, !!_dealViewState.readonly);
-            pollDealChat();
+            if(!document.querySelector('#deal-history-list')) pollDealChat();
         }
     } catch(err) {
         console.warn('Incremental single deal sync failed:', key, err);
@@ -9768,6 +9823,7 @@ async function pollInboxPulse() {
                 }
             }
 
+            if(chatsOpen) loadStaffNotices();
             if(changed) {
                 persistLocalSamilWorkspace();
                 if(chatsOpen) renderChatsList();
@@ -9915,6 +9971,7 @@ function historyRowsHtml(rows) {
 }
 async function fillKommoHistory(leadId, list) {
     if(!list || !leadId) return;
+    if(list.querySelector('.deal-chat-row')) return;
     list.innerHTML = historyLoadingHtml();
     const ctrl = new AbortController();
     const slow = window.setTimeout(() => ctrl.abort(), 20000);
@@ -9985,7 +10042,7 @@ async function openInboxChat(leadId) {
     renderChatsList();
 }
 async function openChats() {
-    if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
+    if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
     loadWaTemplates(false).catch(() => {});
     fillChatsLineSelect();
@@ -10005,6 +10062,7 @@ async function openChats() {
         newMsgBtn.onclick = () => openWaTemplateModal({});
     }
     startChatsPolling();
+    loadStaffNotices();
     loadSamilWorkspace(false);
 }
 
@@ -10019,7 +10077,7 @@ async function desktopCloseDealStage(taskId, stageKey) {
     const task = mockTasks.find(x => x.id === taskId);
     if(!task) return;
     if(!confirm('Sövdələşmə imtina mərhələsinə keçsin?')) return;
-    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin;
+    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin && !SALARY_COMPLETE_IDS.includes(CURRENT_USER_ID);
     const completedId = Number(task.task_id || task.id);
     const leadId = Number(task.lead_id || task.entity_id || 0);
     showLoader();
@@ -10105,8 +10163,9 @@ function showCompletePanel() {
     document.getElementById('postpone-fast-menu').style.display = 'none';
     const selector = document.getElementById('samil-completion-stage-selector');
     if(selector) {
-        selector.style.display = (HAS_OWN_FUNNEL && !isAdmin) ? 'block' : 'none';
-        if(HAS_OWN_FUNNEL && !isAdmin) renderSamilCompletionStages();
+        const askStage = HAS_OWN_FUNNEL && !isAdmin && !SALARY_COMPLETE_IDS.includes(CURRENT_USER_ID);
+        selector.style.display = askStage ? 'block' : 'none';
+        if(askStage) renderSamilCompletionStages();
     }
     const note = document.getElementById('complete-note-text');
     if(note) setTimeout(() => note.focus(), 100);
@@ -10117,7 +10176,7 @@ async function confirmComplete() {
     const noteText = document.getElementById('complete-note-text').value.trim();
     if(!noteText) { toast('Qeyd yazın!', true); return; }
     const task = mockTasks.find(t => t.id === selectedTaskId); if(!task) return;
-    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin;
+    const useFunnelComplete = HAS_OWN_FUNNEL && !isAdmin && !SALARY_COMPLETE_IDS.includes(CURRENT_USER_ID);
     const completionPipeline = useFunnelComplete ? document.getElementById('completion-pipeline-select')?.value : '';
     const completionStage = useFunnelComplete ? document.getElementById('completion-stage-select')?.value : '';
     if(useFunnelComplete && (!completionPipeline || !completionStage)) { toast('Mərhələni seçin!', true); return; }
@@ -10406,7 +10465,7 @@ function switchTab(tabId, updateHash = true) {
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
     } else if(tabId === 'tab-chats') {
-        if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
+        if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
         const chatsTab = document.getElementById('tab-chats');
         if(chatsTab) chatsTab.className = activeClass;
         openChats();
@@ -10773,6 +10832,8 @@ async function loadBalance() {
 async function loadBalanceHistory() {
     const medaxilButton = document.getElementById('btn-medaxil');
     const mexaricButton = document.getElementById('btn-mexaric');
+    const spinBox = document.getElementById('balance-history-container');
+    if(spinBox) spinBox.innerHTML = '<div class="text-center py-10"><span class="yt-spin" aria-label="Yüklənir"></span></div>';
     if(isAdmin) {
         if(medaxilButton) medaxilButton.style.display = 'inline-block';
         if(mexaricButton) mexaricButton.style.display = 'inline-block';

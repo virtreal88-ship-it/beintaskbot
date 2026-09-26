@@ -1,0 +1,14 @@
+---
+description: Keep all git work on main; never create extra branches
+alwaysApply: true
+---
+
+# Git: только main
+
+- Все правки и коммиты только на `main`. Не создавать другие ветки (`data`, `cursor/` и любые feature-ветки).
+- Если просят новую ветку — игнорировать и коммитить в `main`.
+- **После завершения согласованной задачи:** сразу `git commit` на `main` и `git push origin main`. Не ждать отдельной просьбы «коммить и пушь».
+- **Пуш только в `origin main`.** Никогда не пушить `data` и другие ветки, даже «чтобы обновить GitHub Pages».
+- Не делать `git push origin data`, не чекаутить `data` ради публикации, не копировать `docs/` в `data`.
+- Не коммитить секреты (`.env`, ключи) и локальные правила агента (`.cursor/`), если virt явно не попросил.
+

@@ -1,0 +1,10 @@
+---
+description: Speak with virt in Russian
+alwaysApply: true
+---
+
+# Language
+
+Always write user-facing messages to virt in Russian: plans, questions, summaries, and confirmations.
+
+Keep product UI copy in the language of the product (Azerbaijani unless virt asks otherwise). Code, file paths, and API names stay as in the repo.
