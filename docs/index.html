@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="317">
+    <meta name="pwa-build" content="318">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -349,7 +349,17 @@
         .deal-history-chat { background:#efeae2; border-radius:12px; padding:8px 10px 12px; min-height:120px; }
         .history-media { display:inline-flex; align-items:center; gap:6px; font-weight:600; }
         .history-media svg { width:16px; height:16px; flex:none; }
-        .history-loading { display:flex; align-items:center; justify-content:center; gap:8px; min-height:88px; color:#64748b; font-size:13px; font-weight:600; }
+        .history-loading { display:flex; align-items:center; justify-content:center; gap:2px; min-height:88px; color:#64748b; font-size:13px; font-weight:600; }
+        .history-dots { display:inline-flex; }
+        .history-dots i { font-style:normal; opacity:.25; animation:historyDot 1.2s infinite; }
+        .history-dots i:nth-child(2) { animation-delay:.2s; }
+        .history-dots i:nth-child(3) { animation-delay:.4s; }
+        @keyframes historyDot { 0%, 70%, 100% { opacity:.25; } 35% { opacity:1; } }
+        .deal-person-name { font-size:16px; font-weight:600; line-height:1.3; }
+        .deal-person-row { display:flex; align-items:center; gap:8px; margin-top:6px; }
+        .deal-person-phone { font-size:13px; font-weight:600; color:#111827; }
+        .deal-person .deal-head-avatar { width:32px; height:32px; background:#e5e7eb; color:#374151; }
+        .deal-source-link { display:inline-flex; margin-left:auto; text-decoration:none; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
         .deal-stage-row.admin-pipelines { align-items:center; }
@@ -1729,6 +1739,64 @@ function sourceLineHtml(record) {
     const links = sourceUrlsHtml(record);
     if(!badges && !links) return '';
     return `<div class="flex items-center gap-2 flex-wrap mt-1">${badges}</div>${links}`;
+}
+function sourceUrlsOf(deal) {
+    const urls = Array.isArray(deal && deal.source_urls) ? deal.source_urls.slice() : [];
+    if(deal && deal.source_url) urls.push(deal.source_url);
+    return urls.map(url => String(url || '').trim()).filter(Boolean);
+}
+function sourceKeyFromUrls(deal) {
+    const blob = sourceUrlsOf(deal).join(' ').toLowerCase();
+    if(blob.includes('instagram') || blob.includes('ig.me')) return 'instagram';
+    if(blob.includes('tiktok')) return 'tiktok';
+    if(blob.includes('t.me') || blob.includes('telegram')) return 'telegram';
+    if(blob.includes('facebook') || blob.includes('messenger') || blob.includes('m.me')) return 'facebook';
+    if(blob.includes('wa.me') || blob.includes('whatsapp')) return 'whatsapp';
+    return '';
+}
+function handleFromUrl(url, hostRe, skip) {
+    try {
+        const parsed = new URL(url);
+        if(!hostRe.test(parsed.hostname.replace(/^www\./, ''))) return '';
+        const part = decodeURIComponent((parsed.pathname.split('/').filter(Boolean)[0] || '')).replace(/^@/, '');
+        if(!part || skip.indexOf(part.toLowerCase()) >= 0) return '';
+        return part;
+    } catch(_err) { return ''; }
+}
+function sourceDirectUrl(deal, key) {
+    const urls = sourceUrlsOf(deal);
+    const phone = (deal && ((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone)) || '';
+    if(key === 'whatsapp') return urls.find(url => /wa\.me|whatsapp\.com|api\.whatsapp/i.test(url)) || waBusinessUrl(phone);
+    if(key === 'instagram') {
+        const direct = urls.find(url => /ig\.me\/m\/|instagram\.com\/direct/i.test(url));
+        if(direct) return direct;
+        for(const url of urls) {
+            const user = handleFromUrl(url, /(^|\.)instagram\.com$/i, ['p','reel','reels','stories','explore','direct','accounts']);
+            if(user) return 'https://ig.me/m/' + encodeURIComponent(user);
+        }
+        return urls.find(url => /instagram|ig\.me/i.test(url)) || '';
+    }
+    if(key === 'facebook') {
+        const direct = urls.find(url => /m\.me\/|messenger\.com\/t\//i.test(url));
+        if(direct) return direct;
+        for(const url of urls) {
+            const user = handleFromUrl(url, /(^|\.)(facebook|fb)\.com$/i, ['profile.php','pages','groups','watch','share','stories']);
+            if(user) return 'https://m.me/' + encodeURIComponent(user);
+        }
+        return urls.find(url => /facebook|messenger|m\.me/i.test(url)) || '';
+    }
+    if(key === 'telegram') return urls.find(url => /t\.me\/|telegram\./i.test(url)) || '';
+    if(key === 'tiktok') return urls.find(url => /tiktok\.com\/messages/i.test(url)) || urls.find(url => /tiktok/i.test(url)) || '';
+    return urls[0] || '';
+}
+function staffSourceLinkHtml(deal) {
+    const key = chatsSourceKey(deal) || sourceKeyFromUrls(deal);
+    if(!key) return '';
+    const meta = chatChannelMeta(key);
+    const href = sourceDirectUrl(deal, key);
+    const icon = `<span class="chats-source chats-source-${key}">${meta.svg}</span>`;
+    if(!href) return icon;
+    return `<a class="deal-source-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(meta.label)}" aria-label="${escapeHtml(meta.label)}">${icon}</a>`;
 }
 function partnerSelectHtml(selected) {
     const current = String(selected || '');
@@ -6654,14 +6722,14 @@ function dealDetailSectionsHtml(deal, token, opts) {
         }).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
     const chatHtml = staff
-        ? '<div id="deal-history-list" class="deal-history-chat"><div class="history-loading"><span class="yt-spin"></span><span>Yüklənir...</span></div></div>'
+        ? '<div id="deal-history-list" class="deal-history-chat">' + historyLoadingHtml() + '</div>'
         : dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
     const composer = (!staff && canReply) ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
     const phone = phoneList[0] || '';
     const clientName = dealClientName(deal) || deal.contact_name || '';
     const waLink = staff ? waBusinessUrl(phone) : '';
     const kommoLink = staff ? dealKommoUrl(deal) : '';
-    const inlineInput = 'width:auto;min-width:120px;max-width:100%;text-align:left;font-weight:600;border:0;border-bottom:1px solid #e5e7eb;background:transparent;padding:0 2px';
+    const person = `<div class="deal-person"><div class="deal-person-name">${escapeHtml(clientName || '—')}</div><div class="deal-person-row">${dealHeadAvatarHtml(deal, token)}<span class="deal-person-phone">${escapeHtml(phone || '—')}</span>${staffSourceLinkHtml(deal)}</div></div>`;
     const info = `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
@@ -6671,9 +6739,9 @@ function dealDetailSectionsHtml(deal, token, opts) {
                     : `<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>`}
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${staff ? `<input id="deal-side-name" class="deal-side-input" style="${inlineInput}" value="${escapeHtml(clientName)}" placeholder="Müştəri">` : escapeHtml(deal.contact_name || '—')}</div>
+                ${staff ? person : `<div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
                 ${sourceLineHtml(deal)}
-                <div>📞 <b>Telefon:</b> ${staff ? `<input id="deal-side-phone" class="deal-side-input" type="tel" style="${inlineInput}" value="${escapeHtml(phone)}" placeholder="Telefon">` : escapeHtml(phoneList.join(', ') || '—')}</div>
+                <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>`}
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
                 ${staff
@@ -9695,7 +9763,7 @@ function resumeInboxPulse() {
 }
 try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch(_err) {}
 function historyLoadingHtml() {
-    return '<div class="history-loading"><span class="yt-spin"></span><span>Yüklənir...</span></div>';
+    return '<div class="history-loading"><span>danışıq tarixçəsi yüklənir</span><span class="history-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></div>';
 }
 function historyMediaKind(row) {
     const kind = String((row && row.message_type) || '').toLowerCase();
