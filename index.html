@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="304">
+    <meta name="pwa-build" content="305">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5776,7 +5776,7 @@ function applyDealChatPage(seq, dealId, rows, blocked, hasMore) {
 }
 function applyDealChatTail(seq, dealId, rows) {
     if(!requestMatchesDeal(seq, dealId) || !_dealViewState) return false;
-    const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-15);
+    const stored = (Array.isArray(rows) ? rows : []).filter(row => row && !row.preview).slice(-8);
     if(!stored.length) return false;
     const local = (_dealViewState.messages || []).filter(row => row && !row.preview);
     _dealViewState.messages = dropTailStubs(mergeDealChat(local, stored, false));
@@ -5819,16 +5819,11 @@ async function loadMobileBaxishChat() {
         }
     } catch(_err) {}
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    try {
-        const page = await fetchDealChatPage();
-        if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
-            _dealViewState.blocked = !!page.chat_blocked;
-            if(Array.isArray(page.channels) && page.channels.length) applyDealChannels(page.channels);
-            const chatRows = Array.isArray(page.chat) ? page.chat : [];
-            if(chatRows.length) applyDealChatPage(seq, deal && deal.id, chatRows, page.chat_blocked, page.has_more);
-        }
-    } catch(_err) {}
-    if(!requestMatchesDeal(seq, deal && deal.id)) return;
+    if(_dealViewState.loading) {
+        _dealViewState.loading = false;
+        _dealViewState.fullReady = true;
+        paintDealChatThread({stickBottom: true});
+    }
 }
 async function loadDealChatLatest() {
     if(!_dealViewState || _dealViewState.readonly) return;
@@ -5869,21 +5864,8 @@ async function loadDealChatLatest() {
             }
         }).catch(() => {});
     }
-    let painted = false;
-    try {
-        const page = await fetchDealChatPage();
-        if(page && page.success && requestMatchesDeal(seq, deal && deal.id)) {
-            _dealViewState.blocked = !!page.chat_blocked;
-            if(Array.isArray(page.channels) && page.channels.length) applyDealChannels(page.channels);
-            const chatRows = Array.isArray(page.chat) ? page.chat : [];
-            if(chatRows.length) {
-                applyDealChatPage(seq, deal && deal.id, chatRows, page.chat_blocked, page.has_more);
-                painted = true;
-            }
-        }
-    } catch(_err) {}
     if(!requestMatchesDeal(seq, deal && deal.id)) return;
-    if(!painted) {
+    if(!(_dealViewState.messages || []).some(row => row && !row.preview)) {
         _dealViewState.loading = false;
         _dealViewState.fullReady = true;
         paintDealChatThread({stickBottom: true});
@@ -5928,17 +5910,7 @@ async function pollDealChat(forceFull = false) {
     if(_dealViewState.loading && !forceFull) return;
     _dealChatPollBusy = true;
     const seq = _dealViewState.seq;
-    const now = Date.now();
-    const shouldFull = forceFull || (now - _lastDealChatFullPoll > 10000);
     try {
-        if(shouldFull) {
-            _lastDealChatFullPoll = now;
-            const d = await fetchDealChatPage();
-            if(d && d.success && requestMatchesDeal(seq, _dealViewState.id)) {
-                applyDealChatPage(seq, _dealViewState.id, d.chat, d.chat_blocked, d.has_more);
-                return;
-            }
-        }
         const d = await fetchDealChatTail(true);
         if(!d || d.stale || !d.success || !requestMatchesDeal(seq, _dealViewState.id)) return;
         applyDealSidePreview(d);

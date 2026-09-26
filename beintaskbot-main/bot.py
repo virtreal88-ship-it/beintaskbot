@@ -11407,15 +11407,8 @@ def _flush_sent_messages() -> None:
 
 
 def _schedule_sent_messages_save() -> None:
-    """Persist in the background; every write_json is a commit on the data branch."""
-    global _wa_sent_save_timer
-    with _wa_sent_lock:
-        if _wa_sent_save_timer is not None:
-            return
-        timer = threading.Timer(5.0, _flush_sent_messages)
-        timer.daemon = True
-        _wa_sent_save_timer = timer
-    timer.start()
+    """Keep the live chat in memory. Do not upload the whole archive on each message."""
+    return
 
 
 def _persist_cloud_outgoing(lead_id: int, sent_item: dict, phone: str, sent_row: dict) -> None:
@@ -12843,18 +12836,10 @@ def _ingest_cloud_incoming(value: dict) -> None:
             external_id=wamid,
         )
         _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
-        if pending_id:
-            threading.Thread(
-                target=_bind_pending_cloud_lead,
-                args=(phone, name, phone_number_id, pending_id),
-                daemon=True,
-            ).start()
-        else:
-            try:
-                _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line, external_id=wamid)
-            except Exception:
-                pass
-            threading.Thread(target=_patch_cloud_inbox_into_rufat_cache, daemon=True).start()
+        try:
+            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line, external_id=wamid)
+        except Exception:
+            pass
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
         _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
         _WA_LAST_HOOK["lead"] = int(lead_id)
@@ -12881,7 +12866,7 @@ def _ingest_cloud_echoes(value: dict) -> None:
             created = int(message.get("timestamp") or 0)
         except (TypeError, ValueError):
             created = 0
-        lead_id = _resolve_cloud_lead(phone, "", sender_phone_id=phone_number_id)
+        lead_id = _fast_cloud_lead(phone) or _pending_wa_lead_id(phone)
         if not lead_id:
             logger.warning("WhatsApp echo has no lead phone=%s", phone)
             continue
@@ -12906,11 +12891,6 @@ def _ingest_cloud_echoes(value: dict) -> None:
         item["target_pipeline"] = target_pipe
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
-        try:
-            _patch_cloud_inbox_into_rufat_cache()
-            record_lead_pulse_event(lead_id, "deal_update", preview=preview, channel="whatsapp", phone=phone, pipeline_id=target_pipe, wa_line=wa_line)
-        except Exception:
-            pass
         _invalidate_deal_chat_cache(lead_id)
         record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0, channel="whatsapp", pipeline_id=target_pipe, wa_line=wa_line)
         logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
@@ -14861,20 +14841,13 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
     if channel == "whatsapp" and (is_funnel_chat(chat_id) or is_admin(chat_id)):
         sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
         try:
-            limit = max(1, min(int(request.rel_url.query.get("limit") or 20), 50))
-        except (TypeError, ValueError):
-            limit = 20
-        try:
             before = int(request.rel_url.query.get("before") or 0)
         except (TypeError, ValueError):
             before = 0
-        tailish = str(request.rel_url.query.get("preview") or "") == "1" or str(request.rel_url.query.get("tail") or "") == "1"
-        keep = _CHAT_TAIL_KEEP if tailish else limit
+        keep = 8
         viewer_line = _viewer_wa_line(chat_id)
-        rows = [
-            item for item in _wa_thread_rows(lead_id)
-            if _row_visible_on_line(item, viewer_line)
-        ]
+        source = _wa_thread_rows(lead_id) if before else _sent_messages_for_lead(lead_id)
+        rows = [item for item in source if _row_visible_on_line(item, viewer_line)]
         rows.sort(key=lambda item: int(item.get("created_at") or 0))
         if before:
             older = [item for item in rows if int(item.get("created_at") or 0) < before]
