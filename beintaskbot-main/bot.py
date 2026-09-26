@@ -10395,6 +10395,7 @@ _WA_LAST_HOOK = {"at": 0, "fields": [], "in": 0, "lead": 0, "sub": ""}
 
 
 def _wa_graph_get(path: str, params: dict | None = None):
+    return {}
     token, _phone_id = _wa_cloud_credentials()
     if not token:
         return {}
@@ -10412,7 +10413,8 @@ def _wa_graph_get(path: str, params: dict | None = None):
 
 
 def _wa_ensure_subscribed() -> None:
-    """Ask Meta to send live WABA inbound to this app, not only dashboard tests."""
+    """WhatsApp Cloud API is no longer called."""
+    return
     token, phone_id = _wa_cloud_credentials()
     if not token:
         return
@@ -10479,7 +10481,8 @@ def _wa_cloud_error_text(resp) -> str:
 
 
 def _wa_cloud_post(body: dict, phone_id: str = "") -> tuple[bool, str, str]:
-    """POST to the Cloud API messages endpoint; returns ok, error and wamid."""
+    """WhatsApp Cloud API is no longer called."""
+    return False, "Çat bağlanıb.", ""
     token, _env_phone = _wa_cloud_credentials()
     phone_id = str(phone_id or _wa_active_phone_id() or "").strip()
     if not token or not phone_id:
@@ -10511,7 +10514,8 @@ def _wa_cloud_post(body: dict, phone_id: str = "") -> tuple[bool, str, str]:
 
 
 def _wa_cloud_upload_media(content: bytes, filename: str, mime: str, phone_id: str = "") -> tuple[str, str]:
-    """Upload media to Cloud API and return its media id."""
+    """WhatsApp Cloud API is no longer called."""
+    return "", "Çat bağlanıb."
     token, _env_phone = _wa_cloud_credentials()
     phone_id = str(phone_id or _wa_active_phone_id() or "").strip()
     if not token or not phone_id:
@@ -10552,7 +10556,8 @@ _WA_UPLOADED_MEDIA_TTL = 6 * 24 * 3600.0
 
 
 def _wa_media_id_for_link(link: str, kind: str) -> tuple[str, str]:
-    """Download a template image and upload it, so WhatsApp can attach the file."""
+    """WhatsApp Cloud API is no longer called."""
+    return "", "Çat bağlanıb."
     key = str(link or "").strip()
     now = _time_module.time()
     cached = _WA_UPLOADED_MEDIA.get(key)
@@ -11282,7 +11287,8 @@ _WA_MEDIA_BYTES: dict[str, tuple[bytes, str]] = {}
 
 
 def _wa_download_graph_media(media_id: str) -> tuple[bytes, str]:
-    """Download one WABA attachment. The Graph URL expires, so the bytes are cached."""
+    """WhatsApp Cloud API is no longer called."""
+    return b"", ""
     media_id = str(media_id or "").strip()
     cached = _WA_MEDIA_BYTES.get(media_id)
     if cached:
@@ -11326,6 +11332,7 @@ def _wa_download_graph_media(media_id: str) -> tuple[bytes, str]:
 
 
 async def handle_api_wa_media(request: web.Request) -> web.Response:
+    return web.Response(status=410, text="Çat bağlanıb.")
     media_id = str(request.match_info.get("media_id") or "").strip()
     if not media_id.isdigit():
         return web.Response(status=400, text="Invalid media")
@@ -13760,6 +13767,7 @@ def _overlay_sent_delivery(items: list, lead_id: int) -> None:
 
 
 def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
+    return [], False, False
     rows: list[dict] = []
     blocked = False
     maybe_more = False
@@ -14699,6 +14707,7 @@ def _warm_one_chat_tail(lead_id: int) -> None:
 
 
 async def _warm_chat_tail_loop() -> None:
+    return
     while True:
         lead_id = 0
         with _chat_tail_warm_lock:
@@ -14734,7 +14743,8 @@ async def _warm_chat_tail_loop() -> None:
 
 
 def _priority_chat_tail(lead_id: int) -> None:
-    """Move one opened chat to the front of the single warm queue."""
+    """Old WhatsApp chat warm is disabled."""
+    return
     global _chat_tail_warm_task
     try:
         lid = int(lead_id)
@@ -14761,6 +14771,7 @@ def _priority_chat_tail(lead_id: int) -> None:
 
 
 def _schedule_chat_tail_warm(deals_or_ids) -> None:
+    return
     global _chat_tail_warm_task
     if deals_or_ids and isinstance(deals_or_ids[0], dict):
         lead_ids = _chat_tail_ids(deals_or_ids)
@@ -14820,6 +14831,7 @@ async def _refresh_one_talk_tail(lead_id: int, talk_id: int, origin: str) -> Non
 
 
 def _schedule_talk_tail_refresh(lead_id: int, talk_id: int, origin: str) -> None:
+    return
     try:
         lid = int(lead_id)
         talk = int(talk_id)
@@ -14893,6 +14905,7 @@ def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
 
 
 async def handle_api_deal_chat(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -15377,6 +15390,7 @@ def _deliver_via_cloud(
 
 
 async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16020,6 +16034,7 @@ def _send_gray_emoji_reply(chat_id: int, lead: dict, data: dict, emoji: str) -> 
 
 
 async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16078,6 +16093,7 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
 
 
 async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16115,6 +16131,7 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
 
 
 async def handle_api_deal_chat_seen(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16268,6 +16285,7 @@ def _set_user_chat_pin(chat_id: int, lead_id: int, pin: dict | None) -> dict:
 
 
 async def handle_api_deal_chat_pin(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16425,6 +16443,7 @@ def _fallback_chat_summary(history: str) -> str:
 
 
 async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -17691,9 +17710,6 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
         payload = await request.json()
     except Exception:
         payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    asyncio.get_running_loop().run_in_executor(_wa_io, _process_whatsapp_payload, payload)
     return web.Response(text="ok")
 
 
@@ -17785,7 +17801,6 @@ async def start_webhook_server():
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
-    asyncio.create_task(asyncio.to_thread(_wa_ensure_subscribed))
 
 
 def _rehydrate_tecili_tasks():

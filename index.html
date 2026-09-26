@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="310">
+    <meta name="pwa-build" content="311">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3676,6 +3676,7 @@ function showCachedPhoto(wrap) {
     return true;
 }
 async function fetchMediaBlob(url, onProgress) {
+    if(String(url || '').indexOf('/api/wa/media/') >= 0) return null;
     try {
         const idbBlob = await idbGet('media', url);
         if(idbBlob && idbBlob.size > 0 && !String(idbBlob.type || '').startsWith('text/')) {
@@ -5077,6 +5078,7 @@ function setPinnedChatMessage(leadId, item) {
     else data[id] = row;
     savePinnedChatMessages(data);
     paintDealPinBar();
+    return;
     if(!CURRENT_USER_ID) return;
     fetch(API_BASE + '/api/deal/chat/pin', {
         method: 'POST',
@@ -5090,6 +5092,7 @@ function setPinnedChatMessage(leadId, item) {
     }).catch(() => {});
 }
 async function loadChatPins() {
+    return;
     if(!CURRENT_USER_ID) return;
     try {
         const r = await fetch(API_BASE + '/api/deal/chat/pin', {headers: {'X-TG-User-ID': CURRENT_USER_ID}});
@@ -5347,6 +5350,7 @@ function openChatReactionPicker(anchor, reactId) {
     window.setTimeout(() => document.addEventListener('click', onAway, true), 400);
 }
 async function sendChatReaction(reactId, emoji) {
+    return;
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) {
         toast('Reaksiya göndərilmədi.', true);
         return;
@@ -5413,6 +5417,7 @@ function lastIncomingWamid() {
 let _chatReadSent = '';
 let _chatTypingAt = 0;
 function markDealChatRead(typing) {
+    return;
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly) return;
     if(_dealViewState.channel && _dealViewState.channel !== 'whatsapp') return;
     const wamid = lastIncomingWamid();
@@ -5605,6 +5610,7 @@ function applyDealChannels(channels) {
     paintDealChannels(rows, _dealViewState.channel);
 }
 async function fetchDealChatPage(before) {
+    return {stale:true};
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
@@ -5721,6 +5727,7 @@ function instantChatRows(deal, remembered) {
     return withLivePreview(base, deal);
 }
 async function fetchDealChatTail(isPolling = false) {
+    return {stale:true};
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID) return {stale:true};
     const seq = _dealViewState.seq;
     const leadId = _dealViewState.id;
@@ -5826,6 +5833,7 @@ async function loadMobileBaxishChat() {
     }
 }
 async function loadDealChatLatest() {
+    return;
     if(!_dealViewState || _dealViewState.readonly) return;
     if(!_dealInboxMode && window.matchMedia('(max-width: 1023px)').matches) {
         await loadMobileBaxishChat();
@@ -6492,6 +6500,7 @@ function startDealNoteInlineEdit(deal, btn) {
     };
 }
 function startDealChatPolling() {
+    return;
     stopDealChatPolling();
     _dealChatPollTimer = setInterval(pollDealChat, 1500);
 }
@@ -6766,6 +6775,7 @@ function dealAiPayload(mode) {
 }
 let _dealAiBusy = false;
 async function requestDealAiReply() {
+    return;
     const btn = document.getElementById('deal-chat-ai');
     const input = document.getElementById('deal-chat-input');
     if(_dealAiBusy || !_dealViewState || !CURRENT_USER_ID) return;
@@ -6792,6 +6802,7 @@ async function requestDealAiReply() {
     }
 }
 async function requestDealSummary() {
+    return;
     const btn = document.getElementById('deal-chat-summary');
     if(!_dealViewState || !CURRENT_USER_ID) return;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
@@ -6838,6 +6849,7 @@ function paintWaTemplateSelect(rows) {
     paintWaTplForm();
 }
 async function refreshWaTemplates() {
+    return;
     const r = await fetch(API_BASE + '/api/whatsapp/templates', {
         headers: {'X-TG-User-ID': CURRENT_USER_ID}
     });
@@ -7058,6 +7070,7 @@ async function openWaTemplateModal(opts) {
     sendBtn.onclick = () => sendWaTemplate(options);
 }
 async function sendWaTemplate(options) {
+    return;
     if(_waTplSending) return;
     const tpl = waTplSelected();
     if(!tpl) { toast('Şablon seçin', true); return; }
@@ -7313,6 +7326,7 @@ async function toggleDealVoice() {
     _dealVoiceTimer = setInterval(paintDealVoiceTime, 1000);
 }
 async function sendDealChatMessage(fileArg) {
+    return;
     if(_dealVoiceRec && _dealVoiceRec.state !== 'inactive') {
         const file = await stopDealVoiceAndGetFile();
         if(!file) return;
@@ -8382,6 +8396,7 @@ function markChatsSeen(leadId) {
     seen['p_' + String(leadId)] = dealLastClientMessage(deal) || '';
     delete seen['unread_' + String(leadId)];
     saveChatsSeen(seen);
+    return;
     if(leadId && CURRENT_USER_ID) {
         fetch(API_BASE + '/api/deal/chat/seen', {
             method: 'POST',
@@ -9410,6 +9425,7 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
 
 const _prewarmingLeads = new Set();
 async function prewarmChat(leadId) {
+    return;
     const lid = String(leadId || '').trim();
     if(!lid || !CURRENT_USER_ID || _prewarmingLeads.has(lid)) return;
     _prewarmingLeads.add(lid);
