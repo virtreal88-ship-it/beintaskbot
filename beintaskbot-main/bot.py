@@ -14356,6 +14356,15 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
     return payload
 
 
+def _load_deal_view(lead_id: int, require_personal: bool):
+    """Kommo reads for the deal window. Must not run on the HTTP loop."""
+    lead = get_lead_details(int(lead_id))
+    if not isinstance(lead, dict):
+        return None, None
+    deal = build_deal_view_payload(int(lead_id), lead, require_personal=require_personal)
+    return lead, deal
+
+
 async def handle_api_deal_view(request: web.Request) -> web.Response:
     raw_chat_id = (
         request.headers.get("X-TG-User-ID")
@@ -14374,12 +14383,15 @@ async def handle_api_deal_view(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
     if not is_funnel_chat(chat_id) and not is_admin(chat_id):
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    lead = get_lead_details(lead_id)
+    try:
+        lead, deal = await asyncio.to_thread(_load_deal_view, lead_id, not is_admin(chat_id))
+    except Exception as exc:
+        logger.warning("Deal view lead=%s: %s", lead_id, exc)
+        return web.json_response({"success": False, "error": "Sövdələşmə açılmadı"}, status=502)
     if not lead:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     if not _user_can_view_personal_lead(chat_id, lead):
         return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    deal = build_deal_view_payload(lead_id, lead, require_personal=not is_admin(chat_id))
     if not deal:
         return web.json_response({"success": False, "error": "Sövdələşmə tapılmadı"}, status=404)
     return web.json_response({"success": True, "deal": deal, "share_token": make_deal_share_token(lead_id)})
@@ -15634,6 +15646,11 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
     return rows
 
 
+_history_cache: dict[int, tuple[float, list]] = {}
+_history_inflight: dict[int, asyncio.Future] = {}
+_HISTORY_CACHE_TTL = 180.0
+
+
 async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -15650,16 +15667,39 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         hinted_talk = int(request.rel_url.query.get("talk_id") or 0)
     except (TypeError, ValueError):
         hinted_talk = 0
+    cached = _history_cache.get(lead_id)
+    if cached and (_time_module.monotonic() - cached[0]) < _HISTORY_CACHE_TTL:
+        return web.json_response({"success": True, "chat": cached[1]})
+    pending = _history_inflight.get(lead_id)
+    if pending is not None:
+        try:
+            rows = await pending
+        except Exception as exc:
+            return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
+        return web.json_response({"success": True, "chat": rows})
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future = loop.create_future()
+    future.add_done_callback(lambda done: done.exception() if done.done() and not done.cancelled() else None)
+    _history_inflight[lead_id] = future
     try:
         rows = await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(_history_io, _kommo_history_rows, lead_id, hinted_talk),
+            loop.run_in_executor(_history_io, _kommo_history_rows, lead_id, hinted_talk),
             timeout=9,
         )
     except asyncio.TimeoutError:
+        if not future.done():
+            future.set_exception(TimeoutError("Kommo tarixçə sorğusu vaxtında cavab vermədi."))
         return web.json_response({"success": False, "error": "Kommo tarixçə sorğusu vaxtında cavab vermədi."}, status=504)
     except Exception as exc:
         logger.warning("Kommo history lead=%s: %s", lead_id, exc)
+        if not future.done():
+            future.set_exception(exc)
         return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
+    finally:
+        _history_inflight.pop(lead_id, None)
+    _history_cache[lead_id] = (_time_module.monotonic(), rows)
+    if not future.done():
+        future.set_result(rows)
     return web.json_response({"success": True, "chat": rows})
 
 

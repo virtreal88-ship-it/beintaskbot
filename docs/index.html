@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="311">
+    <meta name="pwa-build" content="312">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -7561,7 +7561,6 @@ function dealWorkspaceHtml(deal, token, readonly, opts, initialMessages) {
                 <div class="sub"><span class="deal-head-phone-row">${phoneHtml}</span></div>
             </div>
             ${waHtml}
-            <button type="button" id="deal-history-open" class="deal-share-btn" title="Tarixçə">Tarixçə</button>
             ${shareBtn}
             <button type="button" id="chats-open-deal" class="chats-deal-link${panelOpen ? ' on' : ''}" title="Sövdələşmə" aria-label="Sövdələşmə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M10 8l5 4-5 4"/></svg></button>
         </div>
@@ -7574,7 +7573,7 @@ function dealWorkspaceHtml(deal, token, readonly, opts, initialMessages) {
                     </button>
                     <button type="button" class="chat-pin-clear" id="deal-pin-clear" title="Sabitdən çıxar">×</button>
                 </div>
-                <div id="deal-chat-thread" class="wa-thread"><div style="margin:16px;padding:16px;background:#fff;border-radius:16px"><div style="font-size:12px;color:#64748b;margin-bottom:8px">Son bildiriş</div><div style="font-size:15px;white-space:pre-wrap">${escapeHtml(noticeText)}</div></div></div>
+                <div id="deal-chat-thread" class="wa-thread"><div id="deal-history-list" style="padding:12px">Yüklənir...</div></div>
             </section>
             <aside class="deal-side" id="deal-info-side">${dealInfoBodyHtml(deal, readonly)}</aside>
         </div>
@@ -7853,8 +7852,7 @@ function paintDealViewModal(deal, readonly, opts) {
     bindDealChatThread();
     bindDealSideActions(deal);
     bindAudioWait(root);
-    const historyBtn = root.querySelector('#deal-history-open');
-    if(historyBtn) historyBtn.onclick = () => openKommoHistory(deal.id, dealClientName(deal));
+    fillKommoHistory(deal.id, root.querySelector('#deal-history-list'));
     const shareBtn = root.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
         try {
@@ -9616,6 +9614,45 @@ function resumeInboxPulse() {
     pollInboxPulse();
 }
 try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch(_err) {}
+function historyRowsHtml(rows) {
+    return rows.map(row => {
+        const when = row.created_at ? new Date(Number(row.created_at) * 1000).toLocaleString('az-AZ') : '';
+        const who = row.incoming ? 'Müştəri' : (row.author || 'Biz');
+        return `<div style="background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px">
+            <div style="font-size:11px;color:#64748b">${escapeHtml(who)}${when ? ' · ' + escapeHtml(when) : ''}</div>
+            <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(row.text || '')}</div>
+        </div>`;
+    }).join('');
+}
+async function fillKommoHistory(leadId, list) {
+    if(!list || !leadId) return;
+    list.textContent = 'Yüklənir...';
+    const ctrl = new AbortController();
+    const slow = window.setTimeout(() => ctrl.abort(), 20000);
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/history?lead_id=' + encodeURIComponent(String(leadId)) + '&_ts=' + Date.now(), {
+            cache: 'no-store',
+            headers: {'X-TG-User-ID': CURRENT_USER_ID},
+            signal: ctrl.signal
+        });
+        const payload = await response.json().catch(() => ({}));
+        if(!list.isConnected) return;
+        if(!response.ok || !payload.success) {
+            list.textContent = payload.error || 'Tarixçə açılmadı';
+            return;
+        }
+        const rows = Array.isArray(payload.chat) ? payload.chat : [];
+        if(!rows.length) {
+            list.textContent = 'Kommo tarixçə qaytarmadı';
+            return;
+        }
+        list.innerHTML = historyRowsHtml(rows);
+    } catch(_err) {
+        if(list.isConnected) list.textContent = 'Kommo cavab vermədi';
+    } finally {
+        window.clearTimeout(slow);
+    }
+}
 async function openKommoHistory(leadId, title) {
     const old = document.getElementById('kommo-history-modal');
     if(old) old.remove();
@@ -9632,40 +9669,7 @@ async function openKommoHistory(leadId, title) {
     document.body.appendChild(modal);
     modal.querySelector('#kommo-history-close').onclick = () => modal.remove();
     modal.addEventListener('click', event => { if(event.target === modal) modal.remove(); });
-    const ctrl = new AbortController();
-    const slow = window.setTimeout(() => ctrl.abort(), 15000);
-    try {
-        const response = await fetch(API_BASE + '/api/deal/chat/history?lead_id=' + encodeURIComponent(String(leadId)) + '&_ts=' + Date.now(), {
-            cache: 'no-store',
-            headers: {'X-TG-User-ID': CURRENT_USER_ID},
-            signal: ctrl.signal
-        });
-        const payload = await response.json().catch(() => ({}));
-        const list = modal.querySelector('#kommo-history-list');
-        if(!list) return;
-        if(!response.ok || !payload.success) {
-            list.textContent = payload.error || 'Tarixçə açılmadı';
-            return;
-        }
-        const rows = Array.isArray(payload.chat) ? payload.chat : [];
-        if(!rows.length) {
-            list.textContent = 'Kommo tarixçə qaytarmadı';
-            return;
-        }
-        list.innerHTML = rows.map(row => {
-            const when = row.created_at ? new Date(Number(row.created_at) * 1000).toLocaleString('az-AZ') : '';
-            const who = row.incoming ? 'Müştəri' : (row.author || 'Biz');
-            return `<div style="background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px">
-                <div style="font-size:11px;color:#64748b">${escapeHtml(who)}${when ? ' · ' + escapeHtml(when) : ''}</div>
-                <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(row.text || '')}</div>
-            </div>`;
-        }).join('');
-    } catch(_err) {
-        const list = modal.querySelector('#kommo-history-list');
-        if(list) list.textContent = 'Kommo cavab vermədi';
-    } finally {
-        window.clearTimeout(slow);
-    }
+    fillKommoHistory(leadId, modal.querySelector('#kommo-history-list'));
 }
 async function openInboxChat(leadId) {
     let deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
