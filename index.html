@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="318">
+    <meta name="pwa-build" content="319">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -360,6 +360,7 @@
         .deal-person-phone { font-size:13px; font-weight:600; color:#111827; }
         .deal-person .deal-head-avatar { width:32px; height:32px; background:#e5e7eb; color:#374151; }
         .deal-source-link { display:inline-flex; margin-left:auto; text-decoration:none; }
+        .deal-chat-head { padding:8px 14px 10px; border-bottom:1px solid #e5e7eb; background:#fff; flex:none; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
         .deal-stage-row.admin-pipelines { align-items:center; }
@@ -6739,7 +6740,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
                     : `<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>`}
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
-                ${staff ? person : `<div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
+                ${staff ? '' : `<div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
                 ${sourceLineHtml(deal)}
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>`}
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
@@ -6760,6 +6761,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
     if(!staff) return info;
     return `<div class="deal-shell" style="width:100%;height:100%;max-height:none;border-radius:0;box-shadow:none">
         <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #e5e7eb;flex:none"><button type="button" id="chats-back" class="chats-back" aria-label="Geri">←</button></div>
+        <div class="deal-chat-head">${person}</div>
         <div class="deal-tabs" id="deal-tabs"><button type="button" class="on" data-tab="chat">Tarixçə</button><button type="button" data-tab="info">Məlumat</button></div>
         <div id="deal-shell-body" class="deal-shell-body show-chat">
             <div class="wa-pane" style="background:#efeae2"><div id="deal-chat-thread" class="wa-thread" style="background:#efeae2">${chatHtml}</div></div>
