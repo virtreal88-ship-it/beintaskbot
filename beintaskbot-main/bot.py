@@ -11655,13 +11655,17 @@ def _remember_phone_lead(phone: str, lead_id: int) -> None:
     if not key or not lid:
         return
     store = _load_sent_messages()
+    changed = False
     with _wa_sent_lock:
         idx = store.get(_WA_PHONE_LEADS_KEY)
         if not isinstance(idx, dict):
             idx = {}
             store[_WA_PHONE_LEADS_KEY] = idx
-        idx[key] = lid
-    _schedule_sent_messages_save()
+        if idx.get(key) != lid:
+            idx[key] = lid
+            changed = True
+    if changed:
+        _schedule_sent_messages_save()
 
 
 def _lead_id_for_stored_phone(phone: str) -> int:
@@ -12237,32 +12241,49 @@ def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
         store = _load_sent_messages()
         with _wa_sent_lock:
             cloud_ids = [key for key in store.keys() if str(key).isdigit()]
+        pending_floor = 9_000_000_000_000
         for key in cloud_ids:
             try:
                 lid = int(key)
             except (TypeError, ValueError):
                 continue
-            if lid in seen:
+            if lid < pending_floor or lid in seen:
                 continue
             rows = _sent_messages_for_lead(lid)
-            if not any(row.get("incoming") for row in rows):
+            incoming = [row for row in rows if isinstance(row, dict) and row.get("incoming")]
+            if not incoming:
                 continue
             line = _lead_wa_line(lid)
             if int(pipeline_id) == int(RUFAT_PIPELINE_ID) and line != "rufat":
                 continue
             if int(pipeline_id) == int(NIZAMI_PIPELINE_ID) and line != "nizami":
                 continue
+            last = max(incoming, key=lambda row: int(row.get("created_at") or 0))
+            phone = str(last.get("phone") or "").strip()
+            name = str(last.get("author") or "").strip() or phone or "Müştəri"
             try:
-                lead = get_lead_details(lid)
-                preview, ts, _has = _cloud_last_for_lead(lid)
-                row = _overview_deal_from_cloud_lead(lead, preview, ts)
-            except Exception as exc:
-                logger.warning("Cloud inbox inject failed lead=%s: %s", lid, exc)
-                continue
-            if row.get("id"):
-                _paint_cloud_inbox_deal(row)
-                deals.append(row)
-                seen.add(lid)
+                ts = int(last.get("created_at") or 0)
+            except (TypeError, ValueError):
+                ts = 0
+            row = {
+                "id": lid,
+                "pipeline_id": int(pipeline_id),
+                "contact_name": name,
+                "phone": phone,
+                "phones": [phone] if phone else [],
+                "chat_channel": "whatsapp",
+                "wa_line": line,
+                "last_client_message": str(last.get("text") or "")[:140],
+                "last_incoming_at": ts,
+                "last_outgoing_at": _cloud_last_outgoing_at(lid),
+                "chat_at": ts,
+                "updated_at": ts,
+                "created_at": ts,
+                "inbox_only": True,
+            }
+            _paint_cloud_inbox_deal(row)
+            deals.append(row)
+            seen.add(lid)
     except Exception as exc:
         logger.warning("Cloud inbox overlay failed: %s", exc)
 
@@ -12907,13 +12928,6 @@ def _process_whatsapp_payload(payload: dict) -> None:
     ]
     _WA_LAST_HOOK["at"] = int(_time_module.time())
     _WA_LAST_HOOK["fields"] = fields
-    try:
-        store = _load_sent_messages()
-        with _wa_sent_lock:
-            store["_last_hook"] = {"at": _WA_LAST_HOOK["at"], "fields": fields}
-        _schedule_sent_messages_save()
-    except Exception:
-        pass
     for entry in payload.get("entry") or []:
         if not isinstance(entry, dict):
             continue
