@@ -6055,16 +6055,21 @@ def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_
     line = str(row.get("wa_line") or "")
     event_type = str(row.get("type") or "")
     other_sources = {"instagram", "tiktok", "facebook", "telegram"}
-    is_wa = channel == "whatsapp" or line in {"rufat", "nizami"} or event_type in {"incoming_message", "deal_outgoing"}
     if channel in other_sources:
         return bool(is_admin_user)
-    if is_wa and (channel == "whatsapp" or line or event_type in {"incoming_message", "deal_outgoing"}):
+    if channel == "whatsapp" and line in {"rufat", "nizami"}:
         if line == "nizami":
             return bool(is_admin_user or int(user_pipeline) == int(NIZAMI_PIPELINE_ID))
-        if line == "rufat":
-            return int(user_pipeline) == int(RUFAT_PIPELINE_ID)
-        if channel == "whatsapp" or event_type in {"incoming_message", "deal_outgoing"}:
+        return int(user_pipeline) == int(RUFAT_PIPELINE_ID)
+    if event_type == "incoming_message":
+        try:
+            lead_id = int(row.get("lead_id") or 0)
+            event_pipe = int(row.get("pipeline_id") or 0)
+        except (TypeError, ValueError):
             return False
+        if lead_id and lead_id in visible:
+            return True
+        return bool(event_pipe and event_pipe == int(user_pipeline))
     if is_admin_user:
         return True
     try:
@@ -15388,6 +15393,7 @@ async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
 
 
 async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -15526,7 +15532,64 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     })
 
 
+def _kommo_history_rows(lead_id: int, contact_ids: list[int]) -> list[dict]:
+    """One flat list of the messages Kommo returns for this deal. No send, no local chat."""
+    talks = _fetch_talks(int(lead_id), contact_ids, include_contacts=True) or []
+    rows: list[dict] = []
+    for talk in talks[:8]:
+        if not isinstance(talk, dict):
+            continue
+        talk_id = _talk_id_of(talk)
+        if not talk_id:
+            continue
+        origin = _talk_channel_key(talk) or ""
+        try:
+            messages, _blocked, _more = _fetch_talk_messages(int(talk_id), pages=1, page_limit=50)
+        except Exception as exc:
+            logger.warning("Kommo history talk %s failed: %s", talk_id, exc)
+            continue
+        for message in messages or []:
+            formatted = _format_chat_message(message, origin)
+            if not formatted:
+                continue
+            text = str(formatted.get("text") or "").strip()
+            if not text:
+                text = str(formatted.get("message_type") or "Mesaj")
+            try:
+                created = int(formatted.get("created_at") or 0)
+            except (TypeError, ValueError):
+                created = 0
+            rows.append({
+                "text": text[:500],
+                "author": str(formatted.get("author") or "")[:80],
+                "incoming": bool(formatted.get("incoming")),
+                "created_at": created,
+                "channel": origin,
+            })
+    rows.sort(key=lambda item: int(item.get("created_at") or 0))
+    return rows
+
+
+async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    contact_ids = _lead_contact_ids(lead if isinstance(lead, dict) else {})
+    rows = await asyncio.to_thread(_kommo_history_rows, lead_id, contact_ids)
+    return web.json_response({"success": True, "chat": rows})
+
+
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
+    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -17597,6 +17660,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/deal/view", handle_api_deal_view)
     app_web.router.add_route('OPTIONS', '/api/deal/chat', lambda r: web.Response())
     app_web.router.add_get("/api/deal/chat", handle_api_deal_chat)
+    app_web.router.add_get("/api/deal/chat/history", handle_api_deal_chat_history)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/template', lambda r: web.Response())
