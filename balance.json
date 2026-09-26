@@ -1002,9 +1002,24 @@
         "kpi": 0,
         "type": "task",
         "date": "2026-09-22 17:23:03"
+      },
+      {
+        "id": "a68f8f14b3064914a23f724871cb2771",
+        "task_id": 0,
+        "executor": "Rasim Əsgərov",
+        "client": "—",
+        "phone": "—",
+        "task_type": "Məxaric",
+        "amount": -200.0,
+        "status": "confirmed",
+        "task_text": "borc istedi",
+        "result_text": "borc istedi",
+        "kpi": 0,
+        "type": "məxaric",
+        "date": "2026-09-26 12:57:20"
       }
     ],
-    "balance": -100.0
+    "balance": -300.0
   },
   "7329891614": {
     "transactions": [
