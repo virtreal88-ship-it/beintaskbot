@@ -8331,7 +8331,8 @@ def _cloud_last_outgoing_at(lead_id: int) -> int:
         lid = int(lead_id or 0)
     except (TypeError, ValueError):
         return 0
-    if not lid:
+    # Never pull the GitHub archive onto the event loop from the funnel build.
+    if not lid or _wa_sent_messages is None:
         return 0
     outgoing = [row for row in _sent_messages_for_lead(lid) if not row.get("incoming")]
     if not outgoing:
@@ -11376,6 +11377,7 @@ _wa_sent_lock = threading.Lock()
 _wa_sent_save_timer: threading.Timer | None = None
 _wa_wamid_lead: dict[str, str] = {}
 _wa_io = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wa-chat")
+_history_io = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kommo-history")
 
 
 def _load_sent_messages() -> dict:
@@ -15552,6 +15554,8 @@ def _kommo_read(path: str, params: dict | None = None, timeout: int = 8) -> tupl
     except urllib.error.HTTPError as exc:
         raw = exc.read()
         status = int(exc.code or 0)
+    except Exception as exc:
+        raise RuntimeError("Kommo sorğusu kəsildi.") from exc
     if not raw or status == 204:
         return status, {}
     try:
@@ -15569,7 +15573,7 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
             "filter[entity_id][]": int(lead_id),
             "filter[entity_type]": "lead",
             "limit": 5,
-        })
+        }, timeout=4)
         if status == 403:
             raise RuntimeError("Kommo tokenində External chat history yoxdur.")
         if status not in {200, 204}:
@@ -15582,7 +15586,7 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
                 _lead_open_talk[int(lead_id)] = talk
     if not talk:
         return []
-    status, data = _kommo_read(f"/api/v4/talks/{int(talk)}/messages", {"limit": 50, "page": 1})
+    status, data = _kommo_read(f"/api/v4/talks/{int(talk)}/messages", {"limit": 50, "page": 1}, timeout=5)
     if status == 403:
         detail = str(data.get("detail") or "")
         if "scope" in detail.lower() or not detail:
@@ -15633,7 +15637,12 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         hinted_talk = 0
     try:
-        rows = await asyncio.to_thread(_kommo_history_rows, lead_id, hinted_talk)
+        rows = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(_history_io, _kommo_history_rows, lead_id, hinted_talk),
+            timeout=9,
+        )
+    except asyncio.TimeoutError:
+        return web.json_response({"success": False, "error": "Kommo tarixçə sorğusu vaxtında cavab vermədi."}, status=504)
     except Exception as exc:
         logger.warning("Kommo history lead=%s: %s", lead_id, exc)
         return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
@@ -16723,7 +16732,7 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
             overview["user_name"] = owner["name"]
         if is_admin(chat_id):
             try:
-                overview["pipelines"] = load_all_kommo_pipelines()
+                overview["pipelines"] = await asyncio.to_thread(load_all_kommo_pipelines)
             except Exception as exc:
                 logger.warning("Admin pipelines attach failed: %s", exc)
         return web.json_response({"success": True, **overview, "seen": _get_user_seen_map(chat_id), "is_admin": is_admin(chat_id)})
@@ -17689,10 +17698,6 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 
 async def start_webhook_server():
-    try:
-        await asyncio.to_thread(_wa_ensure_subscribed)
-    except Exception as exc:
-        logger.warning("WhatsApp subscribe on start failed: %s", exc)
     app_web = web.Application(middlewares=[cors_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
@@ -17780,6 +17785,7 @@ async def start_webhook_server():
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
+    asyncio.create_task(asyncio.to_thread(_wa_ensure_subscribed))
 
 
 def _rehydrate_tecili_tasks():
