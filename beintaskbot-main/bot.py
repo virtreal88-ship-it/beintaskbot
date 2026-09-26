@@ -15532,40 +15532,63 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     })
 
 
-def _kommo_history_rows(lead_id: int, contact_ids: list[int]) -> list[dict]:
-    """One flat list of the messages Kommo returns for this deal. No send, no local chat."""
-    talks = _fetch_talks(int(lead_id), contact_ids, include_contacts=True) or []
+def _kommo_history_rows(lead_id: int) -> list[dict]:
+    """Two short Kommo calls: the deal's talks, then messages of the latest one."""
+    try:
+        talks_resp = requests.get(
+            f"{KOMMO_BASE_URL}/api/v4/talks",
+            headers=HEADERS,
+            params={"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 10},
+            timeout=6,
+        )
+    except Exception as exc:
+        logger.warning("Kommo history talks failed lead=%s: %s", lead_id, exc)
+        return []
+    if talks_resp.status_code != 200:
+        return []
+    talks = [
+        talk for talk in (talks_resp.json().get("_embedded", {}).get("talks", []) or [])
+        if isinstance(talk, dict)
+    ]
+    if not talks:
+        return []
+    talks.sort(key=lambda talk: int(talk.get("updated_at") or talk.get("created_at") or 0), reverse=True)
+    talk = talks[0]
+    talk_id = _talk_id_of(talk)
+    if not talk_id:
+        return []
+    origin = _talk_channel_key(talk) or ""
+    try:
+        msg_resp = requests.get(
+            f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
+            headers=HEADERS,
+            params={"limit": 50, "page": 1, "order[created_at]": "desc"},
+            timeout=6,
+        )
+    except Exception as exc:
+        logger.warning("Kommo history messages failed talk=%s: %s", talk_id, exc)
+        return []
+    if msg_resp.status_code != 200:
+        return []
+    payload = msg_resp.json() if msg_resp.content else {}
+    messages = (payload.get("_embedded") or {}).get("messages") or []
     rows: list[dict] = []
-    for talk in talks[:8]:
-        if not isinstance(talk, dict):
+    for message in messages if isinstance(messages, list) else []:
+        formatted = _format_chat_message(message, origin)
+        if not formatted:
             continue
-        talk_id = _talk_id_of(talk)
-        if not talk_id:
-            continue
-        origin = _talk_channel_key(talk) or ""
+        text = str(formatted.get("text") or "").strip() or str(formatted.get("message_type") or "Mesaj")
         try:
-            messages, _blocked, _more = _fetch_talk_messages(int(talk_id), pages=1, page_limit=50)
-        except Exception as exc:
-            logger.warning("Kommo history talk %s failed: %s", talk_id, exc)
-            continue
-        for message in messages or []:
-            formatted = _format_chat_message(message, origin)
-            if not formatted:
-                continue
-            text = str(formatted.get("text") or "").strip()
-            if not text:
-                text = str(formatted.get("message_type") or "Mesaj")
-            try:
-                created = int(formatted.get("created_at") or 0)
-            except (TypeError, ValueError):
-                created = 0
-            rows.append({
-                "text": text[:500],
-                "author": str(formatted.get("author") or "")[:80],
-                "incoming": bool(formatted.get("incoming")),
-                "created_at": created,
-                "channel": origin,
-            })
+            created = int(formatted.get("created_at") or 0)
+        except (TypeError, ValueError):
+            created = 0
+        rows.append({
+            "text": text[:500],
+            "author": str(formatted.get("author") or "")[:80],
+            "incoming": bool(formatted.get("incoming")),
+            "created_at": created,
+            "channel": origin,
+        })
     rows.sort(key=lambda item: int(item.get("created_at") or 0))
     return rows
 
@@ -15574,17 +15597,15 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
     try:
         lead_id = int(request.rel_url.query.get("lead_id") or 0)
     except (TypeError, ValueError):
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
-    if err:
-        return err
-    contact_ids = _lead_contact_ids(lead if isinstance(lead, dict) else {})
-    rows = await asyncio.to_thread(_kommo_history_rows, lead_id, contact_ids)
+    rows = await asyncio.to_thread(_kommo_history_rows, lead_id)
     return web.json_response({"success": True, "chat": rows})
 
 
