@@ -9352,7 +9352,7 @@ async function openSearchedChat(leadId) {
 }
 let _staffNotices = [];
 let _noticeHistoryLeadId = 0;
-function closeNoticeClient() {
+function closeNoticeClient(opts) {
     _noticeHistoryLeadId = 0;
     closeDealInfoDrawer();
     _dealViewState = null;
@@ -9362,6 +9362,7 @@ function closeNoticeClient() {
     if(app) app.classList.remove('chat-open');
     if(pane) pane.innerHTML = chatsEmptyHtml();
     renderChatsList();
+    if(!(opts && opts.fromPopState) && window.history && history.state && history.state.noticeChatOpen) history.back();
 }
 function bindNoticeSwipeBack(pane) {
     if(!pane || pane.dataset.noticeSwipeBound === '1') return;
@@ -9370,7 +9371,7 @@ function bindNoticeSwipeBack(pane) {
     pane.addEventListener('touchstart', event => {
         if(window.innerWidth > 1023 || event.touches.length !== 1 || !document.getElementById('chats-app')?.classList.contains('chat-open')) return;
         const touch = event.touches[0];
-        if(touch.clientX > 36) return;
+        if(touch.clientX < window.innerWidth - 64) return;
         startX = touch.clientX;
         startY = touch.clientY;
         tracking = true;
@@ -9379,7 +9380,7 @@ function bindNoticeSwipeBack(pane) {
         if(!tracking) return;
         tracking = false;
         const touch = event.changedTouches[0];
-        if(touch && touch.clientX - startX > 88 && Math.abs(touch.clientY - startY) < 60) closeNoticeClient();
+        if(touch && startX - touch.clientX > 65 && Math.abs(touch.clientY - startY) < 60) closeNoticeClient();
     }, {passive:true});
     pane.addEventListener('touchcancel', () => { tracking = false; }, {passive:true});
 }
@@ -9458,6 +9459,10 @@ async function openNoticeClient(leadId) {
     _dealViewState = null;
     _dealInboxMode = false;
     if(app) app.classList.add('chat-open');
+    if(window.history && history.pushState) {
+        const state = history.state && typeof history.state === 'object' ? history.state : {};
+        history.pushState({...state, noticeChatOpen:true, leadId:id}, '');
+    }
     bindNoticeSwipeBack(pane);
     renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
@@ -9688,7 +9693,8 @@ window.addEventListener('popstate', () => {
     }
     const app = document.getElementById('chats-app');
     if(app && app.classList.contains('chat-open')) {
-        closeInboxChat({ fromPopState: true });
+        if(_noticeHistoryLeadId) closeNoticeClient({ fromPopState: true });
+        else closeInboxChat({ fromPopState: true });
     }
 });
 let _chatsPollTimer = null;

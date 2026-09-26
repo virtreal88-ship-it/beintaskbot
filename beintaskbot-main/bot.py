@@ -8865,23 +8865,10 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         return all_leads
 
     leads = await _load_all_rufat_leads()
-    if pipeline_id == int(NIZAMI_PIPELINE_ID):
-        hide_contacts = await _load_personal_funnel_contact_ids()
-        employee_pipelines = employee_personal_pipeline_ids()
-        filtered_leads = []
-        for lead in leads:
-            if _lead_pipeline_id(lead) in employee_pipelines:
-                continue
-            linked_ids = set()
-            for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
-                try:
-                    linked_ids.add(int(contact.get("id")))
-                except (TypeError, ValueError):
-                    continue
-            if hide_contacts and linked_ids & hide_contacts:
-                continue
-            filtered_leads.append(lead)
-        leads = filtered_leads
+    # Nizami's queue must retain every deal in its working stages. Filtering by
+    # an older deal for the same contact in another funnel made an active
+    # "Yeni sorğu" disappear from Müştərilər even though it was not closed.
+    # The client list itself now hides only Kommo's terminal stages.
 
     status_to_key = {status_id: key for key, status_id in funnel_stages.items()}
     stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in funnel_stages}
