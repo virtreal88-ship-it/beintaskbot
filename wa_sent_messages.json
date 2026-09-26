@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790404436,
+    "at": 1790406903,
     "fields": [
       "messages"
     ]
@@ -2524,6 +2524,30 @@
       "media_url": "/api/wa/media/1453145820078321",
       "file_uuid": "",
       "file_name": "voice.ogg",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTUzMUFCQURDNTlGOEM4NjlGNzY0RTZERDBCQkNFRDMA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTUzMUFCQURDNTlGOEM4NjlGNzY0RTZERDBCQkNFRDMA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "Test",
+      "message_type": "text",
+      "created_at": 1790406898,
+      "created": "26.09.2026 11:14",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
       "delivery_status": "",
       "via_cloud": true,
       "phone_number_id": "1352169527974549",
