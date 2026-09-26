@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="321">
+    <meta name="pwa-build" content="322">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -944,8 +944,9 @@
         </div>
         </div>
         <div id="deal-search-wrap" class="search-expand">
-            <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="dealListSearch=this.value; renderSamilDeals();">
+            <input id="deal-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" autocomplete="off">
             <button type="button" class="search-close" aria-label="Bağla">×</button>
+            <div id="deal-search-results" class="chats-search-results" hidden></div>
         </div>
         <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
@@ -5570,6 +5571,7 @@ function scrollChatToBottom(thread, smooth) {
 function paintDealChatThread(opts) {
     const thread = document.getElementById('deal-chat-thread');
     if(!thread || !_dealViewState) return;
+    if(thread.querySelector('#deal-history-list')) return;
     const playing = Array.from(thread.querySelectorAll('audio')).find(el => !el.paused && !el.ended);
     if(playing && !(opts && opts.force)) return;
     const stickBottom = !opts || opts.stickBottom !== false;
@@ -9084,6 +9086,93 @@ function hideChatsSearchHits() {
     if(box) { box.hidden = true; box.innerHTML = ''; }
     setChatsSearchLoading(false);
 }
+let _dealSearchTimer = null;
+let _dealSearchSeq = 0;
+function hideDealSearchHits() {
+    const box = document.getElementById('deal-search-results');
+    if(box) { box.hidden = true; box.innerHTML = ''; }
+    document.getElementById('deal-search-wrap')?.classList.toggle('loading', false);
+}
+function openClientPeek(contact) {
+    document.getElementById('client-peek')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'client-peek';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:13000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(360px,100%)">
+        <div style="font-size:16px;font-weight:600">${escapeHtml((contact && contact.name) || 'Müştəri')}</div>
+        <div style="margin-top:6px;font-size:13px;font-weight:600">${escapeHtml((contact && contact.phone) || '—')}</div>
+        <div style="margin-top:8px;font-size:12px;color:#64748b">Sövdələşmə yoxdur</div>
+        <button type="button" id="client-peek-close" style="margin-top:14px;border:0;background:#0f172a;color:#fff;border-radius:10px;padding:8px 12px;font-weight:600">Bağla</button>
+    </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector('#client-peek-close').onclick = () => modal.remove();
+    modal.addEventListener('click', event => { if(event.target === modal) modal.remove(); });
+}
+function paintDealSearchHits(rows, emptyText) {
+    const box = document.getElementById('deal-search-results');
+    if(!box) return;
+    if(!rows || !rows.length) {
+        if(emptyText) {
+            box.innerHTML = `<div class="chats-search-empty">${escapeHtml(emptyText)}</div>`;
+            box.hidden = false;
+        } else hideDealSearchHits();
+        return;
+    }
+    box.innerHTML = rows.map(row => {
+        const leadId = Number(row.lead_id || (row.leads && row.leads[0] && row.leads[0].id) || 0);
+        const name = row.name || row.lead_name || 'Müştəri';
+        const phone = row.phone || '';
+        return `<button type="button" class="chats-search-hit" data-lead="${escapeHtml(String(leadId || ''))}" data-name="${escapeHtml(name)}" data-phone="${escapeHtml(phone)}">
+            <b>${escapeHtml(name)}</b>
+            <span>${escapeHtml(phone || (leadId ? ('Sövdələşmə #' + leadId) : 'Sövdələşmə yoxdur'))}</span>
+        </button>`;
+    }).join('');
+    box.hidden = false;
+    box.onclick = (event) => {
+        const btn = event.target.closest('[data-lead]');
+        if(!btn) return;
+        const leadId = btn.getAttribute('data-lead');
+        const name = btn.getAttribute('data-name') || '';
+        const phone = btn.getAttribute('data-phone') || '';
+        hideDealSearchHits();
+        if(leadId && leadId !== '0') openDealViewById(leadId);
+        else openClientPeek({name, phone});
+    };
+}
+function scheduleDealSearch() {
+    const search = document.getElementById('deal-list-search');
+    const query = String(search && search.value || '').trim();
+    dealListSearch = query;
+    renderSamilDeals();
+    clearTimeout(_dealSearchTimer);
+    if(!query) { hideDealSearchHits(); return; }
+    const local = (samilDeals || []).filter(deal => crmRecordMatchesSearch(deal, query)).slice(0, 12);
+    if(local.length) {
+        document.getElementById('deal-search-wrap')?.classList.toggle('loading', false);
+        paintDealSearchHits(local.map(deal => ({
+            lead_id: deal.id,
+            name: dealClientName(deal) || deal.name || 'Müştəri',
+            phone: (Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || ''
+        })), '');
+        return;
+    }
+    const phoneQ = isPhoneChatQuery(query);
+    if(query.length < 2 && !phoneQ) { hideDealSearchHits(); return; }
+    _dealSearchTimer = setTimeout(async () => {
+        const seq = ++_dealSearchSeq;
+        document.getElementById('deal-search-wrap')?.classList.toggle('loading', true);
+        try {
+            const rows = await fetchChatsContactHits(query);
+            if(seq !== _dealSearchSeq) return;
+            paintDealSearchHits(rows, rows.length ? '' : 'Kontakt tapılmadı');
+        } catch(_err) {
+            if(seq !== _dealSearchSeq) return;
+            paintDealSearchHits([], 'Axtarış alınmadı');
+        } finally {
+            if(seq === _dealSearchSeq) document.getElementById('deal-search-wrap')?.classList.toggle('loading', false);
+        }
+    }, 450);
+}
 function paintChatsSearchHits(rows, emptyText) {
     const box = chatsSearchHitsBox();
     if(!box) return;
@@ -9187,12 +9276,22 @@ function bindPageSearchToggles() {
     });
     bindSearchToggle('deal-search-toggle', 'deal-search-wrap', 'deal-list-search', () => {
         dealListSearch = '';
+        _dealSearchSeq += 1;
+        hideDealSearchHits();
         renderSamilDeals();
     });
     bindSearchToggle('chats-search-toggle', 'chats-search-wrap', 'chats-search', () => {
         renderChatsList();
         hideChatsSearchHits();
     });
+    const dealSearch = document.getElementById('deal-list-search');
+    if(dealSearch && !dealSearch.dataset.bound) {
+        dealSearch.dataset.bound = '1';
+        dealSearch.addEventListener('input', scheduleDealSearch);
+        document.addEventListener('click', (event) => {
+            if(!event.target.closest('#deal-search-wrap') && !event.target.closest('#deal-search-toggle')) hideDealSearchHits();
+        });
+    }
 }
 function fillChatsLineSelect() {
     bindPageSearchToggles();
