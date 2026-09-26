@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="320">
+    <meta name="pwa-build" content="321">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -1777,15 +1777,7 @@ function sourceDirectUrl(deal, key) {
     const urls = sourceUrlsOf(deal);
     const phone = (deal && ((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone)) || '';
     if(key === 'whatsapp') return urls.find(url => /wa\.me|whatsapp\.com|api\.whatsapp/i.test(url)) || waBusinessUrl(phone);
-    if(key === 'instagram') {
-        const direct = urls.find(url => /ig\.me\/m\/|instagram\.com\/direct/i.test(url));
-        if(direct) return direct;
-        for(const url of urls) {
-            const user = handleFromUrl(url, /(^|\.)instagram\.com$/i, ['p','reel','reels','stories','explore','direct','accounts']);
-            if(user) return 'https://ig.me/m/' + encodeURIComponent(user);
-        }
-        return urls.find(url => /instagram|ig\.me/i.test(url)) || 'https://www.instagram.com/direct/inbox/';
-    }
+    if(key === 'instagram') return 'https://www.instagram.com/bein.az/';
     if(key === 'facebook') {
         const direct = urls.find(url => /m\.me\/|messenger\.com\/t\//i.test(url));
         if(direct) return direct;
@@ -1796,15 +1788,7 @@ function sourceDirectUrl(deal, key) {
         return urls.find(url => /facebook|messenger|m\.me/i.test(url)) || '';
     }
     if(key === 'telegram') return urls.find(url => /t\.me\/|telegram\./i.test(url)) || '';
-    if(key === 'tiktok') {
-        const messages = urls.find(url => /tiktok\.com\/messages/i.test(url));
-        if(messages) return messages;
-        for(const url of urls) {
-            const user = handleFromUrl(url, /(^|\.)tiktok\.com$/i, ['messages','foryou','discover','tag']);
-            if(user) return 'https://www.tiktok.com/@' + encodeURIComponent(user);
-        }
-        return urls.find(url => /tiktok/i.test(url)) || 'https://www.tiktok.com/messages';
-    }
+    if(key === 'tiktok') return 'https://www.tiktok.com/@beinclo';
     return urls[0] || '';
 }
 function staffSourceLinkHtml(deal) {
