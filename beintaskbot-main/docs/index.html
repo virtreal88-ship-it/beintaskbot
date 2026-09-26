@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="316">
+    <meta name="pwa-build" content="317">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -711,7 +711,10 @@
         #deal-view-modal .chats-back { display:inline-flex !important; align-items:center; justify-content:center; }
         @media (max-width: 1023px) {
             #deal-view-modal .deal-shell-body { grid-template-columns:1fr; }
-            #deal-view-modal .deal-side { display:none !important; }
+            #deal-view-modal .deal-tabs { display:flex; }
+            #deal-view-modal .deal-shell-body.show-chat .deal-side { display:none !important; }
+            #deal-view-modal .deal-shell-body.show-info .deal-side { display:block !important; }
+            #deal-view-modal .deal-shell-body.show-info .wa-pane { display:none; }
         }
         .chats-deal-link { width:34px; height:34px; padding:0; border:0; background:#f3f4f6; color:#374151; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; }
         .chats-deal-link svg { width:18px; height:18px; display:block; }
@@ -6659,7 +6662,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
     const waLink = staff ? waBusinessUrl(phone) : '';
     const kommoLink = staff ? dealKommoUrl(deal) : '';
     const inlineInput = 'width:auto;min-width:120px;max-width:100%;text-align:left;font-weight:600;border:0;border-bottom:1px solid #e5e7eb;background:transparent;padding:0 2px';
-    return `<div>
+    const info = `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
                 <div style="font-size:16px;font-weight:600">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
@@ -6682,10 +6685,19 @@ function dealDetailSectionsHtml(deal, token, opts) {
             <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Qeydlər</span>${staff ? '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>' : ''}</div>
             <div${staff ? ' id="deal-notes-list" style="margin-top:10px"' : ''}>${staff ? dealNotesListHtml(deal, false) : notesHtml}</div>
             ${staff ? `<div id="deal-note-form" class="deal-side-form" hidden><textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea><button type="button" id="deal-note-save">Qeyd əlavə et</button></div>` : ''}
-            <div style="margin-top:14px;font-size:12px;font-weight:600">WhatsApp</div>
+            ${staff ? '' : `<div style="margin-top:14px;font-size:12px;font-weight:600">WhatsApp</div>
             <div id="deal-chat-thread" class="deal-chat-thread">${chatHtml}</div>
-            ${composer}
+            ${composer}`}
         </div>`;
+    if(!staff) return info;
+    return `<div class="deal-shell" style="width:100%;height:100%;max-height:none;border-radius:0;box-shadow:none">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #e5e7eb;flex:none"><button type="button" id="chats-back" class="chats-back" aria-label="Geri">←</button></div>
+        <div class="deal-tabs" id="deal-tabs"><button type="button" class="on" data-tab="chat">Tarixçə</button><button type="button" data-tab="info">Məlumat</button></div>
+        <div id="deal-shell-body" class="deal-shell-body show-chat">
+            <div class="wa-pane" style="background:#efeae2"><div id="deal-chat-thread" class="wa-thread" style="background:#efeae2">${chatHtml}</div></div>
+            <div class="deal-side">${info}</div>
+        </div>
+    </div>`;
 }
 function buildDealShareUrl(leadId, token) {
     const url = new URL('deal.html', PUBLIC_PWA_BASE);
@@ -7748,11 +7760,8 @@ function paintDealViewModal(deal, readonly, opts) {
     } else {
         const modal = document.createElement('div');
         modal.id = 'deal-view-modal';
-        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#f4f6f8;overflow:auto;padding:0;will-change:transform';
-        modal.innerHTML = `<div style="max-width:720px;margin:0 auto;padding:12px 12px 28px">
-            <div style="display:flex;align-items:center;margin-bottom:10px"><button type="button" id="chats-back" class="chats-back" aria-label="Geri">←</button></div>
-            <div class="bg-white p-4 rounded-2xl shadow-sm">${dealDetailSectionsHtml(deal, token, {staff: true})}</div>
-        </div>`;
+        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#fff;overflow:hidden;padding:0;will-change:transform';
+        modal.innerHTML = dealDetailSectionsHtml(deal, token, {staff: true});
         document.body.classList.add('deal-modal-open', 'chat-open');
         document.body.appendChild(modal);
         root = modal;
@@ -9753,8 +9762,8 @@ async function fillKommoHistory(leadId, list) {
             return;
         }
         list.innerHTML = historyRowsHtml(rows);
-        const modal = list.closest('#deal-view-modal');
-        if(modal) requestAnimationFrame(() => { modal.scrollTop = modal.scrollHeight; });
+        const scroller = list.closest('.wa-thread') || list.closest('#deal-view-modal');
+        if(scroller) requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
     } catch(_err) {
         if(list.isConnected) list.innerHTML = '<div class="history-loading">Kommo cavab vermədi</div>';
     } finally {
