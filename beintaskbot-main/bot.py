@@ -15533,61 +15533,48 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
 
 
 def _kommo_history_rows(lead_id: int) -> list[dict]:
-    """Two short Kommo calls: the deal's talks, then messages of the latest one."""
+    """One Kommo events request: chat messages of this deal."""
     try:
-        talks_resp = requests.get(
-            f"{KOMMO_BASE_URL}/api/v4/talks",
+        resp = requests.get(
+            f"{KOMMO_BASE_URL}/api/v4/events",
             headers=HEADERS,
-            params={"filter[entity_id][]": int(lead_id), "filter[entity_type]": "lead", "limit": 10},
-            timeout=6,
+            params={
+                "filter[entity]": "lead",
+                "filter[entity_id]": int(lead_id),
+                "filter[type]": "incoming_chat_message,outgoing_chat_message",
+                "limit": 50,
+            },
+            timeout=8,
         )
     except Exception as exc:
-        logger.warning("Kommo history talks failed lead=%s: %s", lead_id, exc)
+        logger.warning("Kommo history failed lead=%s: %s", lead_id, exc)
+        raise
+    if resp.status_code == 204:
         return []
-    if talks_resp.status_code != 200:
-        return []
-    talks = [
-        talk for talk in (talks_resp.json().get("_embedded", {}).get("talks", []) or [])
-        if isinstance(talk, dict)
-    ]
-    if not talks:
-        return []
-    talks.sort(key=lambda talk: int(talk.get("updated_at") or talk.get("created_at") or 0), reverse=True)
-    talk = talks[0]
-    talk_id = _talk_id_of(talk)
-    if not talk_id:
-        return []
-    origin = _talk_channel_key(talk) or ""
-    try:
-        msg_resp = requests.get(
-            f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
-            headers=HEADERS,
-            params={"limit": 50, "page": 1, "order[created_at]": "desc"},
-            timeout=6,
-        )
-    except Exception as exc:
-        logger.warning("Kommo history messages failed talk=%s: %s", talk_id, exc)
-        return []
-    if msg_resp.status_code != 200:
-        return []
-    payload = msg_resp.json() if msg_resp.content else {}
-    messages = (payload.get("_embedded") or {}).get("messages") or []
+    if resp.status_code != 200:
+        detail = _kommo_error_detail(resp)
+        raise RuntimeError(detail or f"Kommo {resp.status_code}")
     rows: list[dict] = []
-    for message in messages if isinstance(messages, list) else []:
-        formatted = _format_chat_message(message, origin)
-        if not formatted:
+    for event in (resp.json().get("_embedded") or {}).get("events", []) or []:
+        if not isinstance(event, dict):
             continue
-        text = str(formatted.get("text") or "").strip() or str(formatted.get("message_type") or "Mesaj")
+        etype = str(event.get("type") or "")
+        after = event.get("value_after") or []
+        payload = after[0] if after and isinstance(after[0], dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else payload
+        text = _extract_nested_text(message).strip()
+        if not text:
+            text = "Mesaj"
         try:
-            created = int(formatted.get("created_at") or 0)
+            created = int(event.get("created_at") or 0)
         except (TypeError, ValueError):
             created = 0
         rows.append({
             "text": text[:500],
-            "author": str(formatted.get("author") or "")[:80],
-            "incoming": bool(formatted.get("incoming")),
+            "author": "",
+            "incoming": etype.startswith("incoming"),
             "created_at": created,
-            "channel": origin,
+            "channel": "",
         })
     rows.sort(key=lambda item: int(item.get("created_at") or 0))
     return rows
@@ -15605,7 +15592,11 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    rows = await asyncio.to_thread(_kommo_history_rows, lead_id)
+    try:
+        rows = await asyncio.to_thread(_kommo_history_rows, lead_id)
+    except Exception as exc:
+        logger.warning("Kommo history lead=%s: %s", lead_id, exc)
+        return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
     return web.json_response({"success": True, "chat": rows})
 
 
