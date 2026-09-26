@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="302">
+    <meta name="pwa-build" content="303">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4791,6 +4791,18 @@ function deliveryRank(status) {
     if(st === 'error' || st === 'failed' || st === 'undelivered' || st === '4' || st === '-1') return 1;
     return 0;
 }
+function preferDeliveryStatus(current, next) {
+    const cur = String(current || '').toLowerCase();
+    const nxt = String(next || '').toLowerCase();
+    if(!nxt) return current || '';
+    const apiOk = nxt === 'sent' || nxt === 'delivered' || nxt === 'read' || nxt === 'seen' || nxt === '0' || nxt === '1' || nxt === '2' || nxt === '3';
+    const localBad = cur === 'error' || cur === 'failed' || cur === 'undelivered';
+    if(apiOk && localBad) return next;
+    const apiFailed = nxt === 'error' || nxt === 'failed' || nxt === 'undelivered' || nxt === '4' || nxt === '-1';
+    if(apiFailed && (cur === 'sending' || cur === 'pending' || !cur)) return 'error';
+    if(deliveryRank(nxt) > deliveryRank(cur)) return next;
+    return current || next;
+}
 function cleanMessageText(text) {
     const raw = String(text || '').trim();
     if(!raw) return '';
@@ -4839,8 +4851,9 @@ function applyChatDelivery(existing, incoming) {
         if(!next) return;
         const match = rows.find(row => row && !row.incoming && sameChatMessage(row, item));
         if(!match) return;
-        if(deliveryRank(next) <= deliveryRank(match.delivery_status)) return;
-        match.delivery_status = next === 'failed' ? 'error' : next;
+        const kept = preferDeliveryStatus(match.delivery_status, next);
+        if(!kept || kept === String(match.delivery_status || '')) return;
+        match.delivery_status = kept === 'failed' ? 'error' : kept;
         changed = true;
     });
     return changed;
@@ -4882,7 +4895,7 @@ function mergeDealChat(existing, incoming, atStart) {
             const current = rows[matchIndex];
             const currentStatus = String(current.delivery_status || current.status || '');
             const nextStatus = String(item.delivery_status || item.status || '');
-            const keepStatus = deliveryRank(nextStatus) >= deliveryRank(currentStatus) ? nextStatus : currentStatus;
+            const keepStatus = preferDeliveryStatus(currentStatus, nextStatus);
             rows[matchIndex] = Object.assign({}, current, item, {
                 delivery_status: keepStatus || item.delivery_status || current.delivery_status,
                 local: false,
@@ -6756,6 +6769,7 @@ let _dealInboxMode = false;
 let _dealChatPollTimer = null;
 let _dealChatSeq = 0;
 let _dealChatSending = false;
+let _dealSendChain = Promise.resolve();
 function stopDealChatPolling() {
     if(_dealChatPollTimer) { clearInterval(_dealChatPollTimer); _dealChatPollTimer = null; }
 }
@@ -7331,7 +7345,7 @@ async function sendDealChatMessage(fileArg) {
     const input = document.getElementById('deal-chat-input');
     const btn = document.getElementById('deal-chat-send');
     const field = document.querySelector('.wa-composer-field');
-    if(_dealChatSending || !_dealViewState || !CURRENT_USER_ID) return;
+    if(!_dealViewState || !CURRENT_USER_ID) return;
     const file = fileArg || _dealPendingFile;
     const text = String(input && input.value || '').trim();
     if(!text && !file) { toast('Mesaj yazın', true); return; }
@@ -7345,10 +7359,6 @@ async function sendDealChatMessage(fileArg) {
     const replyExternal = replyTo && replyTo.externalId ? String(replyTo.externalId) : '';
     const channelRow = (_dealViewState.channels || []).find(row => row.key === channel);
     const talkId = Number((replyTo && replyTo.talkId) || (channelRow && channelRow.talk_id) || 0);
-
-    _dealChatSending = true;
-    if(field) field.classList.add('sending');
-    if(btn) btn.disabled = true;
 
     const savedInputText = input ? input.value : '';
     if(input) {
@@ -7390,6 +7400,30 @@ async function sendDealChatMessage(fileArg) {
         clearDealChatReply();
     }
 
+    const sendFile = file;
+    clearDealPendingFile();
+    _dealSendChain = _dealSendChain.then(() => deliverQueuedDealSend({
+        seq, leadId, text, channel, replyId, replyText, replyAuthor, replyExternal, talkId,
+        file: sendFile, voiceNow, optimisticMsg, savedInputText, localBlobUrl
+    })).catch(() => {});
+    return;
+}
+async function deliverQueuedDealSend(job) {
+    const seq = job.seq;
+    const leadId = job.leadId;
+    const text = job.text;
+    const channel = job.channel;
+    const replyId = job.replyId;
+    const replyText = job.replyText;
+    const replyAuthor = job.replyAuthor;
+    const replyExternal = job.replyExternal;
+    const talkId = job.talkId;
+    const file = job.file;
+    const voiceNow = job.voiceNow;
+    const optimisticMsg = job.optimisticMsg;
+    const savedInputText = job.savedInputText;
+    const localBlobUrl = job.localBlobUrl;
+    const input = document.getElementById('deal-chat-input');
     const ctrl = new AbortController();
     const slow = window.setTimeout(() => ctrl.abort(), 20000);
     try {
@@ -7439,7 +7473,6 @@ async function sendDealChatMessage(fileArg) {
 
         optimisticMsg.delivery_status = 'sent';
         keepSentChatVisible(leadId);
-        clearDealPendingFile();
 
         if(voiceNow && localBlobUrl && serverChat.length) {
             const serverVoice = serverChat.slice().reverse().find(m => m && !m.incoming && (isChatAudioItem(m) || String(m.message_type || '').toLowerCase() === 'audio'));
@@ -7469,28 +7502,15 @@ async function sendDealChatMessage(fileArg) {
         paintDealChatThread({stickBottom: true, force: false});
     } catch(err) {
         if(requestMatchesDeal(seq, leadId)) {
-            optimisticMsg.delivery_status = 'error';
+            const rejected = !(err && err.name === 'AbortError');
+            if(rejected) optimisticMsg.delivery_status = 'error';
             paintDealChatThread({stickBottom: false, force: true});
-            if(input && !input.value) {
-                input.value = savedInputText;
-            }
-            if(voiceNow) {
-                const voiceBox = document.getElementById('deal-voice-preview');
-                const player = voiceBox && voiceBox.querySelector('audio');
-                if(voiceBox && player && _dealPendingFile && _dealPendingUrl) {
-                    player.src = _dealPendingUrl;
-                    voiceBox.hidden = false;
-                    document.querySelector('.wa-composer-field')?.classList.add('has-voice');
-                }
-            }
+            if(rejected && input && !input.value) input.value = savedInputText;
             keepSentChatVisible(leadId);
-            toast((err && err.name === 'AbortError') ? 'Mesaj göndərilmədi.' : (err.message || 'Göndərilmədi'), true);
+            if(rejected) toast(err.message || 'Göndərilmədi', true);
         }
     } finally {
         window.clearTimeout(slow);
-        _dealChatSending = false;
-        if(field) field.classList.remove('sending');
-        if(btn) btn.disabled = false;
     }
 }
 function dealWorkspaceHtml(deal, token, readonly, opts, initialMessages) {
