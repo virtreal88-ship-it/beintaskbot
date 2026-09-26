@@ -5515,6 +5515,69 @@ _bot_app: Application = None
 _inbox_pulse_rev = 0
 _inbox_pulse_events: list[dict] = []
 _inbox_pulse_lock = threading.Lock()
+_terminal_reentry_leads: dict[int, int] = {}
+_terminal_reentry_lock = threading.Lock()
+
+
+def _is_terminal_deal(deal: dict | None) -> bool:
+    """Whether a deal is in Kommo's successful or declined terminal status."""
+    if not isinstance(deal, dict):
+        return False
+    key = str(deal.get("stage_key") or "").strip().lower()
+    if key in {"ugurlu", "imtina"}:
+        return True
+    try:
+        return int(deal.get("status_id") or 0) in {142, 143}
+    except (TypeError, ValueError):
+        return False
+
+
+def _mark_terminal_reentry(lead_id: int, incoming_at: int = 0) -> None:
+    """Keep a closed deal visible only after a new customer message."""
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    if not lid:
+        return
+    with _terminal_reentry_lock:
+        _terminal_reentry_leads[lid] = int(incoming_at or _time_module.time())
+
+
+def _clear_terminal_reentry(lead_id: int) -> None:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return
+    with _terminal_reentry_lock:
+        _terminal_reentry_leads.pop(lid, None)
+
+
+def _has_terminal_reentry(lead_id: int) -> bool:
+    try:
+        lid = int(lead_id)
+    except (TypeError, ValueError):
+        return False
+    with _terminal_reentry_lock:
+        return lid in _terminal_reentry_leads
+
+
+def _decorate_terminal_reentry(overview: dict) -> dict:
+    """Expose terminal re-entry state in each personal-funnel snapshot."""
+    if not isinstance(overview, dict):
+        return overview
+    for deal in overview.get("deals") or []:
+        if not isinstance(deal, dict):
+            continue
+        try:
+            lead_id = int(deal.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if _is_terminal_deal(deal) and _has_terminal_reentry(lead_id):
+            deal["needs_reply"] = True
+        else:
+            deal.pop("needs_reply", None)
+    return overview
 
 
 def _cached_lead_id_for_contact(contact_id: int) -> int:
@@ -5912,7 +5975,10 @@ def _apply_inbox_incoming(
                     event_pipe = 0
             event_name = str(deal.get("contact_name") or event_name or "")
             event_phone = str(deal.get("phone") or event_phone or "")
+            if _is_terminal_deal(deal):
+                _mark_terminal_reentry(int(lead_id), int(created_at or 0))
             found = True
+    needs_reply = _has_terminal_reentry(int(lead_id))
     with _inbox_pulse_lock:
         _inbox_pulse_rev += 1
         _inbox_pulse_events.append({
@@ -5927,6 +5993,7 @@ def _apply_inbox_incoming(
             "chat_channel": channel,
             "wa_line": str(wa_line or ""),
             "external_id": str(external_id or ""),
+            "needs_reply": needs_reply,
             "missing": bool(not found and channel != "whatsapp"),
             "refresh": False,
         })
@@ -5979,6 +6046,7 @@ def _minimal_inbox_deal(lead: dict, preview: str, created_at: int, channel: str)
         "created_at": int(lead.get("created_at") or 0),
         "stage_key": "",
         "stage_name": "",
+        "needs_reply": bool(_is_terminal_deal(lead) and _has_terminal_reentry(lid)),
         "tasks": [],
         "inbox_only": True,
     }
@@ -6114,6 +6182,8 @@ async def _hydrate_inbox_lead(
     name = ""
     phone = ""
     if isinstance(lead, dict):
+        if _is_terminal_deal(lead):
+            _mark_terminal_reentry(int(lead_id), int(created_at or 0))
         _place_inbox_deal(lead, preview, created_at, channel)
         try:
             pipe = int(lead.get("pipeline_id") or 0)
@@ -6267,6 +6337,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
                 "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
                 "external_id": row.get("external_id") or "",
+                "needs_reply": bool(row.get("needs_reply") or deal.get("needs_reply") or _has_terminal_reentry(lid)),
             })
     return {
         "success": True,
@@ -6328,6 +6399,9 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                             wh_pipe = int(data[pipe_k])
                         except:
                             pass
+                    if ev_kind == "status":
+                        # Moving a deal to any stage closes a prior terminal re-entry.
+                        _clear_terminal_reentry(wh_lid)
                     record_lead_pulse_event(wh_lid, f"deal_{ev_kind}", pipeline_id=wh_pipe)
                     if ev_kind in {"status", "add"} and wh_pipe:
                         old_pipe = 0
@@ -6845,6 +6919,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 apply_menbe(contact_id, lead_id, source_label, overwrite=True)
                 invalidate_rufat_overview_cache()
             patch_rufat_overview_deal_stage(lead_id, stage_key)
+            _clear_terminal_reentry(lead_id)
             record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=pipeline_id, stage_key=stage_key)
             return web.json_response({
                 "success": True,
@@ -9119,7 +9194,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
 
 
 def _overview_with_partners(overview: dict, owner: dict) -> dict:
-    payload = dict(overview or {})
+    payload = _decorate_terminal_reentry(dict(overview or {}))
     payload["partners"] = get_partner_list_for_chat((owner or {}).get("chat_id"))
     return payload
 

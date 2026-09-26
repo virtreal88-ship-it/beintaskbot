@@ -983,6 +983,10 @@
                 </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
             </div>
+                <div class="chats-filter-tabs" role="tablist" aria-label="Müştəri filtri">
+                    <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-selected="true">Hamısı</button>
+                    <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-selected="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count"></span></button>
+                </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
             <section id="chats-pane" class="chats-pane"></section>
@@ -8615,7 +8619,7 @@ function chatsIsUnread(deal, seen) {
 }
 function paintChatsUnreadBadge() {
     const count = HAS_CHATS
-        ? chatsInboxDeals().filter(deal => chatsIsUnread(deal, getChatsSeen())).length
+        ? chatsInboxDeals('visible').filter(deal => chatsIsUnread(deal, getChatsSeen()) || !!deal.needs_reply).length
         : 0;
     const text = count > 99 ? '99+' : String(count);
     const show = count > 0;
@@ -8629,35 +8633,25 @@ function paintChatsUnreadBadge() {
         tab.textContent = text;
         tab.style.display = show ? 'flex' : 'none';
     }
-    const unanswered = HAS_CHATS ? chatsInboxDeals().filter(chatsIsUnanswered).length : 0;
+    const unanswered = HAS_CHATS ? chatsInboxDeals('unanswered').length : 0;
     const allBtn = document.getElementById('chats-all-tab');
-    const unreadBtn = document.getElementById('chats-unread-label');
-    const unreadCount = document.getElementById('chats-unread-count');
     const waitBtn = document.getElementById('chats-unanswered-tab');
     const waitCount = document.getElementById('chats-unanswered-count');
-    if(unreadCount) unreadCount.textContent = text;
-    if(_chatsListFilter === 'unread' && !show) _chatsListFilter = '';
     if(allBtn) {
-        const allOn = !_chatsListFilter;
+        const allOn = _chatsListFilter !== 'unanswered';
         allBtn.classList.toggle('on', allOn);
         allBtn.setAttribute('aria-pressed', allOn ? 'true' : 'false');
+        allBtn.setAttribute('aria-selected', allOn ? 'true' : 'false');
         if(!allBtn.dataset.bound) {
             allBtn.dataset.bound = '1';
             allBtn.onclick = () => setChatsListFilter('all');
-        }
-    }
-    if(unreadBtn) {
-        unreadBtn.classList.toggle('on', _chatsListFilter === 'unread');
-        unreadBtn.setAttribute('aria-pressed', _chatsListFilter === 'unread' ? 'true' : 'false');
-        if(!unreadBtn.dataset.bound) {
-            unreadBtn.dataset.bound = '1';
-            unreadBtn.onclick = () => setChatsListFilter('unread');
         }
     }
     if(waitCount) waitCount.textContent = unanswered > 99 ? '99+' : String(unanswered);
     if(waitBtn) {
         waitBtn.classList.toggle('on', _chatsListFilter === 'unanswered');
         waitBtn.setAttribute('aria-pressed', _chatsListFilter === 'unanswered' ? 'true' : 'false');
+        waitBtn.setAttribute('aria-selected', _chatsListFilter === 'unanswered' ? 'true' : 'false');
         if(!waitBtn.dataset.bound) {
             waitBtn.dataset.bound = '1';
             waitBtn.onclick = () => setChatsListFilter('unanswered');
@@ -8671,10 +8665,10 @@ function chatsIsUnanswered(deal) {
     return !outgoing || incoming > outgoing;
 }
 function setChatsListFilter(next) {
-    _chatsListFilter = next === 'all' ? '' : (_chatsListFilter === next ? '' : next);
+    _chatsListFilter = next === 'unanswered' ? 'unanswered' : 'all';
     renderChatsList();
 }
-let _chatsListFilter = '';
+let _chatsListFilter = 'all';
 let _chatAlertMap = {};
 let _chatAlertSeeded = false;
 const _chatAlertLock = {};
@@ -9014,7 +9008,7 @@ function viewerWaLine() {
 function chatBelongsToViewer(deal) {
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
     if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
-    if(deal && (deal.inbox_only || deal.outbox || Number(deal.id) >= 9000000000000)) return false;
+    if(deal && (deal.inbox_only || deal.outbox || Number(deal.id) >= 9000000000000)) return !!deal.needs_reply;
     return true;
 }
 function waDealDigits(deal) {
@@ -9062,11 +9056,21 @@ function collapseSamePhoneChats(deals) {
     });
     return out;
 }
-function chatsInboxDeals() {
+function isTerminalChatDeal(deal) {
+    const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
+    return key === 'ugurlu' || key === 'imtina';
+}
+function chatsInboxDeals(requestedFilter) {
+    const filter = requestedFilter || _chatsListFilter || 'all';
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
     const deals = (samilDeals || []).filter(deal => {
         const preview = dealLastClientMessage(deal);
         if(!deal || !deal.id || !chatBelongsToViewer(deal)) return false;
+        const terminal = isTerminalChatDeal(deal);
+        const terminalReturn = terminal && !!deal.needs_reply;
+        if(terminal && !terminalReturn) return false;
+        if(filter === 'all' && terminal) return false;
+        if(filter === 'unanswered' && !(terminalReturn || chatsIsUnanswered(deal))) return false;
         if(!q) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
@@ -9640,6 +9644,7 @@ function applyInboxPulseRow(row) {
             last_wamid: row.external_id || '',
             updated_at: Number(row.last_incoming_at || 0),
             inbox_only: true,
+            needs_reply: !!row.needs_reply,
             tasks: []
         };
         samilDeals.unshift(deal);
@@ -9657,6 +9662,7 @@ function applyInboxPulseRow(row) {
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
     if(row.wa_line) deal.wa_line = row.wa_line;
     if(row.external_id) deal.last_wamid = row.external_id;
+    if(row.needs_reply) deal.needs_reply = true;
     return true;
 }
 
