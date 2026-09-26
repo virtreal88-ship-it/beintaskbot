@@ -206,7 +206,7 @@
     "994703019609": 77992437,
     "994558219058": 70993268,
     "994702222181": 78005569,
-    "994102135103": 78022515,
+    "994102135103": 74547175,
     "994552158229": 77452293,
     "994508552988": 67407438,
     "994553566969": 76476261,
@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790403391,
+    "at": 1790403394,
     "fields": [
       "messages"
     ]
@@ -2409,6 +2409,30 @@
       "delivery_status": "read",
       "via_cloud": true,
       "phone_number_id": "1352169527974549"
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVCN0M2NEU1MEY2MjY4OUMwOEM5NTE0QUM0RDkyNzIA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVCN0M2NEU1MEY2MjY4OUMwOEM5NTE0QUM0RDkyNzIA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "2",
+      "message_type": "text",
+      "created_at": 1790403394,
+      "created": "26.09.2026 10:16",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ],
   "78023867": [
