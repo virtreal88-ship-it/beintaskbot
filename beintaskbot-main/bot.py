@@ -15628,8 +15628,12 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
             continue
         text = str(message.get("text") or "").strip()
         attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
-        if not text:
-            text = str(attachment.get("file_name") or message.get("message_type") or "Mesaj")
+        message_type = str(message.get("message_type") or attachment.get("type") or "").strip().lower()
+        if message_type in {"incoming", "outgoing"}:
+            message_type = str(attachment.get("type") or "").strip().lower()
+        file_name = str(attachment.get("file_name") or "").strip()
+        if not text and not message_type and not file_name:
+            text = "Mesaj"
         author = message.get("author") if isinstance(message.get("author"), dict) else {}
         try:
             created = int(message.get("created_at") or 0)
@@ -15637,6 +15641,8 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
             created = 0
         rows.append({
             "text": text[:500],
+            "file_name": file_name[:180],
+            "message_type": message_type[:40],
             "author": str(author.get("name") or "")[:80],
             "incoming": str(message.get("type") or "") == "incoming",
             "created_at": created,

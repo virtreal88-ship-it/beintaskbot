@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="315">
+    <meta name="pwa-build" content="316">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -347,6 +347,8 @@
         .deal-stage-hit { position:relative; display:inline-flex; max-width:100%; }
         .deal-stage-hit-select { position:absolute; inset:0; width:100%; height:100%; margin:0; padding:0; border:0; opacity:0; cursor:pointer; font-size:16px; }
         .deal-history-chat { background:#efeae2; border-radius:12px; padding:8px 10px 12px; min-height:120px; }
+        .history-media { display:inline-flex; align-items:center; gap:6px; font-weight:600; }
+        .history-media svg { width:16px; height:16px; flex:none; }
         .history-loading { display:flex; align-items:center; justify-content:center; gap:8px; min-height:88px; color:#64748b; font-size:13px; font-weight:600; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
@@ -4484,7 +4486,7 @@ function dealChatItemHtml(item, token, readonly) {
     if(isDealMissedCall(item)) {
         return dealPlainSystemHtml('Buraxılmış zəng', when);
     }
-    if(item && (item.message_type === 'reaction' || (item.incoming && !item.text && !item.media_url && !item.file_uuid))) {
+    if(item && !item.history_face && (item.message_type === 'reaction' || (item.incoming && !item.text && !item.media_url && !item.file_uuid))) {
         return dealPlainSystemHtml(item.text || '💬 Müştəri reaksiya bildirdi', when);
     }
     if(isDealEditedContextNotice(item && item.text)) {
@@ -4512,7 +4514,9 @@ function dealChatItemHtml(item, token, readonly) {
     } else if(isDealMediaNotice(displayText)) {
         displayText = '';
     }
-    const text = profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(displayText || '').trim()) ? '' : linkifyText(displayText);
+    const text = item.history_face
+        ? item.history_face + (String(displayText || '').trim() ? `<div style="margin-top:4px;font-weight:400">${linkifyText(displayText)}</div>` : '')
+        : (profile && /^(Şəkil|Şəkil|picture|sticker|avatar)?$/i.test(String(displayText || '').trim()) ? '' : linkifyText(displayText));
     const pinned = isChatItemPinned(item);
     const pinMark = `<span class="chat-pin-mark" title="Sabitlənmiş"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M10.2 1.6l4.2 4.2-1.1 1.1-1.7-.3-3.8 3.8v1.6L6.6 13 5 11.4 2.4 14 1.3 12.9 4 10.2 2.4 8.6h1.6l3.8-3.8-.3-1.7 1.1-1.1z"/></svg></span>`;
     if(profile && !text && !quote) {
@@ -4524,8 +4528,8 @@ function dealChatItemHtml(item, token, readonly) {
     const carousel = waCarouselHtml(item && item.cards);
     const failed = !item.incoming && /^(error|failed|undelivered)$/i.test(String(item.delivery_status || item.status || ''));
     const isAudio = isChatAudioItem(item) || /voice|audio|call/i.test(String(item && (item.message_type || item.type) || ''));
-    const hasAudioClass = isAudio ? ' has-audio' : '';
-    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}${hasAudioClass}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
+    const hasAudioClass = !item.history_face && isAudio ? ' has-audio' : '';
+    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}${hasAudioClass}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${item.history_face ? '' : dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
     const body = carousel ? `<div class="wa-carousel-stack">${row}${carousel}</div>` : row;
     return `<div class="deal-chat-wrap ${cls}${carousel ? ' has-carousel' : ''}">${body}${replyBtn}</div>`;
 }
@@ -9684,11 +9688,39 @@ try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch
 function historyLoadingHtml() {
     return '<div class="history-loading"><span class="yt-spin"></span><span>Yüklənir...</span></div>';
 }
+function historyMediaKind(row) {
+    const kind = String((row && row.message_type) || '').toLowerCase();
+    const name = String((row && row.file_name) || '').trim();
+    const text = String((row && row.text) || '').trim();
+    const lone = !text || text === name || /^https?:\/\/\S+$/i.test(text) || !/\s/.test(text);
+    const blob = name + ' ' + (lone ? text : '');
+    if(kind === 'voice' || kind === 'audio' || kind === 'ptt' || /\.(ogg|opus|mp3|m4a|wav|aac|oga)(\?|$)/i.test(blob)) return 'audio';
+    if(kind === 'picture' || kind === 'image' || kind === 'sticker' || /\.(png|jpe?g|gif|webp|heic|bmp)(\?|$)/i.test(blob)) return 'photo';
+    if(kind === 'video' || /\.(mp4|mov|webm|3gp|mkv)(\?|$)/i.test(blob)) return 'video';
+    return '';
+}
+function historyMediaFace(kind) {
+    const icon = {
+        audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l10-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>',
+        photo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-5 5"/></svg>',
+        video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg>'
+    }[kind] || '';
+    const label = kind === 'audio' ? 'Səsli mesaj' : (kind === 'photo' ? 'Şəkil' : 'Video');
+    return `<span class="history-media">${icon}<span>${label}</span></span>`;
+}
 function historyRowsHtml(rows) {
-    const sorted = rows.slice().sort((a, b) => Number(b && b.created_at || 0) - Number(a && a.created_at || 0));
+    const sorted = rows.slice().sort((a, b) => Number(a && a.created_at || 0) - Number(b && b.created_at || 0));
     let lastDay = '';
     return sorted.map(row => {
         const item = Object.assign({channel: (row && row.channel) || 'whatsapp'}, row || {});
+        const kind = historyMediaKind(item);
+        if(kind) {
+            const text = String(item.text || '').trim();
+            const name = String(item.file_name || '').trim();
+            const onlyFile = !text || text === name || historyMediaKind({text: text, file_name: text, message_type: ''});
+            item.history_face = historyMediaFace(kind);
+            if(onlyFile) item.text = '';
+        }
         const day = dealChatDayKey(item);
         let pill = '';
         if(day && day !== lastDay) {
@@ -9721,6 +9753,8 @@ async function fillKommoHistory(leadId, list) {
             return;
         }
         list.innerHTML = historyRowsHtml(rows);
+        const modal = list.closest('#deal-view-modal');
+        if(modal) requestAnimationFrame(() => { modal.scrollTop = modal.scrollHeight; });
     } catch(_err) {
         if(list.isConnected) list.innerHTML = '<div class="history-loading">Kommo cavab vermədi</div>';
     } finally {
