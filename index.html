@@ -31,7 +31,8 @@
         .sync-meter .sync-spinner { position:absolute; inset:0; width:28px; height:28px; margin:0; }
         .sync-meter .sync-pct { position:relative; z-index:1; font-size:8px; font-weight:600; color:#64748b; line-height:1; }
         #sync-indicator .sync-meter .sync-pct { color:#cbd5e1; }
-        #toast { position:fixed; top:-80px; left:50%; transform:translateX(-50%); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:600; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:top .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
+        #toast { position:fixed; top:18px; left:50%; transform:translate(-50%,calc(-100% - 18px)); background:#0f766e; color:#fff; padding:14px 22px; border-radius:14px; font-size:14px; font-weight:600; box-shadow:0 12px 40px rgba(0,0,0,.28); transition:transform .28s ease; z-index:12050; max-width:min(440px,92vw); text-align:center; pointer-events:none; }
+        #toast.show { transform:translate(-50%,0); }
         #preloader { pointer-events:none !important; }
         #mobile-header { background:linear-gradient(120deg,#1c2b28,#243832); }
         #tab-bar { z-index:11060 !important; }
@@ -770,7 +771,8 @@
             .chats-app.chat-open .chats-list { transform:translateX(-22%); }
             .chats-app.chat-open .chats-pane { transform:translateX(0); }
             .chats-back, #deal-view-modal .chats-back { display:none !important; }
-            #deal-view-modal .deal-chat-head .chats-back, #chats-pane .deal-chat-head .chats-back { display:inline-flex !important; }
+            #deal-view-modal .deal-chat-head .chats-back { display:inline-flex !important; }
+            #chats-pane .deal-chat-head .chats-back { display:none !important; }
             .chat-reply-btn { display:none !important; }
             #chats-pane .deal-shell-body { grid-template-columns:1fr; }
             #chats-pane .deal-side { display:none !important; }
@@ -2036,10 +2038,9 @@ function toast(m, err) {
     const t = document.getElementById('toast');
     if(!t) return;
     t.textContent = m;
-    t.className = err ? 'error' : '';
-    t.style.top = '18px';
+    t.className = err ? 'error show' : 'show';
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => { t.style.top = '-80px'; }, 3200);
+    toast._timer = setTimeout(() => { t.classList.remove('show'); }, 3200);
 }
 
 const SIDEBAR_PIN_KEY = 'desktop_sidebar_pinned';
@@ -9362,6 +9363,26 @@ function closeNoticeClient() {
     if(pane) pane.innerHTML = chatsEmptyHtml();
     renderChatsList();
 }
+function bindNoticeSwipeBack(pane) {
+    if(!pane || pane.dataset.noticeSwipeBound === '1') return;
+    pane.dataset.noticeSwipeBound = '1';
+    let startX = 0, startY = 0, tracking = false;
+    pane.addEventListener('touchstart', event => {
+        if(window.innerWidth > 1023 || event.touches.length !== 1 || !document.getElementById('chats-app')?.classList.contains('chat-open')) return;
+        const touch = event.touches[0];
+        if(touch.clientX > 36) return;
+        startX = touch.clientX;
+        startY = touch.clientY;
+        tracking = true;
+    }, {passive:true});
+    pane.addEventListener('touchend', event => {
+        if(!tracking) return;
+        tracking = false;
+        const touch = event.changedTouches[0];
+        if(touch && touch.clientX - startX > 88 && Math.abs(touch.clientY - startY) < 60) closeNoticeClient();
+    }, {passive:true});
+    pane.addEventListener('touchcancel', () => { tracking = false; }, {passive:true});
+}
 function noticeClientHeaderHtml(deal) {
     const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
@@ -9437,6 +9458,7 @@ async function openNoticeClient(leadId) {
     _dealViewState = null;
     _dealInboxMode = false;
     if(app) app.classList.add('chat-open');
+    bindNoticeSwipeBack(pane);
     renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
     let deal = (samilDeals || []).find(item => String(item.id) === id);
