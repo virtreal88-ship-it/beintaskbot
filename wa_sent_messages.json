@@ -3960,6 +3960,30 @@
       "delivery_status": "sent",
       "via_cloud": true,
       "phone_number_id": "1352169527974549"
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVFNzhFOTM3MDZGMEI4M0U5OEI2RUY2NTFBNkYyQ0UA",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAEhggQTVFNzhFOTM3MDZGMEI4M0U5OEI2RUY2NTFBNkYyQ0UA",
+      "direction": "incoming",
+      "incoming": true,
+      "author": "Nizami",
+      "phone": "994102135103",
+      "text": "Bu kim?",
+      "message_type": "text",
+      "created_at": 1790411617,
+      "created": "26.09.2026 12:33",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSNkE3MTRGOTk5QTg5OEE5N0M1AA==",
+      "reply_to_text": "1",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549",
+      "target_pipeline": 14243944
     }
   ],
   "78043333": [
