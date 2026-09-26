@@ -8458,7 +8458,8 @@ function chatsListAt(deal) {
     const incoming = Number((deal && deal.last_incoming_at) || 0);
     const outgoing = Number((deal && deal.last_outgoing_at) || 0);
     const chatAt = Number((deal && deal.chat_at) || 0);
-    return Math.max(incoming, outgoing, chatAt);
+    const updated = Number((deal && (deal.updated_at || deal.modified_at || deal.updated)) || 0);
+    return Math.max(incoming, outgoing, chatAt, updated);
 }
 function chatsOutgoingAt(deal) {
     return Number((deal && deal.last_outgoing_at) || 0);
@@ -9047,33 +9048,15 @@ function collapseSamePhoneChats(deals) {
 }
 function chatsInboxDeals() {
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
-    const hidden = pruneChatsHidden(samilDeals);
-    const knownPhones = new Set();
     const deals = (samilDeals || []).filter(deal => {
-        const digits = waDealDigits(deal);
-        if(digits) knownPhones.add(digits);
-        if(isChatRowHidden(deal, hidden)) return false;
-        const channel = String(deal.chat_channel || deal.inbox_channel || '').toLowerCase();
         const preview = dealLastClientMessage(deal);
-        if(!(preview || chatsIncomingAt(deal) || ['whatsapp','instagram','tiktok','facebook','telegram'].includes(channel))) return false;
-        if(!chatBelongsToViewer(deal)) return false;
+        if(!deal || !deal.id || !chatBelongsToViewer(deal)) return false;
         if(!q || usesKommoChatSearch()) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
         return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q);
     });
-    loadWaOutbox().forEach(row => {
-        if(!row || Object.prototype.hasOwnProperty.call(hidden, String(row.id))) return;
-        const digits = waPhoneDigits(row.phone);
-        if(!digits || knownPhones.has(digits)) return;
-        const preview = String(row.last_client_message || '');
-        if(q && !usesKommoChatSearch()) {
-            const phone = String(row.phone || '');
-            if(!phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) && !preview.toLowerCase().includes(q)) return;
-        }
-        deals.push(row);
-    });
-    return collapseSamePhoneChats(deals).sort((a, b) => {
+    return deals.sort((a, b) => {
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
@@ -9334,7 +9317,7 @@ async function openSearchedChat(leadId) {
             persistLocalSamilWorkspace();
         }
     }
-    await openInboxChat(deal.id);
+    await openNoticeClient(deal.id);
 }
 let _staffNotices = [];
 let _noticeHistoryLeadId = 0;
@@ -9344,6 +9327,7 @@ function closeNoticeClient() {
     const pane = document.getElementById('chats-pane');
     if(app) app.classList.remove('chat-open');
     if(pane) pane.innerHTML = chatsEmptyHtml();
+    renderChatsList();
 }
 function noticeClientHeaderHtml(deal) {
     const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
@@ -9358,6 +9342,7 @@ async function openNoticeClient(leadId) {
     if(!id || !pane) return;
     _noticeHistoryLeadId = id;
     if(app) app.classList.add('chat-open');
+    renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
     let deal = (samilDeals || []).find(item => String(item.id) === id);
     try {
@@ -9414,15 +9399,12 @@ async function loadStaffNotices() {
         const payload = await response.json().catch(() => ({}));
         if(response.ok && payload.success) _staffNotices = Array.isArray(payload.notices) ? payload.notices : [];
     } catch(_err) {}
-    if(document.getElementById('screen-chats')?.classList.contains('active')) renderNoticeRows();
+    if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
 }
 function renderChatsList() {
     const box = document.getElementById('chats-rows');
     const pane = document.getElementById('chats-pane');
     if(!box) return;
-    renderNoticeRows();
-    if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
-    return;
     fillChatsLineSelect();
     let deals = chatsInboxDeals();
     const seen = seedChatsSeen(deals);
@@ -9433,16 +9415,16 @@ function renderChatsList() {
     } else if(_chatsListFilter === 'unanswered') {
         deals = deals.filter(chatsIsUnanswered);
     }
-    const openId = _dealViewState && _dealInboxMode ? String(_dealViewState.id) : '';
+    const openId = String(_noticeHistoryLeadId || '');
     if(!deals.length) {
         box.innerHTML = samilDeals.length
-            ? '<div class="chats-empty-list">Bildiriş yoxdur</div>'
-            : '<div class="chats-empty-list"><span class="yt-spin" aria-label="Bildiriş yüklənir"></span></div>';
+            ? '<div class="chats-empty-list">Müştəri yoxdur</div>'
+            : '<div class="chats-empty-list"><span class="yt-spin" aria-label="Müştərilər yüklənir"></span></div>';
     } else {
         box.innerHTML = deals.map(deal => {
             const name = dealClientName(deal) || String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || 'Müştəri');
             const draft = chatDraftText(deal.id);
-            const preview = dealLastClientMessage(deal) || 'Mesaj';
+            const preview = dealLastClientMessage(deal) || String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || deal.stage_name || 'Müştəri');
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
             const pinned = isChatPinned(deal.id);
@@ -9453,7 +9435,6 @@ function renderChatsList() {
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(chatsListAt(deal)))}</span></span>
                     <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
                 </span>
-                <button type="button" class="chats-hide" data-history-lead="${escapeHtml(String(deal.id))}" title="Tarixçə" aria-label="Tarixçə">Tarixçə</button>
             </div>`;
         }).join('');
         box.onclick = (event) => {
@@ -9461,15 +9442,8 @@ function renderChatsList() {
                 box.dataset.skipClick = '';
                 return;
             }
-            const historyBtn = event.target.closest('[data-history-lead]');
-            if(historyBtn) {
-                event.preventDefault();
-                event.stopPropagation();
-                openDealViewById(historyBtn.getAttribute('data-history-lead'));
-                return;
-            }
             const row = event.target.closest('[data-lead]');
-            if(row) openInboxChat(row.getAttribute('data-lead'));
+            if(row) openNoticeClient(row.getAttribute('data-lead'));
         };
         bindChatsRowMenu(box);
     }
@@ -10082,7 +10056,6 @@ async function openInboxChat(leadId) {
 async function openChats() {
     if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
-    loadWaTemplates(false).catch(() => {});
     fillChatsLineSelect();
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
