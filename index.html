@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="312">
+    <meta name="pwa-build" content="313">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -818,9 +818,6 @@
         </div>
     </div>
     <div class="sidebar-nav">
-        <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Bildirişlər</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
-        </button>
         <button id="side-tab-samil-deals" class="sidebar-item" style="display:none;" onclick="switchTab('tab-samil-deals')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg></span><span class="sidebar-item-label">Sövdələşmələr</span>
         </button>
@@ -841,6 +838,9 @@
         </button>
         <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
+        </button>
+        <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Bildiriş</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -1246,9 +1246,6 @@
 
 <!-- BOTTOM NAVIGATION -->
 <div id="tab-bar" class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 h-[64px] flex justify-around items-center px-2 z-40 shadow-[0_-4px_10px_rgba(0,0,0,0.03)]">
-    <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Bildirişlər</span><span id="chats-menu-badge"></span>
-    </button>
     <button id="tab-samil-deals" onclick="switchTab('tab-samil-deals')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="6" height="16" rx="1.5"/><rect x="11" y="4" width="4" height="10" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span class="mt-0.5">Sövdələşmələr</span>
     </button>
@@ -1269,6 +1266,9 @@
     </button>
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
+    </button>
+    <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Bildiriş</span><span id="chats-menu-badge"></span>
     </button>
     <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
@@ -1405,7 +1405,7 @@ function applySamilUi() {
     const sideDeals = document.getElementById('side-tab-samil-deals');
     if(sideDeals) sideDeals.style.display = 'flex';
     const mobileDeals = document.getElementById('tab-samil-deals');
-    if(mobileDeals) mobileDeals.style.display = isAdmin ? 'none' : 'flex';
+    if(mobileDeals) mobileDeals.style.display = 'flex';
     const sideChats = document.getElementById('side-tab-chats');
     if(sideChats) sideChats.style.display = HAS_CHATS ? 'flex' : 'none';
     const mobileChats = document.getElementById('tab-chats');
@@ -1980,10 +1980,10 @@ function setPendingTabVisible() {
     if(sideHesabat) sideHesabat.style.display = isAdmin ? 'none' : 'flex';
     paintMobileTabBar();
 }
-const MOBILE_TAB_ORDER = ['tab-chats','tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending'];
+const MOBILE_TAB_ORDER = ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'];
 function mobileTabWanted(id) {
     if(id === 'tab-chats') return HAS_CHATS;
-    if(id === 'tab-samil-deals') return !isAdmin;
+    if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
     if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
     if(id === 'tab-hesabat') return !isAdmin;
     if(id === 'tab-pending') return isAdmin;
@@ -2082,7 +2082,7 @@ async function initApp() {
     setPendingTabVisible();
     applyDesktopSidebar();
     startAppPulse();
-    if(HAS_CHATS) await switchTab('tab-chats', false);
+    if(HAS_OWN_FUNNEL) await switchTab('tab-samil-deals', false);
     else await openNotifications();
     applyHashRoute();
     await maybeOpenSharedDeal();
@@ -6581,6 +6581,7 @@ function paintDealChatQuote() {
 }
 function dealDetailSectionsHtml(deal, token, opts) {
     const canReply = !!(opts && opts.canReply);
+    const staff = !!(opts && opts.staff);
     const phoneList = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
     const created = deal.created_at ? new Date(Number(deal.created_at) * 1000).toLocaleString('az-AZ') : '—';
     const notes = Array.isArray(deal.notes) ? deal.notes : [];
@@ -6594,8 +6595,19 @@ function dealDetailSectionsHtml(deal, token, opts) {
             return `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9">${linkifyText((item.text || '').replace(/^\[[^\]]+\]\s*/, '') || '—')}${dl ? ` <span class="text-gray-400">(${escapeHtml(dl)})</span>` : ''}</div>`;
         }).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
-    const chatHtml = dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
-    const composer = canReply ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
+    const chatHtml = staff
+        ? '<div id="deal-history-list">Yüklənir...</div>'
+        : dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
+    const composer = (!staff && canReply) ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
+    const phone = phoneList[0] || '';
+    const waLink = staff ? waMeUrl(phone) : '';
+    const kommoLink = staff ? dealKommoUrl(deal) : '';
+    const staffBar = staff ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+        ${kommoLink ? `<a href="${escapeHtml(kommoLink)}" target="_blank" rel="noopener noreferrer" style="padding:8px 12px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700;text-decoration:none">Kommo</a>` : ''}
+        ${waLink ? `<a href="${escapeHtml(waLink)}" target="_blank" rel="noopener noreferrer" style="padding:8px 12px;border-radius:10px;background:#dcfce7;color:#15803d;font-size:12px;font-weight:700;text-decoration:none">WhatsApp</a>` : ''}
+        <button type="button" id="deal-task-plus" style="padding:8px 12px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-size:12px;font-weight:700">Tapşırıq yarat</button>
+        <button type="button" id="deal-create-plus" style="padding:8px 12px;border:0;border-radius:10px;background:#0f172a;color:#fff;font-size:12px;font-weight:700">Sövdələşmə yarat</button>
+    </div>` : '';
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
@@ -6608,7 +6620,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
                 <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
-                ${(canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : ''}
+                ${staff ? staffBar : ((canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : '')}
             </div>
             <div style="margin-top:14px;font-size:12px;font-weight:600">Tapşırıqlar</div>
             <div>${tasksHtml}</div>
@@ -7680,8 +7692,11 @@ function paintDealViewModal(deal, readonly, opts) {
     } else {
         const modal = document.createElement('div');
         modal.id = 'deal-view-modal';
-        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#efeae2;display:flex;padding:0;will-change:transform';
-        modal.innerHTML = dealWorkspaceHtml(deal, token, readonly, null, initMessages);
+        modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#f4f6f8;overflow:auto;padding:0;will-change:transform';
+        modal.innerHTML = `<div style="max-width:720px;margin:0 auto;padding:12px 12px 28px">
+            <div style="display:flex;align-items:center;margin-bottom:10px"><button type="button" id="chats-back" class="chats-back" aria-label="Geri">←</button></div>
+            <div class="bg-white p-4 rounded-2xl shadow-sm">${dealDetailSectionsHtml(deal, token, {staff: true})}</div>
+        </div>`;
         document.body.classList.add('deal-modal-open', 'chat-open');
         document.body.appendChild(modal);
         root = modal;
@@ -7853,6 +7868,10 @@ function paintDealViewModal(deal, readonly, opts) {
     bindDealSideActions(deal);
     bindAudioWait(root);
     fillKommoHistory(deal.id, root.querySelector('#deal-history-list'));
+    const taskPlus = root.querySelector('#deal-task-plus');
+    if(taskPlus) taskPlus.onclick = () => openCreateTaskFromDeal((_dealViewState && _dealViewState.deal) || deal);
+    const dealPlus = root.querySelector('#deal-create-plus');
+    if(dealPlus) dealPlus.onclick = () => openCreateDealModal();
     const shareBtn = root.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
         try {
