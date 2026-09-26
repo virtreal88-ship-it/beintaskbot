@@ -752,7 +752,7 @@
             .chats-app.chat-open .chats-list { transform:translateX(-22%); }
             .chats-app.chat-open .chats-pane { transform:translateX(0); }
             .chats-back, #deal-view-modal .chats-back { display:none !important; }
-            #deal-view-modal .deal-chat-head .chats-back { display:inline-flex !important; }
+            #deal-view-modal .deal-chat-head .chats-back, #chats-pane .deal-chat-head .chats-back { display:inline-flex !important; }
             .chat-reply-btn { display:none !important; }
             #chats-pane .deal-shell-body { grid-template-columns:1fr; }
             #chats-pane .deal-side { display:none !important; }
@@ -3650,7 +3650,7 @@ function dealMediaSrc(raw, token, uuid, extra) {
     if(uuid) q.set('uuid', uuid);
     else if(raw && !raw.startsWith('/api/') && !q.get('note_id')) q.set('src', raw);
     if(token) q.set('k', token);
-    const leadId = meta.leadId || meta.lead_id || (_dealViewState && _dealViewState.id);
+    const leadId = meta.leadId || meta.lead_id || (_dealViewState && _dealViewState.id) || _noticeHistoryLeadId;
     if(leadId) q.set('lead_id', String(leadId));
     if(CURRENT_USER_ID) q.set('uid', String(CURRENT_USER_ID));
     if(uuid || q.get('note_id') || (raw && !raw.startsWith('/api/'))) return API_BASE + '/api/deal/file?' + q.toString();
@@ -9337,6 +9337,44 @@ async function openSearchedChat(leadId) {
     await openInboxChat(deal.id);
 }
 let _staffNotices = [];
+let _noticeHistoryLeadId = 0;
+function closeNoticeClient() {
+    _noticeHistoryLeadId = 0;
+    const app = document.getElementById('chats-app');
+    const pane = document.getElementById('chats-pane');
+    if(app) app.classList.remove('chat-open');
+    if(pane) pane.innerHTML = chatsEmptyHtml();
+}
+function noticeClientHeaderHtml(deal) {
+    const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
+    const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
+    const source = dealSourceLabel(deal);
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}</div></div></div>`;
+}
+async function openNoticeClient(leadId) {
+    const id = String(leadId || '').trim();
+    const pane = document.getElementById('chats-pane');
+    const app = document.getElementById('chats-app');
+    if(!id || !pane) return;
+    _noticeHistoryLeadId = id;
+    if(app) app.classList.add('chat-open');
+    pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
+    let deal = (samilDeals || []).find(item => String(item.id) === id);
+    try {
+        const response = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(id), {
+            cache: 'no-store', headers: {'X-TG-User-ID': CURRENT_USER_ID}
+        });
+        const payload = await response.json().catch(() => ({}));
+        if(response.ok && payload && payload.deal) deal = payload.deal;
+    } catch(_err) {}
+    if(_noticeHistoryLeadId !== id || !pane.isConnected) return;
+    if(!deal) {
+        pane.innerHTML = '<div class="chats-empty"><div class="chats-empty-title">Sövdələşmə tapılmadı</div></div>';
+        return;
+    }
+    pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div></div></div>`;
+    fillKommoHistory(id, document.getElementById('notice-client-history'));
+}
 function noticeTimeLabel(stamp) {
     const n = Number(stamp || 0);
     if(!n) return '';
@@ -9366,7 +9404,7 @@ function renderNoticeRows() {
         const row = event.target.closest('[data-lead]');
         if(!row) return;
         const leadId = row.getAttribute('data-lead');
-        if(leadId && leadId !== '0') openDealViewById(leadId);
+        if(leadId && leadId !== '0') openNoticeClient(leadId);
     };
 }
 async function loadStaffNotices() {

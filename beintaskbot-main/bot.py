@@ -13812,7 +13812,6 @@ def _overlay_sent_delivery(items: list, lead_id: int) -> None:
 
 
 def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
-    return [], False, False
     rows: list[dict] = []
     blocked = False
     maybe_more = False
@@ -15637,64 +15636,92 @@ def _kommo_read(path: str, params: dict | None = None, timeout: int = 8) -> tupl
 
 
 def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
-    """External chat history: GET /api/v4/talks/{talk_id}/messages."""
-    talk = int(talk_id or 0) or int(_lead_open_talk.get(int(lead_id)) or 0)
-    if not talk:
-        status, data = _kommo_read("/api/v4/talks", {
-            "filter[entity_id][]": int(lead_id),
-            "filter[entity_type]": "lead",
-            "limit": 5,
-        }, timeout=4)
-        if status == 403:
-            raise RuntimeError("Kommo tokenində External chat history yoxdur.")
-        if status not in {200, 204}:
-            raise RuntimeError(str(data.get("detail") or f"Kommo {status}"))
-        talks = [row for row in ((data.get("_embedded") or {}).get("talks") or []) if isinstance(row, dict)]
-        talks.sort(key=lambda row: int(row.get("updated_at") or row.get("created_at") or 0), reverse=True)
-        if talks:
-            talk = _talk_id_of(talks[0])
-            if talk:
-                _lead_open_talk[int(lead_id)] = talk
-    if not talk:
-        return []
-    status, data = _kommo_read(f"/api/v4/talks/{int(talk)}/messages", {"limit": 50, "page": 1}, timeout=5)
-    if status == 403:
-        detail = str(data.get("detail") or "")
-        if "scope" in detail.lower() or not detail:
-            raise RuntimeError("Kommo tokenində External chat history yoxdur.")
-        raise RuntimeError(detail)
-    if status == 404:
-        return []
-    if status not in {200, 204}:
-        raise RuntimeError(str(data.get("detail") or f"Kommo {status}"))
+    """Build the useful pre-WABA Kommo timeline for the Bildiriş client pane.
+
+    The Talk API is primary. When a historical dialog is no longer available
+    there, retain the older Baxış fallbacks: Amojo history, CRM events, chat
+    notes, entity files, and the stored voice proxy. This path is read-only.
+    """
+    lid = int(lead_id)
+    lead = get_lead_details(lid) or {}
+    contact_ids = _lead_contact_ids(lead)
     rows: list[dict] = []
-    for message in (data.get("_embedded") or {}).get("messages") or []:
-        if not isinstance(message, dict):
+    seen: set[tuple] = set()
+
+    def add(item: dict | None, *, entity_type: str = "", entity_id: int = 0) -> None:
+        if not item:
+            return
+        value = dict(item)
+        if entity_type:
+            value["entity_type"] = entity_type
+            value["entity_id"] = entity_id
+        key = (
+            str(value.get("id") or value.get("external_id") or ""),
+            str(value.get("text") or ""),
+            int(value.get("created_at") or 0),
+            str(value.get("file_uuid") or ""),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append(value)
+
+    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
+    wanted_talk = int(talk_id or 0)
+    if wanted_talk and not any(_talk_id_of(row) == wanted_talk for row in talks):
+        talks.insert(0, {"talk_id": wanted_talk})
+    if talks:
+        _lead_open_talk[lid] = _talk_id_of(talks[0])
+
+    for talk in talks[:8]:
+        tid = _talk_id_of(talk)
+        if not tid:
             continue
-        text = str(message.get("text") or "").strip()
-        attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
-        message_type = str(message.get("message_type") or attachment.get("type") or "").strip().lower()
-        if message_type in {"incoming", "outgoing"}:
-            message_type = str(attachment.get("type") or "").strip().lower()
-        file_name = str(attachment.get("file_name") or "").strip()
-        if not text and not message_type and not file_name:
-            text = "Mesaj"
-        author = message.get("author") if isinstance(message.get("author"), dict) else {}
-        try:
-            created = int(message.get("created_at") or 0)
-        except (TypeError, ValueError):
-            created = 0
-        rows.append({
-            "text": text[:500],
-            "file_name": file_name[:180],
-            "message_type": message_type[:40],
-            "author": str(author.get("name") or "")[:80],
-            "incoming": str(message.get("type") or "") == "incoming",
-            "created_at": created,
-            "channel": str(message.get("origin") or ""),
-        })
+        origin = _talk_channel_key(talk)
+        messages, blocked, _more = _fetch_talk_messages(tid, pages=2, page_limit=100)
+        for message in messages:
+            add(_format_chat_message(message, origin), entity_type="leads", entity_id=lid)
+        if not messages or blocked:
+            history_id = str(talk.get("chat_id") or "").strip()
+            if history_id:
+                for message in _fetch_chat_history_by_chat_id(history_id):
+                    add(_format_chat_message(message, origin), entity_type="leads", entity_id=lid)
+
+    # These sources preserve useful older dialogs that have disappeared from
+    # the current Talk endpoint.
+    if not rows:
+        event_rows, _skipped = _fetch_chat_events(lid, contact_ids)
+        for item in event_rows:
+            add(item, entity_type="leads", entity_id=lid)
+        entities = [("leads", lid)] + [("contacts", contact_id) for contact_id in contact_ids]
+        for entity_type, entity_id in entities:
+            for note in _fetch_entity_notes(entity_type, entity_id):
+                if not note.get("is_chat") or _note_is_deleted(note):
+                    continue
+                add({
+                    "id": note.get("id"),
+                    "incoming": bool(note.get("incoming")),
+                    "author": note.get("author") or "",
+                    "text": note.get("text") or "",
+                    "message_type": note.get("message_type") or "text",
+                    "created_at": note.get("created_at") or 0,
+                    "created": note.get("created") or "",
+                    "channel": note.get("channel") or note.get("type") or "",
+                    "media_url": note.get("media_url") or "",
+                    "file_uuid": note.get("file_uuid") or "",
+                    "file_name": note.get("file_name") or "",
+                }, entity_type=entity_type, entity_id=entity_id)
+        for entity_type, entity_id in entities:
+            for item in _fetch_entity_files_as_chat(entity_type, entity_id):
+                add(item, entity_type=entity_type, entity_id=entity_id)
+    if not rows and str(lid) in _voice_urls:
+        add({
+            "id": f"voice-{lid}", "incoming": False, "text": "Səs mesajı",
+            "message_type": "audio", "created_at": 0, "channel": "app",
+            "media_url": f"/api/voice/{lid}", "file_name": "voice.ogg",
+        }, entity_type="leads", entity_id=lid)
     rows.sort(key=lambda item: int(item.get("created_at") or 0))
-    return rows
+    return rows[-120:]
 
 
 _history_cache: dict[int, tuple[float, list]] = {}
@@ -15714,6 +15741,9 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
     try:
         hinted_talk = int(request.rel_url.query.get("talk_id") or 0)
     except (TypeError, ValueError):
