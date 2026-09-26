@@ -13240,6 +13240,16 @@ def _candidate_is_audio(cand: dict) -> bool:
     return _looks_audio_name(blob)
 
 
+def _candidate_is_video(cand: dict) -> bool:
+    kind = str(cand.get("message_type") or "").lower()
+    if kind == "video":
+        return True
+    if str(cand.get("content_type") or "").lower().startswith("video/"):
+        return True
+    blob = f"{cand.get('file_name') or ''} {cand.get('media_url') or ''}"
+    return bool(re.search(r"\.(mp4|mov|webm|3gp|mkv)(?:\?|$)", blob, re.IGNORECASE))
+
+
 def _unix_seconds(value) -> int:
     try:
         stamp = int(value or 0)
@@ -13284,14 +13294,18 @@ def _find_click_media(lid: int, contact_ids: list[int], created_at: int, kind: s
     message_id = str(message_id or "").strip()
     if not created_at and not message_id:
         return None
-    want_audio = str(kind or "").lower() in {"audio", "voice", "ptt"}
+    wanted_kind = str(kind or "").lower()
+    want_audio = wanted_kind in {"audio", "voice", "ptt"}
+    want_video = wanted_kind == "video"
     best = None
     best_rank = None
     for cand in _deal_media_candidates(lid, contact_ids):
         is_audio = _candidate_is_audio(cand)
         if want_audio and not is_audio:
             continue
-        if not want_audio and is_audio:
+        if want_video and not _candidate_is_video(cand):
+            continue
+        if not want_audio and not want_video and is_audio:
             continue
         ident = " ".join(
             str(cand.get(key) or "")
@@ -13305,7 +13319,7 @@ def _find_click_media(lid: int, contact_ids: list[int], created_at: int, kind: s
         diff = abs(created_at - cand_ts)
         if diff > 86400:
             continue
-        type_rank = 0 if (want_audio or _candidate_is_image(cand)) else 1
+        type_rank = 0 if (want_audio or want_video or _candidate_is_image(cand)) else 1
         rank = (type_rank, diff)
         if best_rank is None or rank < best_rank:
             best_rank = rank
@@ -15748,8 +15762,9 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         hinted_talk = int(request.rel_url.query.get("talk_id") or 0)
     except (TypeError, ValueError):
         hinted_talk = 0
+    force_refresh = str(request.rel_url.query.get("force") or "").strip().lower() in {"1", "true", "yes"}
     cached = _history_cache.get(lead_id)
-    if cached and (_time_module.monotonic() - cached[0]) < _HISTORY_CACHE_TTL:
+    if not force_refresh and cached and (_time_module.monotonic() - cached[0]) < _HISTORY_CACHE_TTL:
         return web.json_response({"success": True, "chat": cached[1]})
     pending = _history_inflight.get(lead_id)
     if pending is not None:
@@ -16800,7 +16815,7 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
             lookup_lead = int(request.rel_url.query.get("lead_id") or 0)
         except (TypeError, ValueError):
             lookup_lead = 0
-        if lookup_lead and kind in {"picture", "image", "sticker", "audio", "voice", "ptt"} and (at or msg):
+        if lookup_lead and kind in {"picture", "image", "sticker", "audio", "voice", "ptt", "video"} and (at or msg):
             contact_ids, _phones = _contact_ids_and_phones(lead)
             cand = _find_click_media(lookup_lead, contact_ids, at, kind, msg)
             if isinstance(cand, dict):

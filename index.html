@@ -424,6 +424,8 @@
         .wa-audio-speed { border:1px solid rgba(0,0,0,.15); border-radius:4px; background:transparent; font-size:10px; font-weight:700; color:inherit; padding:1px 5px; cursor:pointer; line-height:1.2; outline:none; transition:background .12s ease; }
         .wa-audio-speed:active, .wa-audio-speed.on { background:rgba(0,0,0,.1); }
         .wa-video-box { position:relative; display:inline-block; }
+        .wa-video-load { margin-top:6px; border:0; border-radius:10px; background:#e2e8f0; color:#334155; padding:8px 12px; font:600 12px inherit; }
+        .wa-video-load:disabled { opacity:.65; }
         .wa-video-pct { position:absolute; left:8px; bottom:8px; background:rgba(15,23,42,.72); color:#fff; border-radius:8px; padding:2px 6px; font-size:12px; font-weight:700; }
         .wa-video-box.failed video { display:none; }
         .wa-video-box.failed .wa-video-pct { position:static; display:inline-block; margin-top:6px; }
@@ -688,6 +690,11 @@
         #chats-pane .deal-shell { width:100%; height:100%; max-height:none; border-radius:0; box-shadow:none; }
         #chats-pane .deal-shell-chat { flex:1; min-height:0; display:flex; flex-direction:column; }
         #chats-pane .deal-shell-chat .wa-thread { min-height:0; }
+        #chats-pane .deal-chat-head { flex:none; }
+        .notice-readonly { display:inline-flex; align-items:center; padding:2px 6px; border-radius:7px; background:#eef2f7; color:#64748b; font-size:10px; font-weight:600; white-space:nowrap; }
+        .notice-history-actions { display:flex; align-items:center; gap:6px; margin-left:auto; }
+        .notice-history-actions button { width:32px; height:32px; border:0; border-radius:8px; background:#f1f5f9; color:#334155; font-size:18px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
+        .notice-history-actions button:active { background:#dbeafe; color:#1d4ed8; }
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
@@ -865,7 +872,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Bildiriş</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Müştərilər</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -975,11 +982,6 @@
                         <button type="button" class="search-close" aria-label="Bağla">×</button>
                 </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
-            </div>
-                <div class="chats-filter-tabs" role="tablist">
-                    <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-pressed="true">Hamısı</button>
-                    <button type="button" id="chats-unread-label" class="chats-filter-tab" role="tab" aria-pressed="false">Oxunmamış <span id="chats-unread-count" class="chats-filter-count">0</span></button>
-                    <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-pressed="false" hidden>Cavabsız <span id="chats-unanswered-count" class="chats-filter-count">0</span></button>
             </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
             </aside>
@@ -1294,7 +1296,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
     </button>
     <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Bildiriş</span><span id="chats-menu-badge"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Müştərilər</span><span id="chats-menu-badge"></span>
     </button>
     <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
@@ -3714,8 +3716,7 @@ function formatAudioTime(seconds) {
 }
 function audioWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    const audioSrc = src ? ` src="${escapeHtml(src)}"` : '';
-    return `<div class="wa-audio-player audio-wait${src ? ' ready' : ''}"${srcAttr}${mediaClickAttrs(item)}>
+    return `<div class="wa-audio-player audio-wait"${srcAttr}${mediaClickAttrs(item)}>
   <button type="button" class="wa-audio-btn" aria-label="Play/Pause">
     <span class="wa-audio-icon-play"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
     <span class="wa-audio-icon-pause"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></span>
@@ -3733,7 +3734,7 @@ function audioWaitHtml(src, item) {
       <button type="button" class="wa-audio-speed" aria-label="Speed">1×</button>
     </div>
   </div>
-  <audio preload="auto"${audioSrc}></audio>
+  <audio preload="none"></audio>
 </div>`;
 }
 function isChatPhotoText(text) {
@@ -3749,10 +3750,7 @@ function isChatPhotoItem(item) {
 }
 function photoWaitHtml(src, item) {
     const srcAttr = src ? ` data-src="${escapeHtml(src)}"` : '';
-    const cloud = String(src || '').indexOf('/api/wa/media/') >= 0;
-    const img = src && !cloud ? `<img class="deal-zoom" src="${escapeHtml(src)}" alt="">` : '';
-    const state = !src ? ' failed' : (cloud ? ' loading' : '');
-    return `<span class="photo-wait${state}"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span>${img}<button type="button" class="photo-miss">Yüklə</button></span>`;
+    return `<span class="photo-wait"${srcAttr}${mediaClickAttrs(item)}><span class="audio-spin"></span><button type="button" class="photo-miss">Şəkli yüklə</button></span>`;
 }
 function showCachedPhoto(wrap) {
     const saved = _mediaBlobs.get(mediaCacheKey(wrap, 'picture'));
@@ -3886,8 +3884,6 @@ function bindPhotoWait(root) {
                 loadMissingPhoto(wrap);
             });
         }
-        const direct = wrap.getAttribute('data-src') || '';
-        if(direct.indexOf('/api/wa/media/') >= 0 && !wrap.classList.contains('ready')) loadMissingPhoto(wrap);
     });
 }
 function dropAudioCache(wrap, audio) {
@@ -3956,6 +3952,7 @@ function bindVideoProgress(root) {
         box.dataset.bound = '1';
         const video = box.querySelector('video');
         const pct = box.querySelector('.wa-video-pct');
+        const loadButton = box.querySelector('.wa-video-load');
         if(!video) return;
         const fail = () => {
             box.classList.add('failed');
@@ -3968,16 +3965,33 @@ function bindVideoProgress(root) {
         video.addEventListener('canplay', ready);
         video.addEventListener('loadeddata', ready);
         video.addEventListener('error', fail);
-        const src = video.getAttribute('src') || '';
-        if(src.indexOf('/api/wa/media/') < 0) return;
-        video.removeAttribute('src');
-        try { video.load(); } catch(_e) {}
-        fetchMediaBlob(src, n => {
-            if(pct && !box.classList.contains('failed')) { pct.hidden = false; pct.textContent = n + '%'; }
-        }).then(blob => {
-            video.src = URL.createObjectURL(blob);
-            try { video.load(); } catch(_e) {}
-        }).catch(fail);
+        const src = box.getAttribute('data-src') || video.getAttribute('src') || mediaLookupUrl(box, 'video');
+        const load = () => {
+            if(!src || box.dataset.loading === '1') return;
+            box.dataset.loading = '1';
+            if(loadButton) loadButton.disabled = true;
+            if(pct) { pct.hidden = false; pct.textContent = '0%'; }
+            fetchMediaBlob(src, n => {
+                if(pct && !box.classList.contains('failed')) { pct.hidden = false; pct.textContent = n + '%'; }
+            }).then(blob => {
+                video.src = URL.createObjectURL(blob);
+                video.hidden = false;
+                if(loadButton) loadButton.remove();
+                box.dataset.loading = '';
+                try { video.load(); } catch(_e) {}
+            }).catch(() => {
+                box.dataset.loading = '';
+                if(loadButton) loadButton.disabled = false;
+                fail();
+            });
+        };
+        if(loadButton) loadButton.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            load();
+        });
+        if(video.getAttribute('src') && !loadButton) return;
+        if(!src) fail();
     });
 }
 function bindAudioWait(root) {
@@ -4382,7 +4396,7 @@ function dealMediaBlock(item, token) {
         return photoWaitHtml(src, item);
     }
     if(isCall) return audioWaitHtml(src, item);
-    if(type === 'video') return `<div class="wa-video-box"><video controls playsinline preload="auto" src="${safe}" style="max-width:240px;border-radius:12px;margin-top:6px"></video><span class="wa-video-pct">0%</span></div>`;
+    if(type === 'video') return `<div class="wa-video-box" data-src="${safe}"${mediaClickAttrs(item)}><button type="button" class="wa-video-load">Videonu yüklə</button><video controls playsinline preload="none" hidden style="max-width:240px;border-radius:12px;margin-top:6px"></video><span class="wa-video-pct" hidden></span></div>`;
     return `<a href="${safe}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-weight:600">${escapeHtml(fileName || 'Fayl')}</a>`;
 }
 const CHAT_CHANNEL_META = {
@@ -6552,8 +6566,8 @@ async function saveDealContactFromHeader(deal) {
         deal.name = name;
         deal.phone = phone;
         deal.phones = phone ? [phone] : (deal.phones || []);
-        const headName = document.querySelector('#deal-view-modal .deal-person-name');
-        const headPhone = document.querySelector('#deal-view-modal .deal-person-phone');
+        const headName = document.querySelector('#deal-view-modal .deal-person-name') || document.querySelector('#chats-pane .deal-person-name');
+        const headPhone = document.querySelector('#deal-view-modal .deal-person-phone') || document.querySelector('#chats-pane .deal-person-phone');
         if(headName) headName.textContent = name;
         if(headPhone) headPhone.textContent = phone || '—';
         
@@ -8390,7 +8404,7 @@ async function openSamilDeals() {
 }
 
 function chatsEmptyHtml() {
-    return `<div class="chats-empty"><div class="chats-empty-title">Bildiriş seçilməyib</div><div class="chats-empty-sub">Soldan bildiriş seçin</div></div>`;
+    return `<div class="chats-empty"><div class="chats-empty-title">Müştəri seçilməyib</div><div class="chats-empty-sub">Soldan müştəri seçin</div></div>`;
 }
 function chatsSeenKey() { return 'chats_seen_v1_' + CURRENT_USER_ID; }
 function chatsDraftsKey() { return 'chats_drafts_v1_' + CURRENT_USER_ID; }
@@ -9053,10 +9067,11 @@ function chatsInboxDeals() {
     const deals = (samilDeals || []).filter(deal => {
         const preview = dealLastClientMessage(deal);
         if(!deal || !deal.id || !chatBelongsToViewer(deal)) return false;
-        if(!q || usesKommoChatSearch()) return true;
+        if(!q) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
-        return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q);
+        const stage = String(deal.stage_name || deal.stage_key || '').toLowerCase();
+        return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q) || stage.includes(q);
     });
     return deals.sort((a, b) => {
         const pinA = isChatPinned(a.id) ? 1 : 0;
@@ -9216,8 +9231,8 @@ function scheduleChatsSearch() {
     clearTimeout(_chatsSearchTimer);
     if(!query) { hideChatsSearchHits(); return; }
     const phoneQ = isPhoneChatQuery(query);
-    const localHits = !usesKommoChatSearch() && chatsInboxDeals().length;
-    if(!usesKommoChatSearch() && localHits && !phoneQ) { hideChatsSearchHits(); return; }
+    const localHits = chatsInboxDeals().length;
+    if(localHits && !phoneQ) { hideChatsSearchHits(); return; }
     if(query.length < 2 && !phoneQ) { hideChatsSearchHits(); return; }
     _chatsSearchTimer = setTimeout(async () => {
         const seq = ++_chatsSearchSeq;
@@ -9293,7 +9308,7 @@ function fillChatsLineSelect() {
     const search = document.getElementById('chats-search');
     if(search && !search.dataset.bound) {
         search.dataset.bound = '1';
-        search.placeholder = usesKommoChatSearch() ? 'Kommo-da axtar...' : 'Axtar...';
+        search.placeholder = 'Ad, telefon və ya mərhələ...';
         search.addEventListener('input', () => {
             renderChatsList();
             scheduleChatsSearch();
@@ -9325,6 +9340,9 @@ let _staffNotices = [];
 let _noticeHistoryLeadId = 0;
 function closeNoticeClient() {
     _noticeHistoryLeadId = 0;
+    closeDealInfoDrawer();
+    _dealViewState = null;
+    _dealInboxMode = false;
     const app = document.getElementById('chats-app');
     const pane = document.getElementById('chats-pane');
     if(app) app.classList.remove('chat-open');
@@ -9335,7 +9353,15 @@ function noticeClientHeaderHtml(deal) {
     const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
-    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}</div></div></div>`;
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
+}
+function openNoticeDealInfo() {
+    const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
+    if(deal) openDealInfoDrawer(deal, false);
+}
+function refreshNoticeHistory() {
+    const list = document.getElementById('notice-client-history');
+    if(_noticeHistoryLeadId && list) fillKommoHistory(_noticeHistoryLeadId, list, true);
 }
 async function openNoticeClient(leadId) {
     const id = String(leadId || '').trim();
@@ -9343,6 +9369,9 @@ async function openNoticeClient(leadId) {
     const app = document.getElementById('chats-app');
     if(!id || !pane) return;
     _noticeHistoryLeadId = id;
+    closeDealInfoDrawer();
+    _dealViewState = null;
+    _dealInboxMode = false;
     if(app) app.classList.add('chat-open');
     renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
@@ -9352,13 +9381,18 @@ async function openNoticeClient(leadId) {
             cache: 'no-store', headers: {'X-TG-User-ID': CURRENT_USER_ID}
         });
         const payload = await response.json().catch(() => ({}));
-        if(response.ok && payload && payload.deal) deal = payload.deal;
+        if(response.ok && payload && payload.deal) {
+            deal = payload.deal;
+            deal.share_token = payload.share_token || deal.share_token || '';
+        }
     } catch(_err) {}
     if(_noticeHistoryLeadId !== id || !pane.isConnected) return;
     if(!deal) {
         pane.innerHTML = '<div class="chats-empty"><div class="chats-empty-title">Sövdələşmə tapılmadı</div></div>';
         return;
     }
+    _dealViewState = {id, deal, readonly:false, token: deal.share_token || '', snapshotLoaded:false};
+    _dealInboxMode = true;
     pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div></div></div>`;
     fillKommoHistory(id, document.getElementById('notice-client-history'));
 }
@@ -9410,13 +9444,6 @@ function renderChatsList() {
     fillChatsLineSelect();
     let deals = chatsInboxDeals();
     const seen = seedChatsSeen(deals);
-    if(_chatsListFilter === 'unread') {
-        const unreadDeals = deals.filter(deal => chatsIsUnread(deal, seen));
-        if(unreadDeals.length) deals = unreadDeals;
-        else _chatsListFilter = '';
-    } else if(_chatsListFilter === 'unanswered') {
-        deals = deals.filter(chatsIsUnanswered);
-    }
     const openId = String(_noticeHistoryLeadId || '');
     if(!deals.length) {
         box.innerHTML = samilDeals.length
@@ -9971,7 +9998,6 @@ function historyRowsHtml(rows) {
             const text = String(item.text || '').trim();
             const name = String(item.file_name || '').trim();
             const onlyFile = !text || text === name || historyMediaKind({text: text, file_name: text, message_type: ''});
-            item.history_face = historyMediaFace(kind);
             if(onlyFile) item.text = '';
         }
         const day = dealChatDayKey(item);
@@ -9983,14 +10009,14 @@ function historyRowsHtml(rows) {
         return pill + dealChatItemHtml(item, (_dealViewState && _dealViewState.token) || '', true);
     }).join('');
 }
-async function fillKommoHistory(leadId, list) {
+async function fillKommoHistory(leadId, list, force) {
     if(!list || !leadId) return;
-    if(list.querySelector('.deal-chat-row')) return;
+    if(!force && list.querySelector('.deal-chat-row')) return;
     list.innerHTML = historyLoadingHtml();
     const ctrl = new AbortController();
     const slow = window.setTimeout(() => ctrl.abort(), 20000);
     try {
-        const response = await fetch(API_BASE + '/api/deal/chat/history?lead_id=' + encodeURIComponent(String(leadId)) + '&_ts=' + Date.now(), {
+        const response = await fetch(API_BASE + '/api/deal/chat/history?lead_id=' + encodeURIComponent(String(leadId)) + '&_ts=' + Date.now() + (force ? '&force=1' : ''), {
             cache: 'no-store',
             headers: {'X-TG-User-ID': CURRENT_USER_ID},
             signal: ctrl.signal
@@ -10003,10 +10029,11 @@ async function fillKommoHistory(leadId, list) {
         }
         const rows = Array.isArray(payload.chat) ? payload.chat : [];
         if(!rows.length) {
-            list.innerHTML = '<div class="history-loading">Kommo tarixçə qaytarmadı</div>';
+            list.innerHTML = '<div class="history-loading">Bu müştəri üçün tarixçə tapılmadı</div>';
             return;
         }
         list.innerHTML = historyRowsHtml(rows);
+        bindAudioWait(list);
         const scroller = list.closest('.wa-thread') || list.closest('#deal-view-modal');
         if(scroller) requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
     } catch(_err) {
