@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="314">
+    <meta name="pwa-build" content="315">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -344,6 +344,10 @@
         .wa-tpl-send { border:0; border-radius:12px; background:#25d366; color:#fff; font-size:13px; font-weight:600; padding:11px; font-family:inherit; }
         .wa-tpl-send[disabled] { background:#cbd5e1; }
         .deal-contact-form { display:grid; gap:6px; margin-top:8px; }
+        .deal-stage-hit { position:relative; display:inline-flex; max-width:100%; }
+        .deal-stage-hit-select { position:absolute; inset:0; width:100%; height:100%; margin:0; padding:0; border:0; opacity:0; cursor:pointer; font-size:16px; }
+        .deal-history-chat { background:#efeae2; border-radius:12px; padding:8px 10px 12px; min-height:120px; }
+        .history-loading { display:flex; align-items:center; justify-content:center; gap:8px; min-height:88px; color:#64748b; font-size:13px; font-weight:600; }
         .deal-stage-row { display:flex; align-items:center; gap:8px; }
         .deal-stage-row select { flex:1; }
         .deal-stage-row.admin-pipelines { align-items:center; }
@@ -831,7 +835,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Passiv tapşırıqlar</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="sidebar-item-label">Passiv tapşırıqlar</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
@@ -840,7 +844,7 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg></span><span class="sidebar-item-label">Bildiriş</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Bildiriş</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -1259,7 +1263,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
     </button>
     <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Gözləmə</span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
@@ -1268,7 +1272,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
     </button>
     <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/><path d="M8 9h8M8 13h5"/></svg><span class="mt-0.5">Bildiriş</span><span id="chats-menu-badge"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Bildiriş</span><span id="chats-menu-badge"></span>
     </button>
     <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
@@ -6100,6 +6104,27 @@ function fillAdminPipelinePickers(pipelineId, stageId, selectedPid, selectedStag
     }
     fillAdminPipelineStageSelect(stageId, selectedPid, selectedStage);
 }
+function dealStageBadgeHtml(deal) {
+    const color = stageColor(deal && deal.stage_key);
+    const options = isAdmin
+        ? adminPipelineStageOptionsHtml(deal && deal.pipeline_id || CURRENT_PIPELINE_ID, deal && deal.stage_key)
+        : dealStageOptionsHtml(deal || {});
+    return `<span style="display:inline-flex;align-items:center;gap:6px;flex:none;max-width:52%">
+        <span class="deal-stage-hit">
+            <span id="deal-stage-badge" class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${color}18;color:${color}">${escapeHtml((deal && deal.stage_name) || 'Naməlum mərhələ')}</span>
+            <select id="deal-stage-select" class="deal-stage-hit-select" aria-label="Mərhələ">${options}</select>
+        </span>
+        <span id="deal-stage-spin" class="deal-stage-spin" hidden></span>
+    </span>`;
+}
+function paintDealStageBadge(deal) {
+    const badge = document.getElementById('deal-stage-badge');
+    if(!badge || !deal) return;
+    const color = stageColor(deal.stage_key);
+    badge.textContent = deal.stage_name || 'Naməlum mərhələ';
+    badge.style.background = color + '18';
+    badge.style.color = color;
+}
 function dealPipelineStageFieldsHtml(deal) {
     if(isAdmin) {
         const pid = deal && deal.pipeline_id || CURRENT_PIPELINE_ID;
@@ -6138,6 +6163,7 @@ function applyDealSide(deal, readonly) {
             if(deal.stage_key) stageEl.value = deal.stage_key;
         }
     });
+    paintDealStageBadge(deal);
     const headName = document.getElementById('deal-head-name') || document.querySelector('#deal-view-modal .deal-shell-head .name');
     const clientName = dealClientName(deal);
     if(headName) {
@@ -6399,6 +6425,7 @@ function bindDealSideActions(deal) {
             const label = (stagesOfPipeline(nextPipeline || deal.pipeline_id).find(([k]) => k === stageKey) || SAMIL_ALL_STAGES.find(([k]) => k === stageKey) || [])[1] || stageKey;
             deal.stage_key = stageKey;
             deal.stage_name = label;
+            paintDealStageBadge(deal);
             if(nextPipeline) {
                 deal.pipeline_id = nextPipeline;
                 const pipe = (KOMMO_PIPELINES || []).find(item => String(item.id) === String(nextPipeline));
@@ -6620,7 +6647,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
         }).join('')
         : '<div class="text-gray-400">Açıq tapşırıq yoxdur</div>';
     const chatHtml = staff
-        ? '<div id="deal-history-list">Yüklənir...</div>'
+        ? '<div id="deal-history-list" class="deal-history-chat"><div class="history-loading"><span class="yt-spin"></span><span>Yüklənir...</span></div></div>'
         : dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
     const composer = (!staff && canReply) ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
     const phone = phoneList[0] || '';
@@ -6633,7 +6660,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
                 <div style="font-size:16px;font-weight:600">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
                 ${staff
-                    ? `<div style="flex:none;min-width:140px;max-width:52%">${dealPipelineStageFieldsHtml(deal)}</div>`
+                    ? dealStageBadgeHtml(deal)
                     : `<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>`}
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
@@ -6649,7 +6676,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
             <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Tapşırıqlar</span>${staff ? '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>' : ''}</div>
             <div${staff ? ' id="deal-tasks-list"' : ''}>${staff ? dealTasksListHtml(deal, false) : tasksHtml}</div>
             <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Qeydlər</span>${staff ? '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>' : ''}</div>
-            <div${staff ? ' id="deal-notes-list"' : ''}>${staff ? dealNotesListHtml(deal, false) : notesHtml}</div>
+            <div${staff ? ' id="deal-notes-list" style="margin-top:10px"' : ''}>${staff ? dealNotesListHtml(deal, false) : notesHtml}</div>
             ${staff ? `<div id="deal-note-form" class="deal-side-form" hidden><textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea><button type="button" id="deal-note-save">Qeyd əlavə et</button></div>` : ''}
             <div style="margin-top:14px;font-size:12px;font-weight:600">WhatsApp</div>
             <div id="deal-chat-thread" class="deal-chat-thread">${chatHtml}</div>
@@ -9158,7 +9185,7 @@ function renderChatsList() {
             if(historyBtn) {
                 event.preventDefault();
                 event.stopPropagation();
-                openKommoHistory(historyBtn.getAttribute('data-history-lead'));
+                openDealViewById(historyBtn.getAttribute('data-history-lead'));
                 return;
             }
             const row = event.target.closest('[data-lead]');
@@ -9654,19 +9681,26 @@ function resumeInboxPulse() {
     pollInboxPulse();
 }
 try { window.Telegram?.WebApp?.onEvent?.('activated', resumeInboxPulse); } catch(_err) {}
+function historyLoadingHtml() {
+    return '<div class="history-loading"><span class="yt-spin"></span><span>Yüklənir...</span></div>';
+}
 function historyRowsHtml(rows) {
-    return rows.map(row => {
-        const when = row.created_at ? new Date(Number(row.created_at) * 1000).toLocaleString('az-AZ') : '';
-        const who = row.incoming ? 'Müştəri' : (row.author || 'Biz');
-        return `<div style="background:#fff;border-radius:12px;padding:10px 12px;margin-bottom:8px">
-            <div style="font-size:11px;color:#64748b">${escapeHtml(who)}${when ? ' · ' + escapeHtml(when) : ''}</div>
-            <div style="margin-top:4px;white-space:pre-wrap">${escapeHtml(row.text || '')}</div>
-        </div>`;
+    const sorted = rows.slice().sort((a, b) => Number(b && b.created_at || 0) - Number(a && a.created_at || 0));
+    let lastDay = '';
+    return sorted.map(row => {
+        const item = Object.assign({channel: (row && row.channel) || 'whatsapp'}, row || {});
+        const day = dealChatDayKey(item);
+        let pill = '';
+        if(day && day !== lastDay) {
+            lastDay = day;
+            pill = `<div class="chat-day-pill">${escapeHtml(dealChatDayLabel(day))}</div>`;
+        }
+        return pill + dealChatItemHtml(item, (_dealViewState && _dealViewState.token) || '', true);
     }).join('');
 }
 async function fillKommoHistory(leadId, list) {
     if(!list || !leadId) return;
-    list.textContent = 'Yüklənir...';
+    list.innerHTML = historyLoadingHtml();
     const ctrl = new AbortController();
     const slow = window.setTimeout(() => ctrl.abort(), 20000);
     try {
@@ -9678,38 +9712,34 @@ async function fillKommoHistory(leadId, list) {
         const payload = await response.json().catch(() => ({}));
         if(!list.isConnected) return;
         if(!response.ok || !payload.success) {
-            list.textContent = payload.error || 'Tarixçə açılmadı';
+            list.innerHTML = `<div class="history-loading">${escapeHtml(payload.error || 'Tarixçə açılmadı')}</div>`;
             return;
         }
         const rows = Array.isArray(payload.chat) ? payload.chat : [];
         if(!rows.length) {
-            list.textContent = 'Kommo tarixçə qaytarmadı';
+            list.innerHTML = '<div class="history-loading">Kommo tarixçə qaytarmadı</div>';
             return;
         }
         list.innerHTML = historyRowsHtml(rows);
     } catch(_err) {
-        if(list.isConnected) list.textContent = 'Kommo cavab vermədi';
+        if(list.isConnected) list.innerHTML = '<div class="history-loading">Kommo cavab vermədi</div>';
     } finally {
         window.clearTimeout(slow);
     }
 }
-async function openKommoHistory(leadId, title) {
-    const old = document.getElementById('kommo-history-modal');
-    if(old) old.remove();
-    const modal = document.createElement('div');
-    modal.id = 'kommo-history-modal';
-    modal.style.cssText = 'position:fixed;inset:0;z-index:14000;background:rgba(15,23,42,.45);display:flex;align-items:stretch;justify-content:center;padding:12px';
-    modal.innerHTML = `<div style="background:#f7f1e8;width:min(560px,100%);margin:auto;max-height:100%;overflow:auto;border-radius:18px;padding:14px">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
-            <b>${escapeHtml(title || 'Tarixçə')}</b>
-            <button type="button" id="kommo-history-close" style="border:0;background:#fff;border-radius:10px;padding:6px 10px;font-weight:700">Bağla</button>
-        </div>
-        <div id="kommo-history-list">Yüklənir...</div>
-    </div>`;
-    document.body.appendChild(modal);
-    modal.querySelector('#kommo-history-close').onclick = () => modal.remove();
-    modal.addEventListener('click', event => { if(event.target === modal) modal.remove(); });
-    fillKommoHistory(leadId, modal.querySelector('#kommo-history-list'));
+async function openDealViewById(leadId) {
+    const id = String(leadId || '');
+    if(!id) return;
+    let deal = (samilDeals || []).find(item => String(item.id) === id);
+    if(!deal && CURRENT_USER_ID) {
+        try {
+            const r = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(id), {headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+            const d = await r.json().catch(() => ({}));
+            if(d && d.deal) deal = d.deal;
+        } catch(_e) {}
+    }
+    if(deal) openDealViewModal(deal);
+    else toast('Sövdələşmə tapılmadı', true);
 }
 async function openInboxChat(leadId) {
     let deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
