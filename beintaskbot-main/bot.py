@@ -18591,8 +18591,20 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
     avg_stars = round(summary.get('avg_kpi', 0) / 20, 1) if summary.get('avg_kpi') else 0
     return web.json_response({'success': True, 'employee_type': emp_type, 'balance': bal, 'avg_stars': avg_stars, **summary})
 
+def _run_http_server() -> None:
+    """Serve CRM HTTP on its own loop so Telegram jobs cannot freeze Tarixçə."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(start_webhook_server())
+        loop.run_forever()
+    except Exception as exc:
+        logger.error("HTTP server failed: %s", exc)
+
+
 def main():
     global _bot_app
+    threading.Thread(target=_run_http_server, name="http-server", daemon=True).start()
     async def post_init(application: Application) -> None:
         ensure_known_employee_registrations()
         # This deployment uses long polling for Telegram updates. Telegram
@@ -18600,15 +18612,11 @@ def main():
         # left by any previous deployment before polling begins. The aiohttp
         # server below continues to receive Kommo webhooks only.
         try:
-            await application.bot.delete_webhook(drop_pending_updates=False)
+            await asyncio.wait_for(application.bot.delete_webhook(drop_pending_updates=False), timeout=8)
             logger.info("Telegram webhook cleared; long polling is active")
         except Exception as exc:
             logger.warning("Could not clear Telegram webhook before polling: %s", exc)
-        await start_webhook_server()
-        try:
-            _rehydrate_tecili_tasks()
-        except Exception as _re_err:
-            logger.warning(f"Təcili rehydrate skipped: {_re_err}")
+        asyncio.create_task(asyncio.to_thread(_rehydrate_tecili_tasks))
         logger.info("Bot started. Kommo webhook server on port %s; Telegram polling active.", WEBHOOK_PORT)
         try:
             webapp_url = os.environ.get(
