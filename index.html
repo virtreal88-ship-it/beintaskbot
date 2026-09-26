@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="313">
+    <meta name="pwa-build" content="314">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4353,6 +4353,15 @@ function waMeUrl(phone) {
     else if(digits.length === 10 && digits.startsWith('9')) digits = '994' + digits.slice(1);
     return 'https://wa.me/' + digits;
 }
+function waBusinessUrl(phone) {
+    const web = waMeUrl(phone);
+    const digits = String(web || '').replace(/\D/g, '');
+    if(!digits) return '';
+    if(/Android/i.test(navigator.userAgent || '')) {
+        return 'intent://send?phone=' + digits + '#Intent;scheme=whatsapp;package=com.whatsapp.w4b;end';
+    }
+    return 'whatsapp://send?phone=' + digits;
+}
 function dealChatActor(item) {
     if(item && (item.is_bot || item.bot_name)) {
         return '🤖 ' + (item.bot_name || 'İİ Bot');
@@ -6085,6 +6094,10 @@ async function ensureAdminPipelines() {
     return _pipelinesPromise;
 }
 function fillAdminPipelinePickers(pipelineId, stageId, selectedPid, selectedStage) {
+    if(typeof stageId === 'string') {
+        document.querySelectorAll('#' + stageId).forEach(el => fillAdminPipelineStageSelect(el, selectedPid, selectedStage));
+        return;
+    }
     fillAdminPipelineStageSelect(stageId, selectedPid, selectedStage);
 }
 function dealPipelineStageFieldsHtml(deal) {
@@ -6184,6 +6197,7 @@ async function ensureDealSnapshotLoaded(deal, readonly) {
             const merged = mergeDealSnapshot(live, cachedSnap);
             _dealViewState.deal = merged;
             applyDealSide(merged, readonly !== undefined ? readonly : !!_dealViewState.readonly);
+            bindDealSideActions(merged);
             sideContainers.forEach(el => {
                 const loader = el.querySelector('.deal-side-loader');
                 if(loader) loader.remove();
@@ -6214,6 +6228,7 @@ async function ensureDealSnapshotLoaded(deal, readonly) {
                 _dealViewState.snapshotLoaded = true;
             }
             applyDealSide(merged, readonly !== undefined ? readonly : !!(_dealViewState && _dealViewState.readonly));
+            bindDealSideActions((_dealViewState && _dealViewState.deal) || merged);
             if(isAdmin) {
                 ensureAdminPipelines().then(() => {
                     if(!_dealViewState || String(_dealViewState.id) !== leadId) return;
@@ -6249,23 +6264,32 @@ async function refreshDealSnapshot(deal) {
     if(!deal || !deal.id || !CURRENT_USER_ID) return deal;
     return await ensureDealSnapshotLoaded(deal, !!(_dealViewState && _dealViewState.readonly));
 }
+function dealUi(id) {
+    const modal = document.getElementById('deal-view-modal');
+    if(modal) {
+        const el = modal.querySelector('#' + id);
+        if(el) return el;
+    }
+    return document.getElementById(id);
+}
 function bindDealSideActions(deal) {
-    const noteOpen = document.getElementById('deal-note-open');
-    const noteForm = document.getElementById('deal-note-form');
-    const noteBtn = document.getElementById('deal-note-save');
-    const taskPlus = document.getElementById('deal-task-plus');
-    const stageEl = document.getElementById('deal-stage-select');
-    const headName = document.getElementById('deal-head-name');
-    const headPhone = document.getElementById('deal-head-phone');
+    const root = document.getElementById('deal-view-modal') || document;
+    const noteOpen = dealUi('deal-note-open');
+    const noteForm = dealUi('deal-note-form');
+    const noteBtn = dealUi('deal-note-save');
+    const taskPlus = dealUi('deal-task-plus');
+    const stageEl = dealUi('deal-stage-select');
+    const headName = dealUi('deal-head-name');
+    const headPhone = dealUi('deal-head-phone');
     if(noteOpen && noteForm) {
         noteOpen.onclick = () => {
             noteForm.hidden = !noteForm.hidden;
-            if(!noteForm.hidden) document.getElementById('deal-note-text')?.focus();
+            if(!noteForm.hidden) dealUi('deal-note-text')?.focus();
         };
     }
     if(taskPlus) taskPlus.onclick = () => openCreateTaskFromDeal(deal);
     if(noteBtn) noteBtn.onclick = async () => {
-        const area = document.getElementById('deal-note-text');
+        const area = dealUi('deal-note-text');
         const text = String(area && area.value || '').trim();
         if(!text) { toast('Qeyd yazın', true); return; }
         noteBtn.disabled = true;
@@ -6274,7 +6298,7 @@ function bindDealSideActions(deal) {
             const d = await samilDealAction({action:'deal_add_note', lead_id: deal.id, text});
             if(area) area.value = '';
             if(noteForm) noteForm.hidden = true;
-            const list = document.getElementById('deal-notes-list');
+            const list = dealUi('deal-notes-list');
             if(list) {
                 const now = new Date().toLocaleString('az-AZ');
                 const empty = list.querySelector('.text-gray-400');
@@ -6289,7 +6313,7 @@ function bindDealSideActions(deal) {
         } catch(err) { toast(err.message || 'Qeyd göndərilmədi', true); }
         finally { noteBtn.disabled = false; noteBtn.classList.remove('busy'); }
     };
-    document.querySelectorAll('.deal-note-del').forEach(btn => {
+    root.querySelectorAll('.deal-note-del').forEach(btn => {
         btn.onclick = async () => {
             const noteId = btn.getAttribute('data-note-id');
             const entityType = btn.getAttribute('data-entity-type') || 'leads';
@@ -6311,10 +6335,10 @@ function bindDealSideActions(deal) {
             });
         };
     });
-    document.querySelectorAll('.deal-note-edit').forEach(btn => {
+    root.querySelectorAll('.deal-note-edit').forEach(btn => {
         btn.onclick = () => startDealNoteInlineEdit(deal, btn);
     });
-    document.querySelectorAll('.deal-task-del').forEach(btn => {
+    root.querySelectorAll('.deal-task-del').forEach(btn => {
         btn.onclick = async () => {
             const row = btn.closest('.deal-task-row');
             btn.disabled = true;
@@ -6326,7 +6350,7 @@ function bindDealSideActions(deal) {
             } catch(err) { toast(err.message || 'Tapşırıq silinmədi', true); btn.disabled = false; if(row) row.classList.remove('saving'); }
         };
     });
-    document.querySelectorAll('.deal-task-edit').forEach(btn => {
+    root.querySelectorAll('.deal-task-edit').forEach(btn => {
         btn.onclick = () => {
             const taskId = btn.getAttribute('data-task-id');
             const item = (deal.tasks || []).find(row => String(row.id) === String(taskId)) || {id: taskId, text: ''};
@@ -6357,15 +6381,15 @@ function bindDealSideActions(deal) {
     };
     bindContactInput(headName, 'deal-side-name');
     bindContactInput(headPhone, 'deal-side-phone');
-    bindContactInput(document.getElementById('deal-side-name'), 'deal-head-name');
-    bindContactInput(document.getElementById('deal-side-phone'), 'deal-head-phone');
+    bindContactInput(dealUi('deal-side-name'), 'deal-head-name');
+    bindContactInput(dealUi('deal-side-phone'), 'deal-head-phone');
     const saveStage = async () => {
         const picked = isAdmin ? parsePipelineStageToken(stageEl && stageEl.value || '') : {pipelineId: 0, stageKey: stageEl && stageEl.value};
         const stageKey = picked.stageKey;
         const nextPipeline = picked.pipelineId;
         if(!stageKey) return;
         if(stageKey === deal.stage_key && (!nextPipeline || nextPipeline === Number(deal.pipeline_id || 0))) return;
-        const spin = document.getElementById('deal-stage-spin');
+        const spin = dealUi('deal-stage-spin');
         if(stageEl) stageEl.disabled = true;
         if(spin) spin.hidden = false;
         try {
@@ -6387,7 +6411,7 @@ function bindDealSideActions(deal) {
             toast('Mərhələ dəyişdi');
         } catch(err) {
             toast(err.message || 'Mərhələ dəyişmədi', true);
-            if(stageEl && isAdmin) fillAdminPipelineStageSelect('deal-stage-select', deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+            if(stageEl && isAdmin) fillAdminPipelineStageSelect(stageEl, deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
             else if(stageEl) stageEl.value = deal.stage_key || '';
         } finally {
             if(stageEl) stageEl.disabled = false;
@@ -6399,8 +6423,8 @@ function bindDealSideActions(deal) {
 async function saveDealContactFromHeader(deal) {
     if(!deal || !_dealViewState || _dealViewState.readonly) return;
     const currentLeadId = String(deal.id);
-    const name = String((document.getElementById('deal-side-name') || document.getElementById('deal-head-name'))?.value || document.getElementById('deal-head-name')?.value || '').trim();
-    const phone = String((document.getElementById('deal-side-phone') || document.getElementById('deal-head-phone'))?.value || document.getElementById('deal-head-phone')?.value || '').trim();
+    const name = String((dealUi('deal-side-name') || dealUi('deal-head-name'))?.value || '').trim();
+    const phone = String((dealUi('deal-side-phone') || dealUi('deal-head-phone'))?.value || '').trim();
     const prevName = dealClientName(deal);
     const prevPhone = String((deal.phones && deal.phones[0]) || deal.phone || '').trim();
     if(!name) return;
@@ -6600,32 +6624,33 @@ function dealDetailSectionsHtml(deal, token, opts) {
         : dealChatRowsHtml(deal.chat, token, deal.chat_blocked, false);
     const composer = (!staff && canReply) ? `<div class="deal-chat-composer"><textarea id="deal-chat-input" placeholder="WhatsApp mesajı yazın..."></textarea><button type="button" id="deal-chat-send">Göndər</button></div>` : '';
     const phone = phoneList[0] || '';
-    const waLink = staff ? waMeUrl(phone) : '';
+    const clientName = dealClientName(deal) || deal.contact_name || '';
+    const waLink = staff ? waBusinessUrl(phone) : '';
     const kommoLink = staff ? dealKommoUrl(deal) : '';
-    const staffBar = staff ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
-        ${kommoLink ? `<a href="${escapeHtml(kommoLink)}" target="_blank" rel="noopener noreferrer" style="padding:8px 12px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700;text-decoration:none">Kommo</a>` : ''}
-        ${waLink ? `<a href="${escapeHtml(waLink)}" target="_blank" rel="noopener noreferrer" style="padding:8px 12px;border-radius:10px;background:#dcfce7;color:#15803d;font-size:12px;font-weight:700;text-decoration:none">WhatsApp</a>` : ''}
-        <button type="button" id="deal-task-plus" style="padding:8px 12px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-size:12px;font-weight:700">Tapşırıq yarat</button>
-        <button type="button" id="deal-create-plus" style="padding:8px 12px;border:0;border-radius:10px;background:#0f172a;color:#fff;font-size:12px;font-weight:700">Sövdələşmə yarat</button>
-    </div>` : '';
+    const inlineInput = 'width:auto;min-width:120px;max-width:100%;text-align:left;font-weight:600;border:0;border-bottom:1px solid #e5e7eb;background:transparent;padding:0 2px';
     return `<div>
             <div class="text-[10px] text-gray-400 font-semibold uppercase tracking-wide">Sövdələşmə</div>
             <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:4px 0 10px">
                 <div style="font-size:16px;font-weight:600">${escapeHtml(dealCardTitle(deal) || deal.contact_name || 'Sövdələşmə')}</div>
-                <span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>
+                ${staff
+                    ? `<div style="flex:none;min-width:140px;max-width:52%">${dealPipelineStageFieldsHtml(deal)}</div>`
+                    : `<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md" style="background:${stageColor(deal.stage_key)}18;color:${stageColor(deal.stage_key)}">${escapeHtml(deal.stage_name || 'Naməlum mərhələ')}</span>`}
             </div>
             <div class="space-y-1 text-[13px] text-gray-700">
-                <div>👤 <b>Müştəri:</b> ${escapeHtml(deal.contact_name || '—')}</div>
+                <div>👤 <b>Müştəri:</b> ${staff ? `<input id="deal-side-name" class="deal-side-input" style="${inlineInput}" value="${escapeHtml(clientName)}" placeholder="Müştəri">` : escapeHtml(deal.contact_name || '—')}</div>
                 ${sourceLineHtml(deal)}
-                <div>📞 <b>Telefon:</b> ${escapeHtml(phoneList.join(', ') || '—')}</div>
+                <div>📞 <b>Telefon:</b> ${staff ? `<input id="deal-side-phone" class="deal-side-input" type="tel" style="${inlineInput}" value="${escapeHtml(phone)}" placeholder="Telefon">` : escapeHtml(phoneList.join(', ') || '—')}</div>
                 <div class="grid grid-cols-2 gap-2 text-gray-500 text-[12px]"><div>🕒 ${escapeHtml(created)}</div><div>⏰ ${escapeHtml(deal.deadline || '—')}</div></div>
                 ${deal.voice_url ? `<div>🎧 <b>Audio:</b><div class="mt-1">${dealAudioHtml(deal)}</div></div>` : ''}
-                ${staff ? staffBar : ((canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : '')}
+                ${staff
+                    ? `${kommoLink ? `<div><a href="${escapeHtml(kommoLink)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">Kommo-da aç</a></div>` : ''}${waLink ? `<div><a href="${escapeHtml(waLink)}" style="color:#2563eb;font-weight:600">WhatsApp-da aç</a></div>` : ''}`
+                    : ((canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : '')}
             </div>
-            <div style="margin-top:14px;font-size:12px;font-weight:600">Tapşırıqlar</div>
-            <div>${tasksHtml}</div>
-            <div style="margin-top:14px;font-size:12px;font-weight:600">Qeydlər</div>
-            <div>${notesHtml}</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Tapşırıqlar</span>${staff ? '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>' : ''}</div>
+            <div${staff ? ' id="deal-tasks-list"' : ''}>${staff ? dealTasksListHtml(deal, false) : tasksHtml}</div>
+            <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Qeydlər</span>${staff ? '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>' : ''}</div>
+            <div${staff ? ' id="deal-notes-list"' : ''}>${staff ? dealNotesListHtml(deal, false) : notesHtml}</div>
+            ${staff ? `<div id="deal-note-form" class="deal-side-form" hidden><textarea id="deal-note-text" placeholder="Yeni qeyd..."></textarea><button type="button" id="deal-note-save">Qeyd əlavə et</button></div>` : ''}
             <div style="margin-top:14px;font-size:12px;font-weight:600">WhatsApp</div>
             <div id="deal-chat-thread" class="deal-chat-thread">${chatHtml}</div>
             ${composer}
@@ -7755,7 +7780,7 @@ function paintDealViewModal(deal, readonly, opts) {
             modal.style.transform = '';
         }, { passive: true });
 
-        if(!window.matchMedia('(max-width: 1023px)').matches) ensureDealSnapshotLoaded(deal, readonly);
+        ensureDealSnapshotLoaded(deal, readonly);
     }
     if(!deal.phone && (!deal.phones || !deal.phones.length)) {
         idbGet('deal_details', String(deal.id)).then(cached => {
@@ -7868,10 +7893,6 @@ function paintDealViewModal(deal, readonly, opts) {
     bindDealSideActions(deal);
     bindAudioWait(root);
     fillKommoHistory(deal.id, root.querySelector('#deal-history-list'));
-    const taskPlus = root.querySelector('#deal-task-plus');
-    if(taskPlus) taskPlus.onclick = () => openCreateTaskFromDeal((_dealViewState && _dealViewState.deal) || deal);
-    const dealPlus = root.querySelector('#deal-create-plus');
-    if(dealPlus) dealPlus.onclick = () => openCreateDealModal();
     const shareBtn = root.querySelector('#deal-view-share');
     if(shareBtn) shareBtn.onclick = async () => {
         try {
