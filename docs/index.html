@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="303">
+    <meta name="pwa-build" content="304">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5921,9 +5921,12 @@ async function loadOlderDealChat(quiet) {
     }
 }
 let _lastDealChatFullPoll = 0;
+let _dealChatPollBusy = false;
 async function pollDealChat(forceFull = false) {
     if(!_dealViewState || !_dealViewState.id || !CURRENT_USER_ID || _dealViewState.readonly) return;
+    if(_dealChatPollBusy) return;
     if(_dealViewState.loading && !forceFull) return;
+    _dealChatPollBusy = true;
     const seq = _dealViewState.seq;
     const now = Date.now();
     const shouldFull = forceFull || (now - _lastDealChatFullPoll > 10000);
@@ -5952,6 +5955,7 @@ async function pollDealChat(forceFull = false) {
         paintDealChatThread({stickBottom: nearBottom || hasNew});
         markDealChatRead(false);
     } catch(_err) {}
+    finally { _dealChatPollBusy = false; }
 }
 function dealIconEdit() {
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
@@ -7402,10 +7406,10 @@ async function sendDealChatMessage(fileArg) {
 
     const sendFile = file;
     clearDealPendingFile();
-    _dealSendChain = _dealSendChain.then(() => deliverQueuedDealSend({
+    deliverQueuedDealSend({
         seq, leadId, text, channel, replyId, replyText, replyAuthor, replyExternal, talkId,
         file: sendFile, voiceNow, optimisticMsg, savedInputText, localBlobUrl
-    })).catch(() => {});
+    }).catch(() => {});
     return;
 }
 async function deliverQueuedDealSend(job) {

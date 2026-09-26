@@ -11391,9 +11391,15 @@ def _load_sent_messages() -> dict:
 
 def _flush_sent_messages() -> None:
     global _wa_sent_save_timer
+    # Copy under the lock, then serialize outside it. A full dump of the
+    # store while the lock is held freezes incoming messages and replies.
     with _wa_sent_lock:
         _wa_sent_save_timer = None
-        snapshot = json.loads(json.dumps(_load_sent_messages(), ensure_ascii=False))
+        source = _wa_sent_messages if isinstance(_wa_sent_messages, dict) else {}
+        snapshot = {
+            key: (list(value) if isinstance(value, list) else value)
+            for key, value in source.items()
+        }
     try:
         write_json(_WA_SENT_FILE, snapshot)
     except Exception as exc:
@@ -15773,7 +15779,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         _invalidate_deal_chat_cache(lid_int)
         record_lead_pulse_event(
             lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp",
-            wa_line=_wa_line_for_phone_id(_wa_phone_id_for_digits(sender_digits)) or _lead_wa_line(lid_int),
+            wa_line=_wa_line_for_phone_id(_wa_phone_id_for_digits(sender_digits)),
         )
         cloud_ready = _wa_cloud_ready(sender_digits)
         return web.json_response({
