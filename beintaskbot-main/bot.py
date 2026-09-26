@@ -5619,6 +5619,7 @@ def record_lead_pulse_event(
     missing: bool = False,
     refresh: bool = False,
     incoming_at: int = 0,
+    outgoing_at: int = 0,
     wa_line: str = "",
     replaced_by: int = 0,
     external_id: str = "",
@@ -5661,6 +5662,12 @@ def record_lead_pulse_event(
         event_incoming_at = now_ts
     else:
         event_incoming_at = 0
+    if outgoing_at > 0:
+        event_outgoing_at = outgoing_at
+    elif str(event_type or "").strip().lower() in {"deal_outgoing", "outgoing"}:
+        event_outgoing_at = now_ts
+    else:
+        event_outgoing_at = 0
 
     with _inbox_pulse_lock:
         _inbox_pulse_rev += 1
@@ -5674,6 +5681,7 @@ def record_lead_pulse_event(
             "phone": cphone,
             "last_client_message": str(preview or ""),
             "last_incoming_at": event_incoming_at,
+            "last_outgoing_at": event_outgoing_at,
             "chat_channel": str(channel or ""),
             "wa_line": str(wa_line or ""),
             "replaced_by": int(replaced_by or 0),
@@ -6313,6 +6321,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             continue
         deal = visible.get(lid) or {}
         incoming_at = int(row.get("last_incoming_at") or deal.get("last_incoming_at") or 0)
+        outgoing_at = int(row.get("last_outgoing_at") or deal.get("last_outgoing_at") or 0)
         events.append({
             "rev": int(row.get("rev") or 0),
             "lead_id": lid,
@@ -6333,7 +6342,8 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "phone": deal.get("phone") or row.get("phone") or "",
                 "last_client_message": row.get("last_client_message") or deal.get("last_client_message") or "",
                 "last_incoming_at": incoming_at,
-                "chat_at": max(int(deal.get("chat_at") or 0), incoming_at),
+                "last_outgoing_at": outgoing_at,
+                "chat_at": max(int(deal.get("chat_at") or 0), incoming_at, outgoing_at),
                 "chat_channel": row.get("chat_channel") or deal.get("chat_channel") or "",
                 "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
                 "external_id": row.get("external_id") or "",
@@ -15874,6 +15884,68 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "chat": rows})
 
 
+async def handle_api_deal_kommo_reply(request: web.Request) -> web.Response:
+    """Send one reviewed text reply through the deal's Kommo Talk, never via WABA."""
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    text = str(data.get("text") or "").strip()
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    if not text:
+        return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
+    if len(text) > 2000:
+        return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    talk_id = await asyncio.to_thread(_resolve_channel_talk_id, lead, "whatsapp")
+    if not talk_id:
+        return web.json_response({"success": False, "error": "WhatsApp çatı tapılmadı."}, status=400)
+    ok, error, _status = await asyncio.to_thread(_send_kommo_talk_text, talk_id, text)
+    if not ok:
+        return web.json_response({"success": False, "error": error or "Mesaj göndərilmədi."}, status=400)
+    sent_at = int(_time_module.time())
+    sent_row = {
+        "id": f"kommo-sent-{uuid.uuid4().hex}",
+        "incoming": False,
+        "direction": "outgoing",
+        "text": text,
+        "created_at": sent_at,
+        "message_type": "text",
+        "channel": "whatsapp",
+        "author": employee_name_for_lead(lead),
+        "delivery_status": "sent",
+    }
+    _append_chat_tail(lead_id, sent_row)
+    for overview in _personal_overview_cache.values():
+        for deal in (overview or {}).get("deals") or []:
+            if not isinstance(deal, dict):
+                continue
+            try:
+                cached_lead_id = int(deal.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if cached_lead_id != lead_id:
+                continue
+            deal["last_outgoing_at"] = sent_at
+            deal["chat_at"] = max(int(deal.get("chat_at") or 0), sent_at)
+            deal["chat_channel"] = deal.get("chat_channel") or "whatsapp"
+    _invalidate_deal_chat_cache(lead_id)
+    record_lead_pulse_event(lead_id, "deal_outgoing", channel="whatsapp", outgoing_at=sent_at)
+    return web.json_response({"success": True, "sent_at": sent_at, "message": sent_row})
+
+
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
@@ -16654,7 +16726,6 @@ def _fallback_chat_summary(history: str) -> str:
 
 
 async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
-    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -18074,6 +18145,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/deal/chat/history", handle_api_deal_chat_history)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/send', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/send", handle_api_deal_chat_send)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/kommo-reply', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/kommo-reply", handle_api_deal_kommo_reply)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/template', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/template", handle_api_deal_chat_template)
     app_web.router.add_route('OPTIONS', '/api/whatsapp/templates', lambda r: web.Response())

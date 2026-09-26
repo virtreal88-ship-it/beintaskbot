@@ -695,6 +695,14 @@
         .notice-history-actions { display:flex; align-items:center; gap:6px; margin-left:auto; }
         .notice-history-actions button { width:32px; height:32px; border:0; border-radius:8px; background:#f1f5f9; color:#334155; font-size:18px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
         .notice-history-actions button:active { background:#dbeafe; color:#1d4ed8; }
+        .notice-reply-wrap { flex:none; background:#fff; border-top:1px solid #e8ecf0; padding:8px; }
+        .notice-reply-field { display:flex; gap:6px; align-items:flex-end; }
+        .notice-reply-field textarea { flex:1; min-width:0; min-height:42px; max-height:96px; resize:vertical; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:10px; padding:9px 10px; font:inherit; font-size:13px; }
+        .notice-reply-field button { height:42px; border:0; border-radius:10px; padding:0 11px; font:inherit; font-size:12px; font-weight:700; }
+        .notice-reply-ai { background:#dbeafe; color:#1d4ed8; }
+        .notice-reply-send { background:#2563eb; color:#fff; }
+        .notice-reply-field button[disabled] { opacity:.55; pointer-events:none; }
+        .notice-reply-hint { margin:5px 2px 0; color:#94a3b8; font-size:10px; }
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
@@ -9357,7 +9365,7 @@ function noticeClientHeaderHtml(deal) {
     const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
-    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə: yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
 }
 function openNoticeDealInfo() {
     const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
@@ -9366,6 +9374,42 @@ function openNoticeDealInfo() {
 function refreshNoticeHistory() {
     const list = document.getElementById('notice-client-history');
     if(_noticeHistoryLeadId && list) fillKommoHistory(_noticeHistoryLeadId, list, true);
+}
+let _noticeReplyBusy = false;
+function noticeAiPayload() {
+    const input = document.getElementById('notice-reply-input');
+    return {
+        mode: 'reply', lead_id: _noticeHistoryLeadId, draft: String(input && input.value || '').trim(),
+        messages: ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({incoming: !!item.incoming, text: item.text || '', author: item.author || ''}))
+    };
+}
+async function requestNoticeAiReply() {
+    const input = document.getElementById('notice-reply-input'); const button = document.getElementById('notice-reply-ai');
+    if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
+    _noticeReplyBusy = true; if(button) { button.disabled = true; button.textContent = '...'; }
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method: 'POST', headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID}, body: JSON.stringify(noticeAiPayload())});
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success || !payload.text) throw new Error(payload.error || 'AI cavab alınmadı');
+        if(input) { input.value = payload.text; input.focus(); } toast('AI cavab hazırdır');
+    } catch(error) { toast(error.message || 'AI cavab alınmadı', true); }
+    finally { _noticeReplyBusy = false; if(button) { button.disabled = false; button.textContent = 'AI'; } }
+}
+async function sendNoticeKommoReply() {
+    const input = document.getElementById('notice-reply-input'); const button = document.getElementById('notice-reply-send'); const text = String(input && input.value || '').trim();
+    if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
+    if(!text) { toast('Mesaj yazın', true); return; }
+    _noticeReplyBusy = true; if(button) { button.disabled = true; button.textContent = '...'; }
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/kommo-reply', {method: 'POST', headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID}, body: JSON.stringify({lead_id: _noticeHistoryLeadId, text})});
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success) throw new Error(payload.error || 'Mesaj göndərilmədi');
+        if(input) input.value = '';
+        const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
+        if(deal) deal.last_outgoing_at = Number(payload.sent_at || Math.floor(Date.now() / 1000));
+        renderChatsList(); refreshNoticeHistory(); toast('Mesaj Kommo vasitəsilə göndərildi');
+    } catch(error) { toast(error.message || 'Mesaj göndərilmədi', true); }
+    finally { _noticeReplyBusy = false; if(button) { button.disabled = false; button.textContent = 'Göndər'; } }
 }
 async function openNoticeClient(leadId) {
     const id = String(leadId || '').trim();
@@ -9397,7 +9441,10 @@ async function openNoticeClient(leadId) {
     }
     _dealViewState = {id, deal, readonly:false, token: deal.share_token || '', snapshotLoaded:false};
     _dealInboxMode = true;
-    pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div></div></div>`;
+    pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div><div class="notice-reply-wrap"><div class="notice-reply-field"><textarea id="notice-reply-input" placeholder="Kommo ilə mesaj yazın..."></textarea><button type="button" id="notice-reply-ai" class="notice-reply-ai">AI</button><button type="button" id="notice-reply-send" class="notice-reply-send">Göndər</button></div><div class="notice-reply-hint">AI yalnız qaralama hazırlayır; mesaj yalnız «Göndər» düyməsindən sonra Kommo ilə yollanır.</div></div></div></div>`;
+    document.getElementById('notice-reply-ai')?.addEventListener('click', requestNoticeAiReply);
+    document.getElementById('notice-reply-send')?.addEventListener('click', sendNoticeKommoReply);
+    document.getElementById('notice-reply-input')?.addEventListener('keydown', event => { if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendNoticeKommoReply(); } });
     fillKommoHistory(id, document.getElementById('notice-client-history'));
 }
 function noticeTimeLabel(stamp) {
@@ -9638,6 +9685,7 @@ function applyInboxPulseRow(row) {
             phones: row.phone ? [row.phone] : [],
             last_client_message: row.last_client_message || '',
             last_incoming_at: Number(row.last_incoming_at || 0),
+            last_outgoing_at: Number(row.last_outgoing_at || 0),
             chat_at: Number(row.chat_at || row.last_incoming_at || 0),
             chat_channel: row.chat_channel || 'whatsapp',
             wa_line: row.wa_line || '',
@@ -9658,6 +9706,7 @@ function applyInboxPulseRow(row) {
     if(row.last_client_message) deal.last_client_message = row.last_client_message;
     showLivePreviewInOpenChat(deal);
     if(row.last_incoming_at) deal.last_incoming_at = Number(row.last_incoming_at) || deal.last_incoming_at;
+    if(row.last_outgoing_at) deal.last_outgoing_at = Number(row.last_outgoing_at) || deal.last_outgoing_at;
     if(row.chat_at) deal.chat_at = Number(row.chat_at) || deal.chat_at;
     if(row.chat_channel && !deal.chat_channel) deal.chat_channel = row.chat_channel;
     if(row.wa_line) deal.wa_line = row.wa_line;
@@ -10038,6 +10087,7 @@ async function fillKommoHistory(leadId, list, force) {
             list.innerHTML = '<div class="history-loading">Bu müştəri üçün tarixçə tapılmadı</div>';
             return;
         }
+        if(_dealViewState && String(_dealViewState.id) === String(leadId)) _dealViewState.messages = rows;
         list.innerHTML = historyRowsHtml(rows);
         bindAudioWait(list);
         const scroller = list.closest('.wa-thread') || list.closest('#deal-view-modal');
