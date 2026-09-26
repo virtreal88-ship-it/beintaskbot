@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="309">
+    <meta name="pwa-build" content="310">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9617,7 +9617,7 @@ async function openKommoHistory(leadId, title) {
     modal.querySelector('#kommo-history-close').onclick = () => modal.remove();
     modal.addEventListener('click', event => { if(event.target === modal) modal.remove(); });
     const ctrl = new AbortController();
-    const slow = window.setTimeout(() => ctrl.abort(), 12000);
+    const slow = window.setTimeout(() => ctrl.abort(), 15000);
     try {
         const response = await fetch(API_BASE + '/api/deal/chat/history?lead_id=' + encodeURIComponent(String(leadId)) + '&_ts=' + Date.now(), {
             cache: 'no-store',
@@ -9646,7 +9646,7 @@ async function openKommoHistory(leadId, title) {
         }).join('');
     } catch(_err) {
         const list = modal.querySelector('#kommo-history-list');
-        if(list) list.textContent = 'Tarixçə açılmadı';
+        if(list) list.textContent = 'Kommo cavab vermədi';
     } finally {
         window.clearTimeout(slow);
     }

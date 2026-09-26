@@ -31,7 +31,9 @@ import collections
 import random
 import time as _time_module
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, quote, unquote
+from urllib.parse import urlparse, quote, unquote, urlencode
+import urllib.request
+import urllib.error
 from openai import OpenAI
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, MenuButtonWebApp, WebAppInfo
 from telegram.helpers import escape_markdown
@@ -6341,6 +6343,8 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     talk_id = int(row.get("talk_id") or 0)
                 except (TypeError, ValueError):
                     talk_id = 0
+                if talk_id and entity_id and entity_type not in {"contact", "contacts", "1"}:
+                    _lead_open_talk[int(entity_id)] = int(talk_id)
                 message_id = str(row.get("id") or row.get("msgid") or row.get("message_id") or "").strip()
                 if _incoming_message_seen(message_id):
                     continue
@@ -15532,49 +15536,81 @@ async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
     })
 
 
-def _kommo_history_rows(lead_id: int) -> list[dict]:
-    """One Kommo events request: chat messages of this deal."""
+def _kommo_read(path: str, params: dict | None = None, timeout: int = 8) -> tuple[int, dict]:
+    """One Kommo GET outside the shared rate limiter, so history is not queued."""
+    query = urlencode({key: value for key, value in (params or {}).items() if value is not None})
+    url = f"{KOMMO_BASE_URL}{path}" + (f"?{query}" if query else "")
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Accept": "application/json"},
+        method="GET",
+    )
     try:
-        resp = requests.get(
-            f"{KOMMO_BASE_URL}/api/v4/events",
-            headers=HEADERS,
-            params={
-                "filter[entity]": "lead",
-                "filter[entity_id]": int(lead_id),
-                "filter[type]": "incoming_chat_message,outgoing_chat_message",
-                "limit": 50,
-            },
-            timeout=8,
-        )
-    except Exception as exc:
-        logger.warning("Kommo history failed lead=%s: %s", lead_id, exc)
-        raise
-    if resp.status_code == 204:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            status = int(getattr(resp, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        status = int(exc.code or 0)
+    if not raw or status == 204:
+        return status, {}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        data = {}
+    return status, data if isinstance(data, dict) else {}
+
+
+def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
+    """External chat history: GET /api/v4/talks/{talk_id}/messages."""
+    talk = int(talk_id or 0) or int(_lead_open_talk.get(int(lead_id)) or 0)
+    if not talk:
+        status, data = _kommo_read("/api/v4/talks", {
+            "filter[entity_id][]": int(lead_id),
+            "filter[entity_type]": "lead",
+            "limit": 5,
+        })
+        if status == 403:
+            raise RuntimeError("Kommo tokenində External chat history yoxdur.")
+        if status not in {200, 204}:
+            raise RuntimeError(str(data.get("detail") or f"Kommo {status}"))
+        talks = [row for row in ((data.get("_embedded") or {}).get("talks") or []) if isinstance(row, dict)]
+        talks.sort(key=lambda row: int(row.get("updated_at") or row.get("created_at") or 0), reverse=True)
+        if talks:
+            talk = _talk_id_of(talks[0])
+            if talk:
+                _lead_open_talk[int(lead_id)] = talk
+    if not talk:
         return []
-    if resp.status_code != 200:
-        detail = _kommo_error_detail(resp)
-        raise RuntimeError(detail or f"Kommo {resp.status_code}")
+    status, data = _kommo_read(f"/api/v4/talks/{int(talk)}/messages", {"limit": 50, "page": 1})
+    if status == 403:
+        detail = str(data.get("detail") or "")
+        if "scope" in detail.lower() or not detail:
+            raise RuntimeError("Kommo tokenində External chat history yoxdur.")
+        raise RuntimeError(detail)
+    if status == 404:
+        return []
+    if status not in {200, 204}:
+        raise RuntimeError(str(data.get("detail") or f"Kommo {status}"))
     rows: list[dict] = []
-    for event in (resp.json().get("_embedded") or {}).get("events", []) or []:
-        if not isinstance(event, dict):
+    for message in (data.get("_embedded") or {}).get("messages") or []:
+        if not isinstance(message, dict):
             continue
-        etype = str(event.get("type") or "")
-        after = event.get("value_after") or []
-        payload = after[0] if after and isinstance(after[0], dict) else {}
-        message = payload.get("message") if isinstance(payload.get("message"), dict) else payload
-        text = _extract_nested_text(message).strip()
+        text = str(message.get("text") or "").strip()
+        attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
         if not text:
-            text = "Mesaj"
+            text = str(attachment.get("file_name") or message.get("message_type") or "Mesaj")
+        author = message.get("author") if isinstance(message.get("author"), dict) else {}
         try:
-            created = int(event.get("created_at") or 0)
+            created = int(message.get("created_at") or 0)
         except (TypeError, ValueError):
             created = 0
         rows.append({
             "text": text[:500],
-            "author": "",
-            "incoming": etype.startswith("incoming"),
+            "author": str(author.get("name") or "")[:80],
+            "incoming": str(message.get("type") or "") == "incoming",
             "created_at": created,
-            "channel": "",
+            "channel": str(message.get("origin") or ""),
         })
     rows.sort(key=lambda item: int(item.get("created_at") or 0))
     return rows
@@ -15593,7 +15629,11 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
     try:
-        rows = await asyncio.to_thread(_kommo_history_rows, lead_id)
+        hinted_talk = int(request.rel_url.query.get("talk_id") or 0)
+    except (TypeError, ValueError):
+        hinted_talk = 0
+    try:
+        rows = await asyncio.to_thread(_kommo_history_rows, lead_id, hinted_talk)
     except Exception as exc:
         logger.warning("Kommo history lead=%s: %s", lead_id, exc)
         return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
