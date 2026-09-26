@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="305">
+    <meta name="pwa-build" content="306">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9563,7 +9563,7 @@ async function pollInboxPulse() {
             const openId = _dealViewState ? String(_dealViewState.id) : '';
                 if(openId && events.some(event => event && String(event.lead_id) === openId)) pollDealChat(true);
                 if(events.length) {
-                    const uniqueLids = [...new Set(events.filter(e => e && !e.missing && e.type !== 'incoming_message').map(e => e.lead_id).filter(Boolean))];
+                    const uniqueLids = [...new Set(events.filter(e => e && !e.missing && e.type !== 'incoming_message' && e.type !== 'deal_delivery' && e.channel !== 'whatsapp').map(e => e.lead_id).filter(Boolean))];
                     uniqueLids.forEach(lid => {
                         const ev = events.find(e => String(e.lead_id) === String(lid));
                         syncSingleDealIncremental(lid, ev);
@@ -9572,11 +9572,6 @@ async function pollInboxPulse() {
             }
         }
     } catch(_err) {}
-    if(chatsOpen && !_inboxFullBusy && Date.now() - _inboxFullAt > 180000) {
-        _inboxFullAt = Date.now();
-        _inboxFullBusy = true;
-        Promise.resolve(loadSamilWorkspace(false, null, true)).finally(() => { _inboxFullBusy = false; });
-    }
 }
 
 let _appPulseTimer = null;

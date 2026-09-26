@@ -6001,8 +6001,6 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
             continue
         deals.append(row)
         placed = True
-    if placed:
-        _schedule_chat_tail_warm([lid])
     return placed
 
 
@@ -6238,6 +6236,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             "phone": deal.get("phone") or row.get("phone") or "",
             "missing": bool(row.get("missing")),
             "replaced_by": int(row.get("replaced_by") or 0),
+            "channel": str(row.get("chat_channel") or ""),
         })
         if lid not in seen_chats and (row.get("last_client_message") or row.get("chat_channel")):
             seen_chats.add(lid)
@@ -8892,7 +8891,6 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "deadline": datetime.fromtimestamp(int(related.get("complete_till", 0) or 0), tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M") if related.get("complete_till") else "",
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
-    _apply_cloud_inbox_to_deals(deals, pipeline_id)
     if pipeline_id == int(NIZAMI_PIPELINE_ID):
         _inject_outside_funnel_talk_deals(
             deals,
@@ -9051,21 +9049,16 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         now = _time_module.monotonic()
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
-        if cached is not None:
-            _apply_cloud_inbox_to_deals(cached.get("deals") or [], pipeline_id)
-            _schedule_chat_tail_warm(cached.get("deals") or [])
-            if not force or now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
-                return _overview_with_partners(cached, owner)
+        if cached is not None and (not force or now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL):
+            return _overview_with_partners(cached, owner)
         try:
             overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
             _personal_overview_cache[pipeline_id] = overview
             _personal_overview_cache_at[pipeline_id] = now
-            _schedule_chat_tail_warm(overview.get("deals") or [])
             return _overview_with_partners(overview, owner)
         except Exception as exc:
             logger.error("Personal overview rebuild failed pipeline=%s: %s", pipeline_id, exc)
             if cached is not None:
-                _apply_cloud_inbox_to_deals(cached.get("deals") or [], pipeline_id)
                 return _overview_with_partners(cached, owner)
             raise
 
@@ -11372,6 +11365,8 @@ _wa_sent_messages: dict | None = None
 _WA_SENT_PER_LEAD = 300
 _wa_sent_lock = threading.Lock()
 _wa_sent_save_timer: threading.Timer | None = None
+_wa_wamid_lead: dict[str, str] = {}
+_wa_io = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wa-chat")
 
 
 def _load_sent_messages() -> dict:
@@ -11386,7 +11381,20 @@ def _load_sent_messages() -> dict:
         with _wa_sent_lock:
             if _wa_sent_messages is None:
                 _wa_sent_messages = data if isinstance(data, dict) else {}
+                _index_stored_wamids(_wa_sent_messages)
     return _wa_sent_messages
+
+
+def _index_stored_wamids(store: dict) -> None:
+    for key, rows in store.items():
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            ext = str(row.get("external_id") or "").strip()
+            if ext:
+                _wa_wamid_lead[ext] = str(key)
 
 
 def _flush_sent_messages() -> None:
@@ -11433,6 +11441,9 @@ def _remember_sent_message(lead_id: int, item: dict) -> None:
             rows = []
         rows.append(item)
         store[key] = rows[-_WA_SENT_PER_LEAD:]
+        ext = str(item.get("external_id") or "").strip()
+        if ext:
+            _wa_wamid_lead[ext] = key
     _schedule_sent_messages_save()
     try:
         _store_chat_tail(int(lead_id), [item])
@@ -12471,6 +12482,43 @@ def _lead_id_for_phone_anywhere(phone: str) -> int:
     return int(indexed or overview or 0)
 
 
+def _wa_live_rows(lead_id: int) -> list[dict]:
+    """Last messages of this chat and the same customer number. Does not walk the archive."""
+    try:
+        canon = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return []
+    rows = list(_sent_messages_for_lead(canon))
+    phones = {_wa_phone_key(row.get("phone")) for row in rows}
+    phones.discard("")
+    if canon >= 9_000_000_000_000:
+        digits = str(canon - 9_000_000_000_000)
+        if len(digits) >= 9:
+            phones.add(_wa_phone_key(digits))
+    store = _load_sent_messages()
+    with _wa_sent_lock:
+        idx = store.get(_WA_PHONE_LEADS_KEY)
+        if isinstance(idx, dict):
+            for key, mapped in idx.items():
+                try:
+                    if int(mapped or 0) == canon:
+                        phones.add(_wa_phone_key(key))
+                except (TypeError, ValueError):
+                    continue
+    seen = {canon}
+    for phone in list(phones):
+        for extra in (_pending_wa_lead_id(phone), _lead_id_for_stored_phone(phone)):
+            try:
+                lid = int(extra or 0)
+            except (TypeError, ValueError):
+                lid = 0
+            if not lid or lid in seen:
+                continue
+            seen.add(lid)
+            rows.extend(_sent_messages_for_lead(lid))
+    return rows
+
+
 def _wa_thread_rows(lead_id: int) -> list[dict]:
     """Messages of this chat and the same customer number. Does not walk every other chat."""
     try:
@@ -12687,9 +12735,11 @@ def _update_cloud_status(wamid: str, status: str) -> None:
     store = _load_sent_messages()
     changed = False
     touched_leads: list[int] = []
+    indexed = str(_wa_wamid_lead.get(wanted) or "")
     with _wa_sent_lock:
-        for key, rows in list(store.items()):
-            if key in {_WA_REACTIONS_KEY, _WA_PHONE_LEADS_KEY} or not isinstance(rows, list):
+        items = ((indexed, store.get(indexed)),) if indexed else ()
+        for key, rows in items:
+            if not isinstance(rows, list):
                 continue
             for row in rows:
                 if not isinstance(row, dict):
@@ -12755,12 +12805,15 @@ def _ingest_cloud_incoming(value: dict) -> None:
         if isinstance(status, dict):
             _update_cloud_status(status.get("id"), status.get("status"))
     messages = [row for row in (value.get("messages") or []) if isinstance(row, dict)]
+    history_messages: list[dict] = []
     for block in value.get("history") or []:
         if not isinstance(block, dict):
             continue
         for thread in block.get("threads") or []:
             if isinstance(thread, dict):
-                messages.extend(row for row in (thread.get("messages") or []) if isinstance(row, dict))
+                history_messages.extend(row for row in (thread.get("messages") or []) if isinstance(row, dict))
+    messages.extend(history_messages)
+    history_ids = {id(row) for row in history_messages}
     now_ts = int(_time_module.time())
     for message in messages:
         if not isinstance(message, dict):
@@ -12820,7 +12873,8 @@ def _ingest_cloud_incoming(value: dict) -> None:
         _remember_sent_message(lead_id, item)
         _append_chat_tail(lead_id, item)
         _invalidate_deal_chat_cache(lead_id)
-        fresh = not created or created >= now_ts - 180
+        from_history = id(message) in history_ids
+        fresh = not from_history or not created or created >= now_ts - 180
         if not fresh:
             continue
         record_lead_pulse_event(
@@ -14846,7 +14900,7 @@ async def handle_api_deal_chat(request: web.Request) -> web.Response:
             before = 0
         keep = 8
         viewer_line = _viewer_wa_line(chat_id)
-        source = _wa_thread_rows(lead_id) if before else _sent_messages_for_lead(lead_id)
+        source = _wa_thread_rows(lead_id) if before else _wa_live_rows(lead_id)
         rows = [item for item in source if _row_visible_on_line(item, viewer_line)]
         rows.sort(key=lambda item: int(item.get("created_at") or 0))
         if before:
@@ -15615,7 +15669,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     sent_media_id = ""
     cloud_quote = wa_quote_id if str(wa_quote_id or "").lower().startswith("wamid") else ""
     if use_cloud:
-        ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.to_thread(
+        ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.get_running_loop().run_in_executor(
+            _wa_io,
             _deliver_via_cloud,
             lead,
             text,
@@ -15627,7 +15682,8 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
         sent_via_cloud = ok
         if not ok and cloud_quote and "24 saat" not in str(last_error or ""):
-            ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.to_thread(
+            ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.get_running_loop().run_in_executor(
+                _wa_io,
                 _deliver_via_cloud,
                 lead,
                 text,
@@ -17513,7 +17569,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    asyncio.create_task(asyncio.to_thread(_process_whatsapp_payload, payload))
+    asyncio.get_running_loop().run_in_executor(_wa_io, _process_whatsapp_payload, payload)
     return web.Response(text="ok")
 
 
