@@ -354,7 +354,7 @@
     }
   ],
   "_last_hook": {
-    "at": 1790403356,
+    "at": 1790403382,
     "fields": [
       "messages"
     ]
@@ -2352,6 +2352,29 @@
       "message_type": "text",
       "created_at": 1790403350,
       "created": "26.09.2026 10:15",
+      "origin": "whatsapp",
+      "channel": "whatsapp",
+      "reply_to_message_id": "",
+      "reply_to_text": "",
+      "reply_to_author": "",
+      "media_url": "",
+      "file_uuid": "",
+      "file_name": "",
+      "delivery_status": "read",
+      "via_cloud": true,
+      "phone_number_id": "1352169527974549"
+    },
+    {
+      "id": "wa-wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSQTEzODFBNjcyRENEMTZBRkRFAA==",
+      "external_id": "wamid.HBgMOTk0MTAyMTM1MTAzFQIAERgSQTEzODFBNjcyRENEMTZBRkRFAA==",
+      "direction": "outgoing",
+      "incoming": false,
+      "author": "",
+      "phone": "994102135103",
+      "text": "ошибка",
+      "message_type": "text",
+      "created_at": 1790403379,
+      "created": "26.09.2026 10:16",
       "origin": "whatsapp",
       "channel": "whatsapp",
       "reply_to_message_id": "",
