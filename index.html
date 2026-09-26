@@ -703,6 +703,7 @@
         .notice-reply-send { background:#2563eb; color:#fff; }
         .notice-reply-field button[disabled] { opacity:.55; pointer-events:none; }
         .notice-reply-hint { margin:5px 2px 0; color:#94a3b8; font-size:10px; }
+        .notice-save-example { margin:6px 0 0; border:0; border-radius:7px; background:#f0fdf4; color:#15803d; padding:5px 8px; font:inherit; font-size:11px; font-weight:700; }
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
@@ -9376,6 +9377,7 @@ function refreshNoticeHistory() {
     if(_noticeHistoryLeadId && list) fillKommoHistory(_noticeHistoryLeadId, list, true);
 }
 let _noticeReplyBusy = false;
+let _noticeLastSentForLearning = null;
 function noticeAiPayload() {
     const input = document.getElementById('notice-reply-input');
     return {
@@ -9405,11 +9407,25 @@ async function sendNoticeKommoReply() {
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Mesaj göndərilmədi');
         if(input) input.value = '';
+        _noticeLastSentForLearning = {reply: text, context: ((_dealViewState && _dealViewState.messages) || []).slice(-8)};
+        const saveExample = document.getElementById('notice-save-example'); if(saveExample) saveExample.hidden = false;
         const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
         if(deal) deal.last_outgoing_at = Number(payload.sent_at || Math.floor(Date.now() / 1000));
         renderChatsList(); refreshNoticeHistory(); toast('Mesaj Kommo vasitəsilə göndərildi');
     } catch(error) { toast(error.message || 'Mesaj göndərilmədi', true); }
     finally { _noticeReplyBusy = false; if(button) { button.disabled = false; button.textContent = 'Göndər'; } }
+}
+async function saveNoticeAiExample() {
+    const button = document.getElementById('notice-save-example'); const sample = _noticeLastSentForLearning;
+    if(!sample || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
+    if(button) { button.disabled = true; button.textContent = '...'; }
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/ai-example', {method: 'POST', headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID}, body: JSON.stringify({lead_id: _noticeHistoryLeadId, reply: sample.reply, context: sample.context})});
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success) throw new Error(payload.error || 'Nümunə saxlanmadı');
+        if(button) button.textContent = payload.duplicate ? 'Artıq saxlanıb' : '✓ Nümunə saxlanıb';
+        toast(payload.duplicate ? 'Bu cavab artıq nümunələrdədir' : 'AI üçün uğurlu nümunə saxlanıldı');
+    } catch(error) { if(button) { button.disabled = false; button.textContent = '★ Nümunə kimi saxla'; } toast(error.message || 'Nümunə saxlanmadı', true); }
 }
 async function openNoticeClient(leadId) {
     const id = String(leadId || '').trim();
@@ -9441,9 +9457,11 @@ async function openNoticeClient(leadId) {
     }
     _dealViewState = {id, deal, readonly:false, token: deal.share_token || '', snapshotLoaded:false};
     _dealInboxMode = true;
-    pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div><div class="notice-reply-wrap"><div class="notice-reply-field"><textarea id="notice-reply-input" placeholder="Kommo ilə mesaj yazın..."></textarea><button type="button" id="notice-reply-ai" class="notice-reply-ai">AI</button><button type="button" id="notice-reply-send" class="notice-reply-send">Göndər</button></div><div class="notice-reply-hint">AI yalnız qaralama hazırlayır; mesaj yalnız «Göndər» düyməsindən sonra Kommo ilə yollanır.</div></div></div></div>`;
+    _noticeLastSentForLearning = null;
+    pane.innerHTML = `<div class="deal-shell"><div class="deal-shell-chat">${noticeClientHeaderHtml(deal)}<div class="wa-thread"><div id="notice-client-history" class="deal-history-chat"></div></div><div class="notice-reply-wrap"><div class="notice-reply-field"><textarea id="notice-reply-input" placeholder="Kommo ilə mesaj yazın..."></textarea><button type="button" id="notice-reply-ai" class="notice-reply-ai">AI</button><button type="button" id="notice-reply-send" class="notice-reply-send">Göndər</button></div><div class="notice-reply-hint">AI yalnız qaralama hazırlayır; mesaj yalnız «Göndər» düyməsindən sonra Kommo ilə yollanır.</div><button type="button" id="notice-save-example" class="notice-save-example" hidden>★ Nümunə kimi saxla</button></div></div></div>`;
     document.getElementById('notice-reply-ai')?.addEventListener('click', requestNoticeAiReply);
     document.getElementById('notice-reply-send')?.addEventListener('click', sendNoticeKommoReply);
+    document.getElementById('notice-save-example')?.addEventListener('click', saveNoticeAiExample);
     document.getElementById('notice-reply-input')?.addEventListener('keydown', event => { if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendNoticeKommoReply(); } });
     fillKommoHistory(id, document.getElementById('notice-client-history'));
 }

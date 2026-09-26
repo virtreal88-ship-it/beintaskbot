@@ -16725,6 +16725,110 @@ def _fallback_chat_summary(history: str) -> str:
     return "Son dialoq:\n" + "\n".join(tail)
 
 
+_AI_REPLY_EXAMPLES_FILE = "ai_reply_examples.json"
+_ai_reply_examples_lock = threading.Lock()
+_AI_REPLY_EXAMPLES_LIMIT = 300
+
+
+def _ai_reply_example_scope(lead: dict) -> str:
+    try:
+        pipeline_id = int(lead.get("pipeline_id") or 0)
+    except (TypeError, ValueError):
+        pipeline_id = 0
+    try:
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        status_id = 0
+    return f"{pipeline_id}:{status_id}"
+
+
+def _ai_reply_tokens(text: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[\wəıöüçşğ]{3,}", str(text or "").casefold())
+        if token not in {"musteri", "müştəri", "menecer", "salam", "ucun", "üçün"}
+    }
+
+
+def _select_ai_reply_examples(lead: dict, history: str, draft: str = "") -> list[dict]:
+    data = read_json(_AI_REPLY_EXAMPLES_FILE) or []
+    rows = data if isinstance(data, list) else []
+    scope = _ai_reply_example_scope(lead)
+    requested = _ai_reply_tokens(f"{history}\n{draft}")
+    ranked: list[tuple[int, int, dict]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        reply = str(row.get("reply") or "").strip()
+        context = str(row.get("context") or "").strip()
+        if not reply or not context:
+            continue
+        score = 20 if str(row.get("scope") or "") == scope else 0
+        score += len(requested.intersection(_ai_reply_tokens(context)))
+        try:
+            saved_at = int(row.get("saved_at") or 0)
+        except (TypeError, ValueError):
+            saved_at = 0
+        ranked.append((score, saved_at, {"context": context[:700], "reply": reply[:700]}))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[:4]]
+
+
+async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
+    """Save an explicitly approved reply as a reusable writing example."""
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    reply = str(data.get("reply") or "").strip()
+    context_rows = data.get("context") if isinstance(data.get("context"), list) else []
+    if not lead_id or not reply:
+        return web.json_response({"success": False, "error": "Nümunə üçün məlumat natamamdır."}, status=400)
+    if len(reply) > 2000:
+        return web.json_response({"success": False, "error": "Cavab çox uzundur."}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    context_lines = []
+    for row in context_rows[-8:]:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or "").strip()
+        if text:
+            who = "Müştəri" if row.get("incoming") else "Menecer"
+            context_lines.append(f"{who}: {text[:350]}")
+    context = "\n".join(context_lines).strip()
+    if not context:
+        return web.json_response({"success": False, "error": "Dialoq konteksti tapılmadı."}, status=400)
+    now = int(_time_module.time())
+    row = {
+        "id": uuid.uuid4().hex,
+        "lead_id": lead_id,
+        "scope": _ai_reply_example_scope(lead),
+        "context": context[:2400],
+        "reply": reply,
+        "saved_at": now,
+        "saved_by": int(chat_id),
+    }
+    with _ai_reply_examples_lock:
+        rows = read_json(_AI_REPLY_EXAMPLES_FILE) or []
+        rows = rows if isinstance(rows, list) else []
+        duplicate = next((item for item in rows if isinstance(item, dict) and item.get("lead_id") == lead_id and item.get("reply") == reply), None)
+        if duplicate:
+            return web.json_response({"success": True, "duplicate": True})
+        rows.append(row)
+        write_json(_AI_REPLY_EXAMPLES_FILE, rows[-_AI_REPLY_EXAMPLES_LIMIT:])
+    return web.json_response({"success": True})
+
+
 async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -16778,6 +16882,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     if mode not in {"reply", "summary"}:
         mode = "reply"
     if mode == "reply":
+        examples = _select_ai_reply_examples(lead, history, draft)
         system = (
             "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp cavabı yaz. "
             "Məqsəd: söhbəti irəli aparmaq, etirazı yumşaq bağlamaq, növbəti addımı təklif etmək. "
@@ -16790,6 +16895,10 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         )
         if draft:
             user += f"\nMenecerin qeydi: {draft}\n"
+        if examples:
+            user += "\nBəyənilmiş cavab nümunələri (üslubu öyrən, məlumatı uydurma):\n"
+            for index, example in enumerate(examples, 1):
+                user += f"\nNümunə {index}:\n{example['context']}\nMenecer: {example['reply']}\n"
         user += "\nNövbəti cavabı yaz."
 
         def _ask_reply() -> str:
@@ -18153,6 +18262,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/whatsapp/templates", handle_api_whatsapp_templates)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/ai-example', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/ai-example", handle_api_deal_ai_example)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/react', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/react", handle_api_deal_chat_react)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/read', lambda r: web.Response())
