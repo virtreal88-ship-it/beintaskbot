@@ -2090,7 +2090,11 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             if(showFeedback) toast('Məlumatlar yeniləndi', false);
             return true;
         } catch(error) {
-            if(showFeedback) toast(error.name === 'AbortError' ? 'Server cavab vermir. Yenidən cəhd edin.' : 'Məlumatlar yüklənmədi', true);
+            // The first opening previously failed silently, leaving an empty
+            // CRM screen.  Always tell the employee what happened and offer
+            // the regular refresh control instead of looking like there are
+            // no clients at all.
+            toast(error.name === 'AbortError' ? 'Məlumatlar gecikir. Yeniləmə düyməsini yoxlayın.' : 'Məlumatlar yüklənmədi. Yeniləmə düyməsini yoxlayın.', true);
             return false;
         } finally {
             clearTimeout(timeout);

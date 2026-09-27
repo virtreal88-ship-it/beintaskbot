@@ -9075,7 +9075,11 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         for contact in lead.get("_embedded", {}).get("contacts", []) or []
         if str(contact.get("id", "")).isdigit()
     }
-    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
+    # The task API accepts only small entity-id batches.  Scanning every old
+    # contact turns one page opening into dozens of sequential Kommo calls and
+    # leaves the CRM blank while it waits.  The newest deals are the useful
+    # ones at startup; older task details load when their deal is opened.
+    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))[:160]
     contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
     notes_request = asyncio.create_task(_load_rufat_latest_notes(
         set(lead_by_id.keys()),
@@ -9201,20 +9205,10 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             avatar_by_lead or {},
             talk_updated or {},
         )
-        # This legacy Talk reconciliation can request details for up to twenty
-        # leads.  It is useful for Nizami's queue, but must never block the
-        # aiohttp event loop: otherwise even the lightweight /api/session
-        # request waits behind Kommo and the browser appears stuck at startup.
-        await asyncio.to_thread(
-            _inject_outside_funnel_talk_deals,
-            deals,
-            outside_by_lead or {},
-            incoming_at_by_lead or {},
-            client_message_by_lead or {},
-            channel_by_lead or {},
-            avatar_by_lead or {},
-            talk_updated or {},
-        )
+        # Do not reconcile arbitrary old Talks during page startup.  That
+        # path performs individual lead lookups and can delay the whole CRM.
+        # The two business queues that Nizami must see (Yeni müraciətlər and
+        # Nömrə alınıb) were added above directly from their Kommo stages.
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
