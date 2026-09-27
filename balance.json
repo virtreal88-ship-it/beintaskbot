@@ -996,7 +996,7 @@
         "phone": "+994554807020",
         "task_type": "",
         "amount": 100.0,
-        "status": "pending",
+        "status": "confirmed",
         "task_text": "Tapşırıq təsdiqləndi (100.00 AZN)",
         "result_text": "login marketucuz",
         "kpi": 0,
@@ -1019,7 +1019,7 @@
         "date": "2026-09-26 12:57:20"
       }
     ],
-    "balance": -200.0
+    "balance": -100.0
   },
   "7329891614": {
     "transactions": [
