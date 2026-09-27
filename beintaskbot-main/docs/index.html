@@ -2246,7 +2246,8 @@ function setPendingTabVisible() {
 const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees'];
 const MOBILE_TAB_ORDERS = {
     default: ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
-    nizami: ['tab-tasks','tab-pending','tab-chats','tab-employees','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
+    // Nizami works first from tasks, then immediately from the client queue.
+    nizami: ['tab-tasks','tab-chats','tab-pending','tab-employees','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
 };
 function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
@@ -2367,8 +2368,11 @@ async function initApp() {
     setPendingTabVisible();
     applyDesktopSidebar();
     startAppPulse();
-    if(HAS_OWN_FUNNEL) await switchTab('tab-samil-deals', false);
-    else await openNotifications();
+    // The first screen after login is the employee's work queue.  Opening a
+    // funnel first made Nizami miss urgent tasks and was inconsistent with
+    // the mobile menu order.
+    if(HAS_NOTICES) await switchTab('tab-tasks', false);
+    else if(HAS_OWN_FUNNEL) await switchTab('tab-samil-deals', false);
     applyHashRoute();
     await maybeOpenSharedDeal();
 }
