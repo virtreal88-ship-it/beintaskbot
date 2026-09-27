@@ -97,14 +97,14 @@ self.addEventListener('notificationclick', e => {
   e.notification.close();
   const raw = e.notification.data;
   const target = raw && typeof raw === 'object' ? String(raw.url || '') : String(raw || '');
-  const pwaBaseUrl = 'https://worker-production-3e3e.up.railway.app/webapp';
+  const pwaBaseUrl = 'https://crm.pro.az/webapp';
   const hashIndex = target.indexOf('#');
   const hash = hashIndex >= 0 ? target.slice(hashIndex) : '';
   const destination = hash ? pwaBaseUrl + hash : (target || pwaBaseUrl);
   e.waitUntil(
     clients.matchAll({type: 'window'}).then(list => {
       for(const client of list) {
-        if(client.url.includes('worker-production-3e3e.up.railway.app') && 'focus' in client) {
+        if(client.url.includes('crm.pro.az') && 'focus' in client) {
           if(hash && client.url !== destination && 'navigate' in client) {
             return client.navigate(destination).then(() => client.focus());
           }

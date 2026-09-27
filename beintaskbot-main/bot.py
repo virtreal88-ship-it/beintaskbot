@@ -70,7 +70,9 @@ KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
-WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or "https://worker-production-3e3e.up.railway.app/webapp").rstrip("/")
+CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
+WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or f"{CANONICAL_WEB_ORIGIN}/webapp").rstrip("/")
+LEGACY_RAILWAY_HOST = "worker-production-3e3e.up.railway.app"
 # The HTTP server has its own event loop. Keep this public value as state
 # populated by the Telegram polling loop; never call Bot methods from aiohttp.
 _telegram_bot_username = str(os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
@@ -96,7 +98,7 @@ SAMIL_CHAT_ID = RUFAT_CHAT_ID  # Deprecated alias for old integrations
 # Historical web-app links used Şamil's Telegram UID.  Keep those links
 # working while the current employee account uses RUFAT_CHAT_ID.
 RUFAT_COMPAT_CHAT_IDS = {RUFAT_CHAT_ID}
-RUFAT_LOGIN_LINK = f"https://worker-production-3e3e.up.railway.app/webapp?uid={RUFAT_CHAT_ID}"
+RUFAT_LOGIN_LINK = f"{WEB_APP_URL}?uid={RUFAT_CHAT_ID}"
 RUFAT_PIPELINE_ID = int(os.environ.get("RUFAT_PIPELINE_ID", os.environ.get("SAMIL_PIPELINE_ID", "14357580")))
 # Rüfət's current pipeline snapshot. Do not alter other pipeline mappings here.
 RUFAT_STAGES = {
@@ -19000,6 +19002,19 @@ async def telegram_auth_middleware(request, handler):
 
 
 @web.middleware
+async def canonical_web_origin_middleware(request, handler):
+    """Send visitors from Railway's generated hostname to the public domain.
+
+    POST requests are intentionally left untouched: external integrations may
+    still deliver webhooks through their previously configured callback URL.
+    """
+    host = str(request.host or "").split(":", 1)[0].lower()
+    if host == LEGACY_RAILWAY_HOST and request.method in {"GET", "HEAD"}:
+        raise web.HTTPPermanentRedirect(location=f"{CANONICAL_WEB_ORIGIN}{request.rel_url}")
+    return await handler(request)
+
+
+@web.middleware
 async def cors_middleware(request, handler):
     if request.method == 'OPTIONS':
         resp = web.Response()
@@ -19385,7 +19400,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 
 async def start_webhook_server():
-    app_web = web.Application(middlewares=[cors_middleware, telegram_auth_middleware])
+    app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())
