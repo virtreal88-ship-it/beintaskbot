@@ -18871,7 +18871,7 @@ def _kommo_oauth_settings() -> tuple[str, str, str]:
     client_secret = str(os.environ.get("KOMMO_OAUTH_CLIENT_SECRET") or "").strip()
     redirect_uri = str(os.environ.get("KOMMO_OAUTH_REDIRECT_URI") or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback").strip()
     if not client_id or not client_secret:
-        raise TenantPlatformError("Kommo OAuth tətbiqi hələ platformada quraşdırılmayıb.")
+        raise TenantPlatformError("Kommo bağlantısı hələ aktiv deyil. Dəstək komandası onu qısa müddətdə aktivləşdirəcək.")
     return client_id, client_secret, redirect_uri
 
 

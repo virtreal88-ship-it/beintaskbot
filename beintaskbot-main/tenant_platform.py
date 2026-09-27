@@ -379,7 +379,10 @@ def begin_kommo_oauth(*, tenant_id: str, owner_id: int, account_domain: str) -> 
     current = member(tenant_id, owner_id)
     if not current or current.get("role") != "owner":
         raise TenantPlatformError("İcazə yoxdur.")
-    domain = _kommo_domain(account_domain)
+    # The Kommo authorization window itself returns the selected account's
+    # domain.  Keeping this optional lets the customer connect in one click
+    # instead of typing a technical subdomain first.
+    domain = _kommo_domain(account_domain) if str(account_domain or "").strip() else ""
     state_id = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
     expires = datetime.now(timezone.utc) + timedelta(minutes=15)
