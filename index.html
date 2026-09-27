@@ -1400,7 +1400,7 @@ function getUserId() {
     const saved = localStorage.getItem('pwa_uid');
     return /^\d+$/.test(saved || '') ? saved : '';
 }
-const CURRENT_USER_ID = getUserId();
+let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
 const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
@@ -2106,7 +2106,7 @@ function toggleSidebarPin() {
 applyDesktopSidebar();
 
 function hasEmployeePermission(permission) { return isAdmin || employeePermissions.has(permission); }
-async function loadEmployeeSession() { const response=await fetch(API_BASE+'/api/session',{headers:{'X-TG-User-ID':CURRENT_USER_ID},cache:'no-store'}),data=await response.json().catch(()=>({}));if(!response.ok||!data.success||!data.active)throw new Error(data.error||'Girişə icazə yoxdur');isAdmin=!!data.is_admin;employeePermissions=new Set(Array.isArray(data.permissions)?data.permissions:[]);HAS_NOTICES=hasEmployeePermission('tasks');HAS_CHATS=hasEmployeePermission('customers');localStorage.setItem('is_admin',isAdmin?'true':'false');applyEmployeePermissionUi(); }
+async function loadEmployeeSession() { const sessionHeaders=TELEGRAM_INIT_DATA?{'X-TG-User-ID':CURRENT_USER_ID}:{};const response=await fetch(API_BASE+'/api/session',{headers:sessionHeaders,cache:'no-store'}),data=await response.json().catch(()=>({}));if(!response.ok||!data.success||!data.active)throw new Error(data.error||'Girişə icazə yoxdur');const confirmedId=String(data.chat_id||'');if(!TELEGRAM_INIT_DATA&&confirmedId&&confirmedId!==CURRENT_USER_ID){localStorage.setItem('pwa_uid',confirmedId);window.location.reload();return new Promise(()=>{});}isAdmin=!!data.is_admin;employeePermissions=new Set(Array.isArray(data.permissions)?data.permissions:[]);HAS_NOTICES=hasEmployeePermission('tasks');HAS_CHATS=hasEmployeePermission('customers');localStorage.setItem('is_admin',isAdmin?'true':'false');applyEmployeePermissionUi(); }
 function applyEmployeePermissionUi() { const visible=(ids,allowed)=>ids.forEach(id=>{const el=document.getElementById(id);if(el)el.style.display=allowed?'':'none';});visible(['tab-tasks','side-tab-tasks'],hasEmployeePermission('tasks'));visible(['tab-history','side-tab-history'],hasEmployeePermission('finance'));visible(['tab-gozleme','side-tab-gozleme'],hasEmployeePermission('waiting'));visible(['tab-chats','side-tab-chats'],HAS_CHATS);setPendingTabVisible(); }
 
 function setPendingTabVisible() {

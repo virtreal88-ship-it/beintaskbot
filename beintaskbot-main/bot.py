@@ -67,6 +67,9 @@ BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or "https://worker-production-3e3e.up.railway.app/webapp").rstrip("/")
+# The HTTP server has its own event loop. Keep this public value as state
+# populated by the Telegram polling loop; never call Bot methods from aiohttp.
+_telegram_bot_username = str(os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
 
 # VAPID keys for Web Push
 VAPID_PRIVATE_KEY = _required_env("VAPID_PRIVATE_KEY")
@@ -18086,16 +18089,9 @@ async def handle_api_session(request: web.Request) -> web.Response:
 
 async def handle_web_login_start(request: web.Request) -> web.Response:
     """Begin browser login; Telegram confirms the employee's real identity."""
-    if not _bot_app:
-        return web.json_response({"success": False, "error": "Bot is starting, try again shortly."}, status=503)
-    try:
-        me = await _bot_app.bot.get_me()
-        username = str(me.username or "").strip().lstrip("@")
-    except Exception as exc:
-        logger.warning("Web login bot identity lookup failed: %s", exc)
-        username = ""
+    username = _telegram_bot_username
     if not username:
-        return web.json_response({"success": False, "error": "Telegram bot is unavailable."}, status=503)
+        return web.json_response({"success": False, "error": "Bot is starting, try again shortly."}, status=503)
     nonce = _create_web_login_request()
     return web.json_response({"success": True, "telegram_url": f"https://t.me/{username}?start=web_{nonce}"})
 
@@ -19667,7 +19663,7 @@ def _run_http_server() -> None:
 
 
 def main():
-    global _bot_app
+    global _bot_app, _telegram_bot_username
     threading.Thread(target=_run_http_server, name="http-server", daemon=True).start()
     async def post_init(application: Application) -> None:
         ensure_known_employee_registrations()
@@ -19680,6 +19676,11 @@ def main():
             logger.info("Telegram webhook cleared; long polling is active")
         except Exception as exc:
             logger.warning("Could not clear Telegram webhook before polling: %s", exc)
+        try:
+            me = await application.bot.get_me()
+            _telegram_bot_username = str(me.username or "").strip().lstrip("@")
+        except Exception as exc:
+            logger.warning("Could not resolve Telegram bot username: %s", exc)
         asyncio.create_task(asyncio.to_thread(_rehydrate_tecili_tasks))
         logger.info("Bot started. Kommo webhook server on port %s; Telegram polling active.", WEBHOOK_PORT)
         try:

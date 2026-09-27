@@ -1424,7 +1424,7 @@ function getUserId() {
     const saved = localStorage.getItem('pwa_uid');
     return /^\d+$/.test(saved || '') ? saved : '';
 }
-const CURRENT_USER_ID = getUserId();
+let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
 const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
@@ -2131,9 +2131,17 @@ applyDesktopSidebar();
 
 function hasEmployeePermission(permission) { return isAdmin || employeePermissions.has(permission); }
 async function loadEmployeeSession() {
-    const response = await fetch(API_BASE + '/api/session', {headers:{'X-TG-User-ID': CURRENT_USER_ID}, cache:'no-store'});
+    // In browser mode the signed cookie, not an old pwa_uid, is the identity.
+    const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
+    const response = await fetch(API_BASE + '/api/session', {headers:sessionHeaders, cache:'no-store'});
     const data = await response.json().catch(() => ({}));
     if(!response.ok || !data.success || !data.active) throw new Error(data.error || 'Girişə icazə yoxdur');
+    const confirmedId = String(data.chat_id || '');
+    if(!TELEGRAM_INIT_DATA && confirmedId && confirmedId !== CURRENT_USER_ID) {
+        localStorage.setItem('pwa_uid', confirmedId);
+        window.location.reload();
+        return new Promise(() => {});
+    }
     isAdmin = !!data.is_admin;
     employeePermissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
     HAS_NOTICES = hasEmployeePermission('tasks');
