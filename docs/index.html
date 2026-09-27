@@ -1354,6 +1354,24 @@ const API_BASE = (() => {
     }
     return RAILWAY_API;
 })();
+const TELEGRAM_INIT_DATA = String(tg.initData || '').trim();
+const IS_LOCAL_DEVELOPMENT = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+const _nativeWindowFetch = window.fetch.bind(window);
+function isPrivateApiRequest(input) {
+    try {
+        const raw = typeof input === 'string' ? input : input.url;
+        const target = new URL(raw, window.location.href);
+        const api = new URL(API_BASE, window.location.href);
+        return target.origin === api.origin && target.pathname.startsWith('/api/') && target.pathname !== '/api/deal/public';
+    } catch(_err) { return false; }
+}
+window.fetch = function(input, init) {
+    if(!TELEGRAM_INIT_DATA || !isPrivateApiRequest(input)) return _nativeWindowFetch(input, init);
+    const sourceHeaders = (init && init.headers) || (input instanceof Request ? input.headers : undefined);
+    const headers = new Headers(sourceHeaders || {});
+    headers.set('X-Telegram-Init-Data', TELEGRAM_INIT_DATA);
+    return _nativeWindowFetch(input, Object.assign({}, init || {}, {headers, credentials: 'same-origin'}));
+};
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
@@ -1363,12 +1381,12 @@ let _pendingVoiceUrls = {};
 
 function getUserId() {
     const p = new URLSearchParams(window.location.search);
-    // Links to the PWA have historically used several parameter names.
-    // Read all supported variants before falling back to Telegram/local storage.
-    const queryId = ['uid', 'user_id', 'tg_id', 'telegram_id'].map(k => p.get(k)).find(v => v && /^\d+$/.test(v));
-    if(queryId) { localStorage.setItem('pwa_uid', queryId); return queryId; }
+    // Telegram is the authority. Legacy URL/local values are only a display
+    // fallback and are never accepted by the server as authentication.
     const tgId = String(tg.initDataUnsafe?.user?.id || '');
     if(/^\d+$/.test(tgId)) { localStorage.setItem('pwa_uid', tgId); return tgId; }
+    const queryId = ['uid', 'user_id', 'tg_id', 'telegram_id'].map(k => p.get(k)).find(v => v && /^\d+$/.test(v));
+    if(queryId) { localStorage.setItem('pwa_uid', queryId); return queryId; }
     const saved = localStorage.getItem('pwa_uid');
     return /^\d+$/.test(saved || '') ? saved : '';
 }
@@ -2178,6 +2196,13 @@ async function initApp() {
         const dealId = new URLSearchParams(window.location.search).get('deal');
         if(dealId) next.searchParams.set('deal', dealId);
         window.location.replace(next.toString());
+        return;
+    }
+    if(!IS_LOCAL_DEVELOPMENT && !TELEGRAM_INIT_DATA) {
+        document.getElementById('mobile-header')?.style.setProperty('display', 'none', 'important');
+        document.getElementById('tab-bar')?.style.setProperty('display', 'none', 'important');
+        const content = document.getElementById('content-area');
+        if(content) content.innerHTML = '<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Giriş Telegram vasitəsilədir</div><p class="mt-2 text-sm text-slate-500">Bu səhifəni Bein Systems Telegram botundan açın.</p></div></div>';
         return;
     }
     // Show user name in header

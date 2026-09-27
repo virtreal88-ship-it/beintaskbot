@@ -31,7 +31,7 @@ import collections
 import random
 import time as _time_module
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, quote, unquote, urlencode
+from urllib.parse import urlparse, quote, unquote, urlencode, parse_qsl
 import urllib.request
 import urllib.error
 from openai import OpenAI
@@ -51,9 +51,15 @@ from gh_storage import read_json, write_json
 # import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-_KOMMO_TOKEN_FALLBACK = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6Ijk4MzE4ZjNhZjUzZTUzOTQ2MzkwMmJjYzM2NmMzZWY4YzI1MzFlMDRjNGM4NzUzYzg3MDM1MTYxOGIzYWM2Y2IyMDJjZjcxNjkwZTliYTIyIn0.eyJhdWQiOiIwNzkyYzY5ZS1hYjcxLTQ2MWQtYWY4YS05ODI0NjVjZDIyYWMiLCJqdGkiOiI5ODMxOGYzYWY1M2U1Mzk0NjM5MDJiY2MzNjZjM2VmOGMyNTMxZTA0YzRjODc1M2M4NzAzNTE2MThiM2FjNmNiMjAyY2Y3MTY5MGU5YmEyMiIsImlhdCI6MTc5MDE5MjIwNCwibmJmIjoxNzkwMTkyMjA0LCJleHAiOjE5Mjc2NzA0MDAsInN1YiI6IjEwOTMyNDU1IiwiZ3JhbnRfdHlwZSI6IiIsImFjY291bnRfaWQiOjMyNTI0MzU5LCJiYXNlX2RvbWFpbiI6ImtvbW1vLmNvbSIsInZlcnNpb24iOjIsInNjb3BlcyI6WyJjcm0iLCJmaWxlcyIsImZpbGVzX2RlbGV0ZSIsImxpc3RfZXh0ZXJuYWxfbWVzc2FnZXMiLCJub3RpZmljYXRpb25zIiwicHVzaF9ub3RpZmljYXRpb25zIiwic2VuZF9leHRlcm5hbF9tZXNzYWdlcyIsInVzZXJzX2FjdGl2YXRlIiwidXNlcnNfYWRkIiwidXNlcnNfZGVhY3RpdmF0ZSJdLCJoYXNoX3V1aWQiOiJiZDliOWU2ZC05ZTIxLTQzMjUtODIzYS04YmFhM2Q0NDg4ODgiLCJhcGlfZG9tYWluIjoiYXBpLWcua29tbW8uY29tIn0.AbWmj1TI6yhfr2bv3TUyeHWKSMuJFTkyHdhPEihPkg17FVtHenV1yB0pILNRWGrflI5MkBkJvY30B5oVnz3BgxYOmjVjGRnwIGDk1nuhIoJ6SDlWpXvTme3EQGP-0DlGx_ITEWrMpB7l25WnJb0S9VqVZEA-D5LckFN-UOjYH4us-EDfNxPqKT2tsFXMJd3jynsT6iJrYviBTU1eGrDNZhI3yCp5On-XKxVFK67nEdlfxkrZ6lJhevcJIREUwJmaQkJy4Md_ePNwMc6Dh7k6tP-i0ri58abSOPstaOGpoWSNhvPg2gqNsMxSpKXevelBZzvT0-k57NdsgW2yaANwsg"
-KOMMO_TOKEN = (os.environ.get("KOMMO_TOKEN") or "").strip() or _KOMMO_TOKEN_FALLBACK
+def _required_env(name: str) -> str:
+    value = str(os.environ.get(name) or "").strip()
+    if not value:
+        raise RuntimeError(f"Missing required Railway variable: {name}")
+    return value
+
+
+TELEGRAM_TOKEN = _required_env("TELEGRAM_TOKEN")
+KOMMO_TOKEN = _required_env("KOMMO_TOKEN")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
@@ -61,14 +67,14 @@ LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 
 # VAPID keys for Web Push
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "6i8cjNC8eztEI8LpdwvKAFcKKr-lXR9oEES_zFIbN74")
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BH097FHI9PEdu_jf8XblQnnlS9mEtvPgKSnCkm5uERGGljVryVGl-dhTKKxg_HIfASiujCM_MF2A49N3xRTNNtc")
+VAPID_PRIVATE_KEY = _required_env("VAPID_PRIVATE_KEY")
+VAPID_PUBLIC_KEY = _required_env("VAPID_PUBLIC_KEY")
 VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
 # Push subscriptions loaded from gh_storage on demand
 
 # OpenAI client
 llm_client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY", "sk-C7kqpsGHciC9Mf9oA63xvy"),
+    api_key=_required_env("OPENAI_API_KEY"),
     base_url=os.environ.get("OPENAI_API_BASE", "https://api.manus.im/api/llm-proxy/v1"),
 )
 
@@ -1374,9 +1380,8 @@ def _token_has_scope(tok: str, scope: str) -> bool:
     except Exception:
         return False
 
-# An empty env var is not the only failure mode: a stale or truncated
-# KOMMO_TOKEN on Railway returns 401 and the whole CRM (deals, tasks, chats)
-# looks empty even though the built-in token still works.
+# Check Railway configuration at startup so an expired Kommo token is visible
+# in logs instead of silently falling back to a credential in source control.
 try:
     _kommo_probe = requests.get(
         f"{KOMMO_BASE_URL}/api/v4/account",
@@ -1387,16 +1392,10 @@ try:
 except Exception as _kommo_probe_exc:
     logger.warning("Kommo token probe failed: %s", _kommo_probe_exc)
     _kommo_probe_status = 0
-if _kommo_probe_status != 200 and KOMMO_TOKEN != _KOMMO_TOKEN_FALLBACK:
-    logger.error("Env KOMMO_TOKEN rejected with HTTP %s; using built-in token", _kommo_probe_status)
-    KOMMO_TOKEN = _KOMMO_TOKEN_FALLBACK
-elif (
-    KOMMO_TOKEN != _KOMMO_TOKEN_FALLBACK
-    and not _token_has_scope(KOMMO_TOKEN, "list_external_messages")
-    and _token_has_scope(_KOMMO_TOKEN_FALLBACK, "list_external_messages")
-):
-    logger.info("Env KOMMO_TOKEN lacks list_external_messages; using built-in fallback with full chat permissions")
-    KOMMO_TOKEN = _KOMMO_TOKEN_FALLBACK
+if _kommo_probe_status != 200:
+    logger.error("Railway KOMMO_TOKEN check failed with HTTP %s", _kommo_probe_status)
+elif not _token_has_scope(KOMMO_TOKEN, "list_external_messages"):
+    logger.warning("Railway KOMMO_TOKEN does not advertise list_external_messages scope")
 
 HEADERS = {
     "Authorization": f"Bearer {KOMMO_TOKEN}",
@@ -10482,15 +10481,8 @@ WA_WABA_ID = str(os.environ.get("WHATSAPP_WABA_ID") or "1603840074450579").strip
 WA_VERIFY_TOKEN = str(
     os.environ.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN")
     or os.environ.get("WHATSAPP_VERIFY_TOKEN")
-    or "beintaskbot_webhook_verify_2026"
 ).strip()
-WA_VERIFY_TOKENS = {
-    token for token in (
-        WA_VERIFY_TOKEN,
-        "beintaskbot_webhook_verify_2026",
-        "bein-wa-hook",
-    ) if token
-}
+WA_VERIFY_TOKENS = {WA_VERIFY_TOKEN} if WA_VERIFY_TOKEN else set()
 
 
 def _wa_cloud_credentials() -> tuple[str, str]:
@@ -17900,22 +17892,153 @@ async def serve_privacy_policy(request: web.Request) -> web.Response:
         return web.Response(status=404, text="Privacy policy not found")
     return web.FileResponse(html_path)
 
+_WEB_SESSION_COOKIE = "bein_tg_session"
+_WEB_SESSION_TTL_SEC = 8 * 60 * 60
+_TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
+_PUBLIC_API_PATHS = {"/api/deal/public"}
+
+
+def _telegram_webapp_user_id(init_data: str) -> int | None:
+    """Verify Telegram WebApp initData and return its authenticated user id."""
+    raw = str(init_data or "").strip()
+    if not raw:
+        return None
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True)
+        values = dict(pairs)
+        received_hash = str(values.pop("hash", ""))
+        if not received_hash:
+            return None
+        check_data = "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
+        secret = hmac.new(b"WebAppData", TELEGRAM_TOKEN.encode("utf-8"), hashlib.sha256).digest()
+        expected_hash = hmac.new(secret, check_data.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_hash, received_hash):
+            return None
+        auth_date = int(values.get("auth_date") or 0)
+        now = int(_time_module.time())
+        if not auth_date or auth_date > now + 300 or now - auth_date > _TELEGRAM_INIT_MAX_AGE_SEC:
+            return None
+        user = json.loads(values.get("user") or "{}")
+        user_id = int(user.get("id") or 0)
+        return user_id or None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _make_web_session(chat_id: int) -> str:
+    expires_at = int(_time_module.time()) + _WEB_SESSION_TTL_SEC
+    payload = f"{int(chat_id)}.{expires_at}"
+    signature = hmac.new(TELEGRAM_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _web_session_user_id(request: web.Request) -> int | None:
+    raw = str(request.cookies.get(_WEB_SESSION_COOKIE) or "")
+    try:
+        chat_id_raw, expires_raw, received_signature = raw.rsplit(".", 2)
+        payload = f"{chat_id_raw}.{expires_raw}"
+        expected_signature = hmac.new(TELEGRAM_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_signature, received_signature):
+            return None
+        if int(expires_raw) < int(_time_module.time()):
+            return None
+        chat_id = int(chat_id_raw)
+        return chat_id or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_public_api_request(request: web.Request) -> bool:
+    if request.path in _PUBLIC_API_PATHS:
+        return True
+    return request.path == "/api/deal/file" and bool(request.rel_url.query.get("k"))
+
+
+@web.middleware
+async def telegram_auth_middleware(request, handler):
+    """Require a signed Telegram identity for private Mini App API calls."""
+    if request.method == "OPTIONS" or not request.path.startswith("/api/") or _is_public_api_request(request):
+        return await handler(request)
+
+    chat_id = _web_session_user_id(request)
+    set_session = False
+    if not chat_id:
+        chat_id = _telegram_webapp_user_id(request.headers.get("X-Telegram-Init-Data", ""))
+        set_session = bool(chat_id)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "Telegram authorization required"}, status=401)
+
+    for supplied in (
+        request.headers.get("X-TG-User-ID"),
+        request.rel_url.query.get("uid"),
+        request.rel_url.query.get("chat_id"),
+        request.rel_url.query.get("user_id"),
+        request.rel_url.query.get("tg_id"),
+        request.rel_url.query.get("telegram_id"),
+    ):
+        if supplied in (None, ""):
+            continue
+        try:
+            if int(supplied) != int(chat_id):
+                return web.json_response({"success": False, "error": "Identity mismatch"}, status=403)
+        except (TypeError, ValueError):
+            return web.json_response({"success": False, "error": "Invalid identity"}, status=401)
+
+    # A few older endpoints carry the user id in their JSON body.  Validate it
+    # here as well, before a handler can use it to read or change another
+    # employee's data. aiohttp caches request.read(), so handlers can still
+    # call request.json() normally after this check.
+    if request.can_read_body and request.content_type == "application/json":
+        try:
+            body_identity = await request.json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            body_identity = {}
+        if isinstance(body_identity, dict):
+            for key in ("chat_id", "uid", "user_id", "tg_id", "telegram_id"):
+                supplied = body_identity.get(key)
+                if supplied in (None, ""):
+                    continue
+                try:
+                    if int(supplied) != int(chat_id):
+                        return web.json_response({"success": False, "error": "Identity mismatch"}, status=403)
+                except (TypeError, ValueError):
+                    return web.json_response({"success": False, "error": "Invalid identity"}, status=401)
+
+    request["authenticated_chat_id"] = int(chat_id)
+    response = await handler(request)
+    if set_session:
+        response.set_cookie(
+            _WEB_SESSION_COOKIE,
+            _make_web_session(int(chat_id)),
+            max_age=_WEB_SESSION_TTL_SEC,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/",
+        )
+    return response
+
+
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == 'OPTIONS':
         resp = web.Response()
     else:
         resp = await handler(request)
-    resp.headers['Access-Control-Allow-Origin'] = '*'
+    origin = str(request.headers.get("Origin") or "").rstrip("/")
+    own_origin = f"{request.scheme}://{request.host}".rstrip("/")
+    if origin and origin == own_origin:
+        resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Vary'] = 'Origin'
     resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-TG-User-ID, Cache-Control'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-TG-User-ID, X-Telegram-Init-Data, Cache-Control'
     return resp
 
 # ─── Web Push ─────────────────────────────────────────────────────────────────
 async def handle_push_subscribe(request):
     """Save push subscription for a user."""
     data = await request.json()
-    user_id = request.headers.get('X-TG-User-ID', '')
+    user_id = str(request.get("authenticated_chat_id") or "")
     sub = data.get('subscription')
     if user_id and sub:
         save_push_subscription(user_id, sub)
@@ -18277,7 +18400,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 
 async def start_webhook_server():
-    app_web = web.Application(middlewares=[cors_middleware])
+    app_web = web.Application(middlewares=[cors_middleware, telegram_auth_middleware])
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())
