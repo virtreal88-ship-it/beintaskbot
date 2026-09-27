@@ -1311,7 +1311,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən sorğular</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
     </button>
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
@@ -2086,7 +2086,14 @@ function setPendingTabVisible() {
     if(sideHesabat) sideHesabat.style.display = isAdmin ? 'none' : 'flex';
     paintMobileTabBar();
 }
-const MOBILE_TAB_ORDER = ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'];
+const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending'];
+const MOBILE_TAB_ORDERS = {
+    default: ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
+    nizami: ['tab-tasks','tab-pending','tab-chats','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
+};
+function mobileTabOrder() {
+    return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
+}
 function mobileTabWanted(id) {
     if(id === 'tab-chats') return HAS_NOTICES;
     if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
@@ -2106,7 +2113,6 @@ function closeMobileMoreMenu() {
     if(sheet) sheet.hidden = true;
 }
 function toggleMobileMoreMenu() {
-    if(isAdmin) return;
     const sheet = document.getElementById('tab-more-sheet');
     if(!sheet) return;
     sheet.hidden = !sheet.hidden;
@@ -2115,12 +2121,7 @@ function paintMobileTabBar(activeId) {
     const moreBtn = document.getElementById('tab-more');
     const sheet = document.getElementById('tab-more-sheet');
     const list = document.getElementById('tab-more-list');
-    if(isAdmin) {
-        if(moreBtn) moreBtn.style.display = 'none';
-        if(sheet) sheet.hidden = true;
-        return;
-    }
-    const wanted = MOBILE_TAB_ORDER.filter(id => mobileTabWanted(id) && document.getElementById(id));
+    const wanted = mobileTabOrder().filter(id => mobileTabWanted(id) && document.getElementById(id));
     const primary = wanted.slice(0, 3);
     const extra = wanted.slice(3);
     wanted.forEach(id => {
@@ -2143,7 +2144,7 @@ function paintMobileTabBar(activeId) {
     }
 }
 function setSidebarActive(tabId) {
-    ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending'].forEach(id => {
+    ALL_TAB_IDS.forEach(id => {
         const item = document.getElementById('side-' + id);
         if(item) item.classList.toggle('active', id === tabId);
     });
@@ -10721,7 +10722,7 @@ function switchTab(tabId, updateHash = true) {
     }
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
-    ['tab-tasks', 'tab-samil-deals', 'tab-chats', 'tab-create', 'tab-history', 'tab-hesabat', 'tab-gozleme', 'tab-pending'].forEach(id => {
+    ALL_TAB_IDS.forEach(id => {
         const tab = document.getElementById(id);
         if(tab) tab.className = inactiveClass;
     });
