@@ -18486,6 +18486,31 @@ async def serve_privacy_policy(request: web.Request) -> web.Response:
         return web.Response(status=404, text="Privacy policy not found")
     return web.FileResponse(html_path)
 
+
+async def serve_web_asset(request: web.Request) -> web.Response:
+    """Serve PWA files from the same Railway origin as ``/webapp``.
+
+    The HTML is routed explicitly, so unlike GitHub Pages, Railway does not
+    automatically expose the neighbouring manifest, service worker and icons.
+    Without these exact routes Android cannot finish installing the PWA.
+    """
+    filename = str(request.match_info.get("filename") or "")
+    allowed = {"manifest.json", "sw.js", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "alarm.wav"}
+    if filename not in allowed:
+        raise web.HTTPNotFound()
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", filename),
+        os.path.join(base_dir, filename),
+    )
+    asset_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not asset_path:
+        raise web.HTTPNotFound()
+    response = web.FileResponse(asset_path)
+    if filename in {"manifest.json", "sw.js"}:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    return response
+
 _WEB_SESSION_COOKIE = "bein_tg_session"
 _WEB_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
@@ -19182,6 +19207,7 @@ async def start_webhook_server():
     app_web.router.add_post("/auth/telegram-login", handle_telegram_login)
     app_web.router.add_get("/auth/web-login", handle_web_login_complete)
     app_web.router.add_get("/webapp", serve_webapp)
+    app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|alarm\\.wav}", serve_web_asset)
     app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
     app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)

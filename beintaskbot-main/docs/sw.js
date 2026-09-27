@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-25-131';
+const CACHE_NAME = 'beintaskbot-v2026-09-27-132';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -62,7 +62,7 @@ self.addEventListener('push', e => {
     body: data.body || '',
     icon: data.icon || 'icon-192.png',
     badge: 'icon-192.png',
-    data: data.url || '/',
+    data: data.url || '/webapp',
     vibrate: data.urgent ? [200, 100, 200, 100, 200] : [200, 100, 200]
   };
   if (data.chat || data.lead_id) {
@@ -97,14 +97,14 @@ self.addEventListener('notificationclick', e => {
   e.notification.close();
   const raw = e.notification.data;
   const target = raw && typeof raw === 'object' ? String(raw.url || '') : String(raw || '');
-  const pwaBaseUrl = 'https://virtreal88-ship-it.github.io/beintaskbot/';
+  const pwaBaseUrl = 'https://worker-production-3e3e.up.railway.app/webapp';
   const hashIndex = target.indexOf('#');
   const hash = hashIndex >= 0 ? target.slice(hashIndex) : '';
   const destination = hash ? pwaBaseUrl + hash : (target || pwaBaseUrl);
   e.waitUntil(
     clients.matchAll({type: 'window'}).then(list => {
       for(const client of list) {
-        if(client.url.includes('beintaskbot') && 'focus' in client) {
+        if(client.url.includes('worker-production-3e3e.up.railway.app') && 'focus' in client) {
           if(hash && client.url !== destination && 'navigate' in client) {
             return client.navigate(destination).then(() => client.focus());
           }

@@ -11607,10 +11607,14 @@ async function clearAppCacheOnce() {
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
-  if(!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  // A service worker is needed for PWA installation even when this browser
+  // does not support push notifications. Register it first; PushManager is
+  // relevant only to the optional notification subscription below.
+  if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=288');
+    const reg = await navigator.serviceWorker.register('sw.js?v=289');
     await navigator.serviceWorker.ready;
+    if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();
     if(!sub) {
       const perm = await Notification.requestPermission();
