@@ -29,13 +29,14 @@ import uuid
 import threading
 import collections
 import random
+import secrets
 import time as _time_module
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote, urlencode, parse_qsl
 import urllib.request
 import urllib.error
 from openai import OpenAI
-from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, MenuButtonWebApp, WebAppInfo
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton, MenuButtonDefault
 from telegram.helpers import escape_markdown
 from telegram.ext import (
     Application,
@@ -65,6 +66,7 @@ KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = "gpt-4.1-mini"
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
+WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or "https://worker-production-3e3e.up.railway.app/webapp").rstrip("/")
 
 # VAPID keys for Web Push
 VAPID_PRIVATE_KEY = _required_env("VAPID_PRIVATE_KEY")
@@ -4358,12 +4360,27 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
 # ─── Telegram Handlers ───────────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
+    start_arg = str((context.args or [""])[0] or "")
+    if start_arg.startswith("web_"):
+        nonce = start_arg[4:]
+        if not employee_access_profile(chat_id).get("active"):
+            await update.message.reply_text("⛔ Web girişiniz aktiv deyil. Administratorla əlaqə saxlayın.")
+            return
+        if not _approve_web_login_request(nonce, chat_id):
+            await update.message.reply_text("⚠️ Giriş linkinin vaxtı bitib. Saytdan yenisini yaradın.")
+            return
+        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(nonce)}"
+        await update.message.reply_text(
+            "✅ Şəxsiyyətiniz təsdiqləndi. Aşağıdakı düymə ilə veb versiyaya daxil olun:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Veb versiyanı aç", url=login_url)]]),
+        )
+        return
     users = load_users()
     if str(chat_id) in users:
         info = users[str(chat_id)]
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
-            f"📱 CRM düyməsinə basaraq Mini App-dan istifadə edin və ya sərbəst mətn yazın.",
+            f"🌐 Veb versiyaya giriş üçün saytın «Telegram ilə daxil ol» düyməsindən istifadə edin.",
             reply_markup=ReplyKeyboardRemove()
         )
         return
@@ -18063,6 +18080,32 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "permissions": profile["permissions"],
     })
 
+
+async def handle_web_login_start(request: web.Request) -> web.Response:
+    """Begin browser login; Telegram confirms the employee's real identity."""
+    if not _bot_app:
+        return web.json_response({"success": False, "error": "Bot is starting, try again shortly."}, status=503)
+    try:
+        me = await _bot_app.bot.get_me()
+        username = str(me.username or "").strip().lstrip("@")
+    except Exception as exc:
+        logger.warning("Web login bot identity lookup failed: %s", exc)
+        username = ""
+    if not username:
+        return web.json_response({"success": False, "error": "Telegram bot is unavailable."}, status=503)
+    nonce = _create_web_login_request()
+    return web.json_response({"success": True, "telegram_url": f"https://t.me/{username}?start=web_{nonce}"})
+
+
+async def handle_web_login_complete(request: web.Request) -> web.Response:
+    chat_id = _consume_web_login_request(request.rel_url.query.get("token") or "")
+    if not chat_id or not employee_access_profile(chat_id).get("active"):
+        return web.Response(status=403, text="Login link is invalid or access is disabled.")
+    response = web.HTTPFound(WEB_APP_URL)
+    response.set_cookie(_WEB_SESSION_COOKIE, _make_web_session(chat_id), max_age=_WEB_SESSION_TTL_SEC,
+                        httponly=True, secure=True, samesite="Lax", path="/")
+    return response
+
 async def serve_webapp(request: web.Request) -> web.Response:
     """Serve the web app from either the deployment layout or the source layout.
 
@@ -18116,8 +18159,42 @@ async def serve_privacy_policy(request: web.Request) -> web.Response:
 _WEB_SESSION_COOKIE = "bein_tg_session"
 _WEB_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
+_WEB_LOGIN_TTL_SEC = 10 * 60
 _PUBLIC_API_PATHS = {"/api/deal/public"}
 _ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
+_web_login_requests: dict[str, dict] = {}
+_web_login_lock = threading.Lock()
+
+
+def _create_web_login_request() -> str:
+    nonce = secrets.token_urlsafe(32)
+    with _web_login_lock:
+        now = int(_time_module.time())
+        for key, item in list(_web_login_requests.items()):
+            if int(item.get("expires_at") or 0) < now:
+                _web_login_requests.pop(key, None)
+        _web_login_requests[nonce] = {"expires_at": now + _WEB_LOGIN_TTL_SEC, "chat_id": 0}
+    return nonce
+
+
+def _approve_web_login_request(nonce: str, chat_id: int) -> bool:
+    with _web_login_lock:
+        request_data = _web_login_requests.get(str(nonce) or "")
+        if not request_data or int(request_data.get("expires_at") or 0) < int(_time_module.time()):
+            return False
+        request_data["chat_id"] = int(chat_id)
+        return True
+
+
+def _consume_web_login_request(nonce: str) -> int | None:
+    with _web_login_lock:
+        request_data = _web_login_requests.pop(str(nonce) or "", None)
+    if not request_data or int(request_data.get("expires_at") or 0) < int(_time_module.time()):
+        return None
+    try:
+        return int(request_data.get("chat_id") or 0) or None
+    except (TypeError, ValueError):
+        return None
 
 
 def _telegram_webapp_user_id(init_data: str) -> int | None:
@@ -18733,6 +18810,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/admin/employees", handle_api_employee_update)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
+    app_web.router.add_post("/auth/web-login/start", handle_web_login_start)
+    app_web.router.add_get("/auth/web-login", handle_web_login_complete)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
@@ -19601,16 +19680,10 @@ def main():
         asyncio.create_task(asyncio.to_thread(_rehydrate_tecili_tasks))
         logger.info("Bot started. Kommo webhook server on port %s; Telegram polling active.", WEBHOOK_PORT)
         try:
-            webapp_url = os.environ.get(
-                "WEBAPP_PUBLIC_URL",
-                "https://worker-production-3e3e.up.railway.app/webapp?v=175",
-            )
-            await application.bot.set_chat_menu_button(
-                menu_button=MenuButtonWebApp(text="CRM", web_app=WebAppInfo(url=webapp_url))
-            )
-            logger.info("Telegram menu button set to %s", webapp_url)
+            await application.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+            logger.info("Telegram Mini App menu button removed; browser login is active")
         except Exception as exc:
-            logger.warning("Could not set web app menu button: %s", exc)
+            logger.warning("Could not remove Telegram Mini App menu button: %s", exc)
 
     app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
     _bot_app = app

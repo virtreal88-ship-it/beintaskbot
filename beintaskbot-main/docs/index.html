@@ -11,7 +11,6 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=251">
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;1,6..12,400&display=swap');
@@ -1353,10 +1352,10 @@
 
 <script>
 const tg = window.Telegram?.WebApp || {};
-try { tg.ready?.(); tg.expand?.(); } catch(_err) {}
 
 const PUBLIC_PWA_BASE = 'https://worker-production-3e3e.up.railway.app/';
 const RAILWAY_API = 'https://worker-production-3e3e.up.railway.app';
+if(window.location.hostname.endsWith('github.io')) window.location.replace(RAILWAY_API + '/webapp' + window.location.search + window.location.hash);
 function getShareTokenFromLocation() {
     const k = new URLSearchParams(window.location.search).get('k') || '';
     return /^\d+\.\d+\.[0-9a-f]{32}$/i.test(k) ? k : '';
@@ -1395,6 +1394,18 @@ window.fetch = function(input, init) {
     headers.set('X-Telegram-Init-Data', TELEGRAM_INIT_DATA);
     return _nativeWindowFetch(input, Object.assign({}, init || {}, {headers, credentials: 'same-origin'}));
 };
+async function startBrowserLogin() {
+    try {
+        const response = await _nativeWindowFetch(API_BASE + '/auth/web-login/start', {method:'POST', credentials:'same-origin'});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success || !data.telegram_url) throw new Error(data.error || 'Giriş başlatmaq mümkün olmadı');
+        window.location.href = data.telegram_url;
+    } catch(error) { const hint=document.getElementById('browser-login-hint'); if(hint) hint.textContent=error.message || 'Xəta baş verdi'; }
+}
+function showBrowserLogin() {
+    document.getElementById('mobile-header')?.style.setProperty('display','none','important'); document.getElementById('tab-bar')?.style.setProperty('display','none','important');
+    const content=document.getElementById('content-area'); if(content) content.innerHTML='<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Bein Systems CRM</div><p class="mt-2 text-sm text-slate-500">Giriş üçün Telegram hesabınızı təsdiqləyin.</p><button onclick="startBrowserLogin()" class="mt-5 rounded-xl bg-[#2481cc] px-5 py-3 text-sm font-bold text-white">Telegram ilə daxil ol</button><p id="browser-login-hint" class="mt-3 text-xs text-slate-400">Bot açılacaq və sizə bir dəfəlik giriş linki göndərəcək.</p></div></div>';
+}
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
 let mockTasks = [];
@@ -2251,11 +2262,7 @@ async function initApp() {
         return;
     }
     if(!IS_LOCAL_DEVELOPMENT && !TELEGRAM_INIT_DATA) {
-        document.getElementById('mobile-header')?.style.setProperty('display', 'none', 'important');
-        document.getElementById('tab-bar')?.style.setProperty('display', 'none', 'important');
-        const content = document.getElementById('content-area');
-        if(content) content.innerHTML = '<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Giriş Telegram vasitəsilədir</div><p class="mt-2 text-sm text-slate-500">Bu səhifəni Bein Systems Telegram botundan açın.</p></div></div>';
-        return;
+        try { await loadEmployeeSession(); } catch(_error) { showBrowserLogin(); return; }
     }
     try {
         await loadEmployeeSession();
