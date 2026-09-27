@@ -879,10 +879,10 @@
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
         <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="sidebar-item-label">Passiv tapşırıqlar</span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="sidebar-item-label">Gözləmə</span>
         </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Təsdiq</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
         <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
@@ -1185,7 +1185,7 @@
     <div id="screen-pending" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
-                <div class="text-sm font-extrabold text-gray-800">Gözləyən sorğular</div>
+                <div class="text-sm font-extrabold text-gray-800">Təsdiq</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">Telegram və webhook sorğularını idarə edin</div>
             </div>
             <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
@@ -1216,7 +1216,7 @@
     <div id="screen-gozleme" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
-                <div class="text-sm font-extrabold text-gray-800">Passiv tapşırıqlar</div>
+                <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
                 <div class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
@@ -1329,7 +1329,7 @@
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən sorğular</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Təsdiq</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
     </button>
     <button id="tab-hesabat" onclick="switchTab('tab-hesabat')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span class="mt-0.5">Hesabatlar</span>
@@ -3115,7 +3115,7 @@ async function loadPendingActions(showFeedback = false) {
         if(container) {
             container.innerHTML = '<div class="text-center py-10 text-red-500 text-xs font-semibold">Sorğular yüklənmədi.</div>';
         }
-        if(showFeedback) toast('Gözləyən sorğular yüklənmədi', true);
+        if(showFeedback) toast('Təsdiq yüklənmədi', true);
         return false;
     }
 }
@@ -10817,8 +10817,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const EMPLOYEE_PERMISSION_LABELS = {
-    deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Passiv tapşırıqlar',
-    waiting: 'Gözləyən sorğular', customers: 'Müştərilər', employees: 'Əməkdaşlar'
+    deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Gözləmə',
+    waiting: 'Təsdiq', customers: 'Müştərilər', employees: 'Əməkdaşlar'
 };
 function renderEmployeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
@@ -11071,14 +11071,14 @@ async function loadGozleme(showFeedback = false) {
     try {
         const r = await fetch(API_BASE + '/api/gozleme', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(!r.ok || !j.success) throw new Error(j.error || 'Passiv tapşırıqlar yükləndi');
+        if(!r.ok || !j.success) throw new Error(j.error || 'Gözləmə yüklənmədi');
         gozlemeItems = j.items || j.tasks || [];
         setCachedGozleme(gozlemeItems);
         renderGozleme();
-        if(showFeedback) toast('Passiv tapşırıqlar yeniləndi', false);
+        if(showFeedback) toast('Gözləmə yeniləndi', false);
     } catch(e) {
         renderGozleme();
-        if(showFeedback) toast('Passiv tapşırıqlar yükləndi', true);
+        if(showFeedback) toast('Gözləmə yüklənmədi', true);
     }
 }
 
@@ -11125,7 +11125,7 @@ function renderGozleme() {
     const tc = document.getElementById('gozleme-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
     const countEl = document.getElementById('gozleme-count');
-    if(countEl) countEl.textContent = `Passiv tapşırıqlar (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
     const dateSelect = document.getElementById('gozleme-date-select');
     if(dateSelect) {
         if(gozlemeKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'all';
