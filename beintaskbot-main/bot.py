@@ -18348,9 +18348,17 @@ async def handle_web_login_start(request: web.Request) -> web.Response:
     """Begin browser login; Telegram confirms the employee's real identity."""
     username = _telegram_bot_username
     if not username:
+        if request.method == "GET":
+            return web.Response(status=503, text="Bot is starting, try again shortly.")
         return web.json_response({"success": False, "error": "Bot is starting, try again shortly."}, status=503)
     nonce = _create_web_login_request()
-    return web.json_response({"success": True, "telegram_url": f"https://t.me/{username}?start=web_{nonce}"})
+    telegram_url = f"https://t.me/{username}?start=web_{nonce}"
+    # Browser mobile platforms keep a direct link/HTTP redirect as a user
+    # gesture.  Redirecting only after an awaited JavaScript fetch is commonly
+    # ignored, leaving the login button apparently unresponsive.
+    if request.method == "GET":
+        raise web.HTTPFound(telegram_url)
+    return web.json_response({"success": True, "telegram_url": telegram_url})
 
 
 async def handle_web_login_complete(request: web.Request) -> web.Response:
@@ -19072,6 +19080,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)
+    app_web.router.add_get("/auth/web-login/start", handle_web_login_start)
     app_web.router.add_get("/auth/web-login", handle_web_login_complete)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/deal.html", serve_deal_page)
