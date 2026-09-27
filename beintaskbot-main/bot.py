@@ -18064,7 +18064,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Yanlış sorğu formatı."}, status=400)
     action = str(data.get("action") or "upsert").strip().casefold()
     try:
-        employee_id = int(data.get("chat_id") or 0)
+        # ``employee_id`` is the target record. ``chat_id`` is reserved for
+        # request identity validation in the authentication middleware.
+        employee_id = int(data.get("employee_id") or data.get("chat_id") or 0)
     except (TypeError, ValueError):
         employee_id = 0
     if employee_id <= 0:

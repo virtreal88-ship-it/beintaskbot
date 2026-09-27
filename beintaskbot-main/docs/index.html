@@ -10874,7 +10874,7 @@ async function saveEmployee() {
     const name = String(document.getElementById('employee-form-name')?.value || '').trim();
     if(!/^\d+$/.test(chatId) || !name) { toast('Ad və Telegram ID yazın.', true); return; }
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
-    const payload = {action:'upsert', chat_id:chatId, name, kommo_user_id:String(document.getElementById('employee-form-kommo-id')?.value || '').trim(), role:document.getElementById('employee-form-role')?.value || 'employee', permissions, active:true};
+    const payload = {action:'upsert', employee_id:chatId, name, kommo_user_id:String(document.getElementById('employee-form-kommo-id')?.value || '').trim(), role:document.getElementById('employee-form-role')?.value || 'employee', permissions, active:true};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));
@@ -10886,7 +10886,7 @@ async function saveEmployee() {
 async function deactivateEmployee(chatId) {
     if(!window.confirm('Bu əməkdaşın girişini bağlamaq istəyirsiniz?')) return;
     try {
-        const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'deactivate', chat_id:chatId})});
+        const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'deactivate', employee_id:chatId})});
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Giriş bağlanmadı');
         employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
