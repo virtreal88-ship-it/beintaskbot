@@ -4378,10 +4378,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     if str(chat_id) in users:
         info = users[str(chat_id)]
+        nonce = _create_web_login_request()
+        _approve_web_login_request(nonce, chat_id)
+        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(nonce)}"
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
-            f"🌐 Veb versiyaya giriş üçün saytın «Telegram ilə daxil ol» düyməsindən istifadə edin.",
-            reply_markup=ReplyKeyboardRemove()
+            f"🌐 Aşağıdakı düymə ilə veb versiyaya daxil olun:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Veb versiyanı aç", url=login_url)]])
         )
         return
     keyboard = [
