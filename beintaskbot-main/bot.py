@@ -17922,6 +17922,7 @@ _WEB_SESSION_COOKIE = "bein_tg_session"
 _WEB_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
 _PUBLIC_API_PATHS = {"/api/deal/public"}
+_ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
 
 
 def _telegram_webapp_user_id(init_data: str) -> int | None:
@@ -18053,7 +18054,7 @@ async def cors_middleware(request, handler):
         resp = await handler(request)
     origin = str(request.headers.get("Origin") or "").rstrip("/")
     own_origin = f"{request.scheme}://{request.host}".rstrip("/")
-    if origin and origin == own_origin:
+    if origin and origin in (_ALLOWED_WEB_ORIGINS | {own_origin}):
         resp.headers['Access-Control-Allow-Origin'] = origin
         resp.headers['Vary'] = 'Origin'
     resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
