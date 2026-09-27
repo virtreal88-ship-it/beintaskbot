@@ -17973,18 +17973,43 @@ def _employee_manager_id(request: web.Request) -> int | None:
 
 def _employee_directory_rows() -> list[dict]:
     users = load_users()
-    access = _load_employee_access_records()
-    ids = set(access) | set(_KNOWN_EMPLOYEE_REGISTRATIONS)
-    for chat_id, info in users.items():
-        if isinstance(info, dict) and str(info.get("role") or "").casefold() != "partnyor":
-            ids.add(str(chat_id))
+    raw_access = _load_employee_access_records()
+
+    # Older registrations use a CRM/internal key as the JSON key and keep the
+    # actual Telegram identity in ``telegram_id``. New registrations use the
+    # Telegram identity directly. Normalize both before producing the directory
+    # so a person never appears twice.
+    users_by_chat_id: dict[str, dict] = {}
+    aliases: dict[str, str] = {}
+    for stored_id, info in users.items():
+        if not isinstance(info, dict) or str(info.get("role") or "").casefold() == "partnyor":
+            continue
+        try:
+            chat_id = int(info.get("telegram_id") or stored_id)
+        except (TypeError, ValueError):
+            continue
+        if chat_id <= 0:
+            continue
+        chat_key = str(chat_id)
+        aliases[str(stored_id)] = chat_key
+        # A direct Telegram-keyed record is the current record and wins over a
+        # legacy alias; otherwise retain the first usable legacy registration.
+        if chat_key not in users_by_chat_id or str(stored_id) == chat_key:
+            users_by_chat_id[chat_key] = dict(info)
+
+    access = {}
+    for stored_id, record in raw_access.items():
+        chat_key = aliases.get(str(stored_id), str(stored_id))
+        if chat_key not in access or str(stored_id) == chat_key:
+            access[chat_key] = record
+    ids = set(access) | set(_KNOWN_EMPLOYEE_REGISTRATIONS) | set(users_by_chat_id)
     rows = []
     for raw_id in ids:
         try:
             chat_id = int(raw_id)
         except (TypeError, ValueError):
             continue
-        info = users.get(str(chat_id)) if isinstance(users.get(str(chat_id)), dict) else {}
+        info = users_by_chat_id.get(str(chat_id), {})
         profile = employee_access_profile(chat_id)
         rows.append({
             "chat_id": chat_id,
