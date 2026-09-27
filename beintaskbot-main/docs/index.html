@@ -9679,16 +9679,22 @@ async function openNoticeClient(leadId) {
     renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
     let deal = (samilDeals || []).find(item => String(item.id) === id);
-    try {
-        const response = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(id), {
-            cache: 'no-store', headers: {'X-TG-User-ID': CURRENT_USER_ID}
-        });
-        const payload = await response.json().catch(() => ({}));
-        if(response.ok && payload && payload.deal) {
-            deal = payload.deal;
-            deal.share_token = payload.share_token || deal.share_token || '';
-        }
-    } catch(_err) {}
+    // The inbox list already has the name, stage and phone required for the
+    // chat header. Rendering it immediately avoids an expensive full deal
+    // snapshot before the history can start loading. The full notes/tasks
+    // snapshot still loads on demand from the information button.
+    if(!deal) {
+        try {
+            const response = await fetch(API_BASE + '/api/deal/view?lead_id=' + encodeURIComponent(id), {
+                cache: 'no-store', headers: {'X-TG-User-ID': CURRENT_USER_ID}
+            });
+            const payload = await response.json().catch(() => ({}));
+            if(response.ok && payload && payload.deal) {
+                deal = payload.deal;
+                deal.share_token = payload.share_token || deal.share_token || '';
+            }
+        } catch(_err) {}
+    }
     if(_noticeHistoryLeadId !== id || !pane.isConnected) return;
     if(!deal) {
         pane.innerHTML = '<div class="chats-empty"><div class="chats-empty-title">Sövdələşmə tapılmadı</div></div>';

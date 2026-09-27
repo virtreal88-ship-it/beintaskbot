@@ -15900,7 +15900,7 @@ def _kommo_read(path: str, params: dict | None = None, timeout: int = 8) -> tupl
     return status, data if isinstance(data, dict) else {}
 
 
-def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
+def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None) -> list[dict]:
     """Build the useful pre-WABA Kommo timeline for the Bildiriş client pane.
 
     The Talk API is primary. When a historical dialog is no longer available
@@ -15908,7 +15908,9 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
     notes, entity files, and the stored voice proxy. This path is read-only.
     """
     lid = int(lead_id)
-    lead = get_lead_details(lid) or {}
+    # The HTTP handler has already read and authorized this lead. Reusing that
+    # object avoids sending the same Kommo request twice when a client opens.
+    lead = lead if isinstance(lead, dict) else (get_lead_details(lid) or {})
     contact_ids = _lead_contact_ids(lead)
     rows: list[dict] = []
     seen: set[tuple] = set()
@@ -15935,15 +15937,26 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0) -> list[dict]:
     wanted_talk = int(talk_id or 0)
     if wanted_talk and not any(_talk_id_of(row) == wanted_talk for row in talks):
         talks.insert(0, {"talk_id": wanted_talk})
+    # Talks are returned without a guaranteed order. Prefer the newest ones,
+    # keeping a specifically requested talk at the top, and cap the first
+    # screen load. The former 8 talks × 2 pages could consume 16+ Kommo calls
+    # for one tap and make the whole application wait behind the 6 RPS limit.
+    talks.sort(
+        key=lambda row: int(row.get("updated_at") or row.get("created_at") or 0),
+        reverse=True,
+    )
+    if wanted_talk:
+        talks.sort(key=lambda row: 0 if _talk_id_of(row) == wanted_talk else 1)
+    talks = talks[:3]
     if talks:
         _lead_open_talk[lid] = _talk_id_of(talks[0])
 
-    for talk in talks[:8]:
+    for talk in talks:
         tid = _talk_id_of(talk)
         if not tid:
             continue
         origin = _talk_channel_key(talk)
-        messages, blocked, _more = _fetch_talk_messages(tid, pages=2, page_limit=100)
+        messages, blocked, _more = _fetch_talk_messages(tid, pages=1, page_limit=80)
         for message in messages:
             add(_format_chat_message(message, origin), entity_type="leads", entity_id=lid)
         if not messages or blocked:
@@ -15994,6 +16007,20 @@ _history_inflight: dict[int, asyncio.Future] = {}
 _HISTORY_CACHE_TTL = 180.0
 
 
+def _finish_history_load(lead_id: int, pending: asyncio.Future) -> None:
+    """Cache a completed history load and release its single-flight slot."""
+    if _history_inflight.get(lead_id) is pending:
+        _history_inflight.pop(lead_id, None)
+    if pending.cancelled():
+        return
+    try:
+        rows = pending.result()
+    except Exception:
+        return
+    if isinstance(rows, list):
+        _history_cache[lead_id] = (_time_module.monotonic(), rows)
+
+
 async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
@@ -16018,35 +16045,21 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
     if not force_refresh and cached and (_time_module.monotonic() - cached[0]) < _HISTORY_CACHE_TTL:
         return web.json_response({"success": True, "chat": cached[1]})
     pending = _history_inflight.get(lead_id)
-    if pending is not None:
-        try:
-            rows = await pending
-        except Exception as exc:
-            return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
-        return web.json_response({"success": True, "chat": rows})
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future = loop.create_future()
-    future.add_done_callback(lambda done: done.exception() if done.done() and not done.cancelled() else None)
-    _history_inflight[lead_id] = future
+    if pending is None:
+        loop = asyncio.get_running_loop()
+        pending = loop.run_in_executor(_history_io, _kommo_history_rows, lead_id, hinted_talk, _lead)
+        _history_inflight[lead_id] = pending
+        pending.add_done_callback(lambda done: _finish_history_load(lead_id, done))
     try:
-        rows = await asyncio.wait_for(
-            loop.run_in_executor(_history_io, _kommo_history_rows, lead_id, hinted_talk),
-            timeout=9,
-        )
+        # Shield keeps the single background read alive after this HTTP request
+        # times out. A retry then joins that same read instead of doubling the
+        # Kommo traffic.
+        rows = await asyncio.wait_for(asyncio.shield(pending), timeout=14)
     except asyncio.TimeoutError:
-        if not future.done():
-            future.set_exception(TimeoutError("Kommo tarixçə sorğusu vaxtında cavab vermədi."))
         return web.json_response({"success": False, "error": "Kommo tarixçə sorğusu vaxtında cavab vermədi."}, status=504)
     except Exception as exc:
         logger.warning("Kommo history lead=%s: %s", lead_id, exc)
-        if not future.done():
-            future.set_exception(exc)
         return web.json_response({"success": False, "error": str(exc)[:180]}, status=502)
-    finally:
-        _history_inflight.pop(lead_id, None)
-    _history_cache[lead_id] = (_time_module.monotonic(), rows)
-    if not future.done():
-        future.set_result(rows)
     return web.json_response({"success": True, "chat": rows})
 
 
