@@ -1432,8 +1432,10 @@ async function initTelegramLoginWidget() {
     const holder = document.getElementById('telegram-login-widget');
     const hint = document.getElementById('browser-login-hint');
     if(!holder) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-        const response = await _nativeWindowFetch(API_BASE + '/auth/telegram-login/config', {credentials:'same-origin'});
+        const response = await _nativeWindowFetch(API_BASE + '/auth/telegram-login/config', {credentials:'same-origin', signal:controller.signal});
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success || !data.bot_username) throw new Error(data.error || 'Telegram giriş xidməti hazır deyil');
         const script = document.createElement('script');
@@ -1446,7 +1448,10 @@ async function initTelegramLoginWidget() {
         holder.replaceChildren(script);
         if(hint) hint.textContent = 'Telegram hesabınızla bir toxunuşla daxil olun.';
     } catch(error) {
-        if(hint) hint.textContent = error.message || 'Telegram giriş düyməsi yüklənmədi';
+        holder.innerHTML = '<a href="' + escapeHtml(API_BASE + '/auth/web-login/start') + '" class="inline-flex items-center justify-center rounded-xl bg-[#2481cc] px-5 py-3 text-sm font-bold text-white">Telegram-da davam edin</a>';
+        if(hint) hint.textContent = error?.name === 'AbortError' ? 'Giriş xidməti gec cavab verdi. Düymə ilə Telegram-da davam edin.' : (error.message || 'Telegram giriş düyməsi yüklənmədi');
+    } finally {
+        clearTimeout(timeout);
     }
 }
 function showBrowserLogin() {
@@ -2181,7 +2186,17 @@ function hasEmployeePermission(permission) { return isAdmin || employeePermissio
 async function loadEmployeeSession() {
     // In browser mode the signed cookie, not an old pwa_uid, is the identity.
     const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
-    const response = await fetch(API_BASE + '/api/session', {headers:sessionHeaders, cache:'no-store'});
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    let response;
+    try {
+        response = await fetch(API_BASE + '/api/session', {headers:sessionHeaders, cache:'no-store', signal:controller.signal});
+    } catch(error) {
+        if(error?.name === 'AbortError') throw new Error('Server cavab vermədi. Yenidən cəhd edin.');
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
     const data = await response.json().catch(() => ({}));
     if(!response.ok || !data.success || !data.active) throw new Error(data.error || 'Girişə icazə yoxdur');
     const confirmedId = String(data.chat_id || '');
@@ -2319,11 +2334,16 @@ async function initApp() {
         window.location.replace(next.toString());
         return;
     }
+    let sessionLoaded = false;
     if(!IS_LOCAL_DEVELOPMENT && !TELEGRAM_INIT_DATA) {
         try { await loadEmployeeSession(); } catch(_error) { showBrowserLogin(); return; }
+        sessionLoaded = true;
     }
     try {
-        await loadEmployeeSession();
+        // The browser already checked its signed cookie above.  Calling this
+        // endpoint twice made each regular page opening wait for two server
+        // responses, which is especially noticeable while Kommo is busy.
+        if(!sessionLoaded) await loadEmployeeSession();
     } catch(error) {
         const content = document.getElementById('content-area');
         if(content) content.innerHTML = '<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Girişə icazə yoxdur</div><p class="mt-2 text-sm text-slate-500">Administrator sizin girişinizi aktiv etməlidir.</p></div></div>';

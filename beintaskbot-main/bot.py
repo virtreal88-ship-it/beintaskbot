@@ -9201,7 +9201,12 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             avatar_by_lead or {},
             talk_updated or {},
         )
-        _inject_outside_funnel_talk_deals(
+        # This legacy Talk reconciliation can request details for up to twenty
+        # leads.  It is useful for Nizami's queue, but must never block the
+        # aiohttp event loop: otherwise even the lightweight /api/session
+        # request waits behind Kommo and the browser appears stuck at startup.
+        await asyncio.to_thread(
+            _inject_outside_funnel_talk_deals,
             deals,
             outside_by_lead or {},
             incoming_at_by_lead or {},
