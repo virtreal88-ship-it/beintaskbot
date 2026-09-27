@@ -3447,7 +3447,7 @@ function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
             phone: phoneVal,
             phones: phoneList
         });
-        openDealViewModal(dealObj);
+        openUnifiedClientChat(dealObj.id, dealObj);
     });
     card.addEventListener('click', event => {
         if(event.target.closest('a,button,audio')) return;
@@ -8185,6 +8185,20 @@ async function openDealViewModal(deal, opts) {
     const readonly = !!(opts && opts.readonly);
     paintDealViewModal(deal, readonly, opts);
 }
+async function openUnifiedClientChat(leadId, seedDeal) {
+    const id = String(leadId || '').trim();
+    if(!id) { toast('Sövdələşmə tapılmadı', true); return; }
+    // "Baxış" and "Müştərilər" deliberately share one client workspace.
+    // The card already contains a lightweight summary, so no separate heavy
+    // deal modal has to fetch notes, tasks and contacts before opening chat.
+    if(seedDeal && !((samilDeals || []).some(item => String(item.id) === id))) {
+        samilDeals.unshift(seedDeal);
+        persistLocalSamilWorkspace();
+    }
+    if(HAS_NOTICES) switchTab('tab-chats', false);
+    else nav('screen-chats');
+    await openNoticeClient(id);
+}
 async function renderPublicDealPage() {
     const token = getShareTokenFromLocation();
     const box = document.getElementById('screen-public-deal');
@@ -8224,7 +8238,7 @@ function bindSamilDealCard(card, deal) {
     const moreButton = card.querySelector('.deal-more-btn');
     if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
     const viewButton = card.querySelector('.deal-open-view');
-    if(viewButton) viewButton.addEventListener('click', event => { event.stopPropagation(); openDealViewModal(deal); });
+    if(viewButton) viewButton.addEventListener('click', event => { event.stopPropagation(); openUnifiedClientChat(deal.id, deal); });
     card.addEventListener('dragstart', event => {
         samilDealDragState = { dealId: String(deal.id), fromStage: deal.stage_key };
         card.classList.add('dragging');
@@ -10391,7 +10405,7 @@ async function openDealViewById(leadId) {
             if(d && d.deal) deal = d.deal;
         } catch(_e) {}
     }
-    if(deal) openDealViewModal(deal);
+    if(deal) openUnifiedClientChat(deal.id, deal);
     else toast('Sövdələşmə tapılmadı', true);
 }
 async function openInboxChat(leadId) {
