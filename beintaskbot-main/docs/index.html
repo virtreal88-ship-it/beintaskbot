@@ -823,7 +823,7 @@
             <div style="position:relative;"><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri telefonu:</label><input type="tel" id="search-phone" placeholder="0505232933" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" oninput="debounceContactSearch(this.value)"><div id="contact-search-results" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:100;background:#fff;border:1px solid #e2e8f0;border-radius:12px;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px;"></div></div>
             <div id="search-error" class="create-span-2 text-red-500 text-[11px] font-bold" style="display:none;">Min 7 rəqəm daxil edin.</div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">aktiv</option><option value="4239844">passiv</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="task-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="task-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Deadline:</label>
                 <input type="datetime-local" id="task-deadline-custom" class="w-full p-2.5 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none" onchange="gd.deadline='custom:'+this.value;">
@@ -954,7 +954,6 @@
             <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
                 <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
-                <option value="Soltan Abbasov">Soltan Abbasov</option>
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
                 <option value="Nizami Qasımov">Nizami Qasımov</option>
                 <option value="Rasim Əsgərov">Rasim Əsgərov</option>
@@ -1121,7 +1120,7 @@
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Müştəri adı:</label><input type="text" id="edit-client-name" placeholder="Müştəri adı" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Telefon:</label><input type="text" id="edit-phone" readonly class="w-full p-2.5 text-xs font-bold text-gray-500 bg-gray-100 border border-gray-200 rounded-xl outline-none"></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırıq növü:</label><select id="edit-task-type-select" onchange="gd.task_type=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="4232112">aktiv</option><option value="4239844">passiv</option></select></div>
-            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Soltan Abbasov">Soltan Abbasov</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
+            <div><label class="text-xs font-bold text-gray-400 block mb-1">İcraçı:</label><select id="edit-assignee-select" onchange="gd.assigneeName=this.value" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option><option value="Hüseyn Səfərov">Hüseyn Səfərov</option><option value="Nizami Qasımov">Nizami Qasımov</option><option value="Rasim Əsgərov">Rasim Əsgərov</option><option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option><option value="Asya Agayeva">Asya Agayeva</option><option value="Nuranə Şirinova">Nuranə Şirinova</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Prioritet:</label><select id="edit-priority" class="w-full p-2.5 text-xs font-bold text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none"><option value="">— Seçin —</option><option value="urgent">Təcili</option><option value="high">Yüksək</option><option value="medium">Orta</option><option value="low">Aşağı</option></select></div>
             <div><label class="text-xs font-bold text-gray-400 block mb-1">Tapşırığın mətni:</label><textarea id="edit-task-desc" placeholder="Tapşırığı bura yazın..." class="w-full p-3 text-sm leading-relaxed font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl outline-none min-h-[150px] resize-y"></textarea></div>
             <div class="flex items-center gap-2 mt-1">
@@ -1157,7 +1156,7 @@
     </div>
     <div id="screen-stage-assignee" class="screen space-y-4">
         <div class="flex items-center gap-1 mb-2"><button class="text-xs font-bold text-blue-500" onclick="goBack('screen-stage-select')">← Geri</button></div>
-        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('assignee','shamil',this)">Rüfət Həsənzadə</div><div class="option-card" onclick="sel('assignee','soltan',this)">Soltan Abbasov</div><div class="option-card" onclick="sel('assignee','admin',this)">Admin</div></div>
+        <div class="grid grid-cols-2 gap-2"><div class="option-card" onclick="sel('assignee','rufat',this)">Rüfət Həsənzadə</div><div class="option-card" onclick="sel('assignee','huseyn',this)">Hüseyn Səfərov</div><div class="option-card" onclick="sel('assignee','rasim',this)">Rasim Əsgərov</div><div class="option-card" onclick="sel('assignee','sermaye',this)">Sərmayə Əhmədsoy</div><div class="option-card" onclick="sel('assignee','asya',this)">Asya Agayeva</div><div class="option-card" onclick="sel('assignee','nurane',this)">Nuranə Şirinova</div><div class="option-card" onclick="sel('assignee','admin',this)">Nizami Qasımov</div></div>
         <button onclick="stageNextStep2()" class="w-full bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Davam et</button>
     </div>
     <div id="screen-stage-deadline" class="screen space-y-4">
@@ -1242,7 +1241,6 @@
             <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
                 <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
-                <option value="Soltan Abbasov">Soltan Abbasov</option>
                 <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
                 <option value="Nizami Qasımov">Nizami Qasımov</option>
                 <option value="Rasim Əsgərov">Rasim Əsgərov</option>
@@ -1479,18 +1477,18 @@ function getUserId() {
 }
 let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
-const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
-let HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
-let HAS_CHATS = ['6824377548','7962757442','1628569350'].includes(CURRENT_USER_ID);
-let HAS_NOTICES = ['6824377548','7962757442','1628569350','7329891614','7920785774','7262243946','1289510272','6596538872','1142054888'].includes(CURRENT_USER_ID);
-const SALARY_COMPLETE_IDS = ['6824377548','7962757442','7329891614','7920785774','1628569350'];
+const IS_RUFAT = CURRENT_USER_ID === '6824377548';
+let HAS_OWN_FUNNEL = ['6824377548','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
+let HAS_CHATS = ['6824377548','1628569350'].includes(CURRENT_USER_ID);
+let HAS_NOTICES = ['6824377548','1628569350','7329891614','7920785774','1289510272','6596538872','1142054888'].includes(CURRENT_USER_ID);
+const SALARY_COMPLETE_IDS = ['6824377548','7329891614','7920785774','1628569350'];
 const CHAT_SENDER_LINES = [
     {digits:'994102135105', label:'Rüfət'},
     {digits:'994502072240', label:'Nizami'}
 ];
 function canShowKommoLink() { return isAdmin || IS_RUFAT; }
 const FUNNEL_OWNER_NAME = {
-    '6824377548':'Rüfət Həsənzadə','7962757442':'Rüfət Həsənzadə','1628569350':'Nizami Qasımov',
+    '6824377548':'Rüfət Həsənzadə','1628569350':'Nizami Qasımov',
     '7329891614':'Hüseyn Səfərov','7920785774':'Rasim Əsgərov'
 }[CURRENT_USER_ID] || '';
 const FUNNEL_STAGE_PRESETS = {
@@ -1518,7 +1516,7 @@ let _pipelinesPromise = null;
 const SAMIL_COMPLETION_PIPELINES = {
     samil: {label: FUNNEL_OWNER_NAME || 'Öz vоронка', stages:SAMIL_ALL_STAGES},
     operations: {label:'Əməliyyatlar lövhəsi', stages:[
-        ['samil','Rüfət Həsənzadə'],['soltan','Soltan Abbasov'],['huseyn','Hüseyn Səfərov'],
+        ['samil','Rüfət Həsənzadə'],['huseyn','Hüseyn Səfərov'],
         ['nizami','Nizami Qasımov'],['rasim','Rasim Əsgərov'],['sermaye','Sərmayə Əhmədsoy'],
         ['asya','Asya Agayeva'],['nurane','Nuranə Şirinova'],['ugurlu','Uğurla tamamlandı'],['imtina','İmtina olundu']
     ]}
@@ -3048,7 +3046,7 @@ function createPendingActionCard(action) {
         execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
         execBtn.textContent = '👷 İcraçı seç';
         execBtn.addEventListener('click', () => {
-            showPendingSelectModal('İcraçı seç', ['Rüfət','Soltan','Hüseyn','Rasim','Texniki','Özüm'], (choice) => {
+            showPendingSelectModal('İcraçı seç', ['Rüfət','Hüseyn','Rasim','Sərmayə','Asya','Nuranə','Özüm'], (choice) => {
                 resolvePendingAction(action.id, choice, execBtn);
             });
         });
@@ -3276,7 +3274,7 @@ function openSubtaskFromPending(action) {
     const contactName = data.contact_name || '';
     const leadId = data.lead_id || '';
     const parentAssignee = data.sender_name || '';
-    const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
+    const assigneeOptions = ['Rüfət Həsənzadə','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const desc = '';
     const html = `<div id="subtask-modal" data-lead-id="${leadId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
@@ -8492,7 +8490,7 @@ function showDealModal(deal, mode) {
     modal.style.cssText = 'position:fixed;inset:0;background:#0006;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     const title = mode === 'edit' ? 'Redaktə et' : mode === 'task' ? 'Tapşırıq əlavə et' : 'Qeyd əlavə et';
     const ownerName = FUNNEL_OWNER_NAME || 'Rüfət Həsənzadə';
-    const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Nizami Qasımov','Rasim Əsgərov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova']
+    const assigneeOptions = ['Rüfət Həsənzadə','Hüseyn Səfərov','Nizami Qasımov','Rasim Əsgərov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova']
         .map(name => `<option value="${name}" ${name === ownerName ? 'selected' : ''}>${name}</option>`).join('');
     let body = '';
     if(mode === 'edit') {
@@ -11287,7 +11285,7 @@ function openSubtask(taskId) {
     const task = mockTasks.find(t => t.id === taskId); if(!task) return;
     const phone = task.phone||'';
     const parentAssignee = task.assigneeName || task.responsible || '';
-    const assigneeOptions = ['Rüfət Həsənzadə','Soltan Abbasov','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
+    const assigneeOptions = ['Rüfət Həsənzadə','Hüseyn Səfərov','Rasim Əsgərov','Nizami Qasımov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'].map(n => `<option value="${n}" ${n===parentAssignee?'selected':''}>${n}</option>`).join('');
     const html = `<div id="subtask-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:360px;">
         <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Əlavə tapşırıq</h3>
@@ -11340,7 +11338,7 @@ async function submitSubtask(parentTaskId) {
     document.getElementById('subtask-modal').remove();
 }
 // Balance System
-const BALANCE_EMPLOYEE_OPTIONS = '<option value="7920785774">Rasim Əsgərov</option><option value="6824377548">Rüfət Həsənzadə</option><option value="7262243946">Soltan Abbasov</option><option value="7329891614">Hüseyn Səfərov</option><option value="8835096199">Texniki Dəstək</option>';
+const BALANCE_EMPLOYEE_OPTIONS = '<option value="6824377548">Rüfət Həsənzadə</option><option value="7329891614">Hüseyn Səfərov</option><option value="1289510272">Sərmayə Əhmədsoy</option><option value="6596538872">Asya Agayeva</option><option value="1142054888">Nuranə Şirinova</option><option value="7920785774">Rasim Əsgərov</option>';
 
 function escapeBalanceText(value) {
     return String(value ?? '—').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -11723,7 +11721,7 @@ async function pendingChangeExecutor(actionId, executorName) {
         // For assign_executor type, use resolve (task doesn't exist yet)
         const action = pendingActions.find(a => a.id === actionId);
         if(action && action.type === 'assign_executor') {
-            const shortMap = {'Rüfət Həsənzadə':'Rüfət','Soltan Abbasov':'Soltan','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Texniki Dəstək':'Texniki','Özüm':'Özüm'};
+            const shortMap = {'Rüfət Həsənzadə':'Rüfət','Hüseyn Səfərov':'Hüseyn','Rasim Əsgərov':'Rasim','Sərmayə Əhmədsoy':'Sərmayə','Asya Agayeva':'Asya','Nuranə Şirinova':'Nuranə','Özüm':'Özüm'};
             const choice = shortMap[executorName] || executorName;
             hideLoader();
             resolvePendingAction(actionId, choice, null);

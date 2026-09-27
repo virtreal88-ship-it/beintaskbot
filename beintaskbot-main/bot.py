@@ -91,7 +91,7 @@ RUFAT_CHAT_ID = 6824377548
 SAMIL_CHAT_ID = RUFAT_CHAT_ID  # Deprecated alias for old integrations
 # Historical web-app links used Şamil's Telegram UID.  Keep those links
 # working while the current employee account uses RUFAT_CHAT_ID.
-RUFAT_COMPAT_CHAT_IDS = {RUFAT_CHAT_ID, 7962757442}
+RUFAT_COMPAT_CHAT_IDS = {RUFAT_CHAT_ID}
 RUFAT_LOGIN_LINK = f"https://worker-production-3e3e.up.railway.app/webapp?uid={RUFAT_CHAT_ID}"
 RUFAT_PIPELINE_ID = int(os.environ.get("RUFAT_PIPELINE_ID", os.environ.get("SAMIL_PIPELINE_ID", "14357580")))
 # Rüfət's current pipeline snapshot. Do not alter other pipeline mappings here.
@@ -201,8 +201,18 @@ NIZAMI_STAGE_NAMES = {
     142: "Успешно реализовано",
     143: "Закрыто и не реализовано",
 }
-TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
-_UPD_MARKER = {"Rüfət": ("Rüfət Həsənzadə", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
+# Canonical task assignees.  Old account names deliberately do not appear here:
+# they may remain in historical Kommo task text, but can no longer receive work.
+ACTIVE_ASSIGNEES = {
+    "rufat": ("Rüfət Həsənzadə", "Rüfət", 15532668),
+    "huseyn": ("Hüseyn Səfərov", "Hüseyn", 15532668),
+    "rasim": ("Rasim Əsgərov", "Rasim", 15532668),
+    "sermaye": ("Sərmayə Əhmədsoy", "Sərmayə", 15532668),
+    "asya": ("Asya Agayeva", "Asya", 15532668),
+    "nurane": ("Nuranə Şirinova", "Nuranə", 15532668),
+    "admin": ("Nizami Qasımov", "Özüm", 10932455),
+}
+_UPD_MARKER = {short: (name, user_id) for name, short, user_id in ACTIVE_ASSIGNEES.values()}
 
 STAGES = {
     "nerazobrannoye": 66107683,
@@ -237,7 +247,6 @@ STAGE_NAMES = {
 NOTIFY_STAGE_ID = 108537924
 KOMMO_USERS = {
     10932455: "Nizami Qasımov",
-    15531960: "Soltan Abbasov",
     15532668: "Admin",
 }
 _STAGE_TASK_TEXTS = {
@@ -297,7 +306,6 @@ _USER_DB_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users
 _KNOWN_EMPLOYEE_REGISTRATIONS = {
     1628569350: ("Nizami Qasımov", 10932455),
     RUFAT_CHAT_ID: ("Rüfət Həsənzadə", 15532668),
-    7262243946: ("Soltan Abbasov", 15531960),
     7329891614: ("Hüseyn Səfərov", 15532668),
     7920785774: ("Rasim Əsgərov", 15532668),
     1289510272: ("Sərmayə Əhmədsoy", 15532668),
@@ -387,9 +395,13 @@ def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
             return int(chat_id_str)
     return None
 
-# Salary employees that historically shared the Sahə Meneceri Kommo license.
-# Their Telegram identities remain separate; new work is routed to Admin.
-_SALARY_CHAT_IDS = {RUFAT_CHAT_ID, 7262243946, 7329891614, 7920785774, 1289510272, 6596538872, 1142054888}
+# The current team is the only group allowed to receive CRM events. Retired
+# IDs are removed from access and device subscriptions during startup.
+_ACTIVE_STAFF_CHAT_IDS = {RUFAT_CHAT_ID, 7329891614, 7920785774, 1289510272, 6596538872, 1142054888}
+_SALARY_CHAT_IDS = {RUFAT_CHAT_ID, 7329891614, 1289510272, 6596538872, 1142054888}
+_RETIRED_EMPLOYEE_CHAT_IDS = {7262243946, 7962757442, 8835096199}
+_ACTIVE_TEAM_CHAT_IDS = _ACTIVE_STAFF_CHAT_IDS | {ADMIN_CHAT_ID}
+_ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 
 # Employee access is separate from users.json: the latter is kept for the
 # historical Telegram/Kommo mapping, while this record controls Mini App
@@ -449,6 +461,8 @@ def employee_access_profile(chat_id: int) -> dict:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return {"active": False, "role": "Əməkdaş", "permissions": []}
+    if cid in _RETIRED_EMPLOYEE_CHAT_IDS:
+        return {"active": False, "role": "Əməkdaş", "permissions": []}
     stored = _load_employee_access_records().get(str(cid))
     if isinstance(stored, dict):
         # Nizami is the canonical system administrator. An accidental edit in
@@ -472,11 +486,79 @@ def employee_access_profile(chat_id: int) -> dict:
     return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS)}
 
 
+def remove_retired_employee_access() -> None:
+    """Permanently retire former staff from access, registrations and PWA push.
+
+    The list is deliberately explicit: future employees created by Nizami are
+    never removed by this migration.
+    """
+    retired_keys = {str(chat_id) for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS}
+    records = _load_employee_access_records(force=True)
+    cleaned_records = {key: value for key, value in records.items() if key not in retired_keys}
+    users = load_users()
+    cleaned_users = {key: value for key, value in users.items() if key not in retired_keys}
+
+    # The confirmed roster replacement is a one-time migration.  It removes
+    # every old account from the existing directory, while the marker ensures
+    # employees added later by the administrator are never removed on restart.
+    try:
+        roster_marker = read_json(_ROSTER_CLEANUP_FILE) or {}
+    except Exception:
+        roster_marker = {}
+    should_mark_roster_cleanup = not bool(roster_marker.get("completed"))
+    if should_mark_roster_cleanup:
+        known_by_name = {
+            str(name).strip().casefold(): int(chat_id)
+            for chat_id, (name, _kommo_user_id) in _KNOWN_EMPLOYEE_REGISTRATIONS.items()
+        }
+
+        def roster_chat_id(stored_id, value) -> int:
+            if not isinstance(value, dict):
+                try:
+                    return int(stored_id)
+                except (TypeError, ValueError):
+                    return 0
+            try:
+                return int(value.get("telegram_id") or known_by_name.get(str(value.get("name") or "").strip().casefold()) or stored_id)
+            except (TypeError, ValueError):
+                return 0
+
+        cleaned_users = {
+            str(key): value for key, value in cleaned_users.items()
+            if roster_chat_id(key, value) in _ACTIVE_TEAM_CHAT_IDS
+        }
+        cleaned_records = {
+            str(key): value for key, value in cleaned_records.items()
+            if roster_chat_id(key, users.get(str(key), {})) in _ACTIVE_TEAM_CHAT_IDS
+        }
+    if cleaned_records != records:
+        _save_employee_access_records(cleaned_records)
+    if cleaned_users != users:
+        save_users(cleaned_users)
+    if should_mark_roster_cleanup:
+        write_json(_ROSTER_CLEANUP_FILE, {"completed": True, "completed_at": datetime.now(tz=BAKU_TZ).isoformat()})
+
+    for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS:
+        try:
+            remove_push_subscription(str(chat_id))
+        except Exception as exc:
+            logger.warning("Retired push cleanup failed for %s: %s", chat_id, exc)
+
+
 def employee_has_permission(chat_id: int, permission: str) -> bool:
     profile = employee_access_profile(chat_id)
     return bool(profile.get("active")) and (
         str(profile.get("role") or "").casefold() == "admin" or permission in set(profile.get("permissions") or [])
     )
+
+
+def can_receive_staff_notification(chat_id) -> bool:
+    """Send staff notifications only to an active employee or the admin."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    return cid == int(ADMIN_CHAT_ID) or bool(employee_access_profile(cid).get("active"))
 
 def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     users = load_users()
@@ -522,9 +604,11 @@ def task_created_by_rufat(task_id) -> bool:
         return False
 _PENDING_EXECUTOR_NAMES = {
     "Rüfət": "Rüfət Həsənzadə",
-    "Soltan": "Soltan Abbasov",
     "Hüseyn": "Hüseyn Səfərov",
     "Rasim": "Rasim Əsgərov",
+    "Sərmayə": "Sərmayə Əhmədsoy",
+    "Asya": "Asya Agayeva",
+    "Nuranə": "Nuranə Şirinova",
 }
 
 
@@ -818,7 +902,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     if action.get("resolved"):
         return False, "Sorğu artıq həll edilib."
     action_options = action.get("options") or []
-    _executor_names_set = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "\u00d6z\u00fcm"}
+    _executor_names_set = set(_PENDING_EXECUTOR_NAMES) | {"Özüm"}
     if choice not in action_options:
         if choice != "T\u0259sdiq et" and not choice.startswith("stage_change:") and choice not in _executor_names_set:
             return False, "Yanl\u0131\u015f se\u00e7im."
@@ -870,7 +954,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
         return True, f"Mərhələ dəyişdirildi: {new_stage_display}. Sorğu hələ açıqdır."
 
     # ── Universal executor change: choice is an executor short name, card does NOT close ──
-    _executor_short_names = {"\u015eamil", "Soltan", "H\u00fcseyn", "Rasim", "\u00d6z\u00fcm"}
+    _executor_short_names = set(_PENDING_EXECUTOR_NAMES) | {"Özüm"}
     if choice in _executor_short_names and action_type != "assign_executor":
         # Update existing task's responsible user in Kommo
         task_id = action_data.get("task_id")
@@ -1115,7 +1199,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             result_message = "Dəyişiklik rədd edildi."
             _send_telegram_text(creator_chat_id, "❌ Dəyişiklik rədd edildi.")
         else:
-            _UPD_MARKER = {"Təsdiq et": None, "Rüfət": ("Rüfət Həsənzadə", 15532668), "Soltan": ("Soltan Abbasov", 15531960), "Hüseyn": ("Hüseyn Səfərov", 15532668), "Rasim": ("Rasim Əsgərov", 15532668), "Texniki": (TECHNICAL_SUPPORT_NAME, 15532668), "Özüm": ("Nizami Qasımov", 10932455)}
+            _UPD_MARKER = {"Təsdiq et": None, **{short: (name, user_id) for name, short, user_id in ACTIVE_ASSIGNEES.values()}}
             if choice != "Təsdiq et":
                 marker_info = _UPD_MARKER.get(choice)
                 if marker_info:
@@ -1227,7 +1311,6 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
 TG_CHAT_TO_EMPLOYEE = {
     1628569350: "Nizami Qasımov",
     RUFAT_CHAT_ID: "Rüfət Həsənzadə",
-    7262243946: "Soltan Abbasov",
     7329891614: "Hüseyn Səfərov",
     7920785774: "Rasim Əsgərov",
     1289510272: "Sərmayə Əhmədsoy",
@@ -1246,18 +1329,13 @@ def get_employee_name_by_chat_id(chat_id: int, default: str = "Əməkdaş") -> s
 # Name-to-chat mapping for marker-based notifications
 NAME_TO_CHAT = {
     "Rüfət Həsənzadə": RUFAT_CHAT_ID,
-    "Soltan Abbasov": 7262243946,
     "Hüseyn Səfərov": 7329891614,
     "Nizami Qasımov": 1628569350,
     "Rasim Əsgərov": 7920785774,
     "Sərmayə Əhmədsoy": 1289510272,
     "Asya Agayeva": 6596538872,
     "Nuranə Şirinova": 1142054888,
-    # Keep historical task markers routable while writing the employee's real name.
-    "Texniki tapşırıq": 8835096199,
-    "Texniki": 8835096199,
     "Rüfət": RUFAT_CHAT_ID,
-    "Soltan": 7262243946,
     "Hüseyn": 7329891614,
     "Nizami": 1628569350,
     "Rasim": 7920785774,
@@ -3441,7 +3519,8 @@ QAYDALAR (prioritet sırası ilə):
 5. Əgər telefon nömrəsi verilməyibsə, söhbət tarixçəsindən istifadə et və ya istifadəçidən soruş.
 6. "Hə" və ya "bəli" cavabı — əvvəlki kontekstdən tool-u təkrar çağır.
 
-Komanda: Admin (Texniki Destek), Rüfət Həsənzadə (satış), Soltan Abbasov (texnik).
+Komanda: Nizami Qasımov (admin), Rüfət Həsənzadə, Hüseyn Səfərov, Rasim Əsgərov,
+Sərmayə Əhmədsoy, Asya Agayeva və Nuranə Şirinova.
 Bugünkü tarix: {current_date}
 Mesaj göndərən: {sender_name}"""
 
@@ -3541,9 +3620,9 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
     entity_id = int(lead_id)
     entity_type = "leads"
     link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-    assignee_map = {"rufat": 10932455, "soltan": 15531960, "huseyn": 10932455, "rasim": 10932455, "texniki": 10932455, "admin": 10932455, "sahe_meneceri": 10932455}
-    assignee_id = assignee_map.get(assign_to, 10932455)
-    display_assignee = assignee_name or KOMMO_USERS.get(assignee_id, "Admin")
+    assignee = ACTIVE_ASSIGNEES.get(str(assign_to or "").casefold(), ACTIVE_ASSIGNEES["admin"])
+    assignee_id = assignee[2]
+    display_assignee = assignee_name or assignee[0]
     return {
         "success": True, "needs_deadline": True,
         "contact_id": contact_id, "contact_name": contact_name,
@@ -4018,8 +4097,7 @@ def _build_action_summary(fn_name: str, fn_args: dict) -> str:
                 pass
         return f"✅ Tapşırığı tamamlayacam:\n\n{client_line}"
     elif fn_name == "create_task":
-        assign_names = {"rufat": "Rüfət Həsənzadə", "soltan": "Soltan Abbasov", "admin": "Admin"}
-        assignee = assign_names.get(fn_args.get('assign_to', ''), 'Admin')
+        assignee = ACTIVE_ASSIGNEES.get(str(fn_args.get('assign_to') or '').casefold(), ACTIVE_ASSIGNEES['admin'])[0]
         return (f"📋 Tapşırıq yaradacam:\n\n"
                 f"{client_line}\n"
                 f"📝 {fn_args.get('text', '')}\n"
@@ -4155,11 +4233,10 @@ async def action_confirm_callback(update: Update, context: ContextTypes.DEFAULT_
         task_key = str(uuid.uuid4())[:8]
         _pending_tasks[f"ai_{task_key}"] = result
         keyboard = [
-            [
-                InlineKeyboardButton("Rüfət Həsənzadə", callback_data=f"aitask_{task_key}_rufat"),
-                InlineKeyboardButton("Soltan Abbasov", callback_data=f"aitask_{task_key}_soltan"),
-            ],
-            [InlineKeyboardButton("Admin", callback_data=f"aitask_{task_key}_admin")],
+            [InlineKeyboardButton("Rüfət", callback_data=f"aitask_{task_key}_rufat"), InlineKeyboardButton("Hüseyn", callback_data=f"aitask_{task_key}_huseyn")],
+            [InlineKeyboardButton("Rasim", callback_data=f"aitask_{task_key}_rasim"), InlineKeyboardButton("Sərmayə", callback_data=f"aitask_{task_key}_sermaye")],
+            [InlineKeyboardButton("Asya", callback_data=f"aitask_{task_key}_asya"), InlineKeyboardButton("Nuranə", callback_data=f"aitask_{task_key}_nurane")],
+            [InlineKeyboardButton("Özüm", callback_data=f"aitask_{task_key}_admin")],
         ]
         try:
             await query.edit_message_text(
@@ -4247,8 +4324,8 @@ async def ai_task_assign_callback(update: Update, context: ContextTypes.DEFAULT_
             pass
         return
     # Update assignee
-    assignee_map = {"rufat": (10932455, "Admin"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin"), "sahe_meneceri": (10932455, "Admin")}
-    assignee_uid, assignee_name = assignee_map.get(assignee_key, (10932455, "Admin"))
+    assignee = ACTIVE_ASSIGNEES.get(assignee_key, ACTIVE_ASSIGNEES["admin"])
+    assignee_uid, assignee_name = assignee[2], assignee[0]
     task_data["assignee_id"] = assignee_uid
     task_data["assignee_name"] = assignee_name
     _pending_tasks[pending_key] = task_data
@@ -4681,7 +4758,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         )
         return
     # Keep employee markers for the existing workflow; Kommo assignee is Admin.
-    _ASSIGNEE_MARKER = {"rufat": "Rüfət Həsənzadə", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    _ASSIGNEE_MARKER = {key: ("" if key == "admin" else value[0]) for key, value in ACTIVE_ASSIGNEES.items()}
     marker_name = _ASSIGNEE_MARKER.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -4711,10 +4788,7 @@ async def stage_task_assign_callback(update: Update, context: ContextTypes.DEFAU
         )
     except:
         pass
-    _pending_choice_by_assignee = {
-        "rufat": "Rüfət", "soltan": "Soltan", "huseyn": "Hüseyn",
-        "rasim": "Rasim", "texniki": "Texniki", "admin": "Özüm",
-    }
+    _pending_choice_by_assignee = {key: value[1] for key, value in ACTIVE_ASSIGNEES.items()}
     mark_pending_action_resolved(
         action_type="assign_executor",
         lead_id=lead_id,
@@ -4738,7 +4812,7 @@ async def stage_task_deadline_callback(update: Update, context: ContextTypes.DEF
     stage_key = parts[2]
     assignee_key = parts[3]
     deadline_key = parts[4]
-    _ASSIGNEE_MARKER_DL = {"rufat": "Rüfət Həsənzadə", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "admin": ""}
+    _ASSIGNEE_MARKER_DL = {key: ("" if key == "admin" else value[0]) for key, value in ACTIVE_ASSIGNEES.items()}
     marker_name = _ASSIGNEE_MARKER_DL.get(assignee_key, "")
     if assignee_key == "admin":
         assignee_uid = 10932455
@@ -5156,11 +5230,10 @@ async def handle_button_flow(update: Update, context: ContextTypes.DEFAULT_TYPE,
             flow["task_text"] = user_text
             flow["step"] = "assignee"
             keyboard = [
-                [
-                    InlineKeyboardButton("Rüfət", callback_data=f"btnflow_{chat_id}_rufat"),
-                    InlineKeyboardButton("Soltan", callback_data=f"btnflow_{chat_id}_soltan"),
-                ],
-                [InlineKeyboardButton("Admin", callback_data=f"btnflow_{chat_id}_admin")],
+                [InlineKeyboardButton("Rüfət", callback_data=f"btnflow_{chat_id}_rufat"), InlineKeyboardButton("Hüseyn", callback_data=f"btnflow_{chat_id}_huseyn")],
+                [InlineKeyboardButton("Rasim", callback_data=f"btnflow_{chat_id}_rasim"), InlineKeyboardButton("Sərmayə", callback_data=f"btnflow_{chat_id}_sermaye")],
+                [InlineKeyboardButton("Asya", callback_data=f"btnflow_{chat_id}_asya"), InlineKeyboardButton("Nuranə", callback_data=f"btnflow_{chat_id}_nurane")],
+                [InlineKeyboardButton("Özüm", callback_data=f"btnflow_{chat_id}_admin")],
             ]
             await update.message.reply_text(
                 f"📋 Tapşırıq:\n\n👤 {flow['contact_name']}\n📞 {flow['phone']}\n📝 {user_text}\n\n👤 Kim icra edəcək?",
@@ -5328,8 +5401,8 @@ async def btnflow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not flow or flow.get("action") != "task":
         await query.edit_message_text("❌ Vaxtı keçib.")
         return
-    assignee_map = {"rufat": (10932455, "Admin"), "soltan": (15531960, "Soltan Abbasov"), "admin": (10932455, "Admin"), "sahe_meneceri": (10932455, "Admin")}
-    assignee_id, assignee_name = assignee_map.get(action_key, (10932455, "Admin"))
+    assignee = ACTIVE_ASSIGNEES.get(action_key, ACTIVE_ASSIGNEES["admin"])
+    assignee_id, assignee_name = assignee[2], assignee[0]
     flow["assignee_id"] = assignee_id
     flow["assignee_name"] = assignee_name
     flow["step"] = "deadline"
@@ -6811,14 +6884,17 @@ async def _process_kommo_webhook_background(data: dict):
             keyboard = [
                 [
                     InlineKeyboardButton("Rüfət", callback_data=f"stgtask-{lead_id}-{stage_key}-rufat"),
-                    InlineKeyboardButton("Soltan", callback_data=f"stgtask-{lead_id}-{stage_key}-soltan"),
-                ],
-                [
                     InlineKeyboardButton("Hüseyn", callback_data=f"stgtask-{lead_id}-{stage_key}-huseyn"),
-                    InlineKeyboardButton("Rasim", callback_data=f"stgtask-{lead_id}-{stage_key}-rasim"),
                 ],
                 [
-                    InlineKeyboardButton("Texniki", callback_data=f"stgtask-{lead_id}-{stage_key}-texniki"),
+                    InlineKeyboardButton("Rasim", callback_data=f"stgtask-{lead_id}-{stage_key}-rasim"),
+                    InlineKeyboardButton("Sərmayə", callback_data=f"stgtask-{lead_id}-{stage_key}-sermaye"),
+                ],
+                [
+                    InlineKeyboardButton("Asya", callback_data=f"stgtask-{lead_id}-{stage_key}-asya"),
+                    InlineKeyboardButton("Nuranə", callback_data=f"stgtask-{lead_id}-{stage_key}-nurane"),
+                ],
+                [
                     InlineKeyboardButton("Özüm", callback_data=f"stgtask-{lead_id}-{stage_key}-admin"),
                 ],
                 [
@@ -6843,7 +6919,7 @@ async def _process_kommo_webhook_background(data: dict):
                 "stage_key": stage_key,
                 "stage_name": stage_display,
                 "link": link,
-            }, ["Rüfət", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Ləğv et"])
+            }, ["Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Ləğv et"])
             send_push_to_admin(f"Mərhələ dəyişdi: {stage_display} - {contact_name}", title="📋 İcraçı seçimi")
         else:
             # Plain notification
@@ -7183,16 +7259,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if task_type_id not in {4232112, XATIRLAT_TASK_TYPE_ID}:
                 task_type_id = 4232112
             executor = str(data.get("executor") or "Rüfət Həsənzadə").strip()
-            executor_ids = {
-                "Nizami Qasımov": 10932455,
-                "Soltan Abbasov": 15531960,
-                "Rüfət Həsənzadə": 10932455,
-                "Hüseyn Səfərov": 10932455,
-                "Rasim Əsgərov": 10932455,
-                "Sərmayə Əhmədsoy": 10932455,
-                "Asya Agayeva": 10932455,
-                "Nuranə Şirinova": 10932455,
-            }
+            executor_ids = {name: user_id for name, _short, user_id in ACTIVE_ASSIGNEES.values()}
             responsible_user_id = executor_ids.get(executor)
             if not responsible_user_id:
                 return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
@@ -7431,9 +7498,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         msg_text += f"\n\ud83d\udd17 {deal_link}"
                     kb_json = {"inline_keyboard": [
                         [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
-                        [{"text": "\u015eamil", "callback_data": f"updtask-{found_conf_key}-rufat"}, {"text": "Soltan", "callback_data": f"updtask-{found_conf_key}-soltan"}],
-                        [{"text": "H\u00fcseyn", "callback_data": f"updtask-{found_conf_key}-huseyn"}, {"text": "Rasim", "callback_data": f"updtask-{found_conf_key}-rasim"}],
-                        [{"text": "Texniki", "callback_data": f"updtask-{found_conf_key}-texniki"}, {"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
+                        [{"text": "R\u00fcf\u0259t", "callback_data": f"updtask-{found_conf_key}-rufat"}, {"text": "H\u00fcseyn", "callback_data": f"updtask-{found_conf_key}-huseyn"}],
+                        [{"text": "Rasim", "callback_data": f"updtask-{found_conf_key}-rasim"}, {"text": "S\u0259rmay\u0259", "callback_data": f"updtask-{found_conf_key}-sermaye"}],
+                        [{"text": "Asya", "callback_data": f"updtask-{found_conf_key}-asya"}, {"text": "Nuran\u0259", "callback_data": f"updtask-{found_conf_key}-nurane"}],
+                        [{"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
                         [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                     ]}
                     tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
@@ -7458,7 +7526,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         "creator_chat_id": pending.get('creator_chat_id'),
                         "telegram_chat_id": admin_chat,
                         "telegram_message_id": tg_msg_id,
-                    }, ["Təsdiq et", "Rüfət", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
+                    }, ["Təsdiq et", "Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
                     send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending")
                 except Exception as e:
                     logger.error(f"add_note conf notification error: {e}")
@@ -7559,9 +7627,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
                 admin_chat = get_chat_id_for_kommo_user(10932455)
                 kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Rüfət", callback_data=f"cnftask-{conf_key}-rufat"), InlineKeyboardButton("Soltan", callback_data=f"cnftask-{conf_key}-soltan")],
-                    [InlineKeyboardButton("Hüseyn", callback_data=f"cnftask-{conf_key}-huseyn"), InlineKeyboardButton("Rasim", callback_data=f"cnftask-{conf_key}-rasim")],
-                    [InlineKeyboardButton("Texniki", callback_data=f"cnftask-{conf_key}-texniki"), InlineKeyboardButton("Özüm", callback_data=f"cnftask-{conf_key}-admin")],
+                    [InlineKeyboardButton("Rüfət", callback_data=f"cnftask-{conf_key}-rufat"), InlineKeyboardButton("Hüseyn", callback_data=f"cnftask-{conf_key}-huseyn")],
+                    [InlineKeyboardButton("Rasim", callback_data=f"cnftask-{conf_key}-rasim"), InlineKeyboardButton("Sərmayə", callback_data=f"cnftask-{conf_key}-sermaye")],
+                    [InlineKeyboardButton("Asya", callback_data=f"cnftask-{conf_key}-asya"), InlineKeyboardButton("Nuranə", callback_data=f"cnftask-{conf_key}-nurane")],
+                    [InlineKeyboardButton("Özüm", callback_data=f"cnftask-{conf_key}-admin")],
                     [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
                 ])
                 try:
@@ -7588,7 +7657,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     "link": result.get('link', ''),
                     "conf_key": conf_key,
                     "creator_chat_id": chat_id,
-                }, ["Rüfət", "Soltan", "Hüseyn", "Rasim", "Texniki", "Özüm", "Rədd et"])
+                }, ["Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
                 return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
             # Admin creates directly
             logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
@@ -7791,10 +7860,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
             assignee = data.get("assignee")
             assignee_name_raw = normalize_assignee_name(data.get("assigneeName", ""))
             if assignee:
-                assignee_map = {"rufat": 10932455, "soltan": 15531960, "huseyn": 10932455, "rasim": 10932455, "texniki": 10932455, "admin": 10932455, "sahe_meneceri": 10932455}
-                assignee_id = assignee_map.get(assignee)
-                if assignee_id:
-                    update_data["responsible_user_id"] = assignee_id
+                selected_assignee = ACTIVE_ASSIGNEES.get(str(assignee).casefold())
+                if selected_assignee:
+                    update_data["responsible_user_id"] = selected_assignee[2]
             # Handle task type change
             task_type = data.get("task_type")
             if task_type:
@@ -8323,7 +8391,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             json={"chat_id": admin_chat, "text": completion_message, "reply_markup": kb_json, "disable_web_page_preview": True},
                             timeout=8
                         )
-                        send_push_to_admin(completion_message, title="✅ Tapşırıq tamamlandı", url="#pending")
+                        # Completion is delivered to its creator in Telegram.
+                        # It is not urgent enough to duplicate as a PWA push
+                        # to Nizami.
                         save_pending_action("change_stage", {
                             "contact_name": contact_name or "—",
                             "phone": phone or "—",
@@ -8361,7 +8431,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                         if link: _creator_msg += f"\n🔗 {link}"
                         _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                             json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
-                        send_push_notification(str(_creator_chat), '✅ Tapşırıq tamamlandı', f'{contact_name} - {task_desc_display}')
                 except Exception as _cav_err:
                     logger.warning(f"Cavabdeh notification error: {_cav_err}")
               except Exception as notif_block_err:
@@ -8926,6 +8995,21 @@ def _rufat_marker_name(task_text: str) -> str:
         "Nizami": "Nizami Qasımov", "Rasim": "Rasim Əsgərov", "Sərmayə": "Sərmayə Əhmədsoy",
         "Asya": "Asya Agayeva", "Nuranə": "Nuranə Şirinova", "Texniki": TECHNICAL_SUPPORT_NAME,
     }.get(match.group(1), match.group(1))
+
+
+def active_task_assignee_chat_id(task: dict) -> int:
+    """Resolve an active executor even when Kommo stores a shared CRM user ID."""
+    marker_name = _rufat_marker_name(str((task or {}).get("text") or ""))
+    marked_chat_id = NAME_TO_CHAT.get(marker_name)
+    if marked_chat_id and can_receive_staff_notification(marked_chat_id):
+        return int(marked_chat_id)
+    try:
+        fallback_chat_id = get_chat_id_for_kommo_user(int((task or {}).get("responsible_user_id") or 0))
+    except (TypeError, ValueError):
+        fallback_chat_id = None
+    if fallback_chat_id and can_receive_staff_notification(fallback_chat_id):
+        return int(fallback_chat_id)
+    return 0
 
 
 async def _load_personal_funnel_contact_ids() -> set[int]:
@@ -17888,7 +17972,6 @@ GOZLEME_PIPELINE_ID = 14243944
 XATIRLAT_TASK_TYPE_ID = 4239844  # xatırlat muşt.
 TG_TO_STATUS_ID = {
     RUFAT_CHAT_ID: 109988184,   # Rüfət Həsənzadə
-    7262243946: 109988188,   # Soltan Abbasov
     7329891614: 109988192,   # Hüseyn Səfərov
     1628569350: 109988196,   # Nizami Qasımov / Admin
     7920785774: 109988200,   # Rasim Əsgərov
@@ -18761,15 +18844,14 @@ async def handle_push_subscribe(request):
     return web.json_response({'success': True})
 
 def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: str = "", phone_number_id: str = "") -> None:
+    """Push an incoming customer message to its owner, never as Telegram spam."""
     title = str(name or "").strip()
     notice_phone = _wa_display_number(phone)
     line = _wa_line_for_phone_id(phone_number_id)
-    if line == "nizami":
-        target_uids = {str(ADMIN_CHAT_ID)}
-    elif line == "rufat":
-        target_uids = {str(RUFAT_CHAT_ID), *(str(cid) for cid in RUFAT_COMPAT_CHAT_IDS)}
-    else:
-        target_uids = set()
+    owner_chat_id = _owner_chat_for_lead(int(lead_id or 0))
+    if not can_receive_staff_notification(owner_chat_id):
+        owner_chat_id = int(ADMIN_CHAT_ID) if line == "nizami" else int(RUFAT_CHAT_ID) if line == "rufat" else int(ADMIN_CHAT_ID)
+    target_uids = {str(owner_chat_id)}
 
     title = (title or notice_phone or "WhatsApp")[:80]
     body = " ".join(str(preview or "Yeni mesaj").split())[:140] or "Yeni mesaj"
@@ -18788,7 +18870,7 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: st
 
 
 _SALARY_FUNNEL_IDS = {
-    int(RUFAT_CHAT_ID), 7962757442, int(HUSEYN_CHAT_ID), int(RASIM_CHAT_ID), int(ADMIN_CHAT_ID),
+    int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID), int(RASIM_CHAT_ID), int(ADMIN_CHAT_ID),
 }
 _staff_notices: dict[str, list] = {}
 _staff_notice_keys: set[str] = set()
@@ -18919,6 +19001,12 @@ def notice_knock(lead_id: int, preview: str, pipeline_id: int = 0, name: str = "
 
 def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0, phone="", contact_name="", preview="", wa_line=""):
     """Send push notification to a user if subscribed."""
+    try:
+        recipient = int(user_id)
+    except (TypeError, ValueError):
+        return
+    if not can_receive_staff_notification(recipient):
+        return
     sub = get_push_subscription(str(user_id))
     if not sub:
         return
@@ -18955,7 +19043,7 @@ def send_push_to_admin(body, title="Bein Systems", url=None):
 
 def send_push_to_all_salary(title, body, url=None):
     """Send push to all salary employees."""
-    for uid in [str(RUFAT_CHAT_ID),'7262243946','7329891614']:
+    for uid in map(str, sorted(_SALARY_CHAT_IDS)):
         send_push_notification(uid, title, body, url)
 
 KOMMO_DRIVE_URL = "https://drive-g.kommo.com"
@@ -19300,7 +19388,9 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"tecili_alarm_check error for task {task_id}: {exc}")
 
 
-_overdue_notified_tasks: dict[int, float] = {}
+_overdue_push_notified_tasks: dict[int, float] = {}
+_overdue_telegram_notified_tasks: dict[int, float] = {}
+_overdue_admin_notified_tasks: dict[int, float] = {}
 
 
 # ─── Background Jobs ─────────────────────────────────────────────────────────
@@ -19316,70 +19406,50 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         # Skip cavab gözlənilir
         if t.get("task_type_id") == 4229224:
             continue
-        responsible_id = t.get("responsible_user_id")
-        if not responsible_id:
-            continue
-        chat_id = get_chat_id_for_kommo_user(responsible_id)
-        if not chat_id or _salary_funnel_user(chat_id):
+        chat_id = active_task_assignee_chat_id(t)
+        if not chat_id or chat_id == int(ADMIN_CHAT_ID) or not can_receive_staff_notification(chat_id):
             continue
         task_text = t.get("text", "Tapşırıq")
         entity_id = t.get("entity_id")
         entity_type = t.get("entity_type", "leads")
         _due_lead = int(entity_id or 0) if entity_type == "leads" else 0
         remember_staff_notice(chat_id, "due_soon", "15 dəq qalıb!", f"{task_text}", _due_lead)
-        client_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
-        client_phone = get_phone_from_entity(entity_id, entity_type) if entity_id else ""
         dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
-        name_line = f"\n👤 {client_name}" if client_name else ""
-        phone_line = f"\n📞 {client_phone}" if client_phone else ""
-        link_line = f"\n🔗 {KOMMO_BASE_URL}/{'leads' if entity_type == 'leads' else 'contacts'}/detail/{entity_id}" if entity_id else ""
-        # Fetch last note
-        _note_15 = ""
-        if entity_id:
-            try:
-                _nr = _http.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
-                if _nr.status_code == 200:
-                    _nd = _nr.json().get("_embedded", {}).get("notes", [])
-                    if _nd:
-                        _note_15 = _nd[0].get("params", {}).get("text", "")
-            except:
-                pass
-        note_line = f"\n📝 Qeyd: {_note_15}" if _note_15 else ""
-        try:
-            await context.bot.send_message(
-                chat_id,
-                f"⏰ *Tapşırıq 15 dəqiqəyə bitməlidir!*\n\n📝 {task_text}{name_line}{phone_line}\n🕐 {dt.strftime('%H:%M')}{note_line}{link_line}",
-                parse_mode="Markdown",
-                disable_web_page_preview=True
-            )
-            # Push notification
-            send_push_notification(str(chat_id), '⏰ 15 dəq qalıb!', f'{task_text} - {dt.strftime("%H:%M")}')
-        except:
-            pass
+        # A short push is enough before the deadline. Telegram is reserved for
+        # tasks that remain overdue, so employees do not receive duplicates.
+        send_push_notification(str(chat_id), '⏰ 15 dəq qalıb!', f'{task_text} - {dt.strftime("%H:%M")}')
     # Overdue tasks
     overdue_end = now - timedelta(minutes=5)
     overdue_start = now - timedelta(hours=2)
     overdue_tasks = get_tasks(overdue_start, overdue_end)
     for t in overdue_tasks:
         task_id = t.get("id")
-        responsible_id = t.get("responsible_user_id")
-        if not responsible_id or not task_id:
-            continue
-        # Skip overdue notification for admin
-        if responsible_id == 10932455:
+        if not task_id:
             continue
         # Skip cavab gözlənilir tasks
         if t.get("task_type_id") == 4229224:
             continue
-        if task_id in _overdue_notified_tasks and now_ts - _overdue_notified_tasks[task_id] < 14400:
-            continue
-        _overdue_notified_tasks[task_id] = now_ts
-        chat_id = get_chat_id_for_kommo_user(responsible_id)
-        if not chat_id or _salary_funnel_user(chat_id):
+        chat_id = active_task_assignee_chat_id(t)
+        if not chat_id or chat_id == int(ADMIN_CHAT_ID) or not can_receive_staff_notification(chat_id):
             continue
         task_text = t.get("text", "Tapşırıq")
         _over_lead = int(t.get("entity_id") or 0) if t.get("entity_type", "leads") == "leads" else 0
         remember_staff_notice(chat_id, "overdue", "Vaxt keçib!", task_text, _over_lead)
+        if task_id not in _overdue_push_notified_tasks:
+            _overdue_push_notified_tasks[task_id] = now_ts
+            send_push_notification(str(chat_id), '🔴 Vaxt keçib!', task_text)
+        overdue_age = now_ts - float(t.get("complete_till") or now_ts)
+        if overdue_age >= 60 * 60 and task_id not in _overdue_admin_notified_tasks:
+            _overdue_admin_notified_tasks[task_id] = now_ts
+            escalation = f"🔴 1 saatdan çox gecikib: {task_text}"
+            send_push_to_admin(escalation, title="⚠️ Kritik gecikmə", url="#tasks")
+            try:
+                await context.bot.send_message(int(ADMIN_CHAT_ID), escalation, disable_web_page_preview=True)
+            except Exception:
+                pass
+        if overdue_age < 30 * 60 or task_id in _overdue_telegram_notified_tasks:
+            continue
+        _overdue_telegram_notified_tasks[task_id] = now_ts
         keyboard = [
             [
                 InlineKeyboardButton("✅ İcra olundu", callback_data=f"overdue_{task_id}_done"),
@@ -19393,7 +19463,6 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            send_push_notification(str(chat_id), '🔴 Vaxt keçib!', task_text)
         except:
             pass
 
@@ -19420,7 +19489,6 @@ async def morning_digest(context: ContextTypes.DEFAULT_TYPE):
     # All employees
     _DIGEST_EMPLOYEES = {
         RUFAT_CHAT_ID: "Rüfət Həsənzadə",
-        7262243946: "Soltan Abbasov",
         7329891614: "H\u00fcseyn S\u0259f\u0259rov",
         7920785774: "Rasim \u018fsg\u0259rov",
         1289510272: "S\u0259rmay\u0259 \u018fhm\u0259dsoy",
@@ -19726,7 +19794,7 @@ async def update_task_confirm_callback(update: Update, context: ContextTypes.DEF
         except: pass
         return
     # Resolve assignee
-    _UPD_MARKER = {"rufat": ("Rüfət Həsənzadə", 15532668), "soltan": ("Soltan Abbasov", 15531960), "huseyn": ("Hüseyn Səfərov", 15532668), "rasim": ("Rasim Əsgərov", 15532668), "texniki": (TECHNICAL_SUPPORT_NAME, 15532668), "admin": ("Nizami Qasımov", 10932455)}
+    _UPD_MARKER = {key: (value[0], value[2]) for key, value in ACTIVE_ASSIGNEES.items()}
     update_data = pending["update_data"]
     if decision != "yes":
         marker_info = _UPD_MARKER.get(decision)
@@ -19796,7 +19864,7 @@ async def confirm_task_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 pass
         return
     # Admin selected an employee - resolve assignee
-    _CNFTASK_MARKER = {"rufat": "Rüfət Həsənzadə", "soltan": "Soltan Abbasov", "huseyn": "Hüseyn Səfərov", "rasim": "Rasim Əsgərov", "texniki": TECHNICAL_SUPPORT_NAME, "admin": ""}
+    _CNFTASK_MARKER = {key: ("" if key == "admin" else value[0]) for key, value in ACTIVE_ASSIGNEES.items()}
     marker_name = _CNFTASK_MARKER.get(decision, "")
     if decision == "admin":
         assignee_id = 10932455
@@ -19878,8 +19946,7 @@ _KPI_TARGET_TIMES = {
 }
 
 _EMPLOYEE_TYPES = {
-    RUFAT_CHAT_ID: 'salary', 7262243946: 'piecework',
-    7329891614: 'salary', 7920785774: 'piecework',
+    RUFAT_CHAT_ID: 'salary', 7329891614: 'salary', 7920785774: 'piecework',
     1289510272: 'salary', 6596538872: 'salary',
     1142054888: 'salary',
 }
@@ -20083,6 +20150,7 @@ def main():
     global _bot_app, _telegram_bot_username
     threading.Thread(target=_run_http_server, name="http-server", daemon=True).start()
     async def post_init(application: Application) -> None:
+        remove_retired_employee_access()
         ensure_known_employee_registrations()
         # This deployment uses long polling for Telegram updates. Telegram
         # rejects getUpdates while a webhook is configured, so clear a webhook
