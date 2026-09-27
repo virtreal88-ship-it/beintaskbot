@@ -18009,7 +18009,10 @@ def _employee_directory_rows() -> list[dict]:
         chat_key = aliases.get(str(stored_id), str(stored_id))
         if chat_key not in access or str(stored_id) == chat_key:
             access[chat_key] = record
-    ids = set(access) | set(_KNOWN_EMPLOYEE_REGISTRATIONS) | set(users_by_chat_id)
+    # Keep one key type throughout. Without this normalization an integer
+    # built-in ID and the same string ID from users.json survive a set union
+    # as two values and generate two identical cards.
+    ids = set(access) | {str(chat_id) for chat_id in _KNOWN_EMPLOYEE_REGISTRATIONS} | set(users_by_chat_id)
     rows = []
     for raw_id in ids:
         try:
