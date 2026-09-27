@@ -10717,7 +10717,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const dlEl = document.getElementById('edit-deadline-custom'); if(dlEl) dlEl.addEventListener('change', checkEditChanged);
 });
 
-const EMPLOYEE_PERMISSION_LABELS = {tasks:'Tapşırıqlar',customers:'Müştərilər',waiting:'Gözləmə',reports:'Hesabatlar',finance:'Maliyyə',stages:'Mərhələlər',employees:'Əməkdaşları idarə et'};
+const EMPLOYEE_PERMISSION_LABELS = {tasks:'Tapşırıqlar',customers:'Müştərilər və sövdələşmələr',waiting:'Gözləyən sorğular',reports:'Hesabatlar',finance:'Tarixçə',stages:'Gələn sorğular',employees:'Əməkdaşlar'};
 function renderEmployeePermissionInputs(selected=[]){const n=document.getElementById('employee-permission-list'),s=new Set(selected||[]);if(n)n.innerHTML=Object.entries(EMPLOYEE_PERMISSION_LABELS).map(([k,v])=>`<label class="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2"><input type="checkbox" data-employee-permission="${k}" ${s.has(k)?'checked':''}><span>${v}</span></label>`).join('');}
 function resetEmployeeForm(){['employee-form-name','employee-form-chat-id','employee-form-kommo-id'].forEach(id=>document.getElementById(id).value='');document.getElementById('employee-form-role').value='employee';renderEmployeePermissionInputs(['tasks']);}
 function editEmployee(id){const e=employeeDirectory.find(x=>String(x.chat_id)===String(id));if(!e)return;document.getElementById('employee-form-name').value=e.name||'';document.getElementById('employee-form-chat-id').value=e.chat_id||'';document.getElementById('employee-form-kommo-id').value=e.kommo_user_id||'';document.getElementById('employee-form-role').value=e.role==='Admin'?'admin':'employee';renderEmployeePermissionInputs(e.permissions||[]);window.scrollTo({top:0,behavior:'smooth'});}

@@ -17981,11 +17981,18 @@ def _employee_directory_rows() -> list[dict]:
     # so a person never appears twice.
     users_by_chat_id: dict[str, dict] = {}
     aliases: dict[str, str] = {}
+    known_chat_by_name = {
+        str(name).strip().casefold(): str(chat_id)
+        for chat_id, (name, _kommo_user_id) in _KNOWN_EMPLOYEE_REGISTRATIONS.items()
+    }
     for stored_id, info in users.items():
         if not isinstance(info, dict) or str(info.get("role") or "").casefold() == "partnyor":
             continue
         try:
-            chat_id = int(info.get("telegram_id") or stored_id)
+            # A few oldest records omitted telegram_id, but their fixed name
+            # still identifies the same pre-registered employee.
+            known_id = known_chat_by_name.get(str(info.get("name") or "").strip().casefold())
+            chat_id = int(info.get("telegram_id") or known_id or stored_id)
         except (TypeError, ValueError):
             continue
         if chat_id <= 0:
