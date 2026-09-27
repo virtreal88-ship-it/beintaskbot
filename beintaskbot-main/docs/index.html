@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
     <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=251">
-    <!-- Mini App removed -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:ital,opsz,wght@0,6..12,400;0,6..12,600;1,6..12,400&display=swap');
@@ -1331,6 +1331,7 @@
 
 <script>
 const tg = window.Telegram?.WebApp || {};
+try { tg.ready?.(); tg.expand?.(); } catch(_err) {}
 
 const PUBLIC_PWA_BASE = 'https://worker-production-3e3e.up.railway.app/';
 const RAILWAY_API = 'https://worker-production-3e3e.up.railway.app';
