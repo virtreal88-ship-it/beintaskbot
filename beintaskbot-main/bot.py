@@ -17535,13 +17535,16 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         chat_id = int(tg_user_id) if tg_user_id else None
         if not chat_id:
             return web.json_response({"success": False, "error": "User not identified"}, status=401)
-        if is_funnel_chat(chat_id) and not is_admin(chat_id):
+        # Nizami is an administrator but also has his own funnel. Returning
+        # its already-cached task list avoids the legacy all-CRM scan, which
+        # can take long enough for the mobile app to abort on first login.
+        if is_funnel_chat(chat_id):
             try:
                 overview = await get_rufat_overview(owner_chat_id=chat_id)
             except Exception as exc:
                 logger.error("Funnel notifications overview failed: %s", exc)
                 return web.json_response({"success": False, "error": "Kommo sorğusu uğursuz oldu."}, status=502)
-            return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": False,
+            return web.json_response({"success": True, "tasks": overview["tasks"], "is_admin": is_admin(chat_id),
                                       "user_name": overview["user_name"], "ui_stages": overview.get("ui_stages")})
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:

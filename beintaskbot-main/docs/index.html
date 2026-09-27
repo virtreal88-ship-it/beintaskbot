@@ -2317,7 +2317,7 @@ async function initApp() {
 document.addEventListener('visibilitychange', () => {
     if(!document.hidden) {
         resumeInboxPulse();
-        if(HAS_OWN_FUNNEL && !isAdmin) {
+        if(HAS_OWN_FUNNEL) {
             if (Date.now() - samilWorkspaceLoadedAt < 90000) return;
             loadSamilWorkspace();
         } else {
@@ -2507,7 +2507,7 @@ function resumeEdit() {
 }
 
 async function syncNotifications(showError = false) {
-    if(HAS_OWN_FUNNEL && !isAdmin) return loadSamilWorkspace(showError);
+    if(HAS_OWN_FUNNEL) return loadSamilWorkspace(showError);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 18000);
     try {
@@ -2851,7 +2851,7 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
-    if(HAS_OWN_FUNNEL && !isAdmin) {
+    if(HAS_OWN_FUNNEL) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored || mockTasks.length) renderNotifications();
         else if(forceRefresh || !restored) showLoader();
