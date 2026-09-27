@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="az">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CRM Smart Assistant — satış, müştəri, tapşırıq və komanda idarəetməsi üçün BeinSystems platforması.">
+  <meta name="theme-color" content="#0d2422">
+  <title>CRM Smart Assistant — BeinSystems</title>
+  <style>
+    :root { --ink:#10211f; --muted:#58706a; --line:#dfe8e5; --mint:#dff5eb; --card:#fff; --accent:#0d8a69; --accent-dark:#087356; --bg:#f5f8f7; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    a { color:inherit; text-decoration:none; }
+    .shell { width:min(1160px, calc(100% - 40px)); margin:auto; }
+    .nav { height:76px; display:flex; justify-content:space-between; align-items:center; }
+    .brand { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:800; letter-spacing:-.04em; }
+    .brand-mark { width:37px; height:37px; display:grid; place-items:center; color:#fff; background:var(--ink); border-radius:12px; font-weight:900; }
+    .nav-links { display:flex; align-items:center; gap:27px; font-size:14px; color:#415752; }
+    .login, .primary { display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:12px; font-weight:750; transition:transform .15s, background .15s; }
+    .login { padding:10px 15px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+    .primary { padding:14px 20px; background:var(--accent); color:#fff; box-shadow:0 12px 28px rgba(13,138,105,.21); }
+    .primary:hover { background:var(--accent-dark); transform:translateY(-1px); }
+    .hero { position:relative; overflow:hidden; padding:68px 0 86px; background:linear-gradient(115deg,#edf8f3 0%,#f7fbf9 54%,#e7f7f0 100%); border-top:1px solid #e3eee9; }
+    .hero:after { content:""; position:absolute; width:540px; height:540px; right:-190px; top:-180px; border-radius:50%; background:radial-gradient(circle,#afebd0 0,rgba(175,235,208,0) 67%); pointer-events:none; }
+    .hero-grid { position:relative; z-index:1; display:grid; grid-template-columns:1.1fr .9fr; gap:56px; align-items:center; }
+    .eyebrow { display:inline-flex; align-items:center; gap:8px; padding:7px 11px; border:1px solid #bee8d4; background:#f8fffb; color:#117654; border-radius:999px; font-size:13px; font-weight:750; }
+    .eyebrow i { width:7px; height:7px; border-radius:50%; background:#15ad78; }
+    h1 { margin:18px 0; max-width:650px; font-size:clamp(38px,5vw,65px); line-height:1.04; letter-spacing:-.065em; }
+    .lead { max-width:610px; margin:0 0 28px; color:var(--muted); font-size:19px; }
+    .hero-actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    .text-link { padding:12px 7px; color:#165e4b; font-weight:750; }
+    .dashboard { padding:18px; border:1px solid rgba(255,255,255,.7); border-radius:22px; background:rgba(255,255,255,.74); box-shadow:0 25px 55px rgba(29,85,64,.15); backdrop-filter:blur(8px); }
+    .dash-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:15px; font-size:13px; font-weight:750; }
+    .dots { display:flex; gap:5px; }.dots span { width:7px; height:7px; border-radius:50%; background:#cbd8d4; }.dots span:first-child { background:#31bb83; }
+    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .metric, .deal-card { padding:14px; border:1px solid #e4ece9; border-radius:14px; background:#fff; }
+    .metric small,.deal-card small { display:block; color:#738580; font-size:11px; font-weight:650; }.metric strong { display:block; margin-top:3px; font-size:22px; letter-spacing:-.04em; }
+    .deal-card { grid-column:span 2; display:flex; justify-content:space-between; align-items:center; }.deal-card b { display:block; font-size:13px; }.tag { padding:5px 8px; border-radius:7px; background:#e1f7ed; color:#147556; font-size:10px; font-weight:800; }
+    section { padding:88px 0; }.section-title { max-width:650px; margin:0 auto 44px; text-align:center; }.section-title span { color:var(--accent); font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.1em; }.section-title h2 { margin:9px 0 10px; font-size:clamp(30px,3.6vw,45px); line-height:1.1; letter-spacing:-.05em; }.section-title p { margin:0; color:var(--muted); }
+    .features { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }.feature { min-height:210px; padding:24px; border:1px solid var(--line); border-radius:18px; background:var(--card); }.icon { width:42px; height:42px; display:grid; place-items:center; margin-bottom:19px; border-radius:12px; background:#e6f7ef; color:#087356; font-size:20px; }.feature h3 { margin:0 0 7px; font-size:18px; letter-spacing:-.03em; }.feature p { margin:0; color:var(--muted); font-size:14px; }
+    .workflow-wrap { background:var(--ink); color:#fff; }.workflow { display:grid; grid-template-columns:.8fr 1.2fr; gap:70px; align-items:center; }.workflow h2 { margin:10px 0; font-size:clamp(31px,4vw,47px); line-height:1.08; letter-spacing:-.055em; }.workflow p { color:#b9cbc5; }.workflow .section-kicker { color:#65dbaa; font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.1em; }.steps { display:grid; gap:12px; }.step { display:flex; gap:17px; padding:17px; border:1px solid rgba(255,255,255,.12); border-radius:14px; background:rgba(255,255,255,.06); }.step-no { flex:0 0 30px; height:30px; display:grid; place-items:center; border-radius:9px; background:#1e4c42; color:#7aebba; font-weight:800; font-size:13px; }.step b { display:block; margin-bottom:3px; }.step span { color:#b9cbc5; font-size:14px; }
+    .roles { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }.role { padding:25px; border:1px solid var(--line); border-radius:18px; background:#fff; }.role b { display:block; margin:8px 0 8px; font-size:19px; }.role p { margin:0; color:var(--muted); font-size:14px; }.role .role-icon { color:var(--accent); font-size:24px; }
+    .cta { padding:62px 36px; text-align:center; border-radius:25px; background:linear-gradient(120deg,#dff6eb,#eef9f4); border:1px solid #d1eadc; }.cta h2 { margin:0 0 9px; font-size:clamp(30px,4vw,44px); letter-spacing:-.05em; }.cta p { max-width:580px; margin:0 auto 24px; color:var(--muted); }
+    footer { padding:25px 0 38px; color:#6d817b; font-size:13px; }.footer-line { display:flex; justify-content:space-between; gap:15px; padding-top:23px; border-top:1px solid var(--line); }
+    @media (max-width:780px) { .shell{width:min(100% - 30px,600px)} .nav{height:66px}.nav-links{display:none}.hero{padding:50px 0 58px}.hero-grid,.workflow{grid-template-columns:1fr;gap:34px}.dashboard{max-width:440px}.features,.roles{grid-template-columns:1fr}.feature{min-height:auto}section{padding:62px 0}.cta{padding:44px 21px}.footer-line{flex-direction:column}.lead{font-size:17px} }
+  </style>
+</head>
+<body>
+  <header class="shell nav">
+    <a class="brand" href="/"><span class="brand-mark">B</span><span>BeinSystems</span></a>
+    <nav class="nav-links"><a href="#imkanlar">İmkanlar</a><a href="#nece-isleyir">Necə işləyir</a><a href="#istifadeci">İstifadəçilər</a></nav>
+    <a class="login" href="/webapp">Sistemə daxil ol →</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <span class="eyebrow"><i></i> Biznes üçün vahid iş sistemi</span>
+          <h1>Satışı, müştəriləri və komandanı bir yerdən idarə edin.</h1>
+          <p class="lead"><strong>CRM Smart Assistant</strong> gündəlik iş axınını sadələşdirən BeinSystems platformasıdır: müştəri müraciətləri, sövdələşmələr, tapşırıqlar və əməkdaşların işi bir ekranda.</p>
+          <div class="hero-actions"><a class="primary" href="/webapp">Sistemə daxil ol <span>→</span></a><a class="text-link" href="#imkanlar">İmkanlara baxın ↓</a></div>
+        </div>
+        <div class="dashboard" aria-label="BeinSystems idarəetmə paneli nümunəsi">
+          <div class="dash-top"><span>CRM Smart Assistant · Bugünkü iş icmalı</span><span class="dots"><span></span><span></span><span></span></span></div>
+          <div class="dash-grid">
+            <div class="metric"><small>Yeni müraciətlər</small><strong>12</strong></div>
+            <div class="metric"><small>Aktiv tapşırıqlar</small><strong>08</strong></div>
+            <div class="deal-card"><div><small>Sövdələşmə</small><b>Müştəri ilə əlaqə</b></div><span class="tag">İşlənir</span></div>
+            <div class="deal-card"><div><small>Tapşırıq</small><b>Günün prioritet işi</b></div><span class="tag">Bu gün</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="imkanlar"><div class="shell">
+      <div class="section-title"><span>Bir platforma</span><h2>İş axınının bütün mərhələləri nəzarətdədir</h2><p>Komandanın istifadə etdiyi əsas alətlər bir-birindən ayrı deyil — məlumat eyni sistemdə qalır.</p></div>
+      <div class="features">
+        <article class="feature"><div class="icon">◫</div><h3>Sövdələşmələr</h3><p>Yeni müraciətdən satışa qədər mərhələləri izləyin, məsul şəxsi və növbəti addımı aydın görün.</p></article>
+        <article class="feature"><div class="icon">✓</div><h3>Tapşırıqlar</h3><p>Tapşırıq yaradın, icraçı və vaxt təyin edin. Prioritetlər və gecikən işlər diqqətdən kənarda qalmasın.</p></article>
+        <article class="feature"><div class="icon">◌</div><h3>Müştərilər və yazışmalar</h3><p>Müştərinin kartı, müraciət tarixi və söhbət konteksti əməkdaşın qarşısında olur.</p></article>
+        <article class="feature"><div class="icon">↗</div><h3>Kommo inteqrasiyası</h3><p>CRM-dəki məlumatla işləyin: müştəri, mərhələ və iş qeydləri prosesə uyğun sinxronlaşır.</p></article>
+        <article class="feature"><div class="icon">⚡</div><h3>İsti sifarişlər</h3><p>Yeni sifarişi komanda üçün açın. Uyğun əməkdaş qəbul edir, işin icrası və ödənişi şəffaf izlənir.</p></article>
+        <article class="feature"><div class="icon">◉</div><h3>Rol və icazələr</h3><p>Hər istifadəçi yalnız öz işinə aid bölmələri və məlumatı görür. Administrator isə bütün prosesi idarə edir.</p></article>
+      </div>
+    </div></section>
+
+    <section id="nece-isleyir" class="workflow-wrap"><div class="shell workflow">
+      <div><span class="section-kicker">Sadə proses</span><h2>Müraciətdən nəticəyə qədər aydın yol</h2><p>CRM Smart Assistant komandanın kimin nə etdiyini, növbəti addımın nə olduğunu və heç bir müraciətin unudulmamasını təmin edir.</p></div>
+      <div class="steps">
+        <div class="step"><div class="step-no">01</div><div><b>Müraciət sistemə düşür</b><span>Yeni müştəri və ya sifariş qeyd olunur, lazımi mərhələyə yönləndirilir.</span></div></div>
+        <div class="step"><div class="step-no">02</div><div><b>İş düzgün əməkdaşa keçir</b><span>Məsul şəxs tapşırığı və bütün müştəri kontekstini bir yerdə görür.</span></div></div>
+        <div class="step"><div class="step-no">03</div><div><b>Nəticə və nəzarət</b><span>İcra, mərhələ, qeydlər və ödəniş məlumatı sistemdə saxlanılır.</span></div></div>
+      </div>
+    </div></section>
+
+    <section id="istifadeci"><div class="shell">
+      <div class="section-title"><span>Hər rol üçün</span><h2>Komanda üzvləri öz iş sahəsi ilə işləyir</h2><p>İnterfeys istifadəçinin roluna uyğunlaşır — mürəkkəb menyular və lazımsız məlumat olmadan.</p></div>
+      <div class="roles">
+        <article class="role"><div class="role-icon">◈</div><b>Administrator</b><p>Əməkdaşları, icazələri, prosesləri, sifarişləri və ümumi nəticələri idarə edir.</p></article>
+        <article class="role"><div class="role-icon">◉</div><b>Satış və ofis əməkdaşı</b><p>Öz müştərilərini, tapşırıqlarını, yazışmaları və gündəlik prioritetlərini görür.</p></article>
+        <article class="role"><div class="role-icon">◒</div><b>İcraçı əməkdaş</b><p>Mövcud sifarişləri qəbul edir, icra vəziyyətini və öz iş balansını izləyir.</p></article>
+      </div>
+    </div></section>
+
+    <section><div class="shell cta"><h2>İşinizi daha aydın idarə edin.</h2><p>CRM Smart Assistant satış, xidmət və operativ komandalara gündəlik işi sistemli şəkildə aparmağa kömək edir.</p><a class="primary" href="/webapp">CRM Smart Assistant-ə daxil ol →</a></div></section>
+  </main>
+  <footer class="shell"><div class="footer-line"><span>© 2026 BeinSystems</span><span>CRM Smart Assistant · Biznes üçün iş və müştəri idarəetmə sistemi</span></div></footer>
+</body>
+</html>

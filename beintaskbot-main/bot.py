@@ -18707,6 +18707,22 @@ async def serve_webapp(request: web.Request) -> web.Response:
     return resp
 
 
+async def serve_landing_page(request: web.Request) -> web.Response:
+    """Serve the public BeinSystems product landing page at the domain root."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", "landing.html"),
+        os.path.join(base_dir, "landing.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        logger.error("Landing page not found; checked: %s", ", ".join(candidates))
+        return web.Response(status=404, text="Landing page not found")
+    response = web.FileResponse(html_path)
+    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
+
+
 async def serve_deal_page(request: web.Request) -> web.Response:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = (
@@ -19468,7 +19484,7 @@ async def start_webhook_server():
     app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
     app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)
-    app_web.router.add_get("/", health_check)
+    app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
     await runner.setup()
