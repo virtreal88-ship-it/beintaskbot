@@ -709,6 +709,8 @@
         .chats-followup { display:inline-flex; align-items:center; width:max-content; max-width:100%; margin-top:3px; padding:2px 6px; border-radius:6px; background:#eff6ff; color:#1d4ed8; font-size:10px; font-weight:700; white-space:nowrap; }
         .chats-followup.overdue { background:#fef2f2; color:#b91c1c; }
         .chats-row.followup-overdue { background:#fffafa; }
+        .chats-queue-badge { display:inline-flex; align-items:center; width:max-content; max-width:100%; margin-top:3px; padding:2px 6px; border-radius:6px; background:#f1f5f9; color:#475569; font-size:10px; font-weight:700; white-space:nowrap; }
+        .chats-queue-badge.hot { background:#fff7ed; color:#c2410c; }
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
@@ -9054,10 +9056,35 @@ function viewerWaLine() {
     return '';
 }
 function chatBelongsToViewer(deal) {
+    if(isAdmin && !isNizamiQueueDeal(deal)) return false;
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
     if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
     if(deal && (deal.inbox_only || deal.outbox || Number(deal.id) >= 9000000000000)) return !!deal.needs_reply;
     return true;
+}
+const NIZAMI_PIPELINE_ID = 14243944;
+function isSuccessfulChatDeal(deal) {
+    const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
+    return key === 'ugurlu' || Number(deal && deal.status_id) === 142;
+}
+function isDeclinedChatDeal(deal) {
+    const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
+    return key === 'imtina' || Number(deal && deal.status_id) === 143;
+}
+function isNizamiQueueDeal(deal) {
+    if(!deal || deal.outbox) return true;
+    if(isSuccessfulChatDeal(deal)) return false;
+    const kind = String(deal.nizami_queue_kind || '');
+    if(kind === 'new_request' || kind === 'hot') return true;
+    return Number(deal.pipeline_id || 0) === NIZAMI_PIPELINE_ID;
+}
+function chatsQueueBadge(deal) {
+    if(!isAdmin || !deal) return '';
+    const kind = String(deal.nizami_queue_kind || '');
+    if(kind === 'hot') return '<span class="chats-queue-badge hot">🔥 İsti lead · NÖMRƏ ALINIB</span>';
+    if(kind === 'new_request') return '<span class="chats-queue-badge">Sövdələşmələr · Yeni müraciətlər</span>';
+    const stage = String(deal.stage_name || '').trim();
+    return stage ? `<span class="chats-queue-badge">Nizami · ${escapeHtml(stage)}</span>` : '<span class="chats-queue-badge">Nizami</span>';
 }
 function waDealDigits(deal) {
     return waPhoneDigits((deal && Array.isArray(deal.phones) && deal.phones[0]) || (deal && deal.phone) || '');
@@ -9105,8 +9132,7 @@ function collapseSamePhoneChats(deals) {
     return out;
 }
 function isTerminalChatDeal(deal) {
-    const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
-    return key === 'ugurlu' || key === 'imtina';
+    return isSuccessfulChatDeal(deal) || isDeclinedChatDeal(deal);
 }
 function chatsInboxDeals(requestedFilter) {
     const filter = requestedFilter || _chatsListFilter || 'all';
@@ -9114,10 +9140,11 @@ function chatsInboxDeals(requestedFilter) {
     const deals = (samilDeals || []).filter(deal => {
         const preview = dealLastClientMessage(deal);
         if(!deal || !deal.id || !chatBelongsToViewer(deal)) return false;
-        const terminal = isTerminalChatDeal(deal);
-        const terminalReturn = terminal && !!deal.needs_reply;
-        if(terminal && !terminalReturn) return false;
-        if(filter === 'all' && terminal) return false;
+        if(isSuccessfulChatDeal(deal)) return false;
+        const declined = isDeclinedChatDeal(deal);
+        const terminalReturn = declined && !!deal.needs_reply;
+        if(declined && !terminalReturn) return false;
+        if(filter === 'all' && declined) return false;
         if(filter === 'unanswered' && !(terminalReturn || chatsIsUnanswered(deal))) return false;
         if(!q) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
@@ -9130,6 +9157,9 @@ function chatsInboxDeals(requestedFilter) {
         const followB = chatsFollowupState(b);
         if(!!(followA && followA.overdue) !== !!(followB && followB.overdue)) return followA && followA.overdue ? -1 : 1;
         if(followA && followB && followA.overdue && followB.overdue && followA.dueAt !== followB.dueAt) return followA.dueAt - followB.dueAt;
+        const hotA = a.nizami_queue_kind === 'hot' ? 1 : 0;
+        const hotB = b.nizami_queue_kind === 'hot' ? 1 : 0;
+        if(hotA !== hotB) return hotB - hotA;
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
@@ -9599,13 +9629,14 @@ function renderChatsList(preserveScroll) {
             const on = openId && openId === String(deal.id);
             const pinned = isChatPinned(deal.id);
             const chip = chatsSourceChip(deal);
+            const queueBadge = chatsQueueBadge(deal);
             const followup = chatsFollowupState(deal);
             const followupHtml = followup ? `<span class="chats-followup${followup.overdue ? ' overdue' : ''}">${escapeHtml(chatsFollowupLabel(followup))}</span>` : '';
             return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}${unread ? ' unread' : ''}${followup && followup.overdue ? ' followup-overdue' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(chatsListAt(deal)))}</span></span>
-                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${followupHtml}
+                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${queueBadge}${followupHtml}
                 </span>
             </div>`;
         }).join('') + (deals.length < allDeals.length ? `<div class="chats-load-more">Aşağı sürüşdürün · daha ${allDeals.length - deals.length} müştəri</div>` : '');
@@ -9784,6 +9815,11 @@ function applyInboxPulseRow(row) {
             chat_channel: row.chat_channel || 'whatsapp',
             wa_line: row.wa_line || '',
             last_wamid: row.external_id || '',
+            pipeline_id: Number(row.pipeline_id || 0),
+            status_id: Number(row.status_id || 0),
+            stage_key: row.stage_key || '',
+            stage_name: row.stage_name || '',
+            nizami_queue_kind: row.nizami_queue_kind || '',
             updated_at: Number(row.last_incoming_at || 0),
             inbox_only: true,
             needs_reply: !!row.needs_reply,
@@ -9806,6 +9842,11 @@ function applyInboxPulseRow(row) {
     if(row.wa_line) deal.wa_line = row.wa_line;
     if(row.external_id) deal.last_wamid = row.external_id;
     if(row.needs_reply) deal.needs_reply = true;
+    if(row.pipeline_id) deal.pipeline_id = Number(row.pipeline_id) || deal.pipeline_id;
+    if(row.status_id) deal.status_id = Number(row.status_id) || deal.status_id;
+    if(row.stage_key) deal.stage_key = row.stage_key;
+    if(row.stage_name) deal.stage_name = row.stage_name;
+    if(row.nizami_queue_kind) deal.nizami_queue_kind = row.nizami_queue_kind;
     return true;
 }
 

@@ -5532,8 +5532,30 @@ def _is_terminal_deal(deal: dict | None) -> bool:
         return False
 
 
+def _is_successful_deal(deal: dict | None) -> bool:
+    if not isinstance(deal, dict):
+        return False
+    if str(deal.get("stage_key") or "").strip().lower() == "ugurlu":
+        return True
+    try:
+        return int(deal.get("status_id") or 0) == 142
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_declined_deal(deal: dict | None) -> bool:
+    if not isinstance(deal, dict):
+        return False
+    if str(deal.get("stage_key") or "").strip().lower() == "imtina":
+        return True
+    try:
+        return int(deal.get("status_id") or 0) == 143
+    except (TypeError, ValueError):
+        return False
+
+
 def _mark_terminal_reentry(lead_id: int, incoming_at: int = 0) -> None:
-    """Keep a closed deal visible only after a new customer message."""
+    """Keep a declined deal visible only after a new customer message."""
     try:
         lid = int(lead_id)
     except (TypeError, ValueError):
@@ -5573,7 +5595,7 @@ def _decorate_terminal_reentry(overview: dict) -> dict:
             lead_id = int(deal.get("id") or 0)
         except (TypeError, ValueError):
             continue
-        if _is_terminal_deal(deal) and _has_terminal_reentry(lead_id):
+        if _is_declined_deal(deal) and _has_terminal_reentry(lead_id):
             deal["needs_reply"] = True
         else:
             deal.pop("needs_reply", None)
@@ -5983,7 +6005,7 @@ def _apply_inbox_incoming(
                     event_pipe = 0
             event_name = str(deal.get("contact_name") or event_name or "")
             event_phone = str(deal.get("phone") or event_phone or "")
-            if _is_terminal_deal(deal):
+            if _is_declined_deal(deal):
                 _mark_terminal_reentry(int(lead_id), int(created_at or 0))
             found = True
     needs_reply = _has_terminal_reentry(int(lead_id))
@@ -6040,9 +6062,11 @@ def _minimal_inbox_deal(lead: dict, preview: str, created_at: int, channel: str)
         pipe = int(lead.get("pipeline_id") or 0)
     except (TypeError, ValueError):
         pipe = 0
+    queue_kind = _nizami_sovdelesmeler_queue_kind(lead)
     return {
         "id": lid,
         "pipeline_id": pipe,
+        "status_id": int(lead.get("status_id") or 0),
         "contact_name": name,
         "phone": phones[0] if phones else "",
         "phones": phones,
@@ -6054,7 +6078,8 @@ def _minimal_inbox_deal(lead: dict, preview: str, created_at: int, channel: str)
         "created_at": int(lead.get("created_at") or 0),
         "stage_key": "",
         "stage_name": "",
-        "needs_reply": bool(_is_terminal_deal(lead) and _has_terminal_reentry(lid)),
+        "nizami_queue_kind": queue_kind,
+        "needs_reply": bool(_is_declined_deal(lead) and _has_terminal_reentry(lid)),
         "tasks": [],
         "inbox_only": True,
     }
@@ -6073,7 +6098,7 @@ def _place_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -
         targets.append(pipe)
     nizami = int(NIZAMI_PIPELINE_ID)
     if isinstance(_personal_overview_cache.get(nizami), dict):
-        if pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)} or channel == "whatsapp":
+        if pipe == nizami or _nizami_sovdelesmeler_queue_kind(lead):
             if nizami not in targets:
                 targets.append(nizami)
     placed = False
@@ -6190,7 +6215,7 @@ async def _hydrate_inbox_lead(
     name = ""
     phone = ""
     if isinstance(lead, dict):
-        if _is_terminal_deal(lead):
+        if _is_declined_deal(lead):
             _mark_terminal_reentry(int(lead_id), int(created_at or 0))
         _place_inbox_deal(lead, preview, created_at, channel)
         try:
@@ -6320,6 +6345,10 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         if not lid or not _pulse_event_visible(pipeline_id, row, visible, is_admin_user=is_admin_user):
             continue
         deal = visible.get(lid) or {}
+        # A completed customer is never a live chat lead, including when an
+        # incoming webhook reaches the browser before its next full refresh.
+        if deal and _is_successful_deal(deal):
+            continue
         incoming_at = int(row.get("last_incoming_at") or deal.get("last_incoming_at") or 0)
         outgoing_at = int(row.get("last_outgoing_at") or deal.get("last_outgoing_at") or 0)
         events.append({
@@ -6348,6 +6377,11 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "wa_line": row.get("wa_line") or deal.get("wa_line") or "",
                 "external_id": row.get("external_id") or "",
                 "needs_reply": bool(row.get("needs_reply") or deal.get("needs_reply") or _has_terminal_reentry(lid)),
+                "pipeline_id": int(deal.get("pipeline_id") or row.get("pipeline_id") or 0),
+                "status_id": int(deal.get("status_id") or 0),
+                "stage_key": str(deal.get("stage_key") or row.get("stage_key") or ""),
+                "stage_name": str(deal.get("stage_name") or ""),
+                "nizami_queue_kind": str(deal.get("nizami_queue_kind") or ""),
             })
     return {
         "success": True,
@@ -8945,6 +8979,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deals.append({
             "id": lead_id,
             "pipeline_id": pipeline_id,
+            "status_id": status_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
             "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
@@ -12085,8 +12120,11 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
         if candidate and int(candidate.get("pipeline_id") or 0) == int(pipe or 0):
             owner = candidate
             break
-    stages = (owner or {}).get("stages") or {}
-    names = (owner or {}).get("stage_names") or {}
+    if int(pipe or 0) == int(SOVDELESMELER_PIPELINE_ID):
+        stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
+    else:
+        stages = (owner or {}).get("stages") or {}
+        names = (owner or {}).get("stage_names") or {}
     status_to_key = {}
     for key, status_id in stages.items():
         try:
@@ -12118,6 +12156,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
     return {
         "id": lid,
         "pipeline_id": pipe,
+        "status_id": status_id,
         "stage_key": status_to_key.get(status_id, ""),
         "stage_name": names.get(status_id, ""),
         "contact_name": contact_name,
@@ -12187,6 +12226,23 @@ def _sovdelesmeler_chat_lead_ids() -> set[int]:
     return allowed
 
 
+def _nizami_sovdelesmeler_queue_kind(lead: dict | None) -> str:
+    """The only Sövdələşmələr stages that belong in Nizami's sales queue."""
+    if not isinstance(lead, dict) or _lead_pipeline_id(lead) != int(SOVDELESMELER_PIPELINE_ID):
+        return ""
+    try:
+        status_id = int(lead.get("status_id") or 0)
+    except (TypeError, ValueError):
+        return ""
+    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
+    label = _fold_stage_name(names.get(status_id, ""))
+    if "yeni muraciet" in label:
+        return "new_request"
+    if "nomre alin" in label:
+        return "hot"
+    return ""
+
+
 def _inject_outside_funnel_talk_deals(
     deals: list,
     outside_by_lead: dict[int, dict],
@@ -12196,7 +12252,7 @@ def _inject_outside_funnel_talk_deals(
     avatar_by_lead: dict[int, str],
     talk_updated: dict[int, int],
 ) -> None:
-    """Nizami also sees every Sövdələşmələr talk and every gray WhatsApp talk."""
+    """Add only bot-qualified Sövdələşmələr talks to Nizami's sales queue."""
     if not isinstance(deals, list) or not outside_by_lead:
         return
     seen = set()
@@ -12219,18 +12275,20 @@ def _inject_outside_funnel_talk_deals(
             updated = 0
         ranked.append((updated, lid_int, talk))
     ranked.sort(reverse=True)
-    allowed = _sovdelesmeler_chat_lead_ids()
     added = 0
     for updated, lid, talk in ranked:
         if added >= 20:
             break
         channel = _talk_channel_key(talk)
-        if lid in seen or (lid not in allowed and channel != "whatsapp"):
+        if lid in seen:
             continue
         lead = get_lead_details(lid)
         if not lead:
             continue
         if channel not in CHAT_CHANNEL_LABELS:
+            continue
+        queue_kind = _nizami_sovdelesmeler_queue_kind(lead)
+        if not queue_kind:
             continue
         unread_n = _talk_unread_size(talk)
         unread = unread_n > 0
@@ -12240,6 +12298,7 @@ def _inject_outside_funnel_talk_deals(
             incoming_at = int(incoming_at_by_lead.get(lid) or 0)
         preview = client_by_lead.get(lid) or ("Yeni mesaj" if unread else "Çat")
         row = _overview_deal_from_any_lead(lead, preview, updated, channel, incoming_at)
+        row["nizami_queue_kind"] = queue_kind
         if avatar_by_lead.get(lid):
             row["contact_avatar"] = avatar_by_lead[lid]
         deals.append(row)
