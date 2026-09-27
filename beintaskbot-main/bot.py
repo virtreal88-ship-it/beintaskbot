@@ -256,6 +256,32 @@ TASK_TYPE_NAMES = {
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+
+class _SecretRedactionFilter(logging.Filter):
+    """Prevent credentials from reaching Railway's retained deployment logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+            for secret in (TELEGRAM_TOKEN, KOMMO_TOKEN, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY):
+                if secret:
+                    rendered = rendered.replace(secret, "[REDACTED]")
+            # The record has already been formatted above, so do not format it
+            # again with potentially secret-containing arguments downstream.
+            record.msg = rendered
+            record.args = ()
+        except Exception:
+            # A logging safeguard must never affect application availability.
+            pass
+        return True
+
+
+_secret_redaction_filter = _SecretRedactionFilter()
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_secret_redaction_filter)
+# Routine request URLs are not useful in production and can contain bot tokens.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("bot")
 
 # ─── User Registration Storage ───────────────────────────────────────────────
