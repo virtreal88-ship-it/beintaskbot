@@ -705,6 +705,9 @@
         .notice-reply-field button[disabled] { opacity:.55; pointer-events:none; }
         .notice-reply-hint { margin:5px 2px 0; color:#94a3b8; font-size:10px; }
         .notice-save-example { margin:6px 0 0; border:0; border-radius:7px; background:#f0fdf4; color:#15803d; padding:5px 8px; font:inherit; font-size:11px; font-weight:700; }
+        .chats-followup { display:inline-flex; align-items:center; width:max-content; max-width:100%; margin-top:3px; padding:2px 6px; border-radius:6px; background:#eff6ff; color:#1d4ed8; font-size:10px; font-weight:700; white-space:nowrap; }
+        .chats-followup.overdue { background:#fef2f2; color:#b91c1c; }
+        .chats-row.followup-overdue { background:#fffafa; }
         #chats-pane .deal-tabs { display:none !important; }
         #chats-pane .deal-shell-body { grid-template-columns:minmax(0,1fr) 300px; }
         #chats-pane .deal-side {
@@ -8674,6 +8677,25 @@ function chatsIsUnanswered(deal) {
     const outgoing = chatsOutgoingAt(deal);
     return !outgoing || incoming > outgoing;
 }
+const CHAT_FOLLOWUP_AFTER_SECONDS = 24 * 60 * 60;
+function chatsFollowupState(deal, nowSeconds) {
+    if(!isAdmin || !deal || isTerminalChatDeal(deal)) return null;
+    const incoming = chatsIncomingAt(deal);
+    const outgoing = chatsOutgoingAt(deal);
+    if(!outgoing || (incoming && incoming > outgoing)) return null;
+    const dueAt = outgoing + CHAT_FOLLOWUP_AFTER_SECONDS;
+    const now = Number(nowSeconds || Math.floor(Date.now() / 1000));
+    return {dueAt, overdue: now >= dueAt, remaining: dueAt - now};
+}
+function chatsFollowupLabel(state) {
+    if(!state) return '';
+    if(state.overdue) {
+        const hours = Math.max(1, Math.floor((Math.floor(Date.now() / 1000) - state.dueAt) / 3600) + 1);
+        return `Cavab gecikir · ${hours} saat`;
+    }
+    const hours = Math.max(1, Math.ceil(state.remaining / 3600));
+    return `Cavab gözlənilir · ${hours} saat`;
+}
 function setChatsListFilter(next) {
     _chatsListFilter = next === 'unanswered' ? 'unanswered' : 'all';
     renderChatsList();
@@ -9088,6 +9110,10 @@ function chatsInboxDeals(requestedFilter) {
         return name.includes(q) || phone.replace(/\D/g, '').includes(q.replace(/\D/g, '')) || preview.toLowerCase().includes(q) || stage.includes(q);
     });
     return deals.sort((a, b) => {
+        const followA = chatsFollowupState(a);
+        const followB = chatsFollowupState(b);
+        if(!!(followA && followA.overdue) !== !!(followB && followB.overdue)) return followA && followA.overdue ? -1 : 1;
+        if(followA && followB && followA.overdue && followB.overdue && followA.dueAt !== followB.dueAt) return followA.dueAt - followB.dueAt;
         const pinA = isChatPinned(a.id) ? 1 : 0;
         const pinB = isChatPinned(b.id) ? 1 : 0;
         if(pinA !== pinB) return pinB - pinA;
@@ -9554,11 +9580,13 @@ function renderChatsList() {
             const on = openId && openId === String(deal.id);
             const pinned = isChatPinned(deal.id);
             const chip = chatsSourceChip(deal);
-            return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}${unread ? ' unread' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
+            const followup = chatsFollowupState(deal);
+            const followupHtml = followup ? `<span class="chats-followup${followup.overdue ? ' overdue' : ''}">${escapeHtml(chatsFollowupLabel(followup))}</span>` : '';
+            return `<div class="chats-row${on ? ' on' : ''}${pinned ? ' pin' : ''}${unread ? ' unread' : ''}${followup && followup.overdue ? ' followup-overdue' : ''}" role="button" tabindex="0" data-lead="${escapeHtml(String(deal.id))}">
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(chatsListAt(deal)))}</span></span>
-                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>
+                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${followupHtml}
                 </span>
             </div>`;
         }).join('');
