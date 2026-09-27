@@ -579,6 +579,16 @@
             flex:1; min-height:0; display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr);
             background:#fff; overflow:hidden; border-top:0;
         }
+        /* A deal's "Baxış" opens the exact customer workspace above the
+           current board. The board remains mounted underneath, so closing it
+           returns the employee to the same deal column and scroll position. */
+        #screen-chats.deal-client-overlay {
+            display:flex !important; flex-direction:column; position:fixed; inset:0; z-index:12050;
+            width:100vw; max-width:none !important; height:100dvh !important; margin:0; background:#fff;
+        }
+        #screen-chats.deal-client-overlay .chats-app { height:100%; }
+        .notice-overlay-close { width:32px; height:32px; border:0; border-radius:8px; background:#f1f5f9; color:#334155; font-size:22px; line-height:1; cursor:pointer; }
+        @media (max-width:1023px) { .notice-overlay-close { display:none; } }
         .chats-list { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #e6e8eb; background:#fff; }
         .chats-toolbar { padding:10px 12px; border-bottom:0; flex:none; position:relative; background:linear-gradient(145deg,#1f3a34,#0f766e); }
         .chats-toolbar-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:36px; }
@@ -8195,8 +8205,10 @@ async function openUnifiedClientChat(leadId, seedDeal) {
         samilDeals.unshift(seedDeal);
         persistLocalSamilWorkspace();
     }
-    if(HAS_NOTICES) switchTab('tab-chats', false);
-    else nav('screen-chats');
+    const chatScreen = document.getElementById('screen-chats');
+    _noticeClientOverlay = true;
+    chatScreen?.classList.add('deal-client-overlay');
+    document.body.classList.add('chat-open');
     await openNoticeClient(id);
 }
 async function renderPublicDealPage() {
@@ -9541,6 +9553,7 @@ async function openSearchedChat(leadId) {
 }
 let _staffNotices = [];
 let _noticeHistoryLeadId = 0;
+let _noticeClientOverlay = false;
 function closeNoticeClient(opts) {
     _noticeHistoryLeadId = 0;
     closeDealInfoDrawer();
@@ -9548,9 +9561,13 @@ function closeNoticeClient(opts) {
     _dealInboxMode = false;
     const app = document.getElementById('chats-app');
     const pane = document.getElementById('chats-pane');
+    const wasOverlay = _noticeClientOverlay;
+    _noticeClientOverlay = false;
     if(app) app.classList.remove('chat-open');
     if(pane) pane.innerHTML = chatsEmptyHtml();
-    renderChatsList();
+    document.getElementById('screen-chats')?.classList.remove('deal-client-overlay');
+    if(wasOverlay) document.body.classList.remove('chat-open');
+    if(!wasOverlay || document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
     if(!(opts && opts.fromPopState) && window.history && history.state && history.state.noticeChatOpen) history.back();
 }
 function bindNoticeSwipeBack(pane) {
@@ -9577,7 +9594,7 @@ function noticeClientHeaderHtml(deal) {
     const name = dealClientName(deal) || deal.contact_name || deal.name || 'Müştəri';
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
-    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə: yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">‹</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə: yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button>${_noticeClientOverlay ? '<button type="button" class="notice-overlay-close" onclick="closeNoticeClient()" title="Bağla" aria-label="Bağla">×</button>' : ''}</div></div>`;
 }
 function openNoticeDealInfo() {
     const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
