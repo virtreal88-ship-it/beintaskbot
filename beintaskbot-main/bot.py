@@ -18364,6 +18364,70 @@ async def handle_web_login_start(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "telegram_url": telegram_url})
 
 
+def _telegram_login_user_id(payload: dict) -> int | None:
+    """Validate a legacy Telegram Login Widget payload using the bot token."""
+    if not isinstance(payload, dict):
+        return None
+    received_hash = str(payload.get("hash") or "").strip().lower()
+    try:
+        chat_id = int(payload.get("id") or 0)
+        auth_date = int(payload.get("auth_date") or 0)
+    except (TypeError, ValueError):
+        return None
+    now = int(_time_module.time())
+    if not received_hash or not chat_id or not auth_date or auth_date > now + 300 or now - auth_date > _TELEGRAM_INIT_MAX_AGE_SEC:
+        return None
+
+    def _widget_value(value) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value or "")
+
+    check_rows = [
+        f"{key}={_widget_value(value)}"
+        for key, value in payload.items()
+        if key != "hash" and isinstance(key, str)
+    ]
+    check_rows.sort()
+    data_check = "\n".join(check_rows)
+    secret = hashlib.sha256(TELEGRAM_TOKEN.encode("utf-8")).digest()
+    expected = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    return chat_id if hmac.compare_digest(expected, received_hash) else None
+
+
+async def handle_telegram_login_config(_request: web.Request) -> web.Response:
+    """Expose only the public bot username needed by Telegram's login widget."""
+    username = _telegram_bot_username or await _resolve_telegram_bot_username()
+    if not username:
+        return web.json_response({"success": False, "error": "Telegram giriş xidməti hazır deyil."}, status=503)
+    return web.json_response({"success": True, "bot_username": username})
+
+
+async def handle_telegram_login(request: web.Request) -> web.Response:
+    """Create the CRM web session after Telegram Login Widget verification."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    chat_id = _telegram_login_user_id(payload)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
+    profile = employee_access_profile(chat_id)
+    if not profile.get("active"):
+        return web.json_response({"success": False, "error": "Bu Telegram hesabı üçün giriş icazəsi yoxdur."}, status=403)
+    response = web.json_response({"success": True, "chat_id": chat_id})
+    response.set_cookie(
+        _WEB_SESSION_COOKIE,
+        _make_web_session(chat_id),
+        max_age=_WEB_SESSION_TTL_SEC,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+        path="/",
+    )
+    return response
+
+
 async def handle_web_login_complete(request: web.Request) -> web.Response:
     chat_id = _consume_web_login_request(request.rel_url.query.get("token") or "")
     if not chat_id or not employee_access_profile(chat_id).get("active"):
@@ -19115,6 +19179,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)
     app_web.router.add_get("/auth/web-login/start", handle_web_login_start)
+    app_web.router.add_get("/auth/telegram-login/config", handle_telegram_login_config)
+    app_web.router.add_post("/auth/telegram-login", handle_telegram_login)
     app_web.router.add_get("/auth/web-login", handle_web_login_complete)
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/deal.html", serve_deal_page)

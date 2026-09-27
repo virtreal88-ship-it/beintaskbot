@@ -1413,11 +1413,46 @@ async function startBrowserLogin() {
         window.location.href = data.telegram_url;
     } catch(error) { const hint=document.getElementById('browser-login-hint'); if(hint) hint.textContent=error.message || 'Xəta baş verdi'; }
 }
+async function onTelegramLogin(user) {
+    const hint = document.getElementById('browser-login-hint');
+    if(hint) hint.textContent = 'Giriş təsdiqlənir…';
+    try {
+        const response = await _nativeWindowFetch(API_BASE + '/auth/telegram-login', {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'}, body: JSON.stringify(user || {})
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Giriş təsdiqlənmədi');
+        window.location.replace(API_BASE + '/webapp');
+    } catch(error) {
+        if(hint) hint.textContent = error.message || 'Telegram ilə giriş baş tutmadı';
+    }
+}
+async function initTelegramLoginWidget() {
+    const holder = document.getElementById('telegram-login-widget');
+    const hint = document.getElementById('browser-login-hint');
+    if(!holder) return;
+    try {
+        const response = await _nativeWindowFetch(API_BASE + '/auth/telegram-login/config', {credentials:'same-origin'});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success || !data.bot_username) throw new Error(data.error || 'Telegram giriş xidməti hazır deyil');
+        const script = document.createElement('script');
+        script.async = true;
+        script.src = 'https://telegram.org/js/telegram-widget.js?22';
+        script.setAttribute('data-telegram-login', String(data.bot_username));
+        script.setAttribute('data-size', 'large');
+        script.setAttribute('data-radius', '10');
+        script.setAttribute('data-onauth', 'onTelegramLogin(user)');
+        holder.replaceChildren(script);
+        if(hint) hint.textContent = 'Telegram hesabınızla bir toxunuşla daxil olun.';
+    } catch(error) {
+        if(hint) hint.textContent = error.message || 'Telegram giriş düyməsi yüklənmədi';
+    }
+}
 function showBrowserLogin() {
     document.getElementById('mobile-header')?.style.setProperty('display','none','important'); document.getElementById('tab-bar')?.style.setProperty('display','none','important');
-    // A regular link preserves the user's tap on iOS/Android.  A redirect to
-    // Telegram after an awaited fetch is often blocked as an unsolicited popup.
-    const content=document.getElementById('content-area'); if(content) content.innerHTML='<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Bein Systems CRM</div><p class="mt-2 text-sm text-slate-500">Giriş üçün Telegram hesabınızı təsdiqləyin.</p><a href="/auth/web-login/start" class="mt-5 inline-block rounded-xl bg-[#2481cc] px-5 py-3 text-sm font-bold text-white">Telegram ilə daxil ol</a><p id="browser-login-hint" class="mt-3 text-xs text-slate-400">Bot açılacaq və sizə bir dəfəlik giriş linki göndərəcək.</p></div></div>';
+    const content=document.getElementById('content-area'); if(content) content.innerHTML='<div class="min-h-screen flex items-center justify-center px-6 text-center"><div><div class="text-lg font-extrabold text-slate-800">Bein Systems CRM</div><p class="mt-2 text-sm text-slate-500">Telegram hesabınızla daxil olun.</p><div id="telegram-login-widget" class="mt-5 flex justify-center"><span class="text-sm text-slate-400">Giriş düyməsi yüklənir…</span></div><p id="browser-login-hint" class="mt-3 text-xs text-slate-400"></p></div></div>';
+    initTelegramLoginWidget();
 }
 let flow = '', gd = {phone:'', deadline:'', stage:'', assignee:'', assigneeName:'', task_type:''};
 let lastPayload = null, currentEditScreen = '', selectedTaskId = null;
