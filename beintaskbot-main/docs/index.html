@@ -10379,9 +10379,10 @@ function historyRowsHtml(rows) {
         return pill + dealChatItemHtml(item, (_dealViewState && _dealViewState.token) || '', true);
     }).join('');
 }
-async function fillKommoHistory(leadId, list, force) {
+async function fillKommoHistory(leadId, list, force, attempt) {
     if(!list || !leadId) return;
     if(!force && list.querySelector('.deal-chat-row')) return;
+    attempt = Number(attempt || 0);
     list.innerHTML = historyLoadingHtml();
     const ctrl = new AbortController();
     const slow = window.setTimeout(() => ctrl.abort(), 20000);
@@ -10394,6 +10395,14 @@ async function fillKommoHistory(leadId, list, force) {
         const payload = await response.json().catch(() => ({}));
         if(!list.isConnected) return;
         if(!response.ok || !payload.success) {
+            // The server deliberately keeps a slow Kommo read running after
+            // its first timeout, so one quiet retry can use that completed
+            // result instead of making the employee press refresh.
+            if(attempt < 1 && (response.status === 504 || response.status >= 500)) {
+                list.innerHTML = '<div class="history-loading">Tarixçə yenidən yüklənir…</div>';
+                window.setTimeout(() => fillKommoHistory(leadId, list, force, attempt + 1), 900);
+                return;
+            }
             list.innerHTML = `<div class="history-loading">${escapeHtml(payload.error || 'Tarixçə açılmadı')}</div>`;
             return;
         }
@@ -10408,6 +10417,11 @@ async function fillKommoHistory(leadId, list, force) {
         const scroller = list.closest('.wa-thread') || list.closest('#deal-view-modal');
         if(scroller) requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
     } catch(_err) {
+        if(list.isConnected && attempt < 1) {
+            list.innerHTML = '<div class="history-loading">Tarixçə yenidən yüklənir…</div>';
+            window.setTimeout(() => fillKommoHistory(leadId, list, force, attempt + 1), 900);
+            return;
+        }
         if(list.isConnected) list.innerHTML = '<div class="history-loading">Kommo cavab vermədi</div>';
     } finally {
         window.clearTimeout(slow);

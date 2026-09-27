@@ -9193,7 +9193,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         # These are Nizami's assigned sales stages in the separate
         # Sövdələşmələr funnel.  Add them even when there is no Talk yet:
         # moving a qualified lead to Nömrə alınıb must be sufficient.
-        _inject_nizami_sovdelesmeler_stage_deals(
+        await _inject_nizami_sovdelesmeler_stage_deals(
             deals,
             incoming_at_by_lead or {},
             client_message_by_lead or {},
@@ -12383,9 +12383,11 @@ def _nizami_sovdelesmeler_queue_kind(lead: dict | None) -> str:
     return ""
 
 
-def _nizami_sovdelesmeler_queue_stages() -> list[tuple[int, str]]:
+async def _nizami_sovdelesmeler_queue_stages() -> list[tuple[int, str]]:
     """Return the Sövdələşmələr stages that must always be visible to Nizami."""
-    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
+    _stages, names, _ui = await asyncio.to_thread(
+        load_pipeline_stage_maps, int(SOVDELESMELER_PIPELINE_ID)
+    )
     result: list[tuple[int, str]] = []
     for raw_status_id, raw_name in names.items():
         try:
@@ -12404,7 +12406,7 @@ def _nizami_sovdelesmeler_queue_stages() -> list[tuple[int, str]]:
     return result
 
 
-def _load_nizami_sovdelesmeler_stage_leads() -> list[tuple[dict, str]]:
+async def _load_nizami_sovdelesmeler_stage_leads() -> list[tuple[dict, str]]:
     """Fetch Nizami's two cross-funnel queues without relying on a Talk.
 
     A lead can be moved to ``Yeni müraciətlər`` or ``Nömrə alınıb`` before
@@ -12414,13 +12416,12 @@ def _load_nizami_sovdelesmeler_stage_leads() -> list[tuple[dict, str]]:
     """
     result: list[tuple[dict, str]] = []
     seen: set[int] = set()
-    for status_id, queue_kind in _nizami_sovdelesmeler_queue_stages():
+    for status_id, queue_kind in await _nizami_sovdelesmeler_queue_stages():
         page = 1
         while page <= 20:
             try:
-                resp = _http.get(
+                resp = await _kommo_get_async(
                     f"{KOMMO_BASE_URL}/api/v4/leads",
-                    headers=HEADERS,
                     params={
                         "filter[statuses][0][pipeline_id]": int(SOVDELESMELER_PIPELINE_ID),
                         "filter[statuses][0][status_id]": int(status_id),
@@ -12455,7 +12456,67 @@ def _load_nizami_sovdelesmeler_stage_leads() -> list[tuple[dict, str]]:
     return result
 
 
-def _inject_nizami_sovdelesmeler_stage_deals(
+def _overview_nizami_stage_deal(
+    lead: dict,
+    queue_kind: str,
+    preview: str,
+    ts: int,
+    channel: str,
+    incoming_at: int,
+) -> dict:
+    """Make a lightweight queue row from the filtered lead response.
+
+    The overview request already asked Kommo to embed contacts.  Do not make a
+    separate request per hot lead here: this path runs while a user waits for
+    the client list and must never block the history endpoint.
+    """
+    try:
+        lead_id = int(lead.get("id") or 0)
+        status_id = int(lead.get("status_id") or 0)
+        created_at = int(lead.get("created_at") or 0)
+        updated_at = int(lead.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        lead_id = status_id = created_at = updated_at = 0
+    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
+    contact_ids, phones = _lead_phones_fast(lead)
+    linked_contacts = (lead.get("_embedded") or {}).get("contacts") or []
+    first_contact = linked_contacts[0] if linked_contacts and isinstance(linked_contacts[0], dict) else {}
+    contact_name = str(first_contact.get("name") or lead.get("name") or "").strip()
+    if not contact_name:
+        contact_name = phones[0] if phones else "Müştəri"
+    return {
+        "id": lead_id,
+        "pipeline_id": int(SOVDELESMELER_PIPELINE_ID),
+        "status_id": status_id,
+        "stage_key": "",
+        "stage_name": names.get(status_id, ""),
+        "contact_name": contact_name,
+        "phone": phones[0] if phones else "",
+        "phones": phones,
+        "contacts": [{"id": contact_ids[0], "name": contact_name, "phones": phones}] if contact_ids else [],
+        "source": "",
+        "menbe": "",
+        "created_at": created_at,
+        "updated_at": max(updated_at, int(ts or 0)),
+        "chat_at": int(ts or 0),
+        "last_note": "",
+        "last_client_message": str(preview or "")[:140],
+        "last_incoming_at": int(incoming_at or 0),
+        "last_outgoing_at": _cloud_last_outgoing_at(lead_id),
+        "chat_channel": channel or "whatsapp",
+        "contact_avatar": _first_avatar_url(lead, first_contact),
+        "task_desc": "",
+        "deadline": "",
+        "deadline_ts": 0,
+        "voice_url": f"/api/voice/{lead_id}" if lead_id and str(lead_id) in _voice_urls else "",
+        "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+        "tasks": [],
+        "inbox_only": True,
+        "nizami_queue_kind": queue_kind,
+    }
+
+
+async def _inject_nizami_sovdelesmeler_stage_deals(
     deals: list,
     incoming_at_by_lead: dict[int, int],
     client_by_lead: dict[int, str],
@@ -12472,7 +12533,7 @@ def _inject_nizami_sovdelesmeler_stage_deals(
             seen.add(int(deal.get("id") or 0))
         except (AttributeError, TypeError, ValueError):
             continue
-    staged = _load_nizami_sovdelesmeler_stage_leads()
+    staged = await _load_nizami_sovdelesmeler_stage_leads()
     staged.sort(key=lambda item: int(item[0].get("updated_at") or 0), reverse=True)
     for lead, queue_kind in staged:
         try:
@@ -12487,14 +12548,14 @@ def _inject_nizami_sovdelesmeler_stage_deals(
         preview = client_by_lead.get(lead_id) or (
             "Nömrə alınıb" if queue_kind == "hot" else "Yeni müraciət"
         )
-        row = _overview_deal_from_any_lead(
+        row = _overview_nizami_stage_deal(
             lead,
+            queue_kind,
             preview,
             max(updated_at, talk_at),
             channel_by_lead.get(lead_id) or "whatsapp",
             incoming_at,
         )
-        row["nizami_queue_kind"] = queue_kind
         if avatar_by_lead.get(lead_id):
             row["contact_avatar"] = avatar_by_lead[lead_id]
         deals.append(row)
