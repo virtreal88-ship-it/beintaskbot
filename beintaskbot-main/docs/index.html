@@ -8602,7 +8602,6 @@ function showDealModal(deal, mode) {
 }
 async function openSamilDeals() {
     if(!HAS_OWN_FUNNEL) { switchTab('tab-tasks'); return; }
-    if(isAdmin && window.innerWidth < 1024) { switchTab('tab-tasks'); return; }
     nav('screen-samil-deals');
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
