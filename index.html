@@ -602,6 +602,7 @@
         .chats-line select { flex:1; min-width:0; border:1px solid #e2e8f0; border-radius:10px; padding:7px 10px; font-size:12px; font-weight:600; background:#f8fafc; color:#0f172a; outline:none; font-family:inherit; }
         .chats-search { width:100%; margin-top:0; border:1px solid #e2e8f0; border-radius:10px; padding:8px 10px; font-size:12px; background:#f8fafc; outline:none; font-family:inherit; }
         .chats-rows { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scroll-behavior:smooth; }
+        .chats-load-more { padding:12px; color:#64748b; text-align:center; font-size:11px; font-weight:600; }
         .chats-row { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:10px 12px; border:0; background:#fff; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; transition:background .15s ease, transform .12s ease; }
         .chats-row:hover { background:#f8fafc; }
         .chats-row:active { background:#e9edef; }
@@ -8698,9 +8699,24 @@ function chatsFollowupLabel(state) {
 }
 function setChatsListFilter(next) {
     _chatsListFilter = next === 'unanswered' ? 'unanswered' : 'all';
+    resetChatsLazyList();
     renderChatsList();
 }
 let _chatsListFilter = 'all';
+let _chatsVisibleLimit = 50;
+let _chatsVisibleTotal = 0;
+function resetChatsLazyList() { _chatsVisibleLimit = 50; }
+function bindChatsLazyScroll(box) {
+    if(!box || box.dataset.lazyBound) return;
+    box.dataset.lazyBound = '1';
+    box.addEventListener('scroll', () => {
+        if(_chatsVisibleLimit >= _chatsVisibleTotal || box.scrollTop + box.clientHeight < box.scrollHeight - 180) return;
+        _chatsVisibleLimit = Math.min(_chatsVisibleTotal, _chatsVisibleLimit + 50);
+        const top = box.scrollTop;
+        renderChatsList(true);
+        requestAnimationFrame(() => { box.scrollTop = top; });
+    }, {passive:true});
+}
 let _chatAlertMap = {};
 let _chatAlertSeeded = false;
 const _chatAlertLock = {};
@@ -9350,6 +9366,7 @@ function fillChatsLineSelect() {
         search.dataset.bound = '1';
         search.placeholder = 'Ad, telefon və ya mərhələ...';
         search.addEventListener('input', () => {
+            resetChatsLazyList();
             renderChatsList();
             scheduleChatsSearch();
         });
@@ -9559,13 +9576,15 @@ async function loadStaffNotices() {
     } catch(_err) {}
     if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
 }
-function renderChatsList() {
+function renderChatsList(preserveScroll) {
     const box = document.getElementById('chats-rows');
     const pane = document.getElementById('chats-pane');
     if(!box) return;
     fillChatsLineSelect();
-    let deals = chatsInboxDeals();
-    const seen = seedChatsSeen(deals);
+    const allDeals = chatsInboxDeals();
+    _chatsVisibleTotal = allDeals.length;
+    const deals = allDeals.slice(0, _chatsVisibleLimit);
+    const seen = seedChatsSeen(allDeals);
     const openId = String(_noticeHistoryLeadId || '');
     if(!deals.length) {
         box.innerHTML = samilDeals.length
@@ -9589,7 +9608,7 @@ function renderChatsList() {
                     <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${followupHtml}
                 </span>
             </div>`;
-        }).join('');
+        }).join('') + (deals.length < allDeals.length ? `<div class="chats-load-more">Aşağı sürüşdürün · daha ${allDeals.length - deals.length} müştəri</div>` : '');
         box.onclick = (event) => {
             if(box.dataset.skipClick === '1') {
                 box.dataset.skipClick = '';
@@ -9599,6 +9618,7 @@ function renderChatsList() {
             if(row) openNoticeClient(row.getAttribute('data-lead'));
         };
         bindChatsRowMenu(box);
+        bindChatsLazyScroll(box);
     }
     if(pane && !pane.querySelector('.deal-shell') && !pane.querySelector('.chats-empty')) pane.innerHTML = chatsEmptyHtml();
     paintChatsUnreadBadge();
@@ -10215,6 +10235,7 @@ async function openInboxChat(leadId) {
 async function openChats() {
     if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
+    resetChatsLazyList();
     fillChatsLineSelect();
     if(!samilDeals.length) {
         const restored = restoreSamilWorkspaceFromCache();
