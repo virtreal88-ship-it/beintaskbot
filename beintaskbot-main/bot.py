@@ -6578,6 +6578,10 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                     if ev_kind == "status":
                         # Moving a deal to any stage closes a prior terminal re-entry.
                         _clear_terminal_reentry(wh_lid)
+                        # The customer queue is cached briefly.  A stage move
+                        # into/out of Nizami's Sövdələşmələr stages must be
+                        # visible on the next poll, not after the cache TTL.
+                        invalidate_rufat_overview_cache()
                     record_lead_pulse_event(wh_lid, f"deal_{ev_kind}", pipeline_id=wh_pipe)
                     if ev_kind in {"status", "add"} and wh_pipe:
                         old_pipe = 0
@@ -9186,6 +9190,17 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "task_type_id": related.get("task_type_id"),
         } for related in related_tasks]
     if pipeline_id == int(NIZAMI_PIPELINE_ID):
+        # These are Nizami's assigned sales stages in the separate
+        # Sövdələşmələr funnel.  Add them even when there is no Talk yet:
+        # moving a qualified lead to Nömrə alınıb must be sufficient.
+        _inject_nizami_sovdelesmeler_stage_deals(
+            deals,
+            incoming_at_by_lead or {},
+            client_message_by_lead or {},
+            channel_by_lead or {},
+            avatar_by_lead or {},
+            talk_updated or {},
+        )
         _inject_outside_funnel_talk_deals(
             deals,
             outside_by_lead or {},
@@ -9343,7 +9358,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
         now = _time_module.monotonic()
         cached = _personal_overview_cache.get(pipeline_id)
         cached_at = _personal_overview_cache_at.get(pipeline_id, 0.0)
-        if cached is not None and (not force or now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL):
+        if cached is not None and not force and now - cached_at < _RUFAT_OVERVIEW_CACHE_TTL:
             return _overview_with_partners(cached, owner)
         try:
             overview = await build_rufat_overview(owner_chat_id=owner["chat_id"])
@@ -12366,6 +12381,124 @@ def _nizami_sovdelesmeler_queue_kind(lead: dict | None) -> str:
     if "nomre alin" in label:
         return "hot"
     return ""
+
+
+def _nizami_sovdelesmeler_queue_stages() -> list[tuple[int, str]]:
+    """Return the Sövdələşmələr stages that must always be visible to Nizami."""
+    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
+    result: list[tuple[int, str]] = []
+    for raw_status_id, raw_name in names.items():
+        try:
+            status_id = int(raw_status_id)
+        except (TypeError, ValueError):
+            continue
+        label = _fold_stage_name(raw_name)
+        if "yeni muraciet" in label:
+            result.append((status_id, "new_request"))
+        elif "nomre alin" in label:
+            result.append((status_id, "hot"))
+    # Keep the hot-lead queue available if the live stage catalogue happens
+    # to be temporarily unavailable during an overview refresh.
+    if not any(kind == "hot" for _status_id, kind in result):
+        result.append((int(NOTIFY_STAGE_ID), "hot"))
+    return result
+
+
+def _load_nizami_sovdelesmeler_stage_leads() -> list[tuple[dict, str]]:
+    """Fetch Nizami's two cross-funnel queues without relying on a Talk.
+
+    A lead can be moved to ``Yeni müraciətlər`` or ``Nömrə alınıb`` before
+    Kommo creates (or returns) a chat record.  Filtering the actual pipeline
+    stages keeps that lead visible to Nizami immediately and avoids loading
+    the whole Sövdələşmələr funnel.
+    """
+    result: list[tuple[dict, str]] = []
+    seen: set[int] = set()
+    for status_id, queue_kind in _nizami_sovdelesmeler_queue_stages():
+        page = 1
+        while page <= 20:
+            try:
+                resp = _http.get(
+                    f"{KOMMO_BASE_URL}/api/v4/leads",
+                    headers=HEADERS,
+                    params={
+                        "filter[statuses][0][pipeline_id]": int(SOVDELESMELER_PIPELINE_ID),
+                        "filter[statuses][0][status_id]": int(status_id),
+                        "with": "contacts",
+                        "limit": 250,
+                        "page": page,
+                    },
+                    timeout=12,
+                )
+            except Exception as exc:
+                logger.warning("Nizami queue stage %s page %s failed: %s", status_id, page, exc)
+                break
+            if resp.status_code == 204:
+                break
+            if resp.status_code != 200:
+                logger.warning("Nizami queue stage %s page %s returned %s", status_id, page, resp.status_code)
+                break
+            batch = (resp.json().get("_embedded") or {}).get("leads") or []
+            for lead in batch:
+                if not isinstance(lead, dict):
+                    continue
+                try:
+                    lead_id = int(lead.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if lead_id and lead_id not in seen:
+                    seen.add(lead_id)
+                    result.append((lead, queue_kind))
+            if len(batch) < 250:
+                break
+            page += 1
+    return result
+
+
+def _inject_nizami_sovdelesmeler_stage_deals(
+    deals: list,
+    incoming_at_by_lead: dict[int, int],
+    client_by_lead: dict[int, str],
+    channel_by_lead: dict[int, str],
+    avatar_by_lead: dict[int, str],
+    talk_updated: dict[int, int],
+) -> None:
+    """Insert hot/new Sövdələşmələr leads into Nizami's chat-only queue."""
+    if not isinstance(deals, list):
+        return
+    seen = set()
+    for deal in deals:
+        try:
+            seen.add(int(deal.get("id") or 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    staged = _load_nizami_sovdelesmeler_stage_leads()
+    staged.sort(key=lambda item: int(item[0].get("updated_at") or 0), reverse=True)
+    for lead, queue_kind in staged:
+        try:
+            lead_id = int(lead.get("id") or 0)
+            updated_at = int(lead.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not lead_id or lead_id in seen:
+            continue
+        talk_at = int(talk_updated.get(lead_id) or 0)
+        incoming_at = int(incoming_at_by_lead.get(lead_id) or 0)
+        preview = client_by_lead.get(lead_id) or (
+            "Nömrə alınıb" if queue_kind == "hot" else "Yeni müraciət"
+        )
+        row = _overview_deal_from_any_lead(
+            lead,
+            preview,
+            max(updated_at, talk_at),
+            channel_by_lead.get(lead_id) or "whatsapp",
+            incoming_at,
+        )
+        row["nizami_queue_kind"] = queue_kind
+        if avatar_by_lead.get(lead_id):
+            row["contact_avatar"] = avatar_by_lead[lead_id]
+        deals.append(row)
+        seen.add(lead_id)
 
 
 def _inject_outside_funnel_talk_deals(
