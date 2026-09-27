@@ -386,6 +386,80 @@ def get_chat_id_for_kommo_user(kommo_user_id: int) -> int | None:
 # Their Telegram identities remain separate; new work is routed to Admin.
 _SALARY_CHAT_IDS = {RUFAT_CHAT_ID, 7262243946, 7329891614, 7920785774, 1289510272, 6596538872, 1142054888}
 
+# Employee access is separate from users.json: the latter is kept for the
+# historical Telegram/Kommo mapping, while this record controls Mini App
+# access and can be safely changed by the administrator.
+_EMPLOYEE_ACCESS_FILE = "employee_access.json"
+_EMPLOYEE_PERMISSIONS = ("tasks", "customers", "waiting", "reports", "finance", "stages", "employees")
+_ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
+_employee_access_cache: dict[str, dict] | None = None
+_employee_access_cache_at = 0.0
+_employee_access_lock = threading.Lock()
+
+
+def _normalize_employee_permissions(value, role: str = "") -> list[str]:
+    if str(role).strip().casefold() == "admin":
+        return list(_EMPLOYEE_PERMISSIONS)
+    values = value if isinstance(value, (list, tuple, set)) else []
+    return [key for key in _EMPLOYEE_PERMISSIONS if key in {str(item) for item in values}]
+
+
+def _load_employee_access_records(force: bool = False) -> dict[str, dict]:
+    global _employee_access_cache, _employee_access_cache_at
+    now = _time_module.time()
+    with _employee_access_lock:
+        if not force and _employee_access_cache is not None and now - _employee_access_cache_at < 20:
+            return dict(_employee_access_cache)
+        try:
+            raw = read_json(_EMPLOYEE_ACCESS_FILE) or {}
+        except Exception as exc:
+            logger.warning("employee access storage load failed: %s", exc)
+            raw = {}
+        records = {str(key): dict(value) for key, value in raw.items() if isinstance(value, dict)} if isinstance(raw, dict) else {}
+        _employee_access_cache = records
+        _employee_access_cache_at = now
+        return dict(records)
+
+
+def _save_employee_access_records(records: dict[str, dict]) -> None:
+    global _employee_access_cache, _employee_access_cache_at
+    clean = {str(key): dict(value) for key, value in records.items() if isinstance(value, dict)}
+    write_json(_EMPLOYEE_ACCESS_FILE, clean)
+    with _employee_access_lock:
+        _employee_access_cache = clean
+        _employee_access_cache_at = _time_module.time()
+
+
+def employee_access_profile(chat_id: int) -> dict:
+    """Return the effective access record; legacy staff retain current access."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return {"active": False, "role": "Əməkdaş", "permissions": []}
+    stored = _load_employee_access_records().get(str(cid))
+    if isinstance(stored, dict):
+        role = "Admin" if str(stored.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        return {
+            "active": bool(stored.get("active", True)),
+            "role": role,
+            "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
+        }
+    users = load_users()
+    known = cid in _KNOWN_EMPLOYEE_REGISTRATIONS or str(cid) in users
+    if not known:
+        return {"active": False, "role": "Əməkdaş", "permissions": []}
+    # Existing people keep their currently working access until the admin
+    # explicitly changes it from the new employee page.
+    role = "Admin" if cid == ADMIN_CHAT_ID else "Əməkdaş"
+    return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS)}
+
+
+def employee_has_permission(chat_id: int, permission: str) -> bool:
+    profile = employee_access_profile(chat_id)
+    return bool(profile.get("active")) and (
+        str(profile.get("role") or "").casefold() == "admin" or permission in set(profile.get("permissions") or [])
+    )
+
 def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     users = load_users()
     info = users.get(str(chat_id))
@@ -405,15 +479,12 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
     return None
 
 def is_admin(chat_id: int) -> bool:
-    """Return whether a Telegram chat belongs to the Admin account."""
+    """Return whether a Telegram chat belongs to an active administrator."""
     try:
-        if int(chat_id) == ADMIN_CHAT_ID:
-            return True
+        profile = employee_access_profile(int(chat_id))
+        return bool(profile.get("active")) and str(profile.get("role") or "").casefold() == "admin"
     except (TypeError, ValueError):
-        pass
-    # Do not infer admin access from a shared Kommo user ID. Several legacy
-    # employee accounts used the same Sahə Meneceri license.
-    return False
+        return False
 
 
 _PENDING_ACTIONS_FILE = "pending_actions.json"
@@ -17868,6 +17939,130 @@ async def handle_search_contacts(request: web.Request) -> web.Response:
         logger.error(f"Search contacts API error: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+
+def _employee_manager_id(request: web.Request) -> int | None:
+    try:
+        chat_id = int(request.get("authenticated_chat_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    return chat_id if chat_id and employee_has_permission(chat_id, "employees") else None
+
+
+def _employee_directory_rows() -> list[dict]:
+    users = load_users()
+    access = _load_employee_access_records()
+    ids = set(access) | set(_KNOWN_EMPLOYEE_REGISTRATIONS)
+    for chat_id, info in users.items():
+        if isinstance(info, dict) and str(info.get("role") or "").casefold() != "partnyor":
+            ids.add(str(chat_id))
+    rows = []
+    for raw_id in ids:
+        try:
+            chat_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        info = users.get(str(chat_id)) if isinstance(users.get(str(chat_id)), dict) else {}
+        profile = employee_access_profile(chat_id)
+        rows.append({
+            "chat_id": chat_id,
+            "name": str(info.get("name") or _KNOWN_EMPLOYEE_REGISTRATIONS.get(chat_id, ("", 0))[0] or "Əməkdaş").strip(),
+            "kommo_user_id": int(info.get("kommo_user_id") or 0) or None,
+            "role": profile["role"],
+            "active": bool(profile["active"]),
+            "permissions": profile["permissions"],
+            "updated_at": str((access.get(str(chat_id)) or {}).get("updated_at") or ""),
+        })
+    return sorted(rows, key=lambda row: (not row["active"], row["name"].casefold(), row["chat_id"]))
+
+
+async def handle_api_employee_directory(request: web.Request) -> web.Response:
+    manager_id = _employee_manager_id(request)
+    if not manager_id:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    return web.json_response({
+        "success": True,
+        "permissions": list(_EMPLOYEE_PERMISSIONS),
+        "employees": _employee_directory_rows(),
+    })
+
+
+async def handle_api_employee_update(request: web.Request) -> web.Response:
+    manager_id = _employee_manager_id(request)
+    if not manager_id:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"success": False, "error": "Yanlış sorğu formatı."}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"success": False, "error": "Yanlış sorğu formatı."}, status=400)
+    action = str(data.get("action") or "upsert").strip().casefold()
+    try:
+        employee_id = int(data.get("chat_id") or 0)
+    except (TypeError, ValueError):
+        employee_id = 0
+    if employee_id <= 0:
+        return web.json_response({"success": False, "error": "Telegram ID yanlışdır."}, status=400)
+
+    records = _load_employee_access_records()
+    users = load_users()
+    existing = employee_access_profile(employee_id)
+    now = datetime.now(tz=BAKU_TZ).isoformat()
+    if action == "deactivate":
+        if employee_id == manager_id:
+            return web.json_response({"success": False, "error": "Öz girişinizi bağlaya bilməzsiniz."}, status=400)
+        records[str(employee_id)] = {
+            "role": existing["role"], "permissions": existing["permissions"], "active": False,
+            "updated_at": now, "updated_by": manager_id,
+        }
+    elif action == "upsert":
+        name = str(data.get("name") or "").strip()[:120]
+        if not name:
+            current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
+            name = str(current.get("name") or "").strip()[:120]
+        if not name:
+            return web.json_response({"success": False, "error": "Əməkdaşın adını yazın."}, status=400)
+        role = "Admin" if str(data.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        active = bool(data.get("active", True))
+        if employee_id == manager_id and (not active or role != "Admin"):
+            return web.json_response({"success": False, "error": "Öz admin girişinizi dəyişə bilməzsiniz."}, status=400)
+        permissions = _normalize_employee_permissions(data.get("permissions"), role)
+        records[str(employee_id)] = {
+            "role": role, "permissions": permissions, "active": active,
+            "updated_at": now, "updated_by": manager_id,
+        }
+        current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
+        current.update({"name": name, "role": role})
+        try:
+            kommo_user_id = int(data.get("kommo_user_id") or 0)
+        except (TypeError, ValueError):
+            kommo_user_id = 0
+        if kommo_user_id:
+            current["kommo_user_id"] = kommo_user_id
+        users[str(employee_id)] = current
+        save_users(users)
+    else:
+        return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
+    try:
+        _save_employee_access_records(records)
+    except Exception as exc:
+        logger.error("employee access save failed: %s", exc)
+        return web.json_response({"success": False, "error": "Yadda saxlamaq mümkün olmadı."}, status=500)
+    return web.json_response({"success": True, "employees": _employee_directory_rows()})
+
+
+async def handle_api_session(request: web.Request) -> web.Response:
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    profile = employee_access_profile(chat_id)
+    return web.json_response({
+        "success": True,
+        "chat_id": chat_id,
+        "active": bool(profile["active"]),
+        "role": profile["role"],
+        "is_admin": is_admin(chat_id),
+        "permissions": profile["permissions"],
+    })
+
 async def serve_webapp(request: web.Request) -> web.Response:
     """Serve the web app from either the deployment layout or the source layout.
 
@@ -17981,6 +18176,23 @@ def _is_public_api_request(request: web.Request) -> bool:
     return request.path == "/api/deal/file" and bool(request.rel_url.query.get("k"))
 
 
+def _required_api_permission(path: str) -> str | None:
+    """Map private API surfaces to the employee permission that controls them."""
+    if path.startswith("/api/admin/employees"):
+        return "employees"
+    if path.startswith(("/api/balance", "/api/kpi", "/api/admin_balances")):
+        return "finance"
+    if path.startswith("/api/pending_actions"):
+        return "stages"
+    if path.startswith("/api/gozleme"):
+        return "waiting"
+    if path.startswith(("/api/chats", "/api/notices", "/api/deal", "/api/wa/", "/api/whatsapp", "/api/search_contacts", "/api/samil/overview", "/api/pipelines", "/api/stages")):
+        return "customers"
+    if path.startswith(("/api/notifications", "/api/action", "/api/upload_voice", "/api/voice/")):
+        return "tasks"
+    return None
+
+
 @web.middleware
 async def telegram_auth_middleware(request, handler):
     """Require a signed Telegram identity for private Mini App API calls."""
@@ -17994,6 +18206,13 @@ async def telegram_auth_middleware(request, handler):
         set_session = bool(chat_id)
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram authorization required"}, status=401)
+
+    profile = employee_access_profile(int(chat_id))
+    if not profile.get("active"):
+        return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
+    required_permission = _required_api_permission(request.path)
+    if required_permission and not employee_has_permission(int(chat_id), required_permission):
+        return web.json_response({"success": False, "error": "Permission denied"}, status=403)
 
     for supplied in (
         request.headers.get("X-TG-User-ID"),
@@ -18032,6 +18251,7 @@ async def telegram_auth_middleware(request, handler):
                     return web.json_response({"success": False, "error": "Invalid identity"}, status=401)
 
     request["authenticated_chat_id"] = int(chat_id)
+    request["employee_access"] = profile
     response = await handler(request)
     if set_session:
         response.set_cookie(
@@ -18434,6 +18654,8 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/session', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/admin/employees', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/api/notices", handle_api_notices)
@@ -18506,6 +18728,9 @@ async def start_webhook_server():
     app_web.router.add_get("/api/voice/{entity_id}", handle_voice_proxy)
     app_web.router.add_route('OPTIONS', '/api/search_contacts', lambda r: web.Response())
     app_web.router.add_post("/api/search_contacts", handle_search_contacts)
+    app_web.router.add_get("/api/session", handle_api_session)
+    app_web.router.add_get("/api/admin/employees", handle_api_employee_directory)
+    app_web.router.add_post("/api/admin/employees", handle_api_employee_update)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_get("/webapp", serve_webapp)
@@ -19164,10 +19389,9 @@ from gh_storage import (
     save_push_subscription, get_push_subscription, remove_push_subscription
 )
 
-# Initialize GitHub storage
-import base64 as _b64t
-_gh_token = _b64t.b64decode('Z2hwX3B1cVc5czhm' + 'QWoxamhQMTBpUXFo' + 'eEFNU2VhSlliWDBP' + 'ZXVyTA==').decode()
-_init_gh_storage(_gh_token)
+# Initialize GitHub storage from Railway. Never keep a storage credential in
+# source code, including encoded form.
+_init_gh_storage(_required_env("GH_TOKEN"))
 logger.info(f"GH Storage initialized, token ok")
 
 _EMPLOYEE_NAMES_BY_TG = {
