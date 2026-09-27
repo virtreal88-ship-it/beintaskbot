@@ -451,9 +451,14 @@ def employee_access_profile(chat_id: int) -> dict:
         return {"active": False, "role": "Əməkdaş", "permissions": []}
     stored = _load_employee_access_records().get(str(cid))
     if isinstance(stored, dict):
-        role = "Admin" if str(stored.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        # Nizami is the canonical system administrator. An accidental edit in
+        # the employee directory must never downgrade this account: otherwise
+        # finance becomes a personal zero balance and the Təsdiq queue is
+        # hidden even though its menu remains visible.
+        canonical_admin = cid == ADMIN_CHAT_ID
+        role = "Admin" if canonical_admin or str(stored.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
         return {
-            "active": bool(stored.get("active", True)),
+            "active": True if canonical_admin else bool(stored.get("active", True)),
             "role": role,
             "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
         }
@@ -19672,35 +19677,56 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
     all_bals = get_all_balances()
     all_pending = get_all_pending_balances()
-    employees = []
-    for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items():
-        emp_data = {
-            'name': name,
-            'tg_id': tg_id,
-            'balance': all_bals.get(tg_id, 0),
-            'pending_balance': all_pending.get(tg_id, 0),
-            'type': get_employee_type(tg_id),
+    directory = {
+        int(row["chat_id"]): str(row.get("name") or "Əməkdaş")
+        for row in _employee_directory_rows()
+        if row.get("active")
+    }
+    # Retain people whose historical transactions predate the access manager.
+    directory.update({tg_id: name for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items() if tg_id not in directory})
+    employee_ids = set(directory) | set(all_bals) | set(all_pending)
+    employees = [{
+        'name': directory.get(tg_id, get_employee_name_by_chat_id(tg_id, f"Əməkdaş #{tg_id}")),
+        'tg_id': tg_id,
+        'balance': all_bals.get(tg_id, 0),
+        'pending_balance': all_pending.get(tg_id, 0),
+        'type': get_employee_type(tg_id),
+    } for tg_id in employee_ids]
+    employees.sort(key=lambda row: str(row["name"]).casefold())
+
+    def format_transaction(row: dict) -> dict:
+        return {
+            "id": row.get("id") or f"{row.get('telegram_id')}|{row.get('date')}|{row.get('task_id', 0)}|{row.get('amount')}",
+            "employee_id": row.get("telegram_id", 0),
+            "employee": row.get("executor") or directory.get(int(row.get("telegram_id") or 0), str(row.get("telegram_id", ""))),
+            "executor": row.get("executor", ""),
+            "client": row.get("client", ""),
+            "phone": row.get("phone", ""),
+            "task_type": row.get("task_type", ""),
+            "task_id": row.get("task_id", 0),
+            "amount": row.get("amount", 0),
+            "status": row.get("status", "confirmed"),
+            "result_text": row.get("result_text") or row.get("task_text", ""),
+            "kpi": row.get("kpi", 0),
+            "type": row.get("type", "task"),
+            "date": row.get("date", ""),
         }
-        # Salary employees now use balance (same as piecework) - no separate KPI display
-        employees.append(emp_data)
-    recent = get_all_recent_transactions(50)
-    recent_fmt = [{
-        "id": r.get("id") or f"{r.get('telegram_id')}|{r.get('date')}|{r.get('task_id', 0)}|{r.get('amount')}",
-        "employee_id": r.get("telegram_id", 0),
-        "employee": r.get("executor") or _EMPLOYEE_NAMES_BY_TG.get(r.get("telegram_id", 0), str(r.get("telegram_id", ""))),
-        "executor": r.get("executor", ""),
-        "client": r.get("client", ""),
-        "phone": r.get("phone", ""),
-        "task_type": r.get("task_type", ""),
-        "task_id": r.get("task_id", 0),
-        "amount": r.get("amount", 0),
-        "status": r.get("status", "confirmed"),
-        "result_text": r.get("result_text") or r.get("task_text", ""),
-        "kpi": r.get("kpi", 0),
-        "type": r.get("type", "task"),
-        "date": r.get("date", ""),
-    } for r in recent]
-    return web.json_response({"success": True, "employees": employees, "recent": recent_fmt})
+
+    try:
+        selected_id = int(request.rel_url.query.get("employee_id") or 0)
+    except (TypeError, ValueError):
+        selected_id = 0
+    if selected_id:
+        if selected_id not in employee_ids:
+            return web.json_response({"success": False, "error": "Əməkdaş tapılmadı."}, status=404)
+        rows = get_balance_transactions(selected_id, limit=200)
+        return web.json_response({
+            "success": True, "employees": employees, "selected_employee_id": selected_id,
+            "transactions": [format_transaction({**row, "telegram_id": selected_id}) for row in rows],
+        })
+    # The initial screen deliberately contains no transaction history. It is
+    # opened only for the selected employee so Maliyyə stays fast.
+    return web.json_response({"success": True, "employees": employees})
 
 async def handle_api_kpi(request: web.Request) -> web.Response:
     tg_user_id = request.headers.get('X-TG-User-ID', '')

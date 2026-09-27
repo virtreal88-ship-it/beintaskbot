@@ -43,11 +43,17 @@ def _load_file(filename: str, force: bool = False) -> dict:
     with _lock:
         if not force and filename in _cache:
             return _cache[filename]
+    url = f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}"
     try:
-        r = requests.get(
-            f"{_GH_API}/repos/{_GH_REPO}/contents/{filename}?ref={_GH_BRANCH}",
-            headers=_headers(), timeout=15
-        )
+        r = requests.get(url, headers=_headers(), timeout=15)
+        # A stale or scope-limited GH_TOKEN makes GitHub reject even a public
+        # repository request. Read-only fallback keeps existing balances and
+        # pending approvals available while the write token is rotated in
+        # Railway. No token value is logged or exposed.
+        if r.status_code in (401, 403) and _GH_TOKEN:
+            fallback = requests.get(url, headers={"Accept": "application/vnd.github.v3+json"}, timeout=15)
+            if fallback.status_code == 200:
+                r = fallback
         if r.status_code == 200:
             content = base64.b64decode(r.json()["content"]).decode("utf-8")
             data = json.loads(content)
@@ -56,6 +62,7 @@ def _load_file(filename: str, force: bool = False) -> dict:
                 _cache_sha[filename] = r.json()["sha"]
             return data
         else:
+            logger.error("gh_storage load %s returned HTTP %s", filename, r.status_code)
             with _lock:
                 if filename not in _cache:
                     _cache[filename] = {}
