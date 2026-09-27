@@ -18346,7 +18346,7 @@ async def handle_api_session(request: web.Request) -> web.Response:
 
 async def handle_web_login_start(request: web.Request) -> web.Response:
     """Begin browser login; Telegram confirms the employee's real identity."""
-    username = _telegram_bot_username
+    username = _telegram_bot_username or await _resolve_telegram_bot_username()
     if not username:
         if request.method == "GET":
             return web.Response(status=503, text="Bot is starting, try again shortly.")
@@ -18428,6 +18428,37 @@ _PUBLIC_API_PATHS = {"/api/deal/public"}
 _ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
 _web_login_requests: dict[str, dict] = {}
 _web_login_lock = threading.Lock()
+
+
+async def _resolve_telegram_bot_username() -> str:
+    """Resolve the public bot username for browser login if startup missed it.
+
+    The HTTP server intentionally starts independently of Telegram polling.
+    On a Railway restart it can therefore receive a browser-login tap before
+    polling's ``get_me`` callback has populated the process cache. Fetching
+    the public username here makes that harmless; the token is never exposed
+    in the response or logs.
+    """
+    global _telegram_bot_username
+    current = str(_telegram_bot_username or "").strip().lstrip("@")
+    if current:
+        return current
+
+    def _load_username() -> str:
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe",
+                timeout=7,
+            )
+            payload = response.json() if response.status_code == 200 else {}
+            return str(((payload.get("result") or {}).get("username")) or "").strip().lstrip("@")
+        except Exception:
+            return ""
+
+    resolved = await asyncio.to_thread(_load_username)
+    if resolved:
+        _telegram_bot_username = resolved
+    return resolved
 
 
 def _create_web_login_request() -> str:
