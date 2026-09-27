@@ -49,6 +49,10 @@ from telegram.ext import (
 from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
+from hot_orders import (
+    HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
+    release_hot_order, submit_hot_order, settle_hot_order,
+)
 # import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
@@ -407,8 +411,9 @@ _ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "finance", "passive_tasks", "waiting", "customers", "employees")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "finance", "passive_tasks", "waiting", "customers", "employees")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
+_HOT_ORDER_SKILLS = ("all", "montaj", "temir", "catdirilma", "servis", "digər")
 _employee_access_cache: dict[str, dict] | None = None
 _employee_access_cache_at = 0.0
 _employee_access_lock = threading.Lock()
@@ -426,7 +431,14 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
         values.add("passive_tasks")
     if "stages" in values or "reports" in values:
         values.add("waiting")
+    if "tasks" in values:
+        values.add("hot_orders")
     return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
+
+
+def _normalize_hot_order_skills(value) -> list[str]:
+    values = {str(item).strip().casefold() for item in value} if isinstance(value, (list, tuple, set)) else set()
+    return [key for key in _HOT_ORDER_SKILLS if key in values] or ["all"]
 
 
 def _load_employee_access_records(force: bool = False) -> dict[str, dict]:
@@ -475,15 +487,16 @@ def employee_access_profile(chat_id: int) -> dict:
             "active": True if canonical_admin else bool(stored.get("active", True)),
             "role": role,
             "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
+            "hot_order_skills": _normalize_hot_order_skills(stored.get("hot_order_skills")),
         }
     users = load_users()
     known = cid in _KNOWN_EMPLOYEE_REGISTRATIONS or str(cid) in users
     if not known:
-        return {"active": False, "role": "Əməkdaş", "permissions": []}
+        return {"active": False, "role": "Əməkdaş", "permissions": [], "hot_order_skills": []}
     # Existing people keep their currently working access until the admin
     # explicitly changes it from the new employee page.
     role = "Admin" if cid == ADMIN_CHAT_ID else "Əməkdaş"
-    return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS)}
+    return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS), "hot_order_skills": ["all"]}
 
 
 def remove_retired_employee_access() -> None:
@@ -18333,6 +18346,7 @@ def _employee_directory_rows() -> list[dict]:
             "role": profile["role"],
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
+            "hot_order_skills": profile.get("hot_order_skills") or [],
             "updated_at": str((access.get(str(chat_id)) or {}).get("updated_at") or ""),
         })
     return sorted(rows, key=lambda row: (not row["active"], row["name"].casefold(), row["chat_id"]))
@@ -18378,6 +18392,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Öz girişinizi bağlaya bilməzsiniz."}, status=400)
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": False,
+            "hot_order_skills": existing.get("hot_order_skills") or [],
             "updated_at": now, "updated_by": manager_id,
         }
     elif action == "upsert":
@@ -18392,8 +18407,10 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         if employee_id == manager_id and (not active or role != "Admin"):
             return web.json_response({"success": False, "error": "Öz admin girişinizi dəyişə bilməzsiniz."}, status=400)
         permissions = _normalize_employee_permissions(data.get("permissions"), role)
+        hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
+            "hot_order_skills": hot_order_skills,
             "updated_at": now, "updated_by": manager_id,
         }
         current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
@@ -18414,6 +18431,153 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         logger.error("employee access save failed: %s", exc)
         return web.json_response({"success": False, "error": "Yadda saxlamaq mümkün olmadı."}, status=500)
     return web.json_response({"success": True, "employees": _employee_directory_rows()})
+
+
+def _hot_order_recipient_ids(skill: str) -> list[int]:
+    wanted = str(skill or "").strip().casefold()
+    recipients = []
+    for row in _employee_directory_rows():
+        chat_id = int(row.get("chat_id") or 0)
+        if not chat_id or not row.get("active") or is_admin(chat_id):
+            continue
+        if "hot_orders" not in set(row.get("permissions") or []):
+            continue
+        skills = {str(item).casefold() for item in row.get("hot_order_skills") or []}
+        if not wanted or wanted == "all" or wanted in skills or "all" in skills:
+            recipients.append(chat_id)
+    return recipients
+
+
+async def _notify_hot_order_recipients(order: dict, recipients: list[int], *, reopened: bool = False) -> None:
+    if not recipients:
+        return
+    title = "🔁 İsti sifariş yenidən açıldı" if reopened else "🔥 Yeni isti sifariş"
+    body = f"{order.get('client_name') or 'Müştəri'} — {order.get('description') or ''}"[:160]
+    for recipient in recipients:
+        send_push_notification(str(recipient), title, body, url="#hot-orders")
+        if _bot_app:
+            try:
+                await _bot_app.bot.send_message(recipient, f"{title}\n\n👤 {order.get('client_name') or 'Müştəri'}\n📝 {order.get('description') or ''}\n\nProqramdan açıb götürə bilərsiniz.", disable_web_page_preview=True)
+            except Exception:
+                logger.warning("Hot order Telegram notification failed for %s", recipient)
+
+
+async def handle_api_hot_orders(request: web.Request) -> web.Response:
+    """Hot-order board. PostgreSQL enforces that only one worker can claim an order."""
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    profile = employee_access_profile(chat_id)
+    if not chat_id or not employee_has_permission(chat_id, "hot_orders"):
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    if request.method == "GET":
+        try:
+            orders = list_hot_orders(
+                worker_id=chat_id,
+                skills=profile.get("hot_order_skills") or [],
+                is_admin=is_admin(chat_id),
+            )
+            return web.json_response({"success": True, "orders": orders, "skills": list(_HOT_ORDER_SKILLS)})
+        except HotOrderError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=503)
+        except Exception:
+            logger.exception("Could not list hot orders")
+            return web.json_response({"success": False, "error": "İsti sifarişlər yüklənmədi."}, status=500)
+
+    try:
+        data = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        data = {}
+    action = str(data.get("action") or "").strip().casefold()
+    order_id = str(data.get("order_id") or "").strip()
+    try:
+        if action == "create":
+            if not is_admin(chat_id):
+                return web.json_response({"success": False, "error": "Sifarişi yalnız Admin yarada bilər."}, status=403)
+            client_name = str(data.get("client_name") or "").strip()[:180]
+            description = str(data.get("description") or "").strip()[:2000]
+            if not client_name or not description:
+                return web.json_response({"success": False, "error": "Müştəri və sifariş təsviri vacibdir."}, status=400)
+            skill = str(data.get("skill") or "").strip().casefold()
+            if skill not in _HOT_ORDER_SKILLS:
+                skill = "all"
+            priority = "urgent" if str(data.get("priority") or "").casefold() == "urgent" else "normal"
+            deadline_at = None
+            raw_deadline = str(data.get("deadline_at") or "").strip()
+            if raw_deadline:
+                deadline_at = datetime.fromisoformat(raw_deadline.replace("Z", "+00:00"))
+            order = create_hot_order(
+                client_name=client_name, phone=str(data.get("phone") or "").strip()[:50],
+                address=str(data.get("address") or "").strip()[:500], description=description,
+                skill=skill, priority=priority, deadline_at=deadline_at, created_by=chat_id,
+            )
+            recipients = _hot_order_recipient_ids(skill)
+            await _notify_hot_order_recipients(order, recipients)
+            return web.json_response({"success": True, "order": order, "notified": len(recipients)})
+
+        if action == "claim":
+            order = claim_hot_order(order_id=order_id, worker_id=chat_id, skills=profile.get("hot_order_skills") or [])
+            if not order:
+                return web.json_response({"success": False, "error": "Bu sifarişi artıq başqa əməkdaş götürüb və ya sizə uyğun deyil."}, status=409)
+            worker_name = get_employee_name_by_chat_id(chat_id, "Əməkdaş")
+            message = f"🔥 İsti sifariş götürüldü: {order.get('client_name')} — {worker_name}"
+            send_push_to_admin(message, title="İsti sifariş")
+            if _bot_app and chat_id != ADMIN_CHAT_ID:
+                try:
+                    await _bot_app.bot.send_message(ADMIN_CHAT_ID, message, disable_web_page_preview=True)
+                except Exception:
+                    pass
+            return web.json_response({"success": True, "order": order})
+
+        if action == "release":
+            order = release_hot_order(order_id=order_id, worker_id=chat_id)
+            if not order:
+                return web.json_response({"success": False, "error": "Bu sifarişi geri qaytarmaq mümkün deyil."}, status=409)
+            await _notify_hot_order_recipients(order, _hot_order_recipient_ids(str(order.get("skill") or "")), reopened=True)
+            return web.json_response({"success": True, "order": order})
+
+        if action == "submit":
+            report = str(data.get("report") or "").strip()[:3000]
+            if not report:
+                return web.json_response({"success": False, "error": "Yekun hesabatı yazın."}, status=400)
+            order = submit_hot_order(order_id=order_id, worker_id=chat_id, report=report)
+            if not order:
+                return web.json_response({"success": False, "error": "Sifariş tapılmadı və ya sizə aid deyil."}, status=409)
+            message = f"✅ İsti sifariş hesabatı gözləyir: {order.get('client_name')}"
+            send_push_to_admin(message, title="İsti sifariş")
+            if _bot_app:
+                try:
+                    await _bot_app.bot.send_message(ADMIN_CHAT_ID, message, disable_web_page_preview=True)
+                except Exception:
+                    pass
+            return web.json_response({"success": True, "order": order})
+
+        if action == "settle":
+            if not is_admin(chat_id):
+                return web.json_response({"success": False, "error": "Ödənişi yalnız Admin təsdiqləyir."}, status=403)
+            amount = float(data.get("amount") or 0)
+            if amount <= 0:
+                return web.json_response({"success": False, "error": "Məbləği düzgün yazın."}, status=400)
+            order = settle_hot_order(order_id=order_id, admin_id=chat_id, payout_amount=amount)
+            if not order:
+                return web.json_response({"success": False, "error": "Sifariş ödəniş üçün hazır deyil."}, status=409)
+            worker_id = int(order.get("claimed_by") or 0)
+            worker_name = get_employee_name_by_chat_id(worker_id, "Əməkdaş")
+            saved = add_balance_transaction(
+                worker_id, 0, amount, f"İsti sifariş: {order.get('description') or ''}"[:500],
+                executor_name=worker_name, client=str(order.get("client_name") or ""),
+                phone=str(order.get("phone") or ""), status="pending", transaction_type="hot_order",
+                source_key=f"hot-order:{order_id}",
+            )
+            if not saved:
+                logger.error("Hot order %s settled but pending balance was not saved", order_id)
+                return web.json_response({"success": False, "error": "Sifariş təsdiqləndi, lakin balans yadda saxlanmadı."}, status=500)
+            send_push_notification(str(worker_id), "✅ İsti sifariş təsdiqləndi", "Ödəniş Maliyyə bölməsində gözləmədədir.", url="#finance")
+            return web.json_response({"success": True, "order": order})
+    except (HotOrderError, ValueError) as exc:
+        return web.json_response({"success": False, "error": str(exc) or "Məlumat yanlışdır."}, status=400)
+    except Exception:
+        logger.exception("Hot order action failed")
+        return web.json_response({"success": False, "error": "İsti sifariş əməliyyatı alınmadı."}, status=500)
+    return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
 
 
 async def handle_api_session(request: web.Request) -> web.Response:
@@ -18726,6 +18890,8 @@ def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
     """Map private API surfaces to the employee permission that controls them."""
     if path.startswith("/api/admin/employees"):
         return "employees"
+    if path.startswith("/api/hot-orders"):
+        return "hot_orders"
     if path.startswith(("/api/balance", "/api/kpi", "/api/admin_balances")):
         return "finance"
     if path.startswith("/api/pending_actions"):
@@ -19212,6 +19378,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/session', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/admin/employees', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/hot-orders', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/api/notices", handle_api_notices)
@@ -19287,6 +19454,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/session", handle_api_session)
     app_web.router.add_get("/api/admin/employees", handle_api_employee_directory)
     app_web.router.add_post("/api/admin/employees", handle_api_employee_update)
+    app_web.router.add_get("/api/hot-orders", handle_api_hot_orders)
+    app_web.router.add_post("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)

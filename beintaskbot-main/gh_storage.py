@@ -5,10 +5,13 @@ Stores data in JSON files on a 'data' branch to avoid triggering redeploys.
 import json
 import base64
 import logging
+import os
 import threading
 import uuid
 import requests
+import psycopg
 from datetime import datetime, timezone
+from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +19,9 @@ _GH_TOKEN = None
 _GH_REPO = "virtreal88-ship-it/beintaskbot"
 _GH_BRANCH = "data"
 _GH_API = "https://api.github.com"
+_DATABASE_URL = None
+_pg_schema_ready = False
+_pg_schema_lock = threading.Lock()
 
 # In-memory cache
 _cache = {}
@@ -24,9 +30,12 @@ _lock = threading.Lock()
 
 
 def init_storage(token: str):
-    global _GH_TOKEN
+    global _GH_TOKEN, _DATABASE_URL
     _GH_TOKEN = token
+    _DATABASE_URL = str(os.environ.get("DATABASE_URL") or "").strip() or None
     # Always refresh persisted data on startup, even if the cache was populated earlier.
+    # When DATABASE_URL exists, PostgreSQL is the primary store. Documents from
+    # the legacy GitHub data branch are copied lazily on their first read.
     _load_file("balance.json", force=True)
     _load_file("kpi.json", force=True)
 
@@ -38,8 +47,89 @@ def _headers():
     return headers
 
 
+def _ensure_postgres_schema(conn) -> None:
+    global _pg_schema_ready
+    if _pg_schema_ready:
+        return
+    with _pg_schema_lock:
+        if _pg_schema_ready:
+            return
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS app_documents (
+                    key TEXT PRIMARY KEY,
+                    value JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+        conn.commit()
+        _pg_schema_ready = True
+
+
+def _postgres_load_file(filename: str, force: bool = False) -> dict:
+    """Read a document from PostgreSQL, importing its GitHub legacy value once."""
+    try:
+        with psycopg.connect(_DATABASE_URL, row_factory=dict_row) as conn:
+            _ensure_postgres_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_documents WHERE key = %s", (filename,))
+                row = cur.fetchone()
+            if row is not None:
+                data = row["value"]
+                if not isinstance(data, dict):
+                    data = {}
+                with _lock:
+                    _cache[filename] = data
+                    _cache_sha[filename] = "postgres"
+                return data
+    except Exception as exc:
+        logger.error("PostgreSQL load %s failed: %s", filename, exc)
+        # A temporary database outage must not wipe the running CRM cache.
+        with _lock:
+            if filename in _cache:
+                return _cache[filename]
+        return _github_load_file(filename, force=force)
+
+    # First PostgreSQL read: migrate the existing document without deleting the
+    # GitHub source. This gives the current installation a reversible rollout.
+    legacy = _github_load_file(filename, force=force)
+    if _postgres_save_file(filename, legacy):
+        return legacy
+    return legacy
+
+
+def _postgres_save_file(filename: str, data: dict) -> bool:
+    try:
+        payload = json.dumps(data, ensure_ascii=False)
+        with psycopg.connect(_DATABASE_URL) as conn:
+            _ensure_postgres_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO app_documents (key, value, updated_at)
+                    VALUES (%s, %s::jsonb, now())
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """, (filename, payload))
+            conn.commit()
+        with _lock:
+            _cache_sha[filename] = "postgres"
+        return True
+    except Exception as exc:
+        logger.error("PostgreSQL save %s failed: %s", filename, exc)
+        return False
+
+
 def _load_file(filename: str, force: bool = False) -> dict:
-    """Load a JSON file from GitHub data branch into cache."""
+    """Load from PostgreSQL when configured, otherwise use legacy GitHub JSON."""
+    with _lock:
+        if not force and filename in _cache:
+            return _cache[filename]
+    if _DATABASE_URL:
+        return _postgres_load_file(filename, force=force)
+    return _github_load_file(filename, force=force)
+
+
+def _github_load_file(filename: str, force: bool = False) -> dict:
+    """Load a JSON file from the legacy GitHub data branch into cache."""
     with _lock:
         if not force and filename in _cache:
             return _cache[filename]
@@ -78,9 +168,11 @@ def _load_file(filename: str, force: bool = False) -> dict:
 
 
 def _save_file(filename: str):
-    """Save cached data to GitHub with retry on SHA conflict."""
+    """Save cached data to PostgreSQL, or legacy GitHub when PostgreSQL is absent."""
     with _lock:
         data = _cache.get(filename, {})
+    if _DATABASE_URL:
+        return _postgres_save_file(filename, data)
     # Always fetch fresh SHA before saving to avoid conflicts after redeploy
     logger.info(f"gh_storage _save_file({filename}): starting save...")
     try:
@@ -211,6 +303,7 @@ def add_balance_transaction(
     kpi: int = 0,
     status: str = "confirmed",
     transaction_type: str = "task",
+    source_key: str = "",
 ):
     """Add a pending or confirmed transaction with complete business context."""
     filename = "balance.json"
@@ -228,6 +321,17 @@ def add_balance_transaction(
             ), None)
             if duplicate is not None:
                 return True
+        # Non-task operations (for example, a hot order) may be retried after a
+        # network error. A stable source key makes that retry safe and avoids
+        # crediting the same work twice.
+        normalized_source_key = str(source_key or "").strip()
+        if normalized_source_key:
+            duplicate = next((
+                item for item in account["transactions"]
+                if str(item.get("source_key") or "") == normalized_source_key
+            ), None)
+            if duplicate is not None:
+                return True
         transaction = {
             "id": uuid.uuid4().hex,
             "task_id": normalized_task_id,
@@ -241,6 +345,7 @@ def add_balance_transaction(
             "result_text": result_text or task_text,
             "kpi": int(kpi or 0),
             "type": transaction_type,
+            "source_key": normalized_source_key,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         account["transactions"].append(transaction)
