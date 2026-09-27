@@ -1427,7 +1427,7 @@ function getUserId() {
 let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = ['6824377548','7962757442'].includes(CURRENT_USER_ID);
-const HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
+let HAS_OWN_FUNNEL = ['6824377548','7962757442','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
 let HAS_CHATS = ['6824377548','7962757442','1628569350'].includes(CURRENT_USER_ID);
 let HAS_NOTICES = ['6824377548','7962757442','1628569350','7329891614','7920785774','7262243946','1289510272','6596538872','1142054888'].includes(CURRENT_USER_ID);
 const SALARY_COMPLETE_IDS = ['6824377548','7962757442','7329891614','7920785774','1628569350'];
@@ -2144,6 +2144,7 @@ async function loadEmployeeSession() {
     }
     isAdmin = !!data.is_admin;
     employeePermissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
+    HAS_OWN_FUNNEL = hasEmployeePermission('deals');
     HAS_NOTICES = hasEmployeePermission('tasks');
     HAS_CHATS = hasEmployeePermission('customers');
     localStorage.setItem('is_admin', isAdmin ? 'true' : 'false');
@@ -2153,21 +2154,22 @@ function applyEmployeePermissionUi() {
     const visible = (ids, allowed) => ids.forEach(id => { const el = document.getElementById(id); if(el) el.style.display = allowed ? '' : 'none'; });
     visible(['tab-tasks','side-tab-tasks'], hasEmployeePermission('tasks'));
     visible(['tab-history','side-tab-history'], hasEmployeePermission('finance'));
-    visible(['tab-gozleme','side-tab-gozleme'], hasEmployeePermission('waiting'));
-    visible(['tab-hesabat','side-tab-hesabat'], hasEmployeePermission('reports') && !isAdmin);
+    visible(['tab-samil-deals','side-tab-samil-deals'], hasEmployeePermission('deals'));
+    visible(['tab-gozleme','side-tab-gozleme'], hasEmployeePermission('passive_tasks'));
+    visible(['tab-hesabat','side-tab-hesabat'], false);
     visible(['tab-chats','side-tab-chats'], HAS_CHATS);
     setPendingTabVisible();
 }
 
 function setPendingTabVisible() {
     const tab = document.getElementById('tab-pending');
-    if(tab) tab.style.display = isAdmin ? 'flex' : 'none';
+    if(tab) tab.style.display = hasEmployeePermission('waiting') ? 'flex' : 'none';
     const sideTab = document.getElementById('side-tab-pending');
-    if(sideTab) sideTab.style.display = isAdmin ? 'flex' : 'none';
+    if(sideTab) sideTab.style.display = hasEmployeePermission('waiting') ? 'flex' : 'none';
     const hesabatTab = document.getElementById('tab-hesabat');
-    if(hesabatTab) hesabatTab.style.display = !isAdmin && hasEmployeePermission('reports') ? 'flex' : 'none';
+    if(hesabatTab) hesabatTab.style.display = 'none';
     const sideHesabat = document.getElementById('side-tab-hesabat');
-    if(sideHesabat) sideHesabat.style.display = !isAdmin && hasEmployeePermission('reports') ? 'flex' : 'none';
+    if(sideHesabat) sideHesabat.style.display = 'none';
     const employeesTab = document.getElementById('tab-employees');
     if(employeesTab) employeesTab.style.display = hasEmployeePermission('employees') ? 'flex' : 'none';
     const sideEmployees = document.getElementById('side-tab-employees');
@@ -2186,8 +2188,8 @@ function mobileTabWanted(id) {
     if(id === 'tab-chats') return HAS_NOTICES;
     if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
     if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
-    if(id === 'tab-hesabat') return !isAdmin;
-    if(id === 'tab-pending') return isAdmin;
+    if(id === 'tab-hesabat') return false;
+    if(id === 'tab-pending') return hasEmployeePermission('waiting');
     if(id === 'tab-employees') return hasEmployeePermission('employees');
     if(id === 'tab-create') return false;
     return false;
@@ -2240,7 +2242,7 @@ function setSidebarActive(tabId) {
 }
 
 function applyHashRoute(opts) {
-    if(window.location.hash === '#pending' && isAdmin) switchTab('tab-pending', false);
+    if(window.location.hash === '#pending' && hasEmployeePermission('waiting')) switchTab('tab-pending', false);
     const dealMatch = String(window.location.hash || '').match(/^#deal-(\d+)/);
     if(dealMatch) {
         openDealViewById(dealMatch[1]);
@@ -10815,8 +10817,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const EMPLOYEE_PERMISSION_LABELS = {
-    tasks: 'Tapşırıqlar', customers: 'Müştərilər və sövdələşmələr', waiting: 'Gözləyən sorğular', reports: 'Hesabatlar',
-    finance: 'Tarixçə', stages: 'Gələn sorğular', employees: 'Əməkdaşlar'
+    deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Passiv tapşırıqlar',
+    waiting: 'Gözləyən sorğular', customers: 'Müştərilər', employees: 'Əməkdaşlar'
 };
 function renderEmployeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
@@ -10932,7 +10934,7 @@ function switchTab(tabId, updateHash = true) {
         document.getElementById('tab-gozleme').className = activeClass;
         openGozleme();
     } else if(tabId === 'tab-pending') {
-        if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+        if(!hasEmployeePermission('waiting')) { toast('Bu bölmə üçün icazə yoxdur.', true); switchTab('tab-tasks'); return; }
         const pendingTab = document.getElementById('tab-pending');
         if(pendingTab) pendingTab.className = activeClass;
         openPendingActions();

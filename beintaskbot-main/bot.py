@@ -395,7 +395,7 @@ _SALARY_CHAT_IDS = {RUFAT_CHAT_ID, 7262243946, 7329891614, 7920785774, 128951027
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("tasks", "customers", "waiting", "reports", "finance", "stages", "employees")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "finance", "passive_tasks", "waiting", "customers", "employees")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
 _employee_access_cache: dict[str, dict] | None = None
 _employee_access_cache_at = 0.0
@@ -405,8 +405,16 @@ _employee_access_lock = threading.Lock()
 def _normalize_employee_permissions(value, role: str = "") -> list[str]:
     if str(role).strip().casefold() == "admin":
         return list(_EMPLOYEE_PERMISSIONS)
-    values = value if isinstance(value, (list, tuple, set)) else []
-    return [key for key in _EMPLOYEE_PERMISSIONS if key in {str(item) for item in values}]
+    values = {str(item) for item in value} if isinstance(value, (list, tuple, set)) else set()
+    # Profiles saved before the menu-based permission model keep their useful
+    # access instead of being silently locked out after this update.
+    if "customers" in values:
+        values.add("deals")
+    if "waiting" in values:
+        values.add("passive_tasks")
+    if "stages" in values or "reports" in values:
+        values.add("waiting")
+    return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
 
 
 def _load_employee_access_records(force: bool = False) -> dict[str, dict]:
@@ -18287,17 +18295,21 @@ def _is_public_api_request(request: web.Request) -> bool:
     return request.path == "/api/deal/file" and bool(request.rel_url.query.get("k"))
 
 
-def _required_api_permission(path: str) -> str | None:
+def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
     """Map private API surfaces to the employee permission that controls them."""
     if path.startswith("/api/admin/employees"):
         return "employees"
     if path.startswith(("/api/balance", "/api/kpi", "/api/admin_balances")):
         return "finance"
     if path.startswith("/api/pending_actions"):
-        return "stages"
-    if path.startswith("/api/gozleme"):
         return "waiting"
-    if path.startswith(("/api/chats", "/api/notices", "/api/deal", "/api/wa/", "/api/whatsapp", "/api/search_contacts", "/api/samil/overview", "/api/pipelines", "/api/stages")):
+    if path.startswith("/api/gozleme"):
+        return "passive_tasks"
+    if path.startswith(("/api/samil/overview", "/api/pipelines", "/api/stages")):
+        return "deals"
+    if path.startswith("/api/deal"):
+        return ("deals", "customers")
+    if path.startswith(("/api/chats", "/api/notices", "/api/wa/", "/api/whatsapp", "/api/search_contacts")):
         return "customers"
     if path.startswith(("/api/notifications", "/api/action", "/api/upload_voice", "/api/voice/")):
         return "tasks"
@@ -18322,7 +18334,8 @@ async def telegram_auth_middleware(request, handler):
     if not profile.get("active"):
         return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
     required_permission = _required_api_permission(request.path)
-    if required_permission and not employee_has_permission(int(chat_id), required_permission):
+    required_permissions = (required_permission,) if isinstance(required_permission, str) else required_permission
+    if required_permissions and not any(employee_has_permission(int(chat_id), permission) for permission in required_permissions):
         return web.json_response({"success": False, "error": "Permission denied"}, status=403)
 
     for supplied in (
