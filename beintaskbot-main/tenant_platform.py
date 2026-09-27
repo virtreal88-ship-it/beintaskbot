@@ -224,6 +224,11 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
         return None
     result = dict(row)
     result["tenant_id"] = str(result["tenant_id"])
+    # ``member`` is returned directly by JSON API handlers. PostgreSQL gives
+    # timestamps as datetime instances, which must be made JSON-safe here.
+    for key in ("created_at", "updated_at"):
+        if result.get(key):
+            result[key] = result[key].isoformat()
     for key in ("permissions", "modules", "notification_rules", "onboarding"):
         if not isinstance(result.get(key), (dict, list)):
             result[key] = {} if key != "permissions" else []
