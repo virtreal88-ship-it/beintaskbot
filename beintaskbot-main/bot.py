@@ -20077,9 +20077,9 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         for row in _employee_directory_rows()
         if row.get("active")
     }
-    # Retain people whose historical transactions predate the access manager.
-    directory.update({tg_id: name for tg_id, name in _EMPLOYEE_NAMES_BY_TG.items() if tg_id not in directory})
-    employee_ids = set(directory) | set(all_bals) | set(all_pending)
+    # Finance is an active-team screen. Historical balances of retired accounts
+    # stay in storage for audit purposes, but must never create a visible card.
+    employee_ids = set(directory)
     employees = [{
         'name': directory.get(tg_id, get_employee_name_by_chat_id(tg_id, f"Əməkdaş #{tg_id}")),
         'tg_id': tg_id,
