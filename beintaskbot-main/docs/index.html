@@ -208,14 +208,28 @@
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
         #task-date-select, #gozleme-date-select, #pending-type-select { display:block; width:100%; }
         @media (max-width: 1023px) {
-            #screen-notifications .samil-kanban-wrap, #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap { overflow-x:hidden; }
-            #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board {
+            /* A horizontal board makes a phone list hard to scan. Keep the
+               stage header, but render its items as one full-width list. */
+            #screen-samil-deals .samil-kanban-wrap, #screen-notifications .samil-kanban-wrap,
+            #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap { overflow-x:hidden; margin-left:-16px; margin-right:-16px; padding:0; }
+            #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board {
                 display:flex; flex-direction:column; grid-auto-flow:row; grid-auto-columns:unset;
-                grid-template-columns:none; min-height:0; height:auto;
+                grid-template-columns:none; min-height:0; height:auto; gap:0;
             }
-            #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column { max-height:none; min-height:0; height:auto; }
+            #screen-samil-deals .samil-kanban-column, #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column {
+                background:transparent; border:0; border-radius:0; max-height:none; min-height:0; height:auto; overflow:visible;
+            }
+            #screen-samil-deals .samil-kanban-header, #screen-notifications .samil-kanban-header, #screen-gozleme .samil-kanban-header, #screen-pending .samil-kanban-header {
+                padding:12px 16px 8px; background:#fff; border-bottom:4px solid #22c55e;
+            }
+            #screen-samil-deals .samil-kanban-list, #screen-notifications .samil-kanban-list, #screen-gozleme .samil-kanban-list, #screen-pending .samil-kanban-list { display:block; padding:0; overflow:visible; }
+            #screen-samil-deals .samil-deal-card, #screen-notifications .crm-task-card, #screen-gozleme .crm-task-card, #screen-pending .crm-task-card {
+                width:100%; max-width:none; border:0 !important; border-bottom:1px solid #e5e7eb !important;
+                border-radius:0 !important; box-shadow:none !important; padding:14px 16px; background:#fff;
+            }
         }
         @media (min-width: 1024px) {
+            #side-tab-settings { margin-top:auto; border-top:1px solid #e6e8eb; border-radius:0; padding-top:13px; }
             #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active, #content-area > #screen-pending.active, #content-area > #screen-chats.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #content-area > #screen-chats.active { max-width:none !important; height:100%; margin:0; gap:0; }
             #samil-stage-select { display:none !important; }
@@ -517,7 +531,15 @@
         .audio-speed { flex:0 0 auto; border:1px solid #cbd5e1; background:#fff; color:#334155; border-radius:999px; font-size:10px; font-weight:600; padding:3px 6px; line-height:1; }
         .audio-speed.on { background:#25d366; border-color:#25d366; color:#fff; }
         .wa-composer { display:flex; gap:8px; align-items:flex-end; padding:8px; }
-        .wa-composer-field { position:relative; flex:1; min-width:0; }
+        .wa-composer-field { position:relative; flex:1; min-width:0; background:#fff; border-radius:12px; }
+        /* A chat editor should not look like a form field. Its height grows as
+           the employee types or pastes an AI answer. */
+        .wa-composer-field textarea, #deal-chat-input {
+            display:block; width:100%; min-height:42px; max-height:190px; box-sizing:border-box;
+            resize:none; overflow-y:auto; border:0 !important; outline:0; box-shadow:none !important;
+            background:transparent !important; color:#17212b; font:inherit; line-height:1.42;
+            padding:11px 142px 11px 42px;
+        }
         .wa-voice-preview { display:flex; align-items:center; gap:8px; box-sizing:border-box; min-height:42px; padding:6px 140px 6px 40px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
         .wa-voice-preview[hidden] { display:none !important; }
         .wa-voice-preview audio { flex:1; min-width:0; height:30px; }
@@ -688,15 +710,20 @@
         #tab-more-sheet[hidden] { display:none !important; }
         #tab-more-sheet .tab-more-dim { position:absolute; inset:0; background:rgba(15,23,42,.35); }
         #tab-more-sheet .tab-more-panel {
-            position:absolute; left:0; right:0; bottom:64px; background:#fff; border-radius:16px 16px 0 0;
-            padding:10px 10px 14px; box-shadow:0 -8px 24px rgba(15,23,42,.16);
+            position:absolute; left:0; top:0; bottom:0; width:min(330px,86vw); background:#fff; border-radius:0 18px 18px 0;
+            padding:calc(16px + env(safe-area-inset-top)) 10px 18px; box-shadow:8px 0 24px rgba(15,23,42,.16); overflow-y:auto;
         }
         #tab-more-list { display:flex; flex-direction:column; gap:4px; }
+        .tab-more-title { color:#0f172a; font-size:17px; font-weight:800; padding:2px 6px 12px; }
         #tab-more-list button {
             width:100%; text-align:left; border:0; background:#f8fafc; color:#0f172a; border-radius:12px;
-            padding:12px 14px; font-size:13px; font-weight:600; font-family:inherit;
+            padding:12px 14px; font-size:13px; font-weight:600; font-family:inherit; display:flex; align-items:center; gap:11px;
         }
         #tab-more-list button.on { background:#dbeafe; color:#1d4ed8; }
+        #tab-more-list .tab-more-icon { width:21px; height:21px; display:inline-flex; align-items:center; justify-content:center; color:inherit; }
+        #tab-more-list .tab-more-icon svg { width:20px; height:20px; }
+        #tab-more-list .tab-more-label { flex:1; }
+        #tab-more-list .tab-more-arrow { color:#94a3b8; font-size:20px; line-height:1; }
         .chats-hide { flex:none; width:auto; height:auto; border:0; border-radius:8px; background:#eef3f1; color:#1c2b28; font-size:11px; line-height:1; cursor:pointer; font-family:inherit; padding:6px 8px; font-weight:700; }
         .chats-hide:hover { background:#fee2e2; color:#b91c1c; }
         .chats-empty-list { padding:28px 16px; text-align:center; color:#94a3b8; font-size:13px; font-weight:600; }
@@ -1219,6 +1246,7 @@
 
     <!-- SCREEN: EMPLOYEES (employee managers only) -->
     <div id="screen-employees" class="screen space-y-3">
+        <div class="flex gap-2 overflow-x-auto pb-1" aria-label="Ayarlar bölmələri"><button type="button" class="shrink-0 bg-[#2481cc] text-white px-3 py-2 rounded-xl text-xs font-bold">Əməkdaşlar</button><button type="button" onclick="openSettingsIntegrationsSection()" class="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-bold">İnteqrasiyalar</button></div>
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">Əməkdaşlar</div><div class="text-[10px] text-gray-400 font-medium mt-0.5">Əməkdaşın üzərinə toxunun: giriş və hüquqlar açılacaq</div></div>
             <button type="button" onclick="openEmployeeEditor()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yeni əməkdaş</button>
@@ -1228,6 +1256,7 @@
 
     <div id="screen-settings" class="screen space-y-3">
         <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="text-base font-extrabold text-slate-800">Ayarlar</div><div class="text-[11px] text-slate-400 mt-1">Komandanı və sistem bağlantılarını idarə edin</div></div>
+        <div class="flex gap-2 overflow-x-auto pb-1" aria-label="Ayarlar bölmələri"><button type="button" onclick="switchTab('tab-employees')" class="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-bold">Əməkdaşlar</button><button type="button" class="shrink-0 bg-[#2481cc] text-white px-3 py-2 rounded-xl text-xs font-bold">İnteqrasiyalar</button></div>
         <button type="button" id="settings-employees-button" onclick="switchTab('tab-employees')" class="w-full text-left bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">Əməkdaşlar</div><div class="text-[11px] text-slate-400 mt-1">Giriş, hüquqlar, WhatsApp nömrəsi və bacarıqlar</div></div><span class="text-slate-400">›</span></div></button>
         <div id="settings-integrations-card" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">İnteqrasiyalar</div><div class="text-[11px] text-slate-400 mt-1">Aktiv və qoşulmamış bağlantılar</div></div><button type="button" onclick="loadSettingsIntegrations()" class="text-xs font-bold text-[#2481cc]">Yenilə</button></div><div id="settings-integrations-list" class="mt-3 space-y-2 text-xs text-slate-500"></div></div>
     </div>
@@ -2311,6 +2340,11 @@ function mobileTabLabel(id) {
     const text = el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : '';
     return text || id;
 }
+function mobileTabIcon(id) {
+    const source = document.getElementById(id);
+    const icon = source && source.querySelector('svg');
+    return icon ? icon.outerHTML : '<span>•</span>';
+}
 function closeMobileMoreMenu() {
     const sheet = document.getElementById('tab-more-sheet');
     if(sheet) sheet.hidden = true;
@@ -2337,7 +2371,7 @@ function paintMobileTabBar(activeId) {
         moreBtn.style.color = extra.includes(activeId) ? '#2481cc' : '';
     }
     if(list) {
-        list.innerHTML = extra.map(id => `<button type="button" class="${id === activeId ? 'on' : ''}" data-more-tab="${id}">${escapeHtml(mobileTabLabel(id))}</button>`).join('');
+        list.innerHTML = `<div class="tab-more-title">Daha</div>` + extra.map(id => `<button type="button" class="${id === activeId ? 'on' : ''}" data-more-tab="${id}"><span class="tab-more-icon">${mobileTabIcon(id)}</span><span class="tab-more-label">${escapeHtml(mobileTabLabel(id))}</span><span class="tab-more-arrow">›</span></button>`).join('');
         list.onclick = event => {
             const btn = event.target.closest('[data-more-tab]');
             if(!btn) return;
@@ -7965,7 +7999,7 @@ async function deliverQueuedDealSend(job) {
             const rejected = !(err && err.name === 'AbortError');
             if(rejected) optimisticMsg.delivery_status = 'error';
             paintDealChatThread({stickBottom: false, force: true});
-            if(rejected && input && !input.value) input.value = savedInputText;
+            if(rejected && input && !input.value) { input.value = savedInputText; resizeDealChatInput(input); }
             keepSentChatVisible(leadId);
             if(rejected) toast(err.message || 'Göndərilmədi', true);
         }
@@ -8263,7 +8297,8 @@ function paintDealViewModal(deal, readonly, opts) {
     paintDealPinBar();
     if(input) {
         restoreChatDraft(deal.id);
-        input.addEventListener('input', persistOpenChatDraft);
+        resizeDealChatInput(input);
+        input.addEventListener('input', () => { resizeDealChatInput(input); persistOpenChatDraft(); });
     }
     if(input) input.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDealChatMessage(); }
@@ -8757,9 +8792,14 @@ function persistOpenChatDraft() {
     const input = document.getElementById('deal-chat-input');
     setChatDraft(_dealViewState.id, input ? input.value : '');
 }
+function resizeDealChatInput(input = document.getElementById('deal-chat-input')) {
+    if(!input) return;
+    input.style.height = 'auto';
+    input.style.height = Math.min(Math.max(input.scrollHeight, 42), 190) + 'px';
+}
 function restoreChatDraft(leadId) {
     const input = document.getElementById('deal-chat-input');
-    if(input) input.value = chatDraftText(leadId);
+    if(input) { input.value = chatDraftText(leadId); resizeDealChatInput(input); }
 }
 function chatsHiddenKey() { return 'chats_hidden_v1_' + CURRENT_USER_ID; }
 function getChatsHidden() {
@@ -9403,6 +9443,7 @@ function isDeclinedChatDeal(deal) {
 function isNizamiQueueDeal(deal) {
     if(!deal || deal.outbox) return true;
     if(isSuccessfulChatDeal(deal)) return false;
+    if(deal.nizami_funnel === true) return true;
     const kind = String(deal.nizami_queue_kind || '');
     if(kind === 'new_request' || kind === 'hot') return true;
     return Number(deal.pipeline_id || 0) === NIZAMI_PIPELINE_ID;
@@ -9891,7 +9932,7 @@ async function sendNoticeKommoReply() {
         });
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Mesaj göndərilmədi');
-        if(input) input.value = '';
+        if(input) { input.value = ''; resizeDealChatInput(input); }
         _noticeLastSentForLearning = {reply: text, context: ((_dealViewState && _dealViewState.messages) || []).slice(-8)};
         const saveExample = document.getElementById('notice-save-example');
         if(saveExample) saveExample.hidden = false;
@@ -11141,13 +11182,13 @@ function openEmployeeEditor(chatId = null) {
         <input id="employee-editor-original-id" type="hidden" value="${employee?.chat_id || ''}">
         <label class="block text-[11px] font-bold text-slate-500 mb-1">Ad və soyad</label><input id="employee-editor-name" value="${escapeHtml(employee?.name || '')}" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ad və soyad">
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">Telegram ID <span class="text-rose-500">— giriş üçün yeganə kod</span></label><input id="employee-editor-chat-id" value="${employee?.chat_id || ''}" inputmode="numeric" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Məsələn: 123456789">
-        <p class="text-[10px] leading-4 text-slate-400 mt-1.5">Əməkdaş giriş düyməsinə basanda bot ona öz Telegram ID-sini göstərir. Həmin rəqəmi yalnız buraya yazın.</p>
+        <p class="text-[10px] leading-4 text-slate-400 mt-1.5">Telegram ID yalnız bu əməkdaşa girişi bağlamaq üçündür. Yadda saxladıqdan sonra ona dəvət linkini göndərin.</p>
         <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
         <div class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span>${employeeHotSkillDropdown([...skills])}</div>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
-        ${isEditing && !isSelf && employee.active ? `<button type="button" onclick="deactivateEmployee(${employee.chat_id})" class="w-full mt-3 text-rose-600 font-bold py-2 text-xs">Girişi bağla</button>` : ''}
+        ${isEditing && !isSelf ? `<div class="grid grid-cols-2 gap-2 mt-4"><button type="button" onclick="copyEmployeeInviteLink(${employee.chat_id})" class="bg-sky-50 text-sky-700 font-bold py-2.5 rounded-xl text-xs">Dəvət linki</button><button type="button" onclick="setEmployeeAccess(${employee.chat_id}, ${employee.active ? 'false' : 'true'})" class="${employee.active ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'} font-bold py-2.5 rounded-xl text-xs">${employee.active ? 'Girişi bağla' : 'Girişi aktiv et'}</button></div><button type="button" onclick="deleteEmployee(${employee.chat_id})" class="w-full mt-2 text-rose-600 font-bold py-2 text-xs">Əməkdaşı sil</button>` : ''}
         <div style="position:sticky;bottom:-18px;background:#fff;border-top:1px solid #f1f5f9;padding:12px 0 calc(12px + env(safe-area-inset-bottom));margin-top:12px"><div class="flex gap-2"><button type="button" onclick="closeEmployeeEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="button" onclick="saveEmployee()" class="flex-1 bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Yadda saxla</button></div></div>
     </div>`;
     document.body.appendChild(modal);
@@ -11199,6 +11240,36 @@ async function deactivateEmployee(chatId) {
         employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
         renderEmployees(); closeEmployeeEditor(); toast('Giriş bağlandı');
     } catch(error) { toast(error.message || 'Xəta', true); }
+}
+async function setEmployeeAccess(chatId, active) {
+    const verb = active ? 'aktiv etmək' : 'bağlamaq';
+    if(!window.confirm(`Bu əməkdaşın web girişini ${verb} istəyirsiniz?`)) return;
+    try {
+        const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:active ? 'activate' : 'deactivate', employee_id:chatId})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Giriş dəyişdirilmədi');
+        employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
+        renderEmployees(); closeEmployeeEditor(); toast(active ? 'Web girişi aktiv edildi' : 'Web girişi bağlandı');
+    } catch(error) { toast(error.message || 'Xəta', true); }
+}
+async function deleteEmployee(chatId) {
+    if(!window.confirm('Əməkdaş silinsin? Giriş, bildiriş abunələri və görünən kart bağlanacaq.')) return;
+    try {
+        const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'delete', employee_id:chatId})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Əməkdaş silinmədi');
+        employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
+        renderEmployees(); closeEmployeeEditor(); toast('Əməkdaş silindi');
+    } catch(error) { toast(error.message || 'Xəta', true); }
+}
+async function copyEmployeeInviteLink(_chatId) {
+    const link = `${window.location.origin}/login`;
+    try {
+        await navigator.clipboard.writeText(link);
+        toast('Dəvət linki kopyalandı');
+    } catch(_error) {
+        window.prompt('Əməkdaşa bu linki göndərin:', link);
+    }
 }
 
 let hotOrders = [];
@@ -11375,13 +11446,23 @@ async function loadSettingsIntegrations() {
         const response = await fetch(API_BASE + '/api/admin/integrations', {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'İnteqrasiyalar yüklənmədi');
-        const statuses = {connected:['Qoşulub','bg-emerald-50 text-emerald-700'], via_kommo:['Kommo ilə','bg-blue-50 text-blue-700'], not_connected:['Qoşulmayıb','bg-slate-100 text-slate-600']};
+        const statuses = {connected:['Qoşulub','bg-emerald-50 text-emerald-700'], via_kommo:['Kommo ilə','bg-blue-50 text-blue-700'], disabled:['Deaktiv','bg-amber-50 text-amber-700'], not_connected:['Qoşulmayıb','bg-slate-100 text-slate-600']};
         list.innerHTML = (data.integrations || []).map(item => {
             const status = statuses[item.status] || statuses.not_connected;
-            const action = item.id === 'kommo' && item.status !== 'connected' ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Qoş</a>' : item.id === 'kommo' ? '<span class="text-[10px] text-slate-400">Yenidən qoşulma lazım olarsa /setup bölməsindən edin</span>' : '';
+            const action = item.id === 'kommo'
+                ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Yenidən qoş / idarə et</a>'
+                : item.id === 'waba'
+                    ? '<span class="text-[10px] text-slate-400">WABA istifadə olunmur. Aktivləşdirmə yeni kabinetin inteqrasiyalar bölməsindən edilir.</span>'
+                    : item.status === 'not_connected'
+                        ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Qoşulmanı qur</a>'
+                        : '';
             return `<div class="rounded-xl bg-slate-50 border border-slate-100 p-3"><div class="flex items-center justify-between gap-2"><b class="text-slate-700">${escapeHtml(item.name || '')}</b><span class="px-2 py-1 rounded-lg text-[10px] font-bold ${status[1]}">${status[0]}</span></div><div class="text-[10px] text-slate-400 mt-1">${escapeHtml(item.detail || '')}</div>${action ? `<div class="mt-2">${action}</div>` : ''}</div>`;
         }).join('') || '<div class="text-slate-400">İnteqrasiya yoxdur.</div>';
     } catch(error) { list.innerHTML = `<div class="text-rose-500">${escapeHtml(error.message || 'Xəta')}</div>`; }
+}
+function openSettingsIntegrationsSection() {
+    switchTab('tab-settings');
+    window.setTimeout(() => document.getElementById('settings-integrations-card')?.scrollIntoView({behavior:'smooth', block:'start'}), 40);
 }
 
 function switchTab(tabId, updateHash = true) {

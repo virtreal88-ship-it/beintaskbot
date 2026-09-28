@@ -504,6 +504,11 @@ def employee_access_profile(chat_id: int) -> dict:
     if cid in _RETIRED_EMPLOYEE_CHAT_IDS and not explicit_admin_reactivation:
         return {"active": False, "role": "Əməkdaş", "permissions": [], "hot_order_skills": []}
     if isinstance(stored, dict):
+        # A deleted card must not fall back to the old hard-coded staff list.
+        # Keep a small tombstone for audit/security, but never authenticate or
+        # display that Telegram account again.
+        if stored.get("deleted"):
+            return {"active": False, "role": "Əməkdaş", "permissions": [], "hot_order_skills": []}
         # Nizami is the canonical system administrator. An accidental edit in
         # the employee directory must never downgrade this account: otherwise
         # finance becomes a personal zero balance and the Təsdiq queue is
@@ -9362,6 +9367,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deals.append({
             "id": lead_id,
             "pipeline_id": pipeline_id,
+            "nizami_funnel": pipeline_id == int(NIZAMI_PIPELINE_ID),
             "status_id": status_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
@@ -18667,6 +18673,8 @@ def _employee_directory_rows() -> list[dict]:
         except (TypeError, ValueError):
             continue
         info = users_by_chat_id.get(str(chat_id), {})
+        if isinstance(access.get(str(chat_id)), dict) and access[str(chat_id)].get("deleted"):
+            continue
         profile = employee_access_profile(chat_id)
         rows.append({
             "chat_id": chat_id,
@@ -18721,14 +18729,30 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
     users = load_users()
     existing = employee_access_profile(employee_id)
     now = datetime.now(tz=BAKU_TZ).isoformat()
-    if action == "deactivate":
+    if action in {"deactivate", "activate"}:
         if employee_id == manager_id:
-            return web.json_response({"success": False, "error": "Öz girişinizi bağlaya bilməzsiniz."}, status=400)
+            return web.json_response({"success": False, "error": "Öz girişinizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
         records[str(employee_id)] = {
-            "role": existing["role"], "permissions": existing["permissions"], "active": False,
+            "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "updated_at": now, "updated_by": manager_id,
         }
+        if action == "activate" and employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
+            records[str(employee_id)]["reactivated_by_admin"] = manager_id
+    elif action == "delete":
+        if employee_id == manager_id:
+            return web.json_response({"success": False, "error": "Öz hesabınızı silə bilməzsiniz."}, status=400)
+        # Keep a tombstone so a historic ID cannot silently regain the legacy
+        # fallback permissions. User data remains in the CRM/audit history.
+        records[str(employee_id)] = {
+            "deleted": True, "active": False, "updated_at": now, "updated_by": manager_id,
+        }
+        users.pop(str(employee_id), None)
+        try:
+            remove_push_subscription(str(employee_id))
+        except Exception as exc:
+            logger.warning("employee push cleanup failed for %s: %s", employee_id, exc)
+        save_users(users)
     elif action == "upsert":
         if previous_employee_id and previous_employee_id != employee_id and previous_employee_id == manager_id:
             return web.json_response({"success": False, "error": "Öz Telegram ID-nizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
@@ -18983,13 +19007,16 @@ async def handle_api_settings_integrations(request: web.Request) -> web.Response
     chat_id = int(request.get("authenticated_chat_id") or 0)
     if not chat_id or not is_admin(chat_id):
         return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    cloud_whatsapp = bool(str(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or "").strip())
     return web.json_response({
         "success": True,
         "integrations": [
             {"id": "kommo", "name": "Kommo CRM", "status": "connected" if KOMMO_TOKEN else "not_connected", "detail": KOMMO_DOMAIN if KOMMO_TOKEN else "Kommo tokeni tapılmadı"},
             {"id": "whatsapp", "name": "WhatsApp (Kommo)", "status": "via_kommo", "detail": "Kommo xətti ilə qoşulub"},
-            {"id": "waba", "name": "WhatsApp Business API (WABA)", "status": "connected" if cloud_whatsapp else "not_connected", "detail": "Cloud API qoşulub" if cloud_whatsapp else "WABA tokeni tapılmadı"},
+            # WABA credentials can remain in Railway for a future migration,
+            # but this workspace deliberately sends chat replies through the
+            # grey Kommo connection. Never present unused credentials as an
+            # active WABA integration to the administrator.
+            {"id": "waba", "name": "WhatsApp Business API (WABA)", "status": "disabled", "detail": "Aktiv deyil — hazırda WhatsApp Kommo xətti ilə işləyir"},
             {"id": "instagram", "name": "Instagram", "status": "via_kommo", "detail": "Mesajlar Kommo tarixçəsindən alınır"},
             {"id": "telegram", "name": "Telegram", "status": "connected" if TELEGRAM_TOKEN else "not_connected", "detail": "Giriş və bildirişlər"},
             {"id": "push", "name": "Push bildirişləri", "status": "connected" if VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY else "not_connected", "detail": "PWA bildirişləri"},
