@@ -567,10 +567,12 @@ def remove_retired_employee_access() -> None:
     # A previous build could remove the destination of a deliberately moved
     # employee card when that destination happened to be an old Telegram ID.
     # The source keeps ``migrated_to`` and is proof of the admin's action, so
-    # recover that one card rather than making the person disappear.
+    # recover that one card rather than making the person disappear.  A stale
+    # inactive record may already exist under the retired ID; it belongs to
+    # the former employee and must not override this explicit card move.
     for old_id, record in list(records.items()):
         target_id = str(record.get("migrated_to") or "") if isinstance(record, dict) else ""
-        if not target_id or target_id not in retired_keys or target_id in records:
+        if not target_id or target_id not in retired_keys:
             continue
         restored = {key: value for key, value in record.items() if key != "migrated_to"}
         restored.update({
@@ -578,8 +580,8 @@ def remove_retired_employee_access() -> None:
             "reactivated_by_admin": record.get("updated_by") or ADMIN_CHAT_ID,
         })
         records[target_id] = restored
-        if target_id not in users:
-            source_user = users.get(str(old_id)) if isinstance(users.get(str(old_id)), dict) else {}
+        source_user = users.get(str(old_id)) if isinstance(users.get(str(old_id)), dict) else {}
+        if source_user or target_id not in users:
             try:
                 source_known = _KNOWN_EMPLOYEE_REGISTRATIONS.get(int(old_id), ("Əməkdaş", 0))
             except (TypeError, ValueError):
