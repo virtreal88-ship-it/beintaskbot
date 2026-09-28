@@ -1221,15 +1221,7 @@
     <div id="screen-hot-orders" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">İsti sifarişlər</div><div class="text-[10px] text-gray-400 mt-0.5">İlk götürən əməkdaşın sifarişi olur</div></div>
-            <button type="button" onclick="loadHotOrders()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-        </div>
-        <div id="hot-order-create" style="display:none" class="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm space-y-2">
-            <div class="text-xs font-extrabold text-slate-700">Yeni isti sifariş</div>
-            <input id="hot-client" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Müştərinin adı">
-            <div class="grid grid-cols-2 gap-2"><input id="hot-phone" inputmode="tel" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Telefon"><input id="hot-address" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ünvan"></div>
-            <textarea id="hot-description" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none min-h-[76px]" placeholder="Sifarişin təsviri"></textarea>
-            <div class="grid grid-cols-3 gap-2"><select id="hot-skill" class="p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="all">Hamı</option><option value="montaj">Montaj</option><option value="temir">Təmir</option><option value="catdirilma">Çatdırılma</option><option value="servis">Servis</option><option value="digər">Digər</option></select><select id="hot-priority" class="p-2.5 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="normal">Adi</option><option value="urgent">Təcili</option></select><input id="hot-deadline" type="datetime-local" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"></div>
-            <button type="button" onclick="createHotOrder()" class="w-full bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs">İsti sifariş yarat</button>
+            <div class="flex items-center gap-2"><button type="button" id="hot-order-create-button" onclick="openHotOrderEditor()" class="icon-action-btn primary labeled" aria-label="Yeni isti sifariş" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button><button type="button" onclick="loadHotOrders()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
         </div>
         <div id="hot-orders-container" class="space-y-2"></div>
     </div>
@@ -7169,7 +7161,10 @@ function dealAiPayload(mode) {
         messages: ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({
             incoming: !!item.incoming,
             text: item.text || '',
-            author: item.author || ''
+            author: item.author || '',
+            message_type: item.message_type || item.type || '',
+            media_url: item.media_url || item.media || '',
+            file_uuid: item.file_uuid || ''
         }))
     };
 }
@@ -7202,7 +7197,6 @@ async function requestDealAiReply() {
     }
 }
 async function requestDealSummary() {
-    return;
     const btn = document.getElementById('deal-chat-summary');
     if(!_dealViewState || !CURRENT_USER_ID) return;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
@@ -7214,9 +7208,34 @@ async function requestDealSummary() {
         });
         const d = await r.json().catch(() => ({}));
         if(!r.ok || !d.success) throw new Error(d.error || 'Xülasə alınmadı');
-        toast(d.handed ? ('Xülasə ' + (d.agent || 'Anar Vəliyev') + ' üçün göndərildi') : 'Xülasə Kommo-ya yazıldı');
+        openDealSummaryModal(d.summary, _dealViewState.id, d.transcribed_voice_count || 0);
     } catch(err) { toast(err.message || 'Xülasə alınmadı', true); }
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
+}
+function closeDealSummaryModal() { document.getElementById('deal-summary-modal')?.remove(); }
+function openDealSummaryModal(summary, leadId, voiceCount) {
+    const modal = document.createElement('div');
+    modal.id = 'deal-summary-modal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:10040;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
+    modal.onclick = event => { if(event.target === modal) closeDealSummaryModal(); };
+    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><div class="grid grid-cols-2 gap-2 mt-4"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
+    modal.dataset.leadId = String(leadId || '');
+    modal.dataset.summary = String(summary || '');
+    document.body.appendChild(modal);
+}
+async function saveDealSummary(kind) {
+    const modal = document.getElementById('deal-summary-modal');
+    const lead_id = String(modal?.dataset.leadId || '');
+    const summary = String(modal?.dataset.summary || '');
+    if(!lead_id || !summary) return;
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({lead_id, mode:'summary', summary_action:kind, summary})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Yadda saxlanmadı');
+        closeDealSummaryModal();
+        toast(data.message || 'Yadda saxlanıldı');
+        if(_dealViewState && String(_dealViewState.id) === lead_id) refreshNoticeHistory();
+    } catch(error) { toast(error.message || 'Xəta', true); }
 }
 let _waTemplates = null, _waTemplatesAt = 0, _waTplSending = false;
 const WA_TPL_CACHE_KEY = 'wa_tpl_cache_v1';
@@ -9682,7 +9701,7 @@ function noticeClientHeaderHtml(deal) {
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
     const backLabel = _noticeClientOverlay ? '← Sövdələşmələr' : '‹';
-    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə · Kommo ilə cavab</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə · Kommo ilə cavab</span></div></div><div class="notice-history-actions"><button type="button" onclick="requestNoticeSummary()" title="AI xülasə" aria-label="AI xülasə">✦</button><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
 }
 function openNoticeDealInfo() {
     const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
@@ -9714,9 +9733,24 @@ function noticeAiPayload() {
         messages: ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({
             incoming: !!item.incoming,
             text: item.text || '',
-            author: item.author || ''
+            author: item.author || '',
+            message_type: item.message_type || item.type || '',
+            media_url: item.media_url || item.media || '',
+            file_uuid: item.file_uuid || ''
         }))
     };
+}
+async function requestNoticeSummary() {
+    if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
+    _noticeReplyBusy = true;
+    try {
+        const messages = ((_dealViewState && _dealViewState.messages) || []).slice(-40).map(item => ({incoming:!!item.incoming, text:item.text || '', author:item.author || '', message_type:item.message_type || item.type || '', media_url:item.media_url || item.media || '', file_uuid:item.file_uuid || ''}));
+        const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({mode:'summary', lead_id:_noticeHistoryLeadId, messages})});
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success) throw new Error(payload.error || 'Xülasə alınmadı');
+        openDealSummaryModal(payload.summary, _noticeHistoryLeadId, payload.transcribed_voice_count || 0);
+    } catch(error) { toast(error.message || 'Xülasə alınmadı', true); }
+    finally { _noticeReplyBusy = false; }
 }
 async function requestNoticeAiReply() {
     const input = document.getElementById('notice-reply-input');
@@ -10969,7 +11003,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const EMPLOYEE_PERMISSION_LABELS = {
     deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Gözləmə',
-    waiting: 'Təsdiq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', employees: 'Əməkdaşlar'
+    waiting: 'Təsdiq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', hot_orders_create: 'İsti sifariş yaratmaq', employees: 'Əməkdaşlar'
 };
 function employeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
@@ -11063,8 +11097,8 @@ function hotOrderStatusClass(status) {
     return ({open:'bg-rose-50 text-rose-600', claimed:'bg-amber-50 text-amber-700', submitted:'bg-sky-50 text-sky-700', settled:'bg-emerald-50 text-emerald-700'})[status] || 'bg-slate-100 text-slate-600';
 }
 function renderHotOrders() {
-    const create = document.getElementById('hot-order-create');
-    if(create) create.style.display = isAdmin ? '' : 'none';
+    const create = document.getElementById('hot-order-create-button');
+    if(create) create.hidden = !(isAdmin || hasEmployeePermission('hot_orders_create'));
     const container = document.getElementById('hot-orders-container');
     if(!container) return;
     if(!hotOrders.length) { container.innerHTML = '<div class="bg-white rounded-2xl border border-gray-100 py-10 text-center text-xs font-bold text-slate-400">Hazırda sizə uyğun isti sifariş yoxdur.</div>'; return; }
@@ -11075,7 +11109,9 @@ function renderHotOrders() {
         const address = order.address ? `<div class="text-[11px] text-slate-500 mt-1">📍 ${escapeHtml(order.address)}</div>` : '';
         const phone = order.phone ? `<a class="text-[11px] font-bold text-[#2481cc] mt-1 inline-block" href="tel:${escapeHtml(order.phone)}">📞 ${escapeHtml(order.phone)}</a>` : '';
         let actions = '';
+        const canEdit = status === 'open' && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID));
         if(status === 'open' && !isAdmin) actions = `<button type="button" onclick="hotOrderAction('claim','${order.id}')" class="w-full mt-3 bg-rose-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Götürürəm</button>`;
+        if(canEdit) actions += `<button type="button" onclick="openHotOrderEditor('${order.id}')" class="w-full mt-2 bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-extrabold">Dəyiş</button>`;
         if(status === 'claimed' && owner) actions = `<div class="flex gap-2 mt-3"><button type="button" onclick="hotOrderAction('submit','${order.id}')" class="flex-1 bg-[#2481cc] text-white py-2.5 rounded-xl text-xs font-extrabold">Bitirdim</button><button type="button" onclick="hotOrderAction('release','${order.id}')" class="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold">Qaytar</button></div>`;
         if(status === 'submitted' && isAdmin) actions = `<button type="button" onclick="hotOrderAction('settle','${order.id}')" class="w-full mt-3 bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Məbləği gözləməyə əlavə et</button>`;
         const payout = isAdmin && order.payout_amount != null ? `<div class="text-[11px] font-bold text-emerald-600 mt-2">Əməkdaş ödənişi: ${Number(order.payout_amount).toFixed(2)} AZN</div>` : '';
@@ -11097,14 +11133,35 @@ async function loadHotOrders() {
     catch(error) { if(container) container.innerHTML = `<div class="bg-white rounded-2xl border border-rose-100 py-8 text-center text-xs font-bold text-rose-500">${escapeHtml(error.message || 'Xəta')}</div>`; }
 }
 async function createHotOrder() {
-    const client_name = String(document.getElementById('hot-client')?.value || '').trim();
-    const description = String(document.getElementById('hot-description')?.value || '').trim();
+    const client_name = String(document.getElementById('hot-editor-client')?.value || '').trim();
+    const description = String(document.getElementById('hot-editor-description')?.value || '').trim();
     if(!client_name || !description) { toast('Müştəri və sifariş təsvirini yazın.', true); return; }
     try {
-        const data = await hotOrdersRequest({action:'create', client_name, description, phone:String(document.getElementById('hot-phone')?.value || '').trim(), address:String(document.getElementById('hot-address')?.value || '').trim(), skill:document.getElementById('hot-skill')?.value || 'all', priority:document.getElementById('hot-priority')?.value || 'normal', deadline_at:document.getElementById('hot-deadline')?.value || ''});
-        ['hot-client','hot-phone','hot-address','hot-description','hot-deadline'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
-        toast(`Sifariş yaradıldı. ${data.notified || 0} əməkdaşa bildirildi.`); await loadHotOrders();
+        const orderId = String(document.getElementById('hot-editor-id')?.value || '').trim();
+        const data = await hotOrdersRequest({action:orderId ? 'update' : 'create', order_id:orderId, client_name, description, phone:String(document.getElementById('hot-editor-phone')?.value || '').trim(), address:String(document.getElementById('hot-editor-address')?.value || '').trim(), skill:document.getElementById('hot-editor-skill')?.value || 'all', priority:document.getElementById('hot-editor-priority')?.value || 'normal', deadline_at:document.getElementById('hot-editor-deadline')?.value || ''});
+        closeHotOrderEditor();
+        toast(orderId ? `Sifariş yeniləndi. ${data.notified || 0} əməkdaşa bildirildi.` : `Sifariş yaradıldı. ${data.notified || 0} əməkdaşa bildirildi.`); await loadHotOrders();
     } catch(error) { toast(error.message || 'Xəta', true); }
+}
+function hotOrderDateInput(value) {
+    if(!value) return '';
+    const date = new Date(value);
+    if(Number.isNaN(date.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function closeHotOrderEditor() { document.getElementById('hot-order-editor-modal')?.remove(); }
+function openHotOrderEditor(orderId = '') {
+    const order = orderId ? hotOrders.find(row => String(row.id) === String(orderId)) : null;
+    if(orderId && !order) { toast('Sifariş tapılmadı', true); return; }
+    const modal = document.createElement('div');
+    modal.id = 'hot-order-editor-modal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:10030;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
+    modal.onclick = event => { if(event.target === modal) closeHotOrderEditor(); };
+    const value = key => escapeHtml(String(order?.[key] || ''));
+    const selected = (key, current) => String(order?.[key] || current) === current ? 'selected' : '';
+    modal.innerHTML = `<form class="bg-white rounded-t-[22px] w-full max-w-[560px] max-h-[92vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))] space-y-2" onsubmit="event.preventDefault();createHotOrder()"><div class="flex justify-between items-center mb-2"><div><div class="text-base font-extrabold text-slate-800">${order ? 'İsti sifarişi dəyiş' : 'Yeni isti sifariş'}</div><div class="text-[11px] text-slate-400">Qiyməti yalnız iş bitəndən sonra Admin qeyd edir.</div></div><button type="button" onclick="closeHotOrderEditor()" class="text-xl text-slate-400 px-2">×</button></div><input id="hot-editor-id" type="hidden" value="${value('id')}"><input id="hot-editor-client" required class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Müştərinin adı" value="${value('client_name')}"><div class="grid grid-cols-2 gap-2"><input id="hot-editor-phone" inputmode="tel" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Telefon" value="${value('phone')}"><input id="hot-editor-address" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ünvan" value="${value('address')}"></div><textarea id="hot-editor-description" required class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none min-h-[104px]" placeholder="Sifarişin təsviri">${value('description')}</textarea><div class="grid grid-cols-3 gap-2"><select id="hot-editor-skill" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="all" ${selected('skill','all')}>Hamı</option><option value="montaj" ${selected('skill','montaj')}>Montaj</option><option value="temir" ${selected('skill','temir')}>Təmir</option><option value="catdirilma" ${selected('skill','catdirilma')}>Çatdırılma</option><option value="servis" ${selected('skill','servis')}>Servis</option><option value="digər" ${selected('skill','digər')}>Digər</option></select><select id="hot-editor-priority" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="normal" ${selected('priority','normal')}>Adi</option><option value="urgent" ${selected('priority','urgent')}>Təcili</option></select><input id="hot-editor-deadline" type="datetime-local" value="${hotOrderDateInput(order?.deadline_at)}" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"></div><div class="flex gap-2 pt-2"><button type="button" onclick="closeHotOrderEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="submit" class="flex-1 bg-rose-500 text-white font-bold py-3 rounded-xl text-xs">${order ? 'Dəyişiklikləri saxla' : 'Sifariş yarat'}</button></div></form>`;
+    document.body.appendChild(modal);
 }
 async function hotOrderAction(action, orderId) {
     const payload = {action, order_id:orderId};

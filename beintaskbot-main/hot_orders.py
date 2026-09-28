@@ -97,6 +97,28 @@ def create_hot_order(*, client_name: str, phone: str, address: str, description:
     return _row(row, reveal_payout=True)
 
 
+def update_hot_order(*, order_id: str, editor_id: int, is_admin: bool, client_name: str,
+                     phone: str, address: str, description: str, skill: str,
+                     priority: str, deadline_at: datetime | None) -> dict | None:
+    """Update an open order. Its creator keeps this right after creation."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE hot_orders
+                SET client_name = %s, phone = %s, address = %s, description = %s,
+                    skill = %s, priority = %s, deadline_at = %s
+                WHERE id = %s::uuid
+                  AND status = 'open'
+                  AND (%s OR created_by = %s)
+                RETURNING *
+            """, (client_name, phone, address, description, skill, priority, deadline_at,
+                  order_id, is_admin, editor_id))
+            row = cur.fetchone()
+        conn.commit()
+    return _row(row, reveal_payout=is_admin) if row else None
+
+
 def list_hot_orders(*, worker_id: int, skills: list[str], is_admin: bool) -> list[dict]:
     allowed_skills = [str(item).strip().casefold() for item in skills if str(item).strip()]
     with _connect() as conn:

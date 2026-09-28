@@ -51,7 +51,7 @@ from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
-    release_hot_order, submit_hot_order, settle_hot_order,
+    release_hot_order, submit_hot_order, settle_hot_order, update_hot_order,
 )
 from tenant_platform import (
     TenantPlatformError, accept_invite as accept_tenant_invite,
@@ -423,7 +423,7 @@ _ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "finance", "passive_tasks", "waiting", "customers", "employees")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
 _HOT_ORDER_SKILLS = ("all", "montaj", "temir", "catdirilma", "servis", "digər")
 _employee_access_cache: dict[str, dict] | None = None
@@ -446,6 +446,9 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
     # Hot orders is an independent menu.  It used to follow task access,
     # which made the switch ineffective: removing the hot-order checkbox and
     # retaining tasks silently brought it back on every save.
+    # Creating an order is meaningful only together with access to its board.
+    if "hot_orders_create" in values:
+        values.add("hot_orders")
     return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
 
 
@@ -9315,11 +9318,9 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         for contact in lead.get("_embedded", {}).get("contacts", []) or []
         if str(contact.get("id", "")).isdigit()
     }
-    # The task API accepts only small entity-id batches.  Scanning every old
-    # contact turns one page opening into dozens of sequential Kommo calls and
-    # leaves the CRM blank while it waits.  The newest deals are the useful
-    # ones at startup; older task details load when their deal is opened.
-    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))[:160]
+    # Open tasks are fetched once and filtered locally. Do not truncate linked
+    # entities: a stage edit changes ordering and otherwise hides a valid task.
+    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
     contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
     notes_request = asyncio.create_task(_load_rufat_latest_notes(
         set(lead_by_id.keys()),
@@ -17351,6 +17352,86 @@ def _fallback_chat_summary(history: str) -> str:
     return "Son dialoq:\n" + "\n".join(tail)
 
 
+def _summary_audio_source(item: dict) -> str:
+    """Return a safe direct source for a voice note included in chat history."""
+    source = str(item.get("media_url") or item.get("media") or "").strip()
+    file_uuid = str(item.get("file_uuid") or "").strip()
+    if source.startswith("/api/voice/"):
+        voice_id = source.rsplit("/", 1)[-1]
+        voice = _voice_urls.get(voice_id) or {}
+        if isinstance(voice, dict):
+            source = str(voice.get("url") or "").strip()
+            file_uuid = file_uuid or str(voice.get("uuid") or "").strip()
+        elif isinstance(voice, str):
+            source = voice
+    if file_uuid and (not source or not _is_allowed_media_url(source)):
+        source = _drive_file_download_url(file_uuid)
+    return source if _is_allowed_media_url(source) else ""
+
+
+def _transcribe_summary_audio(item: dict) -> str:
+    """Transcribe one Kommo voice file for an AI summary; failures stay visible."""
+    source = _summary_audio_source(item)
+    if not source:
+        return ""
+    input_path = output_path = ""
+    before = {path for path in glob.glob("/tmp/*transcription*.txt")}
+    try:
+        headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(source) else {}
+        response = requests.get(source, headers=headers, timeout=25, allow_redirects=True)
+        if response.status_code != 200:
+            return ""
+        suffix = ".ogg" if response.content[:4] == b"OggS" else ".audio"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+            handle.write(response.content)
+            input_path = handle.name
+        output_path = input_path + ".mp3"
+        converted = subprocess.run(["ffmpeg", "-i", input_path, "-y", output_path], capture_output=True, text=True, timeout=60)
+        if converted.returncode != 0:
+            return ""
+        subprocess.run(["manus-speech-to-text", output_path], capture_output=True, text=True, timeout=90)
+        candidates = [path for path in glob.glob("/tmp/*transcription*.txt") if path not in before]
+        if not candidates:
+            return ""
+        transcript_path = max(candidates, key=os.path.getctime)
+        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as handle:
+            return clean_transcription(handle.read())[:3000]
+    except Exception as exc:
+        logger.info("Summary voice transcription skipped: %s", exc)
+        return ""
+    finally:
+        for path in (input_path, output_path):
+            if path:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
+async def _summary_history_lines(rows: list[dict]) -> tuple[list[str], int]:
+    """Build readable dialogue context, including up to four recent voice notes."""
+    lines: list[str] = []
+    pending_voice: list[tuple[int, dict]] = []
+    for index, item in enumerate(rows[-40:]):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        who = "Müştəri" if item.get("incoming") else "Menecer"
+        kind = str(item.get("message_type") or item.get("type") or "").casefold()
+        if text:
+            lines.append(f"{who}: {text[:400]}")
+        if kind in {"audio", "voice", "ptt"} or re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", str(item.get("media_url") or ""), re.I):
+            pending_voice.append((index, item))
+    transcribed = 0
+    for _index, item in pending_voice[-4:]:
+        text = await asyncio.to_thread(_transcribe_summary_audio, item)
+        if text:
+            who = "Müştəri" if item.get("incoming") else "Menecer"
+            lines.append(f"{who} (səsli mesajın mətni): {text}")
+            transcribed += 1
+    return lines, transcribed
+
+
 _AI_REPLY_EXAMPLES_FILE = "ai_reply_examples.json"
 _ai_reply_examples_lock = threading.Lock()
 _AI_REPLY_EXAMPLES_LIMIT = 300
@@ -17474,6 +17555,23 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     lead, err = _authorized_deal_lead(chat_id, lead_id)
     if err:
         return err
+    summary_action = str(data.get("summary_action") or "").strip().casefold()
+    if summary_action in {"task", "note"}:
+        summary_text = str(data.get("summary") or "").strip()[:3500]
+        if not summary_text:
+            return web.json_response({"success": False, "error": "Xülasə boşdur."}, status=400)
+        lead_ref = int(lead.get("id") or lead_id)
+        if summary_action == "note":
+            saved = await asyncio.to_thread(add_note, lead_ref, f"AI dialoq xülasəsi\n\n{summary_text}", "leads")
+            message = "Xülasə qeyd kimi əlavə edildi."
+        else:
+            due = int((datetime.now(tz=BAKU_TZ) + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0).timestamp())
+            saved = await asyncio.to_thread(create_task, lead_ref, f"AI xülasəsi — növbəti addım\n{summary_text}", due, get_kommo_user_id_for_chat(chat_id), "leads", 1, get_employee_name_by_chat_id(chat_id, ""))
+            message = "Xülasə əsasında tapşırıq yaradıldı."
+        if not saved:
+            return web.json_response({"success": False, "error": "Kommo-da yadda saxlamaq alınmadı."}, status=502)
+        invalidate_rufat_overview_cache()
+        return web.json_response({"success": True, "saved_as": summary_action, "message": message})
     contacts = (lead.get("_embedded") or {}).get("contacts") or []
     contact_name = ""
     if contacts and isinstance(contacts[0], dict):
@@ -17502,11 +17600,16 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             continue
         who = "Müştəri" if item.get("incoming") else "Menecer"
         lines.append(f"{who}: {text[:400]}")
-    history = "\n".join(lines) or "Yazışma yoxdur."
     draft = str(data.get("draft") or "").strip()
     mode = str(data.get("mode") or "reply").strip().lower()
     if mode not in {"reply", "summary"}:
         mode = "reply"
+    transcribed_count = 0
+    if mode == "summary":
+        voice_lines, transcribed_count = await _summary_history_lines(history_rows)
+        if voice_lines:
+            lines = voice_lines
+    history = "\n".join(lines) or "Yazışma yoxdur."
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)
         system = (
@@ -17574,19 +17677,11 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         logger.error("Deal AI summary failed: %s", exc)
     if not summary:
         summary = _fallback_chat_summary(history)
-    try:
-        handoff = await asyncio.to_thread(_handoff_summary_to_anar, int(lead.get("id") or lead_id), summary)
-    except Exception as exc:
-        logger.error("AI handoff failed: %s", exc)
-        return web.json_response({"success": False, "error": "Xülasə Kommo-ya göndərilmədi."}, status=502)
-    if not handoff.get("note_ok"):
-        return web.json_response({"success": False, "error": "Xülasə Kommo-ya yazılmadı."}, status=502)
     return web.json_response({
         "success": True,
         "mode": "summary",
         "summary": summary,
-        "agent": handoff.get("agent") or KOMMO_AI_AGENT_NAME,
-        "handed": bool(handoff.get("handed")),
+        "transcribed_voice_count": transcribed_count,
     })
 
 
@@ -18688,8 +18783,8 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
     order_id = str(data.get("order_id") or "").strip()
     try:
         if action == "create":
-            if not is_admin(chat_id):
-                return web.json_response({"success": False, "error": "Sifarişi yalnız Admin yarada bilər."}, status=403)
+            if not is_admin(chat_id) and not employee_has_permission(chat_id, "hot_orders_create"):
+                return web.json_response({"success": False, "error": "İsti sifariş yaratmaq üçün icazə yoxdur."}, status=403)
             client_name = str(data.get("client_name") or "").strip()[:180]
             description = str(data.get("description") or "").strip()[:2000]
             if not client_name or not description:
@@ -18709,6 +18804,31 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
             )
             recipients = _hot_order_recipient_ids(skill)
             await _notify_hot_order_recipients(order, recipients)
+            return web.json_response({"success": True, "order": order, "notified": len(recipients)})
+
+        if action == "update":
+            client_name = str(data.get("client_name") or "").strip()[:180]
+            description = str(data.get("description") or "").strip()[:2000]
+            if not client_name or not description:
+                return web.json_response({"success": False, "error": "Müştəri və sifariş təsviri vacibdir."}, status=400)
+            skill = str(data.get("skill") or "").strip().casefold()
+            if skill not in _HOT_ORDER_SKILLS:
+                skill = "all"
+            priority = "urgent" if str(data.get("priority") or "").casefold() == "urgent" else "normal"
+            deadline_at = None
+            raw_deadline = str(data.get("deadline_at") or "").strip()
+            if raw_deadline:
+                deadline_at = datetime.fromisoformat(raw_deadline.replace("Z", "+00:00"))
+            order = update_hot_order(
+                order_id=order_id, editor_id=chat_id, is_admin=is_admin(chat_id),
+                client_name=client_name, phone=str(data.get("phone") or "").strip()[:50],
+                address=str(data.get("address") or "").strip()[:500], description=description,
+                skill=skill, priority=priority, deadline_at=deadline_at,
+            )
+            if not order:
+                return web.json_response({"success": False, "error": "Yalnız sifarişi yaradan şəxs açıq sifarişi dəyişə bilər."}, status=409)
+            recipients = _hot_order_recipient_ids(skill)
+            await _notify_hot_order_recipients(order, recipients, reopened=True)
             return web.json_response({"success": True, "order": order, "notified": len(recipients)})
 
         if action == "claim":
