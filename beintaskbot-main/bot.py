@@ -574,6 +574,14 @@ def remove_retired_employee_access() -> None:
         target_id = str(record.get("migrated_to") or "") if isinstance(record, dict) else ""
         if not target_id or target_id not in retired_keys:
             continue
+        target_record = records.get(target_id)
+        # Once the recovered account has been saved by the administrator, its
+        # own rights are authoritative.  Do not reset them from the disabled
+        # source alias on every deploy/restart.
+        if isinstance(target_record, dict) and target_record.get("active") and (
+            target_record.get("reactivated_by_admin") or target_record.get("updated_by")
+        ):
+            continue
         restored = {key: value for key, value in record.items() if key != "migrated_to"}
         restored.update({
             "active": True,
@@ -9044,41 +9052,47 @@ async def _load_rufat_latest_notes(
 
 
 async def _load_rufat_open_tasks(entity_ids: list[int]) -> list[dict]:
-    """Load open tasks only for pipeline leads/contacts, in small filter batches."""
+    """Load open tasks for every deal/contact in Rüfət's pipeline.
+
+    Kommo's entity-id filter has a practical batch limit.  Asking only for
+    the first 160 IDs made tasks on older, still-active deals disappear.  A
+    small paginated scan of open tasks is both faster and complete for the
+    personal funnel; results are filtered locally by its lead/contact IDs.
+    """
     rows: list[dict] = []
-    ids = [entity_id for entity_id in entity_ids if entity_id]
+    ids = {int(entity_id) for entity_id in entity_ids if entity_id}
     if not ids:
         return rows
-    chunk_size = 40
-    for start in range(0, len(ids), chunk_size):
-        chunk = ids[start:start + chunk_size]
-        page = 1
-        while True:
+    page = 1
+    while True:
+        try:
+            response = await _kommo_get_async(
+                f"{KOMMO_BASE_URL}/api/v4/tasks",
+                params={"filter[is_completed]": 0, "limit": 250, "page": page},
+                timeout=12,
+            )
+        except Exception as exc:
+            logger.warning("Rüfət open-task scan unavailable: %s", exc)
+            break
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.warning("Rüfət open-task scan failed: %s", response.status_code)
+            break
+        payload = response.json()
+        batch = payload.get("_embedded", {}).get("tasks", []) or []
+        for row in batch:
+            if not isinstance(row, dict):
+                continue
             try:
-                response = await _kommo_get_async(
-                    f"{KOMMO_BASE_URL}/api/v4/tasks",
-                    params={
-                        "filter[is_completed]": 0,
-                        "filter[entity_id][]": chunk,
-                        "limit": 250,
-                        "page": page,
-                    },
-                    timeout=12,
-                )
-            except Exception as exc:
-                logger.warning("Rüfət task chunk unavailable: %s", exc)
-                break
-            if response.status_code == 204:
-                break
-            if response.status_code != 200:
-                logger.warning("Rüfət task chunk failed: %s", response.status_code)
-                break
-            payload = response.json()
-            batch = payload.get("_embedded", {}).get("tasks", []) or []
-            rows.extend(row for row in batch if isinstance(row, dict))
-            if len(batch) < 250 and not payload.get("_links", {}).get("next"):
-                break
-            page += 1
+                entity_id = int(row.get("entity_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if entity_id in ids:
+                rows.append(row)
+        if len(batch) < 250 and not payload.get("_links", {}).get("next"):
+            break
+        page += 1
     return rows
 
 
