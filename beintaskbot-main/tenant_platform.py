@@ -461,3 +461,41 @@ def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payloa
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
+
+
+def kommo_credentials(*, tenant_id: str) -> dict:
+    """Read credentials only for server-side requests, never for a browser."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT account_domain, status, metadata, secrets
+                FROM saas_tenant_integrations
+                WHERE tenant_id = %s::uuid AND provider = 'kommo'
+            """, (tenant_id,))
+            row = cur.fetchone()
+    if not row or row.get("status") != "connected" or not row.get("secrets"):
+        raise TenantPlatformError("Kommo hələ qoşulmayıb.")
+    try:
+        raw = _fernet().decrypt(bytes(row["secrets"]))
+        tokens = json.loads(raw.decode("utf-8"))
+    except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise TenantPlatformError("Kommo bağlantı məlumatı oxunmadı. Yenidən qoşulun.") from exc
+    if not isinstance(tokens, dict) or not tokens.get("access_token") or not tokens.get("refresh_token"):
+        raise TenantPlatformError("Kommo bağlantı məlumatı tam deyil. Yenidən qoşulun.")
+    metadata = row["metadata"] if isinstance(row.get("metadata"), dict) else {}
+    return {
+        "account_domain": str(row["account_domain"]),
+        "access_token": str(tokens["access_token"]),
+        "refresh_token": str(tokens["refresh_token"]),
+        "token_expires_at": str(metadata.get("token_expires_at") or ""),
+    }
+
+
+def replace_kommo_tokens(*, tenant_id: str, account_domain: str, token_payload: dict) -> dict:
+    """Save a refreshed token pair using the same encrypted storage path."""
+    return save_kommo_oauth_tokens(
+        tenant_id=tenant_id,
+        account_domain=account_domain,
+        token_payload=token_payload,
+    )
