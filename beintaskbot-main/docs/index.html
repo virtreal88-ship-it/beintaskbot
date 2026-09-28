@@ -1221,7 +1221,7 @@
     <div id="screen-hot-orders" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">İsti sifarişlər</div><div class="text-[10px] text-gray-400 mt-0.5">İlk götürən əməkdaşın sifarişi olur</div></div>
-            <div class="flex items-center gap-2"><button type="button" id="hot-order-create-button" onclick="openHotOrderEditor()" class="icon-action-btn primary labeled" aria-label="Yeni isti sifariş" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button><button type="button" onclick="loadHotOrders()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
+            <div class="flex items-center gap-2"><button type="button" id="hot-order-create-button" class="icon-action-btn primary labeled" aria-label="Yeni isti sifariş" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button><button type="button" id="hot-order-refresh-button" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
         </div>
         <div id="hot-orders-container" class="space-y-2"></div>
     </div>
@@ -11110,11 +11110,11 @@ function renderHotOrders() {
         const phone = order.phone ? `<a class="text-[11px] font-bold text-[#2481cc] mt-1 inline-block" href="tel:${escapeHtml(order.phone)}">📞 ${escapeHtml(order.phone)}</a>` : '';
         let actions = '';
         const canEdit = status === 'open' && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID));
-        if(status === 'open' && !isAdmin) actions = `<button type="button" onclick="hotOrderAction('claim','${order.id}')" class="w-full mt-3 bg-rose-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Götürürəm</button>`;
-        if(canEdit) actions += `<button type="button" onclick="openHotOrderEditor('${order.id}')" class="w-full mt-2 bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-extrabold">Dəyiş</button>`;
-        if(status === 'claimed' && owner) actions = `<div class="flex gap-2 mt-3"><button type="button" onclick="hotOrderAction('submit','${order.id}', this)" class="flex-1 bg-[#2481cc] text-white py-2.5 rounded-xl text-xs font-extrabold">Bitirdim</button><button type="button" onclick="hotOrderAction('release','${order.id}', this)" class="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold">Qaytar</button></div>`;
-        if(status === 'claimed' && !owner && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID))) actions += `<button type="button" onclick="hotOrderAction('release','${order.id}', this)" class="w-full mt-2 bg-slate-100 text-slate-600 py-2.5 rounded-xl text-xs font-bold">Ümumi siyahıya qaytar</button>`;
-        if(status === 'submitted' && isAdmin) actions = `<button type="button" onclick="hotOrderAction('settle','${order.id}')" class="w-full mt-3 bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Məbləği gözləməyə əlavə et</button>`;
+        if(status === 'open' && !isAdmin) actions = `<button type="button" data-hot-order-action="claim" data-hot-order-id="${order.id}" class="w-full mt-3 bg-rose-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Götürürəm</button>`;
+        if(canEdit) actions += `<button type="button" data-hot-order-edit="${order.id}" class="w-full mt-2 bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-extrabold">Dəyiş</button>`;
+        if(status === 'claimed' && owner) actions = `<div class="flex gap-2 mt-3"><button type="button" data-hot-order-action="submit" data-hot-order-id="${order.id}" class="flex-1 bg-[#2481cc] text-white py-2.5 rounded-xl text-xs font-extrabold">Bitirdim</button><button type="button" data-hot-order-action="release" data-hot-order-id="${order.id}" class="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold">Qaytar</button></div>`;
+        if(status === 'claimed' && !owner && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID))) actions += `<button type="button" data-hot-order-action="release" data-hot-order-id="${order.id}" class="w-full mt-2 bg-slate-100 text-slate-600 py-2.5 rounded-xl text-xs font-bold">Ümumi siyahıya qaytar</button>`;
+        if(status === 'submitted' && isAdmin) actions = `<button type="button" data-hot-order-action="settle" data-hot-order-id="${order.id}" class="w-full mt-3 bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Məbləği gözləməyə əlavə et</button>`;
         const payout = isAdmin && order.payout_amount != null ? `<div class="text-[11px] font-bold text-emerald-600 mt-2">Əməkdaş ödənişi: ${Number(order.payout_amount).toFixed(2)} AZN</div>` : '';
         return `<article class="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-start justify-between gap-2"><div class="text-sm font-extrabold text-slate-800">${escapeHtml(order.client_name || 'Müştəri')}</div><span class="shrink-0 px-2 py-1 rounded-lg text-[10px] font-extrabold ${hotOrderStatusClass(status)}">${HOT_ORDER_STATUS_LABELS[status] || status}</span></div><div class="text-xs text-slate-600 mt-2 whitespace-pre-wrap">${escapeHtml(order.description || '')}</div>${address}${phone}<div class="flex flex-wrap gap-2 mt-2 text-[10px] font-bold text-slate-400"><span>${escapeHtml(order.skill || 'all')}</span>${order.priority === 'urgent' ? '<span class="text-rose-500">TƏCİLİ</span>' : ''}${deadline ? `<span>Son vaxt: ${deadline}</span>` : ''}</div>${status === 'submitted' && isAdmin && order.report ? `<div class="mt-2 p-2 rounded-xl bg-slate-50 text-[11px] text-slate-600"><b>Hesabat:</b> ${escapeHtml(order.report)}</div>` : ''}${payout}${actions}</article>`;
     }).join('');
@@ -11218,6 +11218,33 @@ async function hotOrderAction(action, orderId, button) {
         }
     }
 }
+
+// Do not depend on inline onclick handlers: Android PWA can restore an older
+// document context where those handlers stop resolving. Delegation remains
+// attached for every rerendered hot-order card.
+document.addEventListener('click', event => {
+    const actionButton = event.target.closest('[data-hot-order-action]');
+    if(actionButton) {
+        event.preventDefault();
+        hotOrderAction(actionButton.dataset.hotOrderAction || '', actionButton.dataset.hotOrderId || '', actionButton);
+        return;
+    }
+    const editButton = event.target.closest('[data-hot-order-edit]');
+    if(editButton) {
+        event.preventDefault();
+        openHotOrderEditor(editButton.dataset.hotOrderEdit || '');
+        return;
+    }
+    if(event.target.closest('#hot-order-create-button')) {
+        event.preventDefault();
+        openHotOrderEditor();
+        return;
+    }
+    if(event.target.closest('#hot-order-refresh-button')) {
+        event.preventDefault();
+        loadHotOrders();
+    }
+});
 
 function switchTab(tabId, updateHash = true) {
     if(tabId === 'tab-create') {
