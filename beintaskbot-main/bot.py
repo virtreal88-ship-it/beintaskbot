@@ -523,6 +523,35 @@ def employee_access_profile(chat_id: int) -> dict:
     return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS), "hot_order_skills": ["all"]}
 
 
+def get_rufat_compat_chat_ids() -> set[int]:
+    """Return Rüfət's canonical Telegram ID and an explicitly moved ID.
+
+    The employee card allows an administrator to correct a Telegram ID.  The
+    old card stores ``migrated_to`` as an audit trail; use that record for the
+    personal sales funnel as well.  This deliberately does not trust an old
+    retired ID by itself: the destination must still have active web access.
+    """
+    result = {int(RUFAT_CHAT_ID)}
+    try:
+        records = _load_employee_access_records()
+        pending = [int(RUFAT_CHAT_ID)]
+        while pending:
+            source_id = pending.pop()
+            record = records.get(str(source_id))
+            target = record.get("migrated_to") if isinstance(record, dict) else None
+            try:
+                target_id = int(target)
+            except (TypeError, ValueError):
+                continue
+            if target_id in result or not employee_access_profile(target_id).get("active"):
+                continue
+            result.add(target_id)
+            pending.append(target_id)
+    except Exception as exc:
+        logger.warning("Could not resolve Rüfət Telegram aliases: %s", exc)
+    return result
+
+
 def remove_retired_employee_access() -> None:
     """Permanently retire former staff from access, registrations and PWA push.
 
@@ -1806,7 +1835,7 @@ def get_contact_details(contact_id: int) -> dict | None:
 
 def is_rufat_chat(chat_id) -> bool:
     try:
-        return int(chat_id) in RUFAT_COMPAT_CHAT_IDS
+        return int(chat_id) in get_rufat_compat_chat_ids()
     except (TypeError, ValueError):
         return False
 
@@ -2005,7 +2034,7 @@ def get_funnel_owner(chat_id) -> dict | None:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return None
-    if cid in RUFAT_COMPAT_CHAT_IDS:
+    if is_rufat_chat(cid):
         stages, names, ui = load_pipeline_stage_maps(RUFAT_PIPELINE_ID)
         return {
             "chat_id": RUFAT_CHAT_ID, "pipeline_id": int(RUFAT_PIPELINE_ID),
@@ -6414,7 +6443,7 @@ def _viewer_wa_line(chat_id: int) -> str:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return ""
-    if cid == int(RUFAT_CHAT_ID) or cid in RUFAT_COMPAT_CHAT_IDS:
+    if is_rufat_chat(cid):
         return "rufat"
     if is_admin(cid):
         return "nizami"
@@ -6569,7 +6598,7 @@ def _get_user_seen_map(chat_id: int) -> dict[str, int]:
         if not isinstance(data, dict):
             return {}
         cid = int(chat_id or 0)
-        target_cids = RUFAT_COMPAT_CHAT_IDS if cid in RUFAT_COMPAT_CHAT_IDS else {cid}
+        target_cids = get_rufat_compat_chat_ids() if is_rufat_chat(cid) else {cid}
         merged: dict[str, int] = {}
         for c in target_cids:
             user_data = data.get(str(c)) or {}
@@ -6588,7 +6617,7 @@ def _record_user_seen(chat_id: int, lead_id: int, seen_ts: int = 0) -> None:
         if not lid or not cid:
             return
         ts = int(seen_ts or _time_module.time())
-        target_cids = RUFAT_COMPAT_CHAT_IDS if cid in RUFAT_COMPAT_CHAT_IDS else {cid}
+        target_cids = get_rufat_compat_chat_ids() if is_rufat_chat(cid) else {cid}
         with _user_seen_lock:
             data = read_json(_USER_SEEN_FILE) or {}
             if not isinstance(data, dict):
@@ -10233,6 +10262,8 @@ def _wa_sender_digits_for_chat(chat_id) -> str:
     mapped = WA_SENDER_NUMBERS.get(cid)
     if mapped:
         return re.sub(r"\D", "", str(mapped))
+    if is_rufat_chat(cid):
+        return re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
     # Everyone except Rüfət writes through the shared WhatsApp Lite number.
     return NIZAMI_WHATSAPP_NUMBER
 
@@ -10256,7 +10287,7 @@ def _hinted_wa_sender_digits(chat_id, hinted) -> str:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return default
-    if is_admin(cid) or cid in RUFAT_COMPAT_CHAT_IDS:
+    if is_admin(cid) or is_rufat_chat(cid):
         return wanted
     return default
 
@@ -19750,7 +19781,7 @@ def _salary_funnel_user(chat_id) -> bool:
 
 
 def _notice_bucket_id(chat_id: int) -> str:
-    if int(chat_id) in RUFAT_COMPAT_CHAT_IDS:
+    if is_rufat_chat(chat_id):
         return str(int(RUFAT_CHAT_ID))
     return str(int(chat_id))
 
