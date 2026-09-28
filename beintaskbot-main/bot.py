@@ -18846,7 +18846,7 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
             return web.json_response({"success": True, "order": order})
 
         if action == "release":
-            order = release_hot_order(order_id=order_id, worker_id=chat_id)
+            order = release_hot_order(order_id=order_id, worker_id=chat_id, is_admin=is_admin(chat_id))
             if not order:
                 return web.json_response({"success": False, "error": "Bu sifarişi geri qaytarmaq mümkün deyil."}, status=409)
             await _notify_hot_order_recipients(order, _hot_order_recipient_ids(str(order.get("skill") or "")), reopened=True)

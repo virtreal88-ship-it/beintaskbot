@@ -155,16 +155,19 @@ def claim_hot_order(*, order_id: str, worker_id: int, skills: list[str]) -> dict
     return _row(row) if row else None
 
 
-def release_hot_order(*, order_id: str, worker_id: int) -> dict | None:
+def release_hot_order(*, order_id: str, worker_id: int, is_admin: bool = False) -> dict | None:
+    """Reopen a claimed order for its worker, creator, or an administrator."""
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE hot_orders
                 SET status = 'open', claimed_by = NULL, claimed_at = NULL, released_at = now()
-                WHERE id = %s::uuid AND status = 'claimed' AND claimed_by = %s
+                WHERE id = %s::uuid
+                  AND status = 'claimed'
+                  AND (claimed_by = %s OR created_by = %s OR %s)
                 RETURNING *
-            """, (order_id, worker_id))
+            """, (order_id, worker_id, worker_id, is_admin))
             row = cur.fetchone()
         conn.commit()
     return _row(row) if row else None
