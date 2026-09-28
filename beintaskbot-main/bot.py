@@ -19225,6 +19225,17 @@ async def handle_platform_login(request: web.Request) -> web.Response:
     return response
 
 
+async def handle_platform_logout(_request: web.Request) -> web.Response:
+    """End only the tenant-platform browser session.
+
+    The legacy BeinSystems cookie is intentionally untouched so the two
+    products do not sign each other out.
+    """
+    response = web.json_response({"success": True})
+    response.del_cookie(_TENANT_SESSION_COOKIE, path="/")
+    return response
+
+
 async def handle_platform_members(request: web.Request) -> web.Response:
     """Owner-managed employee cards for direct Telegram-based access."""
     profile = _tenant_member_from_request(request, owner_only=True)
@@ -20959,6 +20970,7 @@ async def start_webhook_server():
     # tenant-scoped cookie and never fall through to legacy employee APIs.
     app_web.router.add_post("/api/platform/register", handle_platform_register)
     app_web.router.add_post("/api/platform/login", handle_platform_login)
+    app_web.router.add_post("/api/platform/logout", handle_platform_logout)
     app_web.router.add_get("/api/platform/me", handle_platform_me)
     app_web.router.add_get("/api/platform/members", handle_platform_members)
     app_web.router.add_post("/api/platform/members", handle_platform_members)
