@@ -4482,7 +4482,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if start_arg.startswith("web_"):
         nonce = start_arg[4:]
         if not employee_access_profile(chat_id).get("active"):
-            await update.message.reply_text("⛔ Web girişiniz aktiv deyil. Administratorla əlaqə saxlayın.")
+            # This reply is delivered only to the Telegram account attempting
+            # to sign in.  Showing its own numeric ID lets the administrator
+            # correct an old or mistyped staff-card ID without granting access
+            # to an unknown account or inspecting server logs.
+            await update.message.reply_text(
+                "⛔ Web girişiniz aktiv deyil. Administratorla əlaqə saxlayın.\n\n"
+                f"Sizin Telegram ID: {chat_id}\n"
+                "Bu ID-ni administrator «Əməkdaşlar» kartında yeniləməlidir."
+            )
             return
         if not _approve_web_login_request(nonce, chat_id):
             await update.message.reply_text("⚠️ Giriş linkinin vaxtı bitib. Saytdan yenisini yaradın.")
