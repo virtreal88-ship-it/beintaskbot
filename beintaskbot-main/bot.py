@@ -4482,6 +4482,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if start_arg.startswith("web_"):
         nonce = start_arg[4:]
         if not employee_access_profile(chat_id).get("active"):
+            logger.warning("Web login denied for Telegram ID %s", chat_id)
             # This reply is delivered only to the Telegram account attempting
             # to sign in.  Showing its own numeric ID lets the administrator
             # correct an old or mistyped staff-card ID without granting access
