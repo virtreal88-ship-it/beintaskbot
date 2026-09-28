@@ -535,8 +535,8 @@
         /* A chat editor should not look like a form field. Its height grows as
            the employee types or pastes an AI answer. */
         .wa-composer-field textarea, #deal-chat-input {
-            display:block; width:100%; min-height:42px; max-height:190px; box-sizing:border-box;
-            resize:none; overflow-y:auto; border:0 !important; outline:0; box-shadow:none !important;
+            display:block; width:100%; min-height:42px; max-height:none; box-sizing:border-box;
+            resize:none; overflow-y:hidden; border:0 !important; outline:0; box-shadow:none !important;
             background:transparent !important; color:#17212b; font:inherit; line-height:1.42;
             padding:11px 142px 11px 42px;
         }
@@ -8795,7 +8795,7 @@ function persistOpenChatDraft() {
 function resizeDealChatInput(input = document.getElementById('deal-chat-input')) {
     if(!input) return;
     input.style.height = 'auto';
-    input.style.height = Math.min(Math.max(input.scrollHeight, 42), 190) + 'px';
+    input.style.height = Math.max(input.scrollHeight, 42) + 'px';
 }
 function restoreChatDraft(leadId) {
     const input = document.getElementById('deal-chat-input');
