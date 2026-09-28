@@ -57,10 +57,11 @@ from tenant_platform import (
     TenantPlatformError, accept_invite as accept_tenant_invite,
     begin_kommo_oauth, consume_kommo_oauth_state,
     create_invite as create_tenant_invite, create_tenant,
+    deactivate_member as deactivate_tenant_member,
     finalize_onboarding, list_integrations as list_tenant_integrations,
-    kommo_credentials, member as tenant_member, request_kommo_connection,
+    list_members as list_tenant_members, kommo_credentials, member as tenant_member, request_kommo_connection,
     replace_kommo_tokens, save_kommo_oauth_tokens, tenants_for_user,
-    update_onboarding,
+    update_onboarding, upsert_member as upsert_tenant_member,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -18425,7 +18426,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "updated_at": now, "updated_by": manager_id,
         }
         current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
-        current.update({"name": name, "role": role})
+        # Persist the identity inside the card too, not only as a JSON key.
+        # This keeps Telegram-ID login stable if older data used a CRM key.
+        current.update({"name": name, "role": role, "telegram_id": employee_id})
         try:
             kommo_user_id = int(data.get("kommo_user_id") or 0)
         except (TypeError, ValueError):
@@ -18727,10 +18730,94 @@ async def handle_platform_me(request: web.Request) -> web.Response:
     try:
         integrations = await asyncio.to_thread(list_tenant_integrations, tenant_id=profile["tenant_id"], telegram_id=int(profile["telegram_id"]))
         companies = await asyncio.to_thread(tenants_for_user, int(profile["telegram_id"]))
+        members = await asyncio.to_thread(
+            list_tenant_members, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"])
+        ) if profile.get("role") == "owner" else []
     except Exception:
         logger.exception("Platform session lookup failed")
         return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
-    return web.json_response({"success": True, "member": profile, "integrations": integrations, "companies": companies})
+    return web.json_response({"success": True, "member": profile, "integrations": integrations, "companies": companies, "members": members})
+
+
+async def handle_platform_login(request: web.Request) -> web.Response:
+    """Sign a tenant-scoped browser session after Telegram identity proof.
+
+    Access is not granted merely by knowing an ID. Telegram signs the callback,
+    then the database checks that this exact ID is an active employee card.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    telegram = data.get("telegram") if isinstance(data.get("telegram"), dict) else {}
+    chat_id = _telegram_login_user_id(telegram)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
+    try:
+        companies = await asyncio.to_thread(tenants_for_user, chat_id)
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=503)
+    if not companies:
+        return web.json_response({"success": False, "error": "Bu Telegram hesabı üçün giriş icazəsi yoxdur. Administrator sizi əməkdaş kartına əlavə etməlidir."}, status=403)
+    requested_tenant = str(data.get("tenant_id") or "").strip()
+    if requested_tenant:
+        tenant = next((item for item in companies if str(item.get("id")) == requested_tenant), None)
+        if not tenant:
+            return web.json_response({"success": False, "error": "Bu şirkət üçün giriş icazəniz yoxdur."}, status=403)
+    elif len(companies) == 1:
+        tenant = companies[0]
+    else:
+        return web.json_response({
+            "success": True,
+            "select_company": True,
+            "companies": [{"id": item["id"], "name": item["name"]} for item in companies],
+        })
+    response = web.json_response({"success": True, "redirect": "/setup", "tenant": {"id": tenant["id"], "name": tenant["name"]}})
+    response.set_cookie(
+        _TENANT_SESSION_COOKIE, _make_tenant_session(str(tenant["id"]), chat_id),
+        max_age=_TENANT_SESSION_TTL_SEC, httponly=True, secure=True, samesite="Lax", path="/",
+    )
+    return response
+
+
+async def handle_platform_members(request: web.Request) -> web.Response:
+    """Owner-managed employee cards for direct Telegram-based access."""
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
+    if request.method == "GET":
+        try:
+            members = await asyncio.to_thread(list_tenant_members, tenant_id=tenant_id, owner_id=owner_id)
+        except TenantPlatformError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        return web.json_response({"success": True, "members": members})
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    action = str(data.get("action") or "upsert").strip().casefold()
+    try:
+        telegram_id = int(data.get("telegram_id") or 0)
+        if action == "deactivate":
+            await asyncio.to_thread(deactivate_tenant_member, tenant_id=tenant_id, owner_id=owner_id, telegram_id=telegram_id)
+        elif action == "upsert":
+            await asyncio.to_thread(
+                upsert_tenant_member,
+                tenant_id=tenant_id, owner_id=owner_id, telegram_id=telegram_id,
+                display_name=str(data.get("display_name") or ""), role=str(data.get("role") or "worker"),
+                permissions=data.get("permissions") if isinstance(data.get("permissions"), list) else [],
+            )
+        else:
+            raise TenantPlatformError("Naməlum əməliyyat.")
+        members = await asyncio.to_thread(list_tenant_members, tenant_id=tenant_id, owner_id=owner_id)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "Telegram ID düzgün deyil."}, status=400)
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    return web.json_response({"success": True, "members": members})
 
 
 def _safe_platform_patch(value) -> dict:
@@ -19980,7 +20067,10 @@ async def start_webhook_server():
     # Public self-service platform. These endpoints use a separate
     # tenant-scoped cookie and never fall through to legacy employee APIs.
     app_web.router.add_post("/api/platform/register", handle_platform_register)
+    app_web.router.add_post("/api/platform/login", handle_platform_login)
     app_web.router.add_get("/api/platform/me", handle_platform_me)
+    app_web.router.add_get("/api/platform/members", handle_platform_members)
+    app_web.router.add_post("/api/platform/members", handle_platform_members)
     app_web.router.add_post("/api/platform/onboarding/assistant", handle_platform_ai_onboarding)
     app_web.router.add_post("/api/platform/onboarding/finish", handle_platform_finish_onboarding)
     app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
@@ -19991,6 +20081,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/integrations/kommo/pipelines", handle_platform_kommo_pipelines)
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", handle_platform_save_kommo_pipelines)
     app_web.router.add_get("/register", serve_platform_onboarding)
+    app_web.router.add_get("/login", serve_platform_onboarding)
     app_web.router.add_get("/setup", serve_platform_onboarding)
     app_web.router.add_get("/invite/{token}", serve_platform_onboarding)
     app_web.router.add_get("/app", redirect_platform_app)

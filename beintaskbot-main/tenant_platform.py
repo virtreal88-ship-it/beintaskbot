@@ -161,7 +161,11 @@ def _role(value: str, *, owner: bool = False) -> str:
 
 
 def _permissions(value, role: str) -> list[str]:
-    allowed = set(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["worker"]))
+    # Roles provide sensible defaults. The owner may still grant a smaller
+    # custom set of ordinary workspace modules to a manager or worker.
+    if role == "owner":
+        return list(_ROLE_PERMISSIONS["owner"])
+    allowed = {permission for values in _ROLE_PERMISSIONS.values() for permission in values}
     if not isinstance(value, list):
         return list(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["worker"]))
     requested = [str(item) for item in value if str(item) in allowed]
@@ -246,6 +250,99 @@ def tenants_for_user(telegram_id: int) -> list[dict]:
             """, (int(telegram_id),))
             rows = cur.fetchall()
     return [_tenant_payload(row) for row in rows]
+
+
+def _member_payload(row: dict) -> dict:
+    """Make a member row safe to return from the platform API."""
+    result = dict(row)
+    result["tenant_id"] = str(result["tenant_id"])
+    for key in ("created_at", "updated_at"):
+        if result.get(key):
+            result[key] = result[key].isoformat()
+    if not isinstance(result.get("permissions"), list):
+        result["permissions"] = []
+    return result
+
+
+def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
+    """Return the tenant's employee cards to its owner only."""
+    current = member(tenant_id, owner_id)
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("İcazə yoxdur.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
+                FROM saas_tenant_members
+                WHERE tenant_id = %s::uuid
+                ORDER BY CASE WHEN role = 'owner' THEN 0 ELSE 1 END, display_name, telegram_id
+            """, (tenant_id,))
+            rows = cur.fetchall()
+    return [_member_payload(row) for row in rows]
+
+
+def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_name: str,
+                  role: str, permissions: list[str] | None = None) -> dict:
+    """Create or update an employee card keyed by their Telegram account ID.
+
+    This intentionally needs no invitation link: a person is admitted only
+    after Telegram proves that they own this exact numeric account ID.
+    """
+    current = member(tenant_id, owner_id)
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("İcazə yoxdur.")
+    try:
+        target_id = int(telegram_id)
+    except (TypeError, ValueError):
+        target_id = 0
+    if target_id <= 0:
+        raise TenantPlatformError("Telegram ID düzgün deyil.")
+    name = str(display_name or "").strip()[:120]
+    if not name:
+        raise TenantPlatformError("Əməkdaşın adını yazın.")
+    is_owner = target_id == int(current["telegram_id"])
+    selected_role = _role(str(role or ""), owner=is_owner)
+    selected_permissions = _permissions(permissions or [], selected_role)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO saas_tenant_members (tenant_id, telegram_id, display_name, role, permissions, active, invited_by)
+                VALUES (%s::uuid, %s, %s, %s, %s::jsonb, TRUE, %s)
+                ON CONFLICT (tenant_id, telegram_id) DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    role = CASE WHEN saas_tenant_members.role = 'owner' THEN 'owner' ELSE EXCLUDED.role END,
+                    permissions = CASE WHEN saas_tenant_members.role = 'owner' THEN saas_tenant_members.permissions ELSE EXCLUDED.permissions END,
+                    active = TRUE,
+                    updated_at = now()
+                RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
+            """, (tenant_id, target_id, name, selected_role, _json(selected_permissions), int(owner_id)))
+            row = cur.fetchone()
+        conn.commit()
+    return _member_payload(row)
+
+
+def deactivate_member(*, tenant_id: str, owner_id: int, telegram_id: int) -> dict:
+    """Disable a former employee without deleting their audit record."""
+    current = member(tenant_id, owner_id)
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("İcazə yoxdur.")
+    if int(telegram_id) == int(current["telegram_id"]):
+        raise TenantPlatformError("Öz girişinizi bağlaya bilməzsiniz.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE saas_tenant_members SET active = FALSE, updated_at = now()
+                WHERE tenant_id = %s::uuid AND telegram_id = %s AND role <> 'owner'
+                RETURNING tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
+            """, (tenant_id, int(telegram_id)))
+            row = cur.fetchone()
+        conn.commit()
+    if not row:
+        raise TenantPlatformError("Əməkdaş tapılmadı.")
+    return _member_payload(row)
 
 
 def update_onboarding(*, tenant_id: str, owner_id: int, patch: dict) -> dict:
