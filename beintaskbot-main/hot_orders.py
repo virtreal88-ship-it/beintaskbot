@@ -119,6 +119,24 @@ def update_hot_order(*, order_id: str, editor_id: int, is_admin: bool, client_na
     return _row(row, reveal_payout=is_admin) if row else None
 
 
+def cancel_hot_order(*, order_id: str, editor_id: int, is_admin: bool) -> dict | None:
+    """Cancel only an order that has not yet been claimed by a worker."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE hot_orders
+                SET status = 'cancelled'
+                WHERE id = %s::uuid
+                  AND status = 'open'
+                  AND (%s OR created_by = %s)
+                RETURNING *
+            """, (order_id, is_admin, editor_id))
+            row = cur.fetchone()
+        conn.commit()
+    return _row(row, reveal_payout=is_admin) if row else None
+
+
 def list_hot_orders(*, worker_id: int, skills: list[str], is_admin: bool) -> list[dict]:
     allowed_skills = [str(item).strip().casefold() for item in skills if str(item).strip()]
     with _connect() as conn:

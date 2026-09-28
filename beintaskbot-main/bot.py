@@ -51,7 +51,7 @@ from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
-    release_hot_order, submit_hot_order, settle_hot_order, update_hot_order,
+    release_hot_order, submit_hot_order, settle_hot_order, update_hot_order, cancel_hot_order,
 )
 from tenant_platform import (
     TenantPlatformError, accept_invite as accept_tenant_invite,
@@ -18831,6 +18831,12 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
             await _notify_hot_order_recipients(order, recipients, reopened=True)
             return web.json_response({"success": True, "order": order, "notified": len(recipients)})
 
+        if action == "cancel":
+            order = cancel_hot_order(order_id=order_id, editor_id=chat_id, is_admin=is_admin(chat_id))
+            if not order:
+                return web.json_response({"success": False, "error": "Sifariş artıq əməkdaş tərəfindən götürülüb və ləğv edilə bilməz."}, status=409)
+            return web.json_response({"success": True, "order": order})
+
         if action == "claim":
             order = claim_hot_order(order_id=order_id, worker_id=chat_id, skills=profile.get("hot_order_skills") or [])
             if not order:
@@ -18896,6 +18902,24 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
         logger.exception("Hot order action failed")
         return web.json_response({"success": False, "error": "İsti sifariş əməliyyatı alınmadı."}, status=500)
     return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
+
+
+async def handle_api_settings_integrations(request: web.Request) -> web.Response:
+    """Safe integration health summary for the legacy administrator workspace."""
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    if not chat_id or not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    cloud_whatsapp = bool(str(os.environ.get("WHATSAPP_ACCESS_TOKEN") or os.environ.get("WHATSAPP_TOKEN") or "").strip())
+    return web.json_response({
+        "success": True,
+        "integrations": [
+            {"id": "kommo", "name": "Kommo CRM", "status": "connected" if KOMMO_TOKEN else "not_connected", "detail": KOMMO_DOMAIN if KOMMO_TOKEN else "Kommo tokeni tapılmadı"},
+            {"id": "whatsapp", "name": "WhatsApp", "status": "connected" if cloud_whatsapp else "via_kommo", "detail": "Kommo xətti ilə qoşulub" if not cloud_whatsapp else "Cloud API qoşulub"},
+            {"id": "instagram", "name": "Instagram", "status": "via_kommo", "detail": "Mesajlar Kommo tarixçəsindən alınır"},
+            {"id": "telegram", "name": "Telegram", "status": "connected" if TELEGRAM_TOKEN else "not_connected", "detail": "Giriş və bildirişlər"},
+            {"id": "push", "name": "Push bildirişləri", "status": "connected" if VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY else "not_connected", "detail": "PWA bildirişləri"},
+        ],
+    })
 
 
 async def handle_api_session(request: web.Request) -> web.Response:
@@ -20284,6 +20308,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/session', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/admin/employees', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/admin/integrations', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/hot-orders', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
@@ -20360,6 +20385,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/session", handle_api_session)
     app_web.router.add_get("/api/admin/employees", handle_api_employee_directory)
     app_web.router.add_post("/api/admin/employees", handle_api_employee_update)
+    app_web.router.add_get("/api/admin/integrations", handle_api_settings_integrations)
     app_web.router.add_get("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_post("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())

@@ -904,8 +904,8 @@
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Müştərilər</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
-        <button id="side-tab-employees" class="sidebar-item" style="display:none;" onclick="switchTab('tab-employees')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c.6-4 3-6 6-6s5.4 2 6 6"/><path d="M17 11a2.5 2.5 0 1 0 0-5"/><path d="M18 14c2 1 3 3 3 5"/></svg></span><span class="sidebar-item-label">Əməkdaşlar</span>
+        <button id="side-tab-settings" class="sidebar-item" style="display:none;" onclick="switchTab('tab-settings')">
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="sidebar-item-label">Ayarlar</span>
         </button>
     </div>
     <div id="sidebar-user">
@@ -1218,6 +1218,12 @@
         <div id="employees-list" class="space-y-2"></div>
     </div>
 
+    <div id="screen-settings" class="screen space-y-3">
+        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="text-base font-extrabold text-slate-800">Ayarlar</div><div class="text-[11px] text-slate-400 mt-1">Komandanı və sistem bağlantılarını idarə edin</div></div>
+        <button type="button" id="settings-employees-button" onclick="switchTab('tab-employees')" class="w-full text-left bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">Əməkdaşlar</div><div class="text-[11px] text-slate-400 mt-1">Giriş, hüquqlar, WhatsApp nömrəsi və bacarıqlar</div></div><span class="text-slate-400">›</span></div></button>
+        <div id="settings-integrations-card" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">İnteqrasiyalar</div><div class="text-[11px] text-slate-400 mt-1">Aktiv və qoşulmamış bağlantılar</div></div><button type="button" onclick="loadSettingsIntegrations()" class="text-xs font-bold text-[#2481cc]">Yenilə</button></div><div id="settings-integrations-list" class="mt-3 space-y-2 text-xs text-slate-500"></div></div>
+    </div>
+
     <div id="screen-hot-orders" class="screen space-y-3">
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">İsti sifarişlər</div><div class="text-[10px] text-gray-400 mt-0.5">İlk götürən əməkdaşın sifarişi olur</div></div>
@@ -1353,8 +1359,8 @@
     <button id="tab-hot-orders" onclick="switchTab('tab-hot-orders')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3c2 3-1 4 1 7 1.5-1.5 3-2.5 3-5 3 3 5 6 5 10a9 9 0 1 1-18 0c0-3 1-5 4-8-.3 3 1 4 2 5 0-3 2-5 3-9Z"/></svg><span class="mt-0.5">İsti sifariş</span>
     </button>
-    <button id="tab-employees" onclick="switchTab('tab-employees')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c.6-4 3-6 6-6s5.4 2 6 6"/><path d="M17 11a2.5 2.5 0 1 0 0-5"/></svg><span class="mt-0.5">Əməkdaşlar</span>
+    <button id="tab-settings" onclick="switchTab('tab-settings')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span class="mt-0.5">Ayarlar</span>
     </button>
     <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
@@ -2249,16 +2255,21 @@ function setPendingTabVisible() {
     const sideHesabat = document.getElementById('side-tab-hesabat');
     if(sideHesabat) sideHesabat.style.display = 'none';
     const employeesTab = document.getElementById('tab-employees');
-    if(employeesTab) employeesTab.style.display = hasEmployeePermission('employees') ? 'flex' : 'none';
+    if(employeesTab) employeesTab.style.display = 'none';
     const sideEmployees = document.getElementById('side-tab-employees');
-    if(sideEmployees) sideEmployees.style.display = hasEmployeePermission('employees') ? 'flex' : 'none';
+    if(sideEmployees) sideEmployees.style.display = 'none';
+    const settingsAllowed = isAdmin || hasEmployeePermission('employees');
+    const settingsTab = document.getElementById('tab-settings');
+    if(settingsTab) settingsTab.style.display = settingsAllowed ? 'flex' : 'none';
+    const sideSettings = document.getElementById('side-tab-settings');
+    if(sideSettings) sideSettings.style.display = settingsAllowed ? 'flex' : 'none';
     paintMobileTabBar();
 }
-const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees'];
+const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees','tab-settings'];
 const MOBILE_TAB_ORDERS = {
     default: ['tab-samil-deals','tab-tasks','tab-hot-orders','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
     // Nizami works first from tasks, then immediately from the client queue.
-    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-pending','tab-employees','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
+    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-pending','tab-settings','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
 };
 function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
@@ -2269,7 +2280,8 @@ function mobileTabWanted(id) {
     if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
     if(id === 'tab-hesabat') return false;
     if(id === 'tab-pending') return hasEmployeePermission('waiting');
-    if(id === 'tab-employees') return hasEmployeePermission('employees');
+    if(id === 'tab-employees') return false;
+    if(id === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
     if(id === 'tab-hot-orders') return hasEmployeePermission('hot_orders');
     if(id === 'tab-create') return false;
     return false;
@@ -11009,7 +11021,20 @@ function employeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
     return Object.entries(EMPLOYEE_PERMISSION_LABELS).map(([key, label]) => `<label class="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2"><input type="checkbox" data-employee-permission="${key}" ${chosen.has(key) ? 'checked' : ''}><span>${label}</span></label>`).join('');
 }
+const HOT_ORDER_SKILL_LABELS = {all:'Bütün sifarişlər', montaj:'Montaj', temir:'Təmir', catdirilma:'Çatdırılma', servis:'Servis', 'digər':'Digər'};
+function employeeHotSkillDropdown(selected = []) {
+    const skills = new Set(selected || ['all']);
+    const picked = Object.entries(HOT_ORDER_SKILL_LABELS).filter(([key]) => skills.has(key)).map(([, label]) => label).join(', ') || 'Seçin';
+    return `<details class="mt-1.5 relative"><summary class="list-none cursor-pointer w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl flex items-center justify-between"><span data-hot-skills-summary>${escapeHtml(picked)}</span><span class="text-slate-400">⌄</span></summary><div class="mt-1 rounded-xl border border-slate-200 bg-white shadow-lg p-2 space-y-1">${Object.entries(HOT_ORDER_SKILL_LABELS).map(([key, label]) => `<label class="flex items-center gap-2 rounded-lg px-2 py-2 text-xs font-bold text-slate-700"><input type="checkbox" data-employee-hot-skill="${key}" ${skills.has(key) ? 'checked' : ''}><span>${label}</span></label>`).join('')}</div></details>`;
+}
 function closeEmployeeEditor() { document.getElementById('employee-editor-modal')?.remove(); }
+document.addEventListener('change', event => {
+    if(!event.target.matches('[data-employee-hot-skill]')) return;
+    const selected = [...document.querySelectorAll('[data-employee-hot-skill]:checked')]
+        .map(item => HOT_ORDER_SKILL_LABELS[item.getAttribute('data-employee-hot-skill')]).filter(Boolean);
+    const summary = document.querySelector('[data-hot-skills-summary]');
+    if(summary) summary.textContent = selected.join(', ') || 'Seçin';
+});
 function openEmployeeEditor(chatId = null) {
     closeEmployeeEditor();
     const employee = chatId === null ? null : employeeDirectory.find(row => String(row.chat_id) === String(chatId));
@@ -11030,7 +11055,7 @@ function openEmployeeEditor(chatId = null) {
         <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
-        <label class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span><select id="employee-editor-hot-skills" multiple class="mt-1.5 w-full min-h-[84px] p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="all" ${skills.has('all') ? 'selected' : ''}>Bütün sifarişlər</option><option value="montaj" ${skills.has('montaj') ? 'selected' : ''}>Montaj</option><option value="temir" ${skills.has('temir') ? 'selected' : ''}>Təmir</option><option value="catdirilma" ${skills.has('catdirilma') ? 'selected' : ''}>Çatdırılma</option><option value="servis" ${skills.has('servis') ? 'selected' : ''}>Servis</option><option value="digər" ${skills.has('digər') ? 'selected' : ''}>Digər</option></select></label>
+        <div class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span>${employeeHotSkillDropdown([...skills])}</div>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
         ${isEditing && !isSelf && employee.active ? `<button type="button" onclick="deactivateEmployee(${employee.chat_id})" class="w-full mt-3 text-rose-600 font-bold py-2 text-xs">Girişi bağla</button>` : ''}
         <div style="position:sticky;bottom:-18px;background:#fff;border-top:1px solid #f1f5f9;padding:12px 0 calc(12px + env(safe-area-inset-bottom));margin-top:12px"><div class="flex gap-2"><button type="button" onclick="closeEmployeeEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="button" onclick="saveEmployee()" class="flex-1 bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Yadda saxla</button></div></div>
@@ -11064,7 +11089,7 @@ async function saveEmployee() {
     const name = String(document.getElementById('employee-editor-name')?.value || '').trim();
     if(!/^\d+$/.test(chatId) || !name) { toast('Ad və Telegram ID yazın.', true); return; }
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
-    const hotOrderSkills = [...(document.getElementById('employee-editor-hot-skills')?.selectedOptions || [])].map(option => option.value);
+    const hotOrderSkills = [...document.querySelectorAll('[data-employee-hot-skill]:checked')].map(option => option.getAttribute('data-employee-hot-skill'));
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
     const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked};
     try {
@@ -11111,7 +11136,7 @@ function renderHotOrders() {
         let actions = '';
         const canEdit = status === 'open' && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID));
         if(status === 'open' && !isAdmin) actions = `<button type="button" data-hot-order-action="claim" data-hot-order-id="${order.id}" class="w-full mt-3 bg-rose-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Götürürəm</button>`;
-        if(canEdit) actions += `<button type="button" data-hot-order-edit="${order.id}" class="w-full mt-2 bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-extrabold">Dəyiş</button>`;
+        if(canEdit) actions += `<div class="grid grid-cols-2 gap-2 mt-2"><button type="button" data-hot-order-edit="${order.id}" class="bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-extrabold">Dəyiş</button><button type="button" data-hot-order-action="cancel" data-hot-order-id="${order.id}" class="bg-rose-50 text-rose-600 py-2.5 rounded-xl text-xs font-extrabold">Ləğv et</button></div>`;
         if(status === 'claimed' && owner) actions = `<div class="flex gap-2 mt-3"><button type="button" data-hot-order-action="submit" data-hot-order-id="${order.id}" class="flex-1 bg-[#2481cc] text-white py-2.5 rounded-xl text-xs font-extrabold">Bitirdim</button><button type="button" data-hot-order-action="release" data-hot-order-id="${order.id}" class="bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold">Qaytar</button></div>`;
         if(status === 'claimed' && !owner && (isAdmin || String(order.created_by || '') === String(CURRENT_USER_ID))) actions += `<button type="button" data-hot-order-action="release" data-hot-order-id="${order.id}" class="w-full mt-2 bg-slate-100 text-slate-600 py-2.5 rounded-xl text-xs font-bold">Ümumi siyahıya qaytar</button>`;
         if(status === 'submitted' && isAdmin) actions = `<button type="button" data-hot-order-action="settle" data-hot-order-id="${order.id}" class="w-full mt-3 bg-emerald-500 text-white py-2.5 rounded-xl text-xs font-extrabold">Məbləği gözləməyə əlavə et</button>`;
@@ -11175,14 +11200,12 @@ function openHotOrderEditor(orderId = '') {
     document.body.appendChild(modal);
 }
 function showHotOrderProgress(message, error = false) {
-    const container = document.getElementById('hot-orders-container');
-    if(!container) return;
     let progress = document.getElementById('hot-order-progress');
     if(!progress) {
         progress = document.createElement('div');
         progress.id = 'hot-order-progress';
-        progress.className = 'rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-2';
-        container.prepend(progress);
+        progress.style.cssText = 'position:fixed;left:16px;right:16px;top:max(16px, env(safe-area-inset-top));z-index:10150;box-shadow:0 12px 30px rgba(15,23,42,.22)';
+        document.body.appendChild(progress);
     }
     progress.className = `rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-2 ${error ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-[#2481cc]'}`;
     progress.innerHTML = error ? `<span>!</span><span>${escapeHtml(message)}</span>` : `<span class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span><span>${escapeHtml(message)}</span>`;
@@ -11192,7 +11215,8 @@ async function hotOrderAction(action, orderId, button) {
     if(action === 'submit') { const report = window.prompt('Gördüyünüz işi qısa yazın:'); if(!report || !report.trim()) return; payload.report = report.trim(); }
     if(action === 'settle') { const amount = window.prompt('Əməkdaş üçün məbləğ (AZN):'); if(amount === null) return; payload.amount = amount.trim(); }
     const initialText = button ? button.textContent : '';
-    const progressText = action === 'release' ? 'Sifariş ümumi siyahıya qaytarılır…' : action === 'claim' ? 'Sifariş sizə təyin edilir…' : 'Əməliyyat yerinə yetirilir…';
+    if(action === 'cancel' && !window.confirm('Bu isti sifariş ləğv edilsin? Əməkdaş götürdükdən sonra ləğv mümkün olmayacaq.')) return;
+    const progressText = action === 'release' ? 'Sifariş ümumi siyahıya qaytarılır…' : action === 'claim' ? 'Sifariş sizə təyin edilir…' : action === 'cancel' ? 'Sifariş ləğv edilir…' : 'Əməliyyat yerinə yetirilir…';
     if(button) {
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
@@ -11202,9 +11226,10 @@ async function hotOrderAction(action, orderId, button) {
     showHotOrderProgress(progressText);
     try {
         await hotOrdersRequest(payload);
-        const done = action === 'claim' ? 'Sifariş sizə təyin edildi.' : action === 'release' ? 'Sifariş ümumi siyahıya qaytarıldı.' : 'Yadda saxlanıldı.';
+        const done = action === 'claim' ? 'Sifariş sizə təyin edildi.' : action === 'release' ? 'Sifariş ümumi siyahıya qaytarıldı.' : action === 'cancel' ? 'Sifariş ləğv edildi.' : 'Yadda saxlanıldı.';
         toast(done);
         await loadHotOrders();
+        document.getElementById('hot-order-progress')?.remove();
     }
     catch(error) {
         const message = error.message || 'Xəta';
@@ -11245,6 +11270,27 @@ document.addEventListener('click', event => {
         loadHotOrders();
     }
 });
+
+async function loadSettingsIntegrations() {
+    const list = document.getElementById('settings-integrations-list');
+    const card = document.getElementById('settings-integrations-card');
+    if(card) card.style.display = isAdmin ? '' : 'none';
+    const employees = document.getElementById('settings-employees-button');
+    if(employees) employees.style.display = hasEmployeePermission('employees') ? '' : 'none';
+    if(!isAdmin || !list) return;
+    list.innerHTML = '<div class="py-2 text-slate-400">Yüklənir...</div>';
+    try {
+        const response = await fetch(API_BASE + '/api/admin/integrations', {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'İnteqrasiyalar yüklənmədi');
+        const statuses = {connected:['Qoşulub','bg-emerald-50 text-emerald-700'], via_kommo:['Kommo ilə','bg-blue-50 text-blue-700'], not_connected:['Qoşulmayıb','bg-slate-100 text-slate-600']};
+        list.innerHTML = (data.integrations || []).map(item => {
+            const status = statuses[item.status] || statuses.not_connected;
+            const action = item.id === 'kommo' && item.status !== 'connected' ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Qoş</a>' : item.id === 'kommo' ? '<span class="text-[10px] text-slate-400">Yenidən qoşulma lazım olarsa /setup bölməsindən edin</span>' : '';
+            return `<div class="rounded-xl bg-slate-50 border border-slate-100 p-3"><div class="flex items-center justify-between gap-2"><b class="text-slate-700">${escapeHtml(item.name || '')}</b><span class="px-2 py-1 rounded-lg text-[10px] font-bold ${status[1]}">${status[0]}</span></div><div class="text-[10px] text-slate-400 mt-1">${escapeHtml(item.detail || '')}</div>${action ? `<div class="mt-2">${action}</div>` : ''}</div>`;
+        }).join('') || '<div class="text-slate-400">İnteqrasiya yoxdur.</div>';
+    } catch(error) { list.innerHTML = `<div class="text-rose-500">${escapeHtml(error.message || 'Xəta')}</div>`; }
+}
 
 function switchTab(tabId, updateHash = true) {
     if(tabId === 'tab-create') {
@@ -11302,6 +11348,12 @@ function switchTab(tabId, updateHash = true) {
         if(employeesTab) employeesTab.className = activeClass;
         nav('screen-employees');
         loadEmployees();
+    } else if(tabId === 'tab-settings') {
+        if(!(isAdmin || hasEmployeePermission('employees'))) { switchTab('tab-tasks'); return; }
+        const settingsTab = document.getElementById('tab-settings');
+        if(settingsTab) settingsTab.className = activeClass;
+        nav('screen-settings');
+        loadSettingsIntegrations();
     }
     if(updateHash) {
         const nextHash = tabId === 'tab-pending' ? '#pending' : '';
@@ -11839,7 +11891,7 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 async function clearAppCacheOnce() {
-  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_28_hotorders') === '1') return;
+  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_28_settings') === '1') return;
   if ('caches' in window) {
     const cacheNames = await caches.keys();
     await Promise.all(cacheNames.map(name => caches.delete(name)));
@@ -11847,7 +11899,7 @@ async function clearAppCacheOnce() {
   Object.keys(localStorage).forEach(key => {
     if (key.startsWith('cached_')) localStorage.removeItem(key);
   });
-  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_28_hotorders', '1');
+  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_28_settings', '1');
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
@@ -11856,7 +11908,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=290');
+    const reg = await navigator.serviceWorker.register('sw.js?v=291');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();
