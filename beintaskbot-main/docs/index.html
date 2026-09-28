@@ -11122,7 +11122,17 @@ function renderHotOrders() {
 async function hotOrdersRequest(payload) {
     const options = {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'};
     if(payload) { options.method = 'POST'; options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(payload); }
-    const response = await fetch(API_BASE + '/api/hot-orders', options);
+    // On a weak mobile connection an action must end with a visible error,
+    // rather than leave the employee unsure whether the tap was registered.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    options.signal = controller.signal;
+    let response;
+    try { response = await fetch(API_BASE + '/api/hot-orders', options); }
+    catch(error) {
+        if(error?.name === 'AbortError') throw new Error('Əməliyyat çox gecikir. İnterneti yoxlayıb yenidən cəhd edin.');
+        throw error;
+    } finally { clearTimeout(timeout); }
     const data = await response.json().catch(() => ({}));
     if(!response.ok || !data.success) throw new Error(data.error || 'İsti sifariş əməliyyatı alınmadı.');
     return data;
@@ -11164,15 +11174,49 @@ function openHotOrderEditor(orderId = '') {
     modal.innerHTML = `<form class="bg-white rounded-t-[22px] w-full max-w-[560px] max-h-[92vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))] space-y-2" onsubmit="event.preventDefault();createHotOrder()"><div class="flex justify-between items-center mb-2"><div><div class="text-base font-extrabold text-slate-800">${order ? 'İsti sifarişi dəyiş' : 'Yeni isti sifariş'}</div><div class="text-[11px] text-slate-400">Qiyməti yalnız iş bitəndən sonra Admin qeyd edir.</div></div><button type="button" onclick="closeHotOrderEditor()" class="text-xl text-slate-400 px-2">×</button></div><input id="hot-editor-id" type="hidden" value="${value('id')}"><input id="hot-editor-client" required class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Müştərinin adı" value="${value('client_name')}"><div class="grid grid-cols-2 gap-2"><input id="hot-editor-phone" inputmode="tel" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Telefon" value="${value('phone')}"><input id="hot-editor-address" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ünvan" value="${value('address')}"></div><textarea id="hot-editor-description" required class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none min-h-[104px]" placeholder="Sifarişin təsviri">${value('description')}</textarea><div class="grid grid-cols-3 gap-2"><select id="hot-editor-skill" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="all" ${selected('skill','all')}>Hamı</option><option value="montaj" ${selected('skill','montaj')}>Montaj</option><option value="temir" ${selected('skill','temir')}>Təmir</option><option value="catdirilma" ${selected('skill','catdirilma')}>Çatdırılma</option><option value="servis" ${selected('skill','servis')}>Servis</option><option value="digər" ${selected('skill','digər')}>Digər</option></select><select id="hot-editor-priority" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="normal" ${selected('priority','normal')}>Adi</option><option value="urgent" ${selected('priority','urgent')}>Təcili</option></select><input id="hot-editor-deadline" type="datetime-local" value="${hotOrderDateInput(order?.deadline_at)}" class="p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"></div><div class="flex gap-2 pt-2"><button type="button" onclick="closeHotOrderEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="submit" class="flex-1 bg-rose-500 text-white font-bold py-3 rounded-xl text-xs">${order ? 'Dəyişiklikləri saxla' : 'Sifariş yarat'}</button></div></form>`;
     document.body.appendChild(modal);
 }
+function showHotOrderProgress(message, error = false) {
+    const container = document.getElementById('hot-orders-container');
+    if(!container) return;
+    let progress = document.getElementById('hot-order-progress');
+    if(!progress) {
+        progress = document.createElement('div');
+        progress.id = 'hot-order-progress';
+        progress.className = 'rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-2';
+        container.prepend(progress);
+    }
+    progress.className = `rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-2 ${error ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-[#2481cc]'}`;
+    progress.innerHTML = error ? `<span>!</span><span>${escapeHtml(message)}</span>` : `<span class="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span><span>${escapeHtml(message)}</span>`;
+}
 async function hotOrderAction(action, orderId, button) {
     const payload = {action, order_id:orderId};
     if(action === 'submit') { const report = window.prompt('Gördüyünüz işi qısa yazın:'); if(!report || !report.trim()) return; payload.report = report.trim(); }
     if(action === 'settle') { const amount = window.prompt('Əməkdaş üçün məbləğ (AZN):'); if(amount === null) return; payload.amount = amount.trim(); }
     const initialText = button ? button.textContent : '';
-    if(button) { button.disabled = true; button.textContent = action === 'release' ? 'Qaytarılır...' : '...'; }
-    try { await hotOrdersRequest(payload); toast(action === 'claim' ? 'Sifariş sizə təyin edildi.' : action === 'release' ? 'Sifariş ümumi siyahıya qaytarıldı.' : 'Yadda saxlanıldı.'); await loadHotOrders(); }
-    catch(error) { toast(error.message || 'Xəta', true); await loadHotOrders(); }
-    finally { if(button && button.isConnected) { button.disabled = false; button.textContent = initialText; } }
+    const progressText = action === 'release' ? 'Sifariş ümumi siyahıya qaytarılır…' : action === 'claim' ? 'Sifariş sizə təyin edilir…' : 'Əməliyyat yerinə yetirilir…';
+    if(button) {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        button.classList.add('opacity-70', 'cursor-wait');
+        button.innerHTML = `<span class="inline-block w-3 h-3 mr-1 align-[-1px] border-2 border-current border-t-transparent rounded-full animate-spin"></span>${action === 'release' ? 'Qaytarılır…' : 'Yüklənir…'}`;
+    }
+    showHotOrderProgress(progressText);
+    try {
+        await hotOrdersRequest(payload);
+        const done = action === 'claim' ? 'Sifariş sizə təyin edildi.' : action === 'release' ? 'Sifariş ümumi siyahıya qaytarıldı.' : 'Yadda saxlanıldı.';
+        toast(done);
+        await loadHotOrders();
+    }
+    catch(error) {
+        const message = error.message || 'Xəta';
+        showHotOrderProgress(message, true);
+        toast(message, true);
+        if(button && button.isConnected) {
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+            button.classList.remove('opacity-70', 'cursor-wait');
+            button.textContent = initialText;
+        }
+    }
 }
 
 function switchTab(tabId, updateHash = true) {
@@ -11768,7 +11812,7 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 async function clearAppCacheOnce() {
-  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_21c') === '1') return;
+  if (localStorage.getItem('beintaskbot_cache_cleared_v2026_09_28_hotorders') === '1') return;
   if ('caches' in window) {
     const cacheNames = await caches.keys();
     await Promise.all(cacheNames.map(name => caches.delete(name)));
@@ -11776,7 +11820,7 @@ async function clearAppCacheOnce() {
   Object.keys(localStorage).forEach(key => {
     if (key.startsWith('cached_')) localStorage.removeItem(key);
   });
-  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_21c', '1');
+  localStorage.setItem('beintaskbot_cache_cleared_v2026_09_28_hotorders', '1');
 }
 async function initPush() {
   try { await clearAppCacheOnce(); } catch(e) { console.warn('Cache clear error:', e); }
@@ -11785,7 +11829,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=289');
+    const reg = await navigator.serviceWorker.register('sw.js?v=290');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();
