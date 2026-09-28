@@ -7225,6 +7225,7 @@ async function requestDealSummary() {
     const btn = document.getElementById('deal-chat-summary');
     if(!_dealViewState || !CURRENT_USER_ID) return;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
+    showDealSummaryProgress();
     try {
         const r = await fetch(API_BASE + '/api/deal/chat/suggest', {
             method: 'POST',
@@ -7235,51 +7236,29 @@ async function requestDealSummary() {
         if(!r.ok || !d.success) throw new Error(d.error || 'Xülasə alınmadı');
         openDealSummaryModal(d.summary, _dealViewState.id, d.transcribed_voice_count || 0);
     } catch(err) { toast(err.message || 'Xülasə alınmadı', true); }
-    finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
-}
-let _dealSummarySpeech = null;
-function stopDealSummarySpeech() {
-    try { window.speechSynthesis?.cancel(); } catch(_error) {}
-    _dealSummarySpeech = null;
-    const button = document.getElementById('deal-summary-speak');
-    if(button) button.textContent = '🔊 Səsləndir';
-}
-function speakDealSummary() {
-    const modal = document.getElementById('deal-summary-modal');
-    const text = String(modal?.dataset.summary || '').trim();
-    if(!text) return;
-    if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-        toast('Bu brauzerdə səsli oxuma dəstəklənmir.', true);
-        return;
-    }
-    const button = document.getElementById('deal-summary-speak');
-    if(_dealSummarySpeech) { stopDealSummarySpeech(); return; }
-    try {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'az-AZ';
-        utterance.rate = 0.94;
-        const voice = window.speechSynthesis.getVoices().find(item => /(^az[-_]|azerbaijani)/i.test(String(item.lang || '') + ' ' + String(item.name || '')));
-        if(voice) utterance.voice = voice;
-        _dealSummarySpeech = utterance;
-        if(button) button.textContent = '■ Dayandır';
-        utterance.onend = utterance.onerror = () => {
-            if(_dealSummarySpeech === utterance) stopDealSummarySpeech();
-        };
-        window.speechSynthesis.speak(utterance);
-    } catch(_error) {
-        stopDealSummarySpeech();
-        toast('Səsli oxuma başladılmadı.', true);
+    finally {
+        hideDealSummaryProgress();
+        if(btn) { btn.disabled = false; btn.classList.remove('loading'); }
     }
 }
-function closeDealSummaryModal() { stopDealSummarySpeech(); document.getElementById('deal-summary-modal')?.remove(); }
+function showDealSummaryProgress() {
+    document.getElementById('deal-summary-progress')?.remove();
+    const progress = document.createElement('div');
+    progress.id = 'deal-summary-progress';
+    // This layer deliberately sits above every client card and modal.
+    progress.style.cssText = 'position:fixed;top:max(16px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:17000;background:#10211f;color:#fff;padding:11px 15px;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.24);display:flex;align-items:center;gap:9px;font:700 13px system-ui;pointer-events:none;';
+    progress.innerHTML = '<span style="display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite"></span><span>AI xülasə hazırlanır…</span>';
+    document.body.appendChild(progress);
+}
+function hideDealSummaryProgress() { document.getElementById('deal-summary-progress')?.remove(); }
+function closeDealSummaryModal() { document.getElementById('deal-summary-modal')?.remove(); }
 function openDealSummaryModal(summary, leadId, voiceCount) {
     const modal = document.createElement('div');
     modal.id = 'deal-summary-modal';
     // Summary must sit above the client card and the right-side details drawer.
     modal.style.cssText = 'position:fixed;inset:0;z-index:16000;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
     modal.onclick = event => { if(event.target === modal) closeDealSummaryModal(); };
-    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><button id="deal-summary-speak" type="button" onclick="speakDealSummary()" class="mt-3 w-full border border-[#2481cc] text-[#2481cc] font-bold py-2.5 rounded-xl text-xs">🔊 Səsləndir</button><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
+    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
     modal.dataset.leadId = String(leadId || '');
     modal.dataset.summary = String(summary || '');
     document.body.appendChild(modal);
@@ -9804,6 +9783,7 @@ function noticeAiPayload() {
 async function requestNoticeSummary() {
     if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
     _noticeReplyBusy = true;
+    showDealSummaryProgress();
     try {
         const messages = ((_dealViewState && _dealViewState.messages) || []).slice(-40).map(item => ({incoming:!!item.incoming, text:item.text || '', author:item.author || '', message_type:item.message_type || item.type || '', media_url:item.media_url || item.media || '', file_uuid:item.file_uuid || ''}));
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({mode:'summary', lead_id:_noticeHistoryLeadId, messages})});
@@ -9811,7 +9791,10 @@ async function requestNoticeSummary() {
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Xülasə alınmadı');
         openDealSummaryModal(payload.summary, _noticeHistoryLeadId, payload.transcribed_voice_count || 0);
     } catch(error) { toast(error.message || 'Xülasə alınmadı', true); }
-    finally { _noticeReplyBusy = false; }
+    finally {
+        hideDealSummaryProgress();
+        _noticeReplyBusy = false;
+    }
 }
 async function requestNoticeAiReply() {
     const input = document.getElementById('notice-reply-input');
@@ -11960,7 +11943,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=293');
+    const reg = await navigator.serviceWorker.register('sw.js?v=294');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

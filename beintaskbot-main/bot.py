@@ -10406,6 +10406,13 @@ def _talk_channel_key(talk: dict) -> str:
     key = _origin_channel_key(origin)
     if key:
         return key
+    # Kommo widgets do not use one uniform schema.  For example, Instagram
+    # and TikTok can be nested under an integration/chat metadata object
+    # instead of the top-level origin.  Looking through the safe serialized
+    # Talk makes the reply route follow the channel that the customer used.
+    key = _origin_channel_key(_talk_blob(talk))
+    if key:
+        return key
     return "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
 
 
@@ -10557,10 +10564,18 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
     row = next((item for item in channels if item.get("key") == wanted), None)
     if hinted_id:
         hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
-        chat_id = str((hinted_row or row or {}).get("chat_id") or "")
-        return hinted_id, chat_id
+        # A browser can retain an old Talk id after a customer switches from
+        # WhatsApp to Instagram (or TikTok).  Never send a social reply to a
+        # Talk belonging to another channel.
+        if hinted_row and hinted_row.get("key") == wanted:
+            return hinted_id, str(hinted_row.get("chat_id") or "")
     if row and row.get("talk_id"):
         return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
+    # Falling back to an arbitrary "most recent" Talk is acceptable only for
+    # legacy WhatsApp chats.  For social messengers it can send a message to
+    # the wrong channel, so return an actionable "chat not found" error.
+    if wanted != "whatsapp":
+        return 0, ""
     ranked = _ranked_reply_talk_ids(talks)
     talk_id = int(ranked[0]) if ranked else 0
     fallback = next((item for item in channels if int(item.get("talk_id") or 0) == talk_id), None)
@@ -16718,6 +16733,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
     if not reply_talk_id and not use_cloud:
         return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
+    logger.info("Chat delivery route: lead=%s channel=%s talk=%s chat=%s", lead_id, channel, reply_talk_id, reply_chat_id or "-")
     wa_quote_id = _first_wamid(reply_external, reply_to_message_id)
     want_quote = bool(reply_to_message_id or reply_external or reply_preview)
     drive_uuid = ""
@@ -16860,6 +16876,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
                     last_error = kommo_error
     if not ok:
         detail = last_error
+        logger.warning("Chat delivery failed: lead=%s channel=%s talk=%s error=%s", lead_id, channel, reply_talk_id, str(last_error or "unknown")[:300])
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
@@ -19503,6 +19520,26 @@ async def handle_platform_kommo_pipelines(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
 
 
+async def handle_platform_test_kommo_connection(request: web.Request) -> web.Response:
+    """Run one harmless authenticated request so an owner can verify OAuth."""
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        account = await _tenant_kommo_request(profile["tenant_id"], "GET", "account")
+        return web.json_response({
+            "success": True,
+            "message": "Kommo bağlantısı işləyir.",
+            "account": {
+                "id": account.get("id"),
+                "name": str(account.get("name") or "Kommo hesabı"),
+                "subdomain": str(account.get("subdomain") or ""),
+            },
+        })
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+
+
 async def handle_platform_save_kommo_pipelines(request: web.Request) -> web.Response:
     profile = _tenant_member_from_request(request, owner_only=True)
     if not profile:
@@ -20449,6 +20486,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/integrations/kommo/callback", handle_platform_kommo_callback)
     app_web.router.add_get("/api/platform/integrations/kommo/pipelines", handle_platform_kommo_pipelines)
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", handle_platform_save_kommo_pipelines)
+    app_web.router.add_get("/api/platform/integrations/kommo/test", handle_platform_test_kommo_connection)
     app_web.router.add_get("/register", serve_platform_onboarding)
     app_web.router.add_get("/login", serve_platform_onboarding)
     app_web.router.add_get("/setup", serve_platform_onboarding)

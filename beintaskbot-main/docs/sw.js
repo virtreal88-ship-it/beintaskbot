@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-28-nizami-queue';
+const CACHE_NAME = 'beintaskbot-v2026-09-28-integrations-market';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
