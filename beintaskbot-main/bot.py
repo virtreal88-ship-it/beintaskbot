@@ -443,8 +443,9 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
         values.add("passive_tasks")
     if "stages" in values or "reports" in values:
         values.add("waiting")
-    if "tasks" in values:
-        values.add("hot_orders")
+    # Hot orders is an independent menu.  It used to follow task access,
+    # which made the switch ineffective: removing the hot-order checkbox and
+    # retaining tasks silently brought it back on every save.
     return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
 
 
