@@ -54,13 +54,13 @@ from hot_orders import (
     release_hot_order, submit_hot_order, settle_hot_order, update_hot_order, cancel_hot_order,
 )
 from tenant_platform import (
-    TenantPlatformError, accept_invite as accept_tenant_invite,
+    TenantPlatformError, decide_invite_request as decide_tenant_invite_request,
     begin_kommo_oauth, consume_kommo_oauth_state,
     create_invite as create_tenant_invite, create_tenant,
     deactivate_member as deactivate_tenant_member,
-    finalize_onboarding, list_integrations as list_tenant_integrations,
+    finalize_onboarding, list_integrations as list_tenant_integrations, list_invite_requests as list_tenant_invite_requests,
     list_members as list_tenant_members, kommo_credentials, member as tenant_member, request_kommo_connection,
-    replace_kommo_tokens, save_kommo_oauth_tokens, tenants_for_user,
+    replace_kommo_tokens, request_invite_acceptance as request_tenant_invite_acceptance, save_kommo_oauth_tokens, tenants_for_user,
     update_onboarding, upsert_member as upsert_tenant_member,
 )
 # import sqlite3  # replaced by gh_storage
@@ -914,11 +914,13 @@ def _send_telegram_text(chat_id, text: str):
     if not chat_id:
         return
     try:
-        _http.post(
+        response = _http.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": int(chat_id), "text": text, "disable_web_page_preview": True},
             timeout=8,
         )
+        if not response.ok:
+            logger.warning("Telegram notification rejected: chat=%s status=%s body=%s", chat_id, response.status_code, (response.text or "")[:180])
     except Exception as exc:
         logger.warning("Pending action Telegram notification failed: %s", exc)
 
@@ -10562,12 +10564,29 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
     wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
     channels = _channels_from_talks(talks, sender_digits)
     row = next((item for item in channels if item.get("key") == wanted), None)
+
+    def same_reply_profile(actual: str) -> bool:
+        # Kommo often represents Instagram and TikTok through one social
+        # profile. They must use the Talk that received the last message,
+        # rather than a stale per-channel dropdown value in the browser.
+        social = {"instagram", "tiktok"}
+        return actual == wanted or (actual in social and wanted in social)
+
+    remembered_id = int(_lead_open_talk.get(lid) or 0)
+    if remembered_id:
+        remembered = next((talk for talk in talks if _talk_id_of(talk) == remembered_id), None)
+        remembered_channel = _talk_channel_key(remembered or {})
+        if remembered and same_reply_profile(remembered_channel):
+            return remembered_id, _talk_chat_id(remembered)
     if hinted_id:
+        hinted_talk = next((talk for talk in talks if _talk_id_of(talk) == hinted_id), None)
         hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
         # A browser can retain an old Talk id after a customer switches from
         # WhatsApp to Instagram (or TikTok).  Never send a social reply to a
         # Talk belonging to another channel.
-        if hinted_row and hinted_row.get("key") == wanted:
+        if hinted_talk and same_reply_profile(_talk_channel_key(hinted_talk)):
+            return hinted_id, _talk_chat_id(hinted_talk)
+        if hinted_row and same_reply_profile(str(hinted_row.get("key") or "")):
             return hinted_id, str(hinted_row.get("chat_id") or "")
     if row and row.get("talk_id"):
         return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
@@ -18969,7 +18988,8 @@ async def handle_api_settings_integrations(request: web.Request) -> web.Response
         "success": True,
         "integrations": [
             {"id": "kommo", "name": "Kommo CRM", "status": "connected" if KOMMO_TOKEN else "not_connected", "detail": KOMMO_DOMAIN if KOMMO_TOKEN else "Kommo tokeni tapılmadı"},
-            {"id": "whatsapp", "name": "WhatsApp", "status": "connected" if cloud_whatsapp else "via_kommo", "detail": "Kommo xətti ilə qoşulub" if not cloud_whatsapp else "Cloud API qoşulub"},
+            {"id": "whatsapp", "name": "WhatsApp (Kommo)", "status": "via_kommo", "detail": "Kommo xətti ilə qoşulub"},
+            {"id": "waba", "name": "WhatsApp Business API (WABA)", "status": "connected" if cloud_whatsapp else "not_connected", "detail": "Cloud API qoşulub" if cloud_whatsapp else "WABA tokeni tapılmadı"},
             {"id": "instagram", "name": "Instagram", "status": "via_kommo", "detail": "Mesajlar Kommo tarixçəsindən alınır"},
             {"id": "telegram", "name": "Telegram", "status": "connected" if TELEGRAM_TOKEN else "not_connected", "detail": "Giriş və bildirişlər"},
             {"id": "push", "name": "Push bildirişləri", "status": "connected" if VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY else "not_connected", "detail": "PWA bildirişləri"},
@@ -19310,16 +19330,48 @@ async def handle_platform_accept_invite(request: web.Request) -> web.Response:
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
     try:
-        profile = await asyncio.to_thread(
-            accept_tenant_invite, token=str(data.get("token") or ""), telegram_id=chat_id,
+        pending = await asyncio.to_thread(
+            request_tenant_invite_acceptance, token=str(data.get("token") or ""), telegram_id=chat_id,
             display_name=_telegram_display_name(telegram),
         )
     except TenantPlatformError as exc:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
-    response = web.json_response({"success": True, "member": profile, "redirect": "/setup"})
-    response.set_cookie(_TENANT_SESSION_COOKIE, _make_tenant_session(profile["tenant_id"], chat_id), max_age=_TENANT_SESSION_TTL_SEC,
-                        httponly=True, secure=True, samesite="Lax", path="/")
-    return response
+    if pending.get("status") == "pending":
+        _send_telegram_text(
+            pending.get("owner_id"),
+            f"🔐 Yeni giriş sorğusu\n\n👤 {pending.get('employee_name') or 'Əməkdaş'}\n"
+            f"📌 Kart: {pending.get('card_name') or 'Əməkdaş'}\n\n"
+            f"Təsdiqləmək üçün: {CANONICAL_WEB_ORIGIN}/setup",
+        )
+    return web.json_response({"success": True, "pending": True, "message": "Sorğu administratora göndərildi. Təsdiqdən sonra /login səhifəsindən daxil olun."})
+
+
+async def handle_platform_invite_requests(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
+    if request.method == "GET":
+        try:
+            rows = await asyncio.to_thread(list_tenant_invite_requests, tenant_id=tenant_id, owner_id=owner_id)
+        except TenantPlatformError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        return web.json_response({"success": True, "requests": rows})
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    try:
+        decided = await asyncio.to_thread(
+            decide_tenant_invite_request, tenant_id=tenant_id, owner_id=owner_id,
+            request_id=str(data.get("request_id") or ""), approve=str(data.get("action") or "").strip().casefold() == "approve",
+        )
+        rows = await asyncio.to_thread(list_tenant_invite_requests, tenant_id=tenant_id, owner_id=owner_id)
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    _send_telegram_text(decided["telegram_id"], "✅ Girişiniz təsdiqləndi. İndi crm.pro.az/login səhifəsindən daxil ola bilərsiniz." if decided["approved"] else "❌ Giriş sorğunuz təsdiqlənmədi.")
+    return web.json_response({"success": True, "requests": rows})
 
 
 async def handle_platform_request_kommo(request: web.Request) -> web.Response:
@@ -20130,8 +20182,9 @@ def remember_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: in
 
 
 def emit_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: int = 0) -> None:
-    if kind != "new_task" and _salary_funnel_user(chat_id):
-        return
+    # Salary employees, including Rüfət, need the same incoming/new-deal
+    # push path as everyone else. The previous guard silently dropped every
+    # notice except a new task for that group.
     before = 0
     try:
         bucket_id = _notice_bucket_id(int(chat_id))
@@ -20177,9 +20230,11 @@ def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id
     except (TypeError, ValueError):
         return
     if not can_receive_staff_notification(recipient):
+        logger.info("Push skipped for inactive recipient=%s", recipient)
         return
     sub = get_push_subscription(str(user_id))
     if not sub:
+        logger.info("Push skipped: no subscription for recipient=%s", recipient)
         return
     payload = json.dumps({
         "title": title,
@@ -20481,6 +20536,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/onboarding/finish", handle_platform_finish_onboarding)
     app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
     app_web.router.add_post("/api/platform/invites/accept", handle_platform_accept_invite)
+    app_web.router.add_get("/api/platform/access-requests", handle_platform_invite_requests)
+    app_web.router.add_post("/api/platform/access-requests", handle_platform_invite_requests)
     app_web.router.add_post("/api/platform/integrations/kommo", handle_platform_request_kommo)
     app_web.router.add_post("/api/platform/integrations/kommo/start", handle_platform_start_kommo_oauth)
     app_web.router.add_get("/api/platform/integrations/kommo/callback", handle_platform_kommo_callback)

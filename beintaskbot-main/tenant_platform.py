@@ -124,6 +124,21 @@ def _ensure_schema(conn) -> None:
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS saas_member_telegram_idx ON saas_tenant_members(telegram_id, active)")
             cur.execute("CREATE INDEX IF NOT EXISTS saas_invite_active_idx ON saas_tenant_invites(token_hash, expires_at) WHERE accepted_at IS NULL")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_tenant_invite_requests (
+                    id UUID PRIMARY KEY,
+                    invite_id UUID NOT NULL REFERENCES saas_tenant_invites(id) ON DELETE CASCADE,
+                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                    telegram_id BIGINT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+                    decided_by BIGINT NULL,
+                    decided_at TIMESTAMPTZ NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (invite_id)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS saas_invite_request_tenant_idx ON saas_tenant_invite_requests(tenant_id, status, created_at DESC)")
         conn.commit()
         _schema_ready = True
 
@@ -406,7 +421,8 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     return {"id": str(invite_id), "token": token, "role": selected_role, "expires_at": expires.isoformat()}
 
 
-def accept_invite(*, token: str, telegram_id: int, display_name: str) -> dict:
+def request_invite_acceptance(*, token: str, telegram_id: int, display_name: str) -> dict:
+    """Bind a Telegram identity to an invite, awaiting owner approval."""
     token_hash = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
     with _connect() as conn:
         _ensure_schema(conn)
@@ -419,15 +435,85 @@ def accept_invite(*, token: str, telegram_id: int, display_name: str) -> dict:
             invite = cur.fetchone()
             if not invite:
                 raise TenantPlatformError("Dəvət etibarsızdır və ya müddəti bitib.")
-            cur.execute("""
-                INSERT INTO saas_tenant_members (tenant_id, telegram_id, display_name, role, permissions, invited_by)
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-                ON CONFLICT (tenant_id, telegram_id) DO UPDATE SET active = TRUE, display_name = EXCLUDED.display_name,
-                    role = EXCLUDED.role, permissions = EXCLUDED.permissions, updated_at = now()
-            """, (invite["tenant_id"], int(telegram_id), str(display_name or invite["display_name"] or "").strip()[:120], invite["role"], _json(invite["permissions"]), invite["created_by"]))
-            cur.execute("UPDATE saas_tenant_invites SET accepted_by = %s, accepted_at = now() WHERE id = %s", (int(telegram_id), invite["id"]))
+            cur.execute("SELECT * FROM saas_tenant_invite_requests WHERE invite_id = %s FOR UPDATE", (invite["id"],))
+            existing = cur.fetchone()
+            if existing:
+                if int(existing["telegram_id"]) != int(telegram_id):
+                    raise TenantPlatformError("Bu dəvət artıq başqa hesab tərəfindən istifadə olunub.")
+                result = dict(existing)
+            else:
+                request_id = uuid.uuid4()
+                cur.execute("""
+                    INSERT INTO saas_tenant_invite_requests (id, invite_id, tenant_id, telegram_id, display_name)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING *
+                """, (request_id, invite["id"], invite["tenant_id"], int(telegram_id), str(display_name or invite["display_name"] or "").strip()[:120]))
+                result = dict(cur.fetchone())
         conn.commit()
-    return member(str(invite["tenant_id"]), telegram_id) or {}
+    return {
+        "id": str(result["id"]), "tenant_id": str(result["tenant_id"]), "status": result["status"],
+        "owner_id": int(invite["created_by"]), "employee_name": str(result.get("display_name") or invite.get("display_name") or "Əməkdaş"),
+        "card_name": str(invite.get("display_name") or "Əməkdaş"),
+    }
+
+
+def list_invite_requests(*, tenant_id: str, owner_id: int) -> list[dict]:
+    current = member(tenant_id, owner_id)
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("İcazə yoxdur.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT r.id, r.telegram_id, r.display_name, r.status, r.created_at,
+                       i.display_name AS card_name, i.role, i.permissions
+                FROM saas_tenant_invite_requests r
+                JOIN saas_tenant_invites i ON i.id = r.invite_id
+                WHERE r.tenant_id = %s::uuid
+                ORDER BY CASE WHEN r.status = 'pending' THEN 0 ELSE 1 END, r.created_at DESC
+            """, (tenant_id,))
+            rows = cur.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["id"] = str(item["id"])
+        if item.get("created_at"):
+            item["created_at"] = item["created_at"].isoformat()
+        if not isinstance(item.get("permissions"), list):
+            item["permissions"] = []
+        result.append(item)
+    return result
+
+
+def decide_invite_request(*, tenant_id: str, owner_id: int, request_id: str, approve: bool) -> dict:
+    current = member(tenant_id, owner_id)
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("İcazə yoxdur.")
+    try:
+        rid = uuid.UUID(str(request_id))
+    except (ValueError, TypeError):
+        raise TenantPlatformError("Sorğu tapılmadı.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT r.*, i.display_name AS card_name, i.role, i.permissions, i.created_by
+                FROM saas_tenant_invite_requests r JOIN saas_tenant_invites i ON i.id = r.invite_id
+                WHERE r.id = %s AND r.tenant_id = %s::uuid FOR UPDATE
+            """, (rid, tenant_id))
+            request = cur.fetchone()
+            if not request or request["status"] != "pending":
+                raise TenantPlatformError("Sorğu artıq işlənib və ya tapılmadı.")
+            if approve:
+                cur.execute("""
+                    INSERT INTO saas_tenant_members (tenant_id, telegram_id, display_name, role, permissions, active, invited_by)
+                    VALUES (%s::uuid, %s, %s, %s, %s::jsonb, TRUE, %s)
+                    ON CONFLICT (tenant_id, telegram_id) DO UPDATE SET active = TRUE, display_name = EXCLUDED.display_name,
+                        role = EXCLUDED.role, permissions = EXCLUDED.permissions, updated_at = now()
+                """, (tenant_id, int(request["telegram_id"]), str(request["display_name"] or request["card_name"] or "").strip()[:120], request["role"], _json(request["permissions"]), int(owner_id)))
+                cur.execute("UPDATE saas_tenant_invites SET accepted_by = %s, accepted_at = now() WHERE id = %s", (int(request["telegram_id"]), request["invite_id"]))
+            cur.execute("UPDATE saas_tenant_invite_requests SET status = %s, decided_by = %s, decided_at = now() WHERE id = %s", ("approved" if approve else "rejected", int(owner_id), rid))
+        conn.commit()
+    return {"telegram_id": int(request["telegram_id"]), "display_name": str(request["display_name"] or request["card_name"] or ""), "approved": bool(approve)}
 
 
 def list_integrations(*, tenant_id: str, telegram_id: int) -> list[dict]:

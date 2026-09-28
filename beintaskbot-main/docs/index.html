@@ -600,6 +600,12 @@
         .chats-toolbar .search-icon-btn.on { background:#fff; color:#1f3a34; border-color:#fff; }
         .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
+        .chats-stage-filter { position:absolute; left:12px; right:12px; top:calc(100% - 6px); z-index:9; background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; padding:10px; max-height:280px; overflow:auto; }
+        .chats-stage-filter[hidden] { display:none; }
+        .chats-stage-filter-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; color:#334155; font-size:12px; font-weight:700; }
+        .chats-stage-clear { border:0; background:transparent; color:#008069; font:inherit; font-size:11px; font-weight:700; cursor:pointer; }
+        .chats-stage-option { display:flex; align-items:center; gap:8px; padding:7px 4px; color:#334155; font-size:12px; cursor:pointer; }
+        .chats-stage-option input { accent-color:#008069; }
         .chats-search-hit { width:100%; text-align:left; border:0; background:#fff; padding:10px 12px; border-bottom:1px solid #f1f5f9; cursor:pointer; font-family:inherit; }
         .chats-search-hit:last-child { border-bottom:0; }
         .chats-search-hit:hover { background:#f8fafc; }
@@ -1006,6 +1012,7 @@
                         <span></span>
                         <span class="flex items-center gap-2">
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
+                            <button type="button" id="chats-stage-toggle" class="search-icon-btn" aria-label="Mərhələlər" title="Mərhələlər"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12m-9 7h6"/></svg></button>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                         </span>
         </div>
@@ -1014,9 +1021,10 @@
                         <button type="button" class="search-close" aria-label="Bağla">×</button>
                 </div>
                     <div id="chats-search-results" class="chats-search-results" hidden></div>
+                    <div id="chats-stage-filter" class="chats-stage-filter" hidden></div>
             </div>
                 <div class="chats-filter-tabs" role="tablist" aria-label="Müştəri filtri">
-                    <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-selected="true">Hamısı</button>
+                    <button type="button" id="chats-all-tab" class="chats-filter-tab on" role="tab" aria-selected="true">Hamısı <span id="chats-all-count" class="chats-filter-count"></span></button>
                     <button type="button" id="chats-unanswered-tab" class="chats-filter-tab" role="tab" aria-selected="false">Cavabsız <span id="chats-unanswered-count" class="chats-filter-count"></span></button>
                 </div>
                 <div id="chats-rows" class="chats-rows custom-scroll"></div>
@@ -3923,7 +3931,10 @@ const _mediaBlobs = new Map();
 function mediaCacheKey(wrap, kind) {
     const lead = String((_dealViewState && _dealViewState.id) || '');
     const parts = [kind, lead, wrap.getAttribute('data-msg') || '', wrap.getAttribute('data-at') || ''];
-    if(kind !== 'audio') parts.push(wrap.getAttribute('data-src') || '');
+    // Notes do not always have a stable Kommo message id. Including the
+    // source for every media kind prevents one voice note from reusing the
+    // blob/progress state of another note on the same deal.
+    parts.push(wrap.getAttribute('data-src') || '');
     return parts.join('|');
 }
 function audioCanPlay(audio) {
@@ -8925,6 +8936,7 @@ function paintChatsUnreadBadge() {
     }
     const unanswered = HAS_CHATS ? chatsInboxDeals('unanswered').length : 0;
     const allBtn = document.getElementById('chats-all-tab');
+    const allCount = document.getElementById('chats-all-count');
     const waitBtn = document.getElementById('chats-unanswered-tab');
     const waitCount = document.getElementById('chats-unanswered-count');
     if(allBtn) {
@@ -8937,6 +8949,7 @@ function paintChatsUnreadBadge() {
             allBtn.onclick = () => setChatsListFilter('all');
         }
     }
+    if(allCount) allCount.textContent = HAS_CHATS ? String(chatsInboxDeals('all').length) : '0';
     if(waitCount) waitCount.textContent = unanswered > 99 ? '99+' : String(unanswered);
     if(waitBtn) {
         waitBtn.classList.toggle('on', _chatsListFilter === 'unanswered');
@@ -8955,6 +8968,48 @@ function chatsIsUnanswered(deal) {
     return !outgoing || incoming > outgoing;
 }
 const CHAT_FOLLOWUP_AFTER_SECONDS = 24 * 60 * 60;
+let _chatsStageFilters = new Set();
+function chatStageFilterKey(deal) {
+    const pipeline = String((deal && (deal.pipeline_id || deal.pipeline)) || '');
+    const stage = String((deal && (deal.status_id || deal.stage_id || deal.stage_key || deal.stage_name)) || '');
+    return pipeline + ':' + stage;
+}
+function chatStageFilterLabel(deal) {
+    return String((deal && (deal.stage_name || deal.stage_key)) || 'Mərhələ göstərilməyib').trim();
+}
+function renderChatsStageFilter() {
+    const box = document.getElementById('chats-stage-filter');
+    if(!box) return;
+    const options = new Map();
+    (samilDeals || []).forEach(deal => {
+        if(!deal || !deal.id || !chatBelongsToViewer(deal) || isSuccessfulChatDeal(deal)) return;
+        const key = chatStageFilterKey(deal);
+        if(!options.has(key)) options.set(key, chatStageFilterLabel(deal));
+    });
+    for(const key of [..._chatsStageFilters]) if(!options.has(key)) _chatsStageFilters.delete(key);
+    const rows = [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'az'));
+    box.innerHTML = `<div class="chats-stage-filter-head"><span>Mərhələlər</span><button type="button" class="chats-stage-clear">Təmizlə</button></div>` + (rows.length
+        ? rows.map(([key,label]) => `<label class="chats-stage-option"><input type="checkbox" value="${escapeHtml(key)}" ${_chatsStageFilters.has(key) ? 'checked' : ''}><span>${escapeHtml(label)}</span></label>`).join('')
+        : '<div class="chats-search-empty">Mərhələ tapılmadı</div>');
+    box.querySelectorAll('input[type="checkbox"]').forEach(input => input.onchange = () => {
+        if(input.checked) _chatsStageFilters.add(input.value); else _chatsStageFilters.delete(input.value);
+        _chatsVisibleLimit = 60;
+        renderChatsList(true);
+    });
+    box.querySelector('.chats-stage-clear').onclick = () => { _chatsStageFilters.clear(); _chatsVisibleLimit = 60; renderChatsList(true); };
+}
+function bindChatsStageFilter() {
+    const toggle = document.getElementById('chats-stage-toggle');
+    const box = document.getElementById('chats-stage-filter');
+    if(!toggle || !box || toggle.dataset.bound) return;
+    toggle.dataset.bound = '1';
+    toggle.onclick = () => {
+        const opening = box.hidden;
+        box.hidden = !opening;
+        toggle.classList.toggle('on', opening);
+        if(opening) { hideChatsSearchHits(); renderChatsStageFilter(); }
+    };
+}
 function chatsFollowupState(deal, nowSeconds) {
     if(!isAdmin || !deal || isTerminalChatDeal(deal)) return null;
     const incoming = chatsIncomingAt(deal);
@@ -9420,6 +9475,7 @@ function chatsInboxDeals(requestedFilter) {
         if(declined && !terminalReturn) return false;
         if(filter === 'all' && declined) return false;
         if(filter === 'unanswered' && !(terminalReturn || chatsIsUnanswered(deal))) return false;
+        if(_chatsStageFilters.size && !_chatsStageFilters.has(chatStageFilterKey(deal))) return false;
         if(!q) return true;
         const name = String(dealClientName(deal) || '').toLowerCase();
         const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '');
@@ -9966,6 +10022,8 @@ function renderChatsList(preserveScroll) {
     const box = document.getElementById('chats-rows');
     const pane = document.getElementById('chats-pane');
     if(!box) return;
+    bindChatsStageFilter();
+    renderChatsStageFilter();
     fillChatsLineSelect();
     const allDeals = chatsInboxDeals();
     _chatsVisibleTotal = allDeals.length;
