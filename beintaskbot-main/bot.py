@@ -57,11 +57,15 @@ from tenant_platform import (
     TenantPlatformError, decide_invite_request as decide_tenant_invite_request,
     begin_kommo_oauth, consume_kommo_oauth_state,
     create_invite as create_tenant_invite, create_tenant,
-    deactivate_member as deactivate_tenant_member,
+    deactivate_member as deactivate_tenant_member, disconnect_integration as disconnect_tenant_integration,
     finalize_onboarding, list_integrations as list_tenant_integrations, list_invite_requests as list_tenant_invite_requests,
     list_members as list_tenant_members, kommo_credentials, member as tenant_member, request_kommo_connection,
     replace_kommo_tokens, request_invite_acceptance as request_tenant_invite_acceptance, save_kommo_oauth_tokens, tenants_for_user,
     update_onboarding, upsert_member as upsert_tenant_member,
+    append_audit_event as append_tenant_audit_event, get_crm_deal as get_tenant_crm_deal,
+    list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
+    list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
+    upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -19204,7 +19208,10 @@ async def handle_platform_login(request: web.Request) -> web.Response:
             "select_company": True,
             "companies": [{"id": item["id"], "name": item["name"]} for item in companies],
         })
-    response = web.json_response({"success": True, "redirect": "/setup", "tenant": {"id": tenant["id"], "name": tenant["name"]}})
+    # A configured customer enters their isolated workspace directly.  A new
+    # owner remains in the wizard until the first setup is completed.
+    destination = "/app" if str(tenant.get("status") or "") not in {"", "onboarding"} else "/setup"
+    response = web.json_response({"success": True, "redirect": destination, "tenant": {"id": tenant["id"], "name": tenant["name"]}})
     response.set_cookie(
         _TENANT_SESSION_COOKIE, _make_tenant_session(str(tenant["id"]), chat_id),
         max_age=_TENANT_SESSION_TTL_SEC, httponly=True, secure=True, samesite="Lax", path="/",
@@ -19368,7 +19375,7 @@ async def handle_platform_accept_invite(request: web.Request) -> web.Response:
             pending.get("owner_id"),
             f"🔐 Yeni giriş sorğusu\n\n👤 {pending.get('employee_name') or 'Əməkdaş'}\n"
             f"📌 Kart: {pending.get('card_name') or 'Əməkdaş'}\n\n"
-            f"Təsdiqləmək üçün: {CANONICAL_WEB_ORIGIN}/setup",
+            f"Təsdiqləmək üçün: {CANONICAL_WEB_ORIGIN}/app",
         )
     return web.json_response({"success": True, "pending": True, "message": "Sorğu administratora göndərildi. Təsdiqdən sonra /login səhifəsindən daxil olun."})
 
@@ -19415,6 +19422,28 @@ async def handle_platform_request_kommo(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
     oauth_ready = bool(str(os.environ.get("KOMMO_OAUTH_CLIENT_ID") or "").strip() and str(os.environ.get("KOMMO_OAUTH_CLIENT_SECRET") or "").strip())
     return web.json_response({"success": True, "integration": integration, "oauth_ready": oauth_ready})
+
+
+async def handle_platform_disconnect_integration(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    try:
+        item = await asyncio.to_thread(
+            disconnect_tenant_integration, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]),
+            provider=str((data or {}).get("provider") or ""),
+        )
+        await asyncio.to_thread(
+            append_tenant_audit_event, tenant_id=profile["tenant_id"], actor_telegram_id=int(profile["telegram_id"]),
+            action="integration_disconnected", entity_type="integration", entity_id=item["provider"], payload={},
+        )
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    return web.json_response({"success": True, "integration": item})
 
 
 def _kommo_oauth_settings() -> tuple[str, str, str]:
@@ -19520,7 +19549,28 @@ def _kommo_token_is_expiring(value: str) -> bool:
         return True
 
 
-async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, params: dict | None = None) -> dict:
+_tenant_kommo_rate_lock = threading.Lock()
+_tenant_kommo_next_request: dict[str, float] = {}
+
+
+def _wait_for_tenant_kommo_slot(account_domain: str) -> None:
+    """Keep each customer below Kommo's published seven-request limit.
+
+    This limiter lives at the one server-side request gateway, so refreshes,
+    dashboard syncs and later chat sends cannot accidentally bypass it.
+    """
+    with _tenant_kommo_rate_lock:
+        now = _time_module.monotonic()
+        available_at = _tenant_kommo_next_request.get(account_domain, now)
+        interval = 1 / 6
+        _tenant_kommo_next_request[account_domain] = max(now, available_at) + interval
+    delay = max(0.0, available_at - now)
+    if delay:
+        _time_module.sleep(delay)
+
+
+async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, params: dict | None = None,
+                                json_body: dict | list | None = None) -> dict:
     """Call one tenant's Kommo account and refresh OAuth tokens when needed.
 
     Tokens are retrieved only on the server from encrypted PostgreSQL storage;
@@ -19555,10 +19605,12 @@ async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, param
             credentials = _refresh(credentials)
 
         def _send(active: dict):
+            _wait_for_tenant_kommo_slot(active["account_domain"])
             return requests.request(
                 method.upper(),
                 f"https://{active['account_domain']}/api/v4/{path.lstrip('/')}",
                 params=params,
+                json=json_body,
                 headers={"Authorization": f"Bearer {active['access_token']}", "Accept": "application/json"},
                 timeout=20,
             )
@@ -19655,6 +19707,315 @@ async def handle_platform_save_kommo_pipelines(request: web.Request) -> web.Resp
         return web.json_response({"success": False, "error": str(exc)}, status=400)
 
 
+def _tenant_has_module(profile: dict, module: str) -> bool:
+    """Authorise the public CRM strictly from the tenant member record."""
+    if profile.get("role") == "owner":
+        return True
+    return module in set(profile.get("permissions") or []) and bool((profile.get("modules") or {}).get(module, False))
+
+
+def _tenant_selected_pipeline_ids(profile: dict) -> tuple[list[int], dict[int, set[int]]]:
+    selected = (((profile.get("onboarding") or {}).get("pipeline") or {}).get("selected") or [])
+    pipeline_ids: list[int] = []
+    stages: dict[int, set[int]] = {}
+    for item in selected if isinstance(selected, list) else []:
+        try:
+            pipeline_id = int((item or {}).get("id") or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if pipeline_id <= 0:
+            continue
+        pipeline_ids.append(pipeline_id)
+        stages[pipeline_id] = {
+            int(stage_id) for stage_id in ((item or {}).get("stage_ids") or [])
+            if str(stage_id).isdigit() and int(stage_id) > 0
+        }
+    return list(dict.fromkeys(pipeline_ids)), stages
+
+
+def _tenant_kommo_timestamp(value) -> str | None:
+    try:
+        raw = int(value or 0)
+        if raw > 0:
+            return datetime.fromtimestamp(raw, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        pass
+    return None
+
+
+def _tenant_kommo_phone(contact: dict) -> str:
+    for field in contact.get("custom_fields_values") or []:
+        if str(field.get("field_code") or "").upper() != "PHONE":
+            continue
+        values = field.get("values") if isinstance(field.get("values"), list) else []
+        if values:
+            return str((values[0] or {}).get("value") or "")[:80]
+    return ""
+
+
+async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dict:
+    """Fetch only selected Kommo pipelines and store a tenant-local snapshot.
+
+    The browser reads PostgreSQL afterwards; this prevents pagination, search
+    and opening a side panel from issuing a burst of Kommo API requests.
+    """
+    tenant_id = str(profile["tenant_id"])
+    pipeline_ids, selected_stages = _tenant_selected_pipeline_ids(profile)
+    if not pipeline_ids:
+        raise TenantPlatformError("Əvvəl Kommo-da göstəriləcək vərəq və mərhələləri seçin.")
+    pipeline_payload = await _tenant_kommo_request(tenant_id, "GET", "leads/pipelines")
+    stage_names: dict[int, str] = {}
+    for pipeline in ((pipeline_payload.get("_embedded") or {}).get("pipelines") or []):
+        for stage in ((pipeline.get("_embedded") or {}).get("statuses") or []):
+            try:
+                stage_names[int(stage.get("id") or 0)] = str(stage.get("name") or "")
+            except (TypeError, ValueError):
+                continue
+
+    snapshots: list[dict] = []
+    for pipeline_id in pipeline_ids:
+        # A tenant config normally has just a handful of active stages.  One
+        # page is intentionally bounded; automatic webhooks will update it
+        # later, while manual refresh stays quick and polite to Kommo.
+        payload = await _tenant_kommo_request(
+            tenant_id, "GET", "leads", params={"filter[pipeline_id]": pipeline_id, "limit": 250, "with": "contacts"},
+        )
+        for lead in ((payload.get("_embedded") or {}).get("leads") or []):
+            try:
+                lead_id = int(lead.get("id") or 0)
+                status_id = int(lead.get("status_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not lead_id or (selected_stages.get(pipeline_id) and status_id not in selected_stages[pipeline_id]):
+                continue
+            contacts = ((lead.get("_embedded") or {}).get("contacts") or [])
+            contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
+            snapshots.append({
+                "kommo_lead_id": lead_id, "pipeline_id": pipeline_id, "status_id": status_id,
+                "stage_name": stage_names.get(status_id, "Mərhələ göstərilməyib"),
+                "name": str(lead.get("name") or "Adsız sövdələşmə"),
+                "contact_name": str(contact.get("name") or ""), "phone": _tenant_kommo_phone(contact),
+                "source_updated_at": _tenant_kommo_timestamp(lead.get("updated_at")), "raw": lead,
+            })
+    saved_deals = await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=snapshots)
+    saved_tasks = 0
+    if include_tasks:
+        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params={"filter[entity_type]": "2", "limit": 250})
+        task_rows = (tasks_payload.get("_embedded") or {}).get("tasks") or []
+        normalized_tasks = []
+        for task in task_rows:
+            try:
+                task_id = int(task.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not task_id:
+                continue
+            normalized_tasks.append({
+                "kommo_task_id": task_id, "kommo_lead_id": int(task.get("entity_id") or 0),
+                "text": str(task.get("text") or task.get("complete_till_at") or "Tapşırıq"),
+                "due_at": _tenant_kommo_timestamp(task.get("complete_till")),
+                "responsible_id": int(task.get("responsible_user_id") or 0),
+                "completed": bool(task.get("is_completed")), "raw": task,
+            })
+        saved_tasks = await asyncio.to_thread(upsert_tenant_crm_tasks, tenant_id=tenant_id, tasks=normalized_tasks)
+    await asyncio.to_thread(
+        append_tenant_audit_event, tenant_id=tenant_id, actor_telegram_id=int(profile["telegram_id"]),
+        action="crm_sync", entity_type="kommo", payload={"deals": saved_deals, "tasks": saved_tasks},
+    )
+    return {"deals": saved_deals, "tasks": saved_tasks}
+
+
+async def handle_platform_crm_deals(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not _tenant_has_module(profile, "deals"):
+        return web.json_response({"success": False, "error": "Sövdələşmələr üçün icazəniz yoxdur."}, status=403)
+    should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
+    sync_error = ""
+    if should_refresh:
+        try:
+            await _sync_tenant_crm(profile, include_tasks=False)
+        except TenantPlatformError as exc:
+            sync_error = str(exc)
+        except Exception:
+            logger.exception("Tenant CRM deal sync failed: tenant=%s", profile["tenant_id"])
+            sync_error = "Kommo məlumatları yenilənmədi. Son saxlanmış siyahı göstərilir."
+    values = request.rel_url.query
+    try:
+        pipeline_ids = [int(value) for value in values.getall("pipeline_id", [])]
+        status_ids = [int(value) for value in values.getall("status_id", [])]
+        limit, offset = int(values.get("limit") or 100), int(values.get("offset") or 0)
+    except ValueError:
+        return web.json_response({"success": False, "error": "Filtr düzgün deyil."}, status=400)
+    rows, total = await asyncio.to_thread(
+        list_tenant_crm_deals, tenant_id=profile["tenant_id"], search=str(values.get("search") or ""),
+        pipeline_ids=pipeline_ids, status_ids=status_ids, limit=limit, offset=offset,
+    )
+    return web.json_response({"success": True, "deals": rows, "total": total, "stale": bool(sync_error), "warning": sync_error})
+
+
+async def handle_platform_crm_deal(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not _tenant_has_module(profile, "deals"):
+        return web.json_response({"success": False, "error": "Sövdələşmə üçün icazəniz yoxdur."}, status=403)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except ValueError:
+        lead_id = 0
+    if lead_id <= 0:
+        return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
+    row = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
+    if not row:
+        return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
+    return web.json_response({"success": True, "deal": row})
+
+
+def _tenant_talk_id(talk: dict) -> int:
+    try:
+        return int((talk or {}).get("talk_id") or (talk or {}).get("id") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
+def _tenant_talk_channel(talk: dict) -> str:
+    try:
+        blob = json.dumps(talk or {}, ensure_ascii=False).casefold()
+    except (TypeError, ValueError):
+        blob = str(talk or "").casefold()
+    for key in ("instagram", "tiktok", "facebook", "telegram", "whatsapp"):
+        if key in blob:
+            return key
+    return "other"
+
+
+def _tenant_normalize_talk_message(message: dict, channel: str) -> dict:
+    nested = message.get("message") if isinstance(message.get("message"), dict) else {}
+    direction_raw = nested.get("direction") or message.get("direction") or nested.get("type") or message.get("type") or ""
+    incoming = str(direction_raw).casefold() in {"incoming", "in", "inbound"} or bool(nested.get("incoming") or message.get("incoming"))
+    text = nested.get("text") or message.get("text") or nested.get("caption") or message.get("caption") or ""
+    attachment = nested.get("attachment") if isinstance(nested.get("attachment"), dict) else message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
+    media = attachment.get("link") or attachment.get("url") or attachment.get("file_url") or ""
+    message_type = nested.get("type") or message.get("type") or attachment.get("type") or "text"
+    created = nested.get("created_at") or message.get("created_at") or nested.get("timestamp") or message.get("timestamp")
+    external = nested.get("msgid") or nested.get("id") or message.get("msgid") or message.get("id") or ""
+    return {
+        "external_id": str(external), "direction": "incoming" if incoming else "outgoing", "channel": channel,
+        "author_name": str(nested.get("author") or message.get("author") or ""), "body": str(text),
+        "message_type": str(message_type), "media_url": str(media), "happened_at": _tenant_kommo_timestamp(created), "raw": message,
+    }
+
+
+async def _sync_tenant_chat(profile: dict, lead_id: int) -> list[dict]:
+    """Read one recent Talk and cache messages within that tenant only."""
+    tenant_id = str(profile["tenant_id"])
+    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
+    if not deal:
+        raise TenantPlatformError("Sövdələşmə seçilmiş siyahıda deyil.")
+    payload = await _tenant_kommo_request(
+        tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50},
+    )
+    talks = ((payload.get("_embedded") or {}).get("talks") or [])
+    talks = [talk for talk in talks if isinstance(talk, dict) and _tenant_talk_id(talk)]
+    talks.sort(key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+    if not talks:
+        return await asyncio.to_thread(list_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id)
+    talk = talks[0]
+    talk_id = _tenant_talk_id(talk)
+    messages_payload = await _tenant_kommo_request(
+        tenant_id, "GET", f"talks/{talk_id}/messages", params={"limit": 100, "page": 1, "order[created_at]": "desc"},
+    )
+    raw_messages = ((messages_payload.get("_embedded") or {}).get("messages") or messages_payload.get("messages") or [])
+    normalized = [_tenant_normalize_talk_message(item, _tenant_talk_channel(talk)) for item in raw_messages if isinstance(item, dict)]
+    if normalized:
+        await asyncio.to_thread(upsert_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id, messages=normalized)
+        latest = max(normalized, key=lambda item: item.get("happened_at") or "")
+        await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=[{
+            **deal, "last_message": latest.get("body") or "", "last_message_at": latest.get("happened_at"),
+            "channel": latest.get("channel") or "", "raw": deal.get("raw") or {},
+        }])
+    return await asyncio.to_thread(list_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id)
+
+
+async def handle_platform_crm_chat(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
+        return web.json_response({"success": False, "error": "Çat tarixçəsi üçün icazəniz yoxdur."}, status=403)
+    try:
+        lead_id = int(request.rel_url.query.get("lead_id") or 0)
+    except ValueError:
+        lead_id = 0
+    if lead_id <= 0:
+        return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
+    warning = ""
+    if str(request.rel_url.query.get("refresh") or "").casefold() in {"1", "true", "yes"}:
+        try:
+            await _sync_tenant_chat(profile, lead_id)
+        except TenantPlatformError as exc:
+            warning = str(exc)
+        except Exception:
+            logger.exception("Tenant chat sync failed: tenant=%s lead=%s", profile["tenant_id"], lead_id)
+            warning = "Çat tarixçəsi yenilənmədi. Son saxlanmış tarixçə göstərilir."
+    rows = await asyncio.to_thread(list_tenant_crm_messages, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
+    return web.json_response({"success": True, "messages": rows, "stale": bool(warning), "warning": warning})
+
+
+async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not _tenant_has_module(profile, "deals"):
+        return web.json_response({"success": False, "error": "Mesaj göndərmək üçün icazəniz yoxdur."}, status=403)
+    try:
+        data = await request.json()
+        lead_id = int((data or {}).get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+        data = {}
+    text = str((data or {}).get("text") or "").strip()
+    if lead_id <= 0 or not text:
+        return web.json_response({"success": False, "error": "Sövdələşmə və mesaj mətni lazımdır."}, status=400)
+    if len(text) > 8000:
+        return web.json_response({"success": False, "error": "Mesaj çox uzundur."}, status=400)
+    tenant_id = str(profile["tenant_id"])
+    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
+    if not deal:
+        return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
+    try:
+        talks_payload = await _tenant_kommo_request(tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50})
+        talks = ((talks_payload.get("_embedded") or {}).get("talks") or [])
+        talks = [talk for talk in talks if isinstance(talk, dict) and _tenant_talk_id(talk)]
+        talks.sort(key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+        if not talks:
+            raise TenantPlatformError("Bu sövdələşmə üçün aktiv Kommo çatı tapılmadı.")
+        talk = talks[0]
+        await _tenant_kommo_request(tenant_id, "POST", f"talks/{_tenant_talk_id(talk)}/send_message", json_body={"text": text})
+        await asyncio.to_thread(upsert_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id, messages=[{
+            "external_id": f"local-{uuid.uuid4()}", "direction": "outgoing", "channel": _tenant_talk_channel(talk),
+            "author_name": profile.get("display_name") or "", "body": text, "message_type": "text",
+            "happened_at": datetime.now(timezone.utc).isoformat(), "raw": {"local": True},
+        }])
+        await asyncio.to_thread(append_tenant_audit_event, tenant_id=tenant_id, actor_telegram_id=int(profile["telegram_id"]),
+                                action="chat_message_sent", entity_type="lead", entity_id=str(lead_id), payload={"channel": _tenant_talk_channel(talk)})
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    return web.json_response({"success": True})
+
+
+async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not _tenant_has_module(profile, "tasks"):
+        return web.json_response({"success": False, "error": "Tapşırıqlar üçün icazəniz yoxdur."}, status=403)
+    should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
+    sync_error = ""
+    if should_refresh:
+        try:
+            await _sync_tenant_crm(profile, include_tasks=True)
+        except TenantPlatformError as exc:
+            sync_error = str(exc)
+        except Exception:
+            logger.exception("Tenant CRM task sync failed: tenant=%s", profile["tenant_id"])
+            sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
+    rows = await asyncio.to_thread(list_tenant_crm_tasks, tenant_id=profile["tenant_id"], limit=200)
+    return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
+
+
 async def handle_web_login_complete(request: web.Request) -> web.Response:
     chat_id = _consume_web_login_request(request.rel_url.query.get("token") or "")
     if not chat_id or not employee_access_profile(chat_id).get("active"):
@@ -19726,8 +20087,19 @@ async def serve_platform_onboarding(request: web.Request) -> web.Response:
 
 
 async def redirect_platform_app(request: web.Request) -> web.Response:
-    """Keep the public platform entry point inside the tenant-safe portal."""
-    raise web.HTTPFound("/setup")
+    """Serve the tenant-safe CRM workspace, never the legacy /webapp."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", "tenant-app.html"),
+        os.path.join(base_dir, "tenant-app.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        logger.error("Tenant CRM page not found; checked: %s", ", ".join(candidates))
+        return web.Response(status=404, text="Tenant CRM page not found")
+    response = web.FileResponse(html_path)
+    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
 
 
 async def serve_deal_page(request: web.Request) -> web.Response:
@@ -20567,10 +20939,16 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/access-requests", handle_platform_invite_requests)
     app_web.router.add_post("/api/platform/integrations/kommo", handle_platform_request_kommo)
     app_web.router.add_post("/api/platform/integrations/kommo/start", handle_platform_start_kommo_oauth)
+    app_web.router.add_post("/api/platform/integrations/disconnect", handle_platform_disconnect_integration)
     app_web.router.add_get("/api/platform/integrations/kommo/callback", handle_platform_kommo_callback)
     app_web.router.add_get("/api/platform/integrations/kommo/pipelines", handle_platform_kommo_pipelines)
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", handle_platform_save_kommo_pipelines)
     app_web.router.add_get("/api/platform/integrations/kommo/test", handle_platform_test_kommo_connection)
+    app_web.router.add_get("/api/platform/crm/deals", handle_platform_crm_deals)
+    app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
+    app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
+    app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
+    app_web.router.add_get("/api/platform/crm/tasks", handle_platform_crm_tasks)
     app_web.router.add_get("/register", serve_platform_onboarding)
     app_web.router.add_get("/login", serve_platform_onboarding)
     app_web.router.add_get("/setup", serve_platform_onboarding)
