@@ -485,9 +485,14 @@ def employee_access_profile(chat_id: int) -> dict:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return {"active": False, "role": "Əməkdaş", "permissions": []}
-    if cid in _RETIRED_EMPLOYEE_CHAT_IDS:
-        return {"active": False, "role": "Əməkdaş", "permissions": []}
     stored = _load_employee_access_records().get(str(cid))
+    # IDs of former staff stay closed by default.  A current employee can
+    # occasionally inherit/reuse one of those Telegram accounts; in that
+    # case only an explicit save by an administrator may reactivate it.
+    if cid in _RETIRED_EMPLOYEE_CHAT_IDS and not (
+        isinstance(stored, dict) and stored.get("reactivated_by_admin")
+    ):
+        return {"active": False, "role": "Əməkdaş", "permissions": [], "hot_order_skills": []}
     if isinstance(stored, dict):
         # Nizami is the canonical system administrator. An accidental edit in
         # the employee directory must never downgrade this account: otherwise
@@ -519,9 +524,16 @@ def remove_retired_employee_access() -> None:
     """
     retired_keys = {str(chat_id) for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS}
     records = _load_employee_access_records(force=True)
-    cleaned_records = {key: value for key, value in records.items() if key not in retired_keys}
+    reactivated_retired_ids = {
+        str(key) for key, value in records.items()
+        if str(key) in retired_keys and isinstance(value, dict) and value.get("reactivated_by_admin")
+    }
+    cleaned_records = {
+        key: value for key, value in records.items()
+        if key not in retired_keys or bool(isinstance(value, dict) and value.get("reactivated_by_admin"))
+    }
     users = load_users()
-    cleaned_users = {key: value for key, value in users.items() if key not in retired_keys}
+    cleaned_users = {key: value for key, value in users.items() if key not in retired_keys or key in reactivated_retired_ids}
 
     # The confirmed roster replacement is a one-time migration.  It removes
     # every old account from the existing directory, while the marker ensures
@@ -563,7 +575,7 @@ def remove_retired_employee_access() -> None:
     if should_mark_roster_cleanup:
         write_json(_ROSTER_CLEANUP_FILE, {"completed": True, "completed_at": datetime.now(tz=BAKU_TZ).isoformat()})
 
-    for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS:
+    for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS - {int(value) for value in reactivated_retired_ids}:
         try:
             remove_push_subscription(str(chat_id))
         except Exception as exc:
@@ -18448,6 +18460,8 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "hot_order_skills": hot_order_skills,
             "updated_at": now, "updated_by": manager_id,
         }
+        if employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
+            records[str(employee_id)]["reactivated_by_admin"] = manager_id
         # A Telegram ID can change when a colleague starts using another
         # account. Move the card rather than leaving the old ID active and
         # creating an identical second card.
