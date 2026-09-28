@@ -671,14 +671,18 @@ def update_onboarding(*, tenant_id: str, owner_id: int, patch: dict) -> dict:
     notifications = dict(current.get("notification_rules") or _DEFAULT_NOTIFICATIONS)
     if isinstance(safe_patch.get("notifications"), dict):
         notifications.update({key: bool(value) for key, value in safe_patch["notifications"].items() if key in _DEFAULT_NOTIFICATIONS})
+    company_name = str(safe_patch.get("company_name") or "").strip()[:120]
+    if len(company_name) < 2:
+        company_name = str(current.get("tenant_name") or "Yeni şirkət")[:120]
+    industry = str(safe_patch.get("industry") or current.get("industry") or "").strip()[:120]
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                UPDATE saas_tenants SET onboarding = %s::jsonb, modules = %s::jsonb,
+                UPDATE saas_tenants SET name = %s, industry = %s, onboarding = %s::jsonb, modules = %s::jsonb,
                     notification_rules = %s::jsonb, updated_at = now()
                 WHERE id = %s::uuid RETURNING *
-            """, (_json(onboarding), _json(modules), _json(notifications), tenant_id))
+            """, (company_name, industry, _json(onboarding), _json(modules), _json(notifications), tenant_id))
             row = cur.fetchone()
         conn.commit()
     return _tenant_payload(row)

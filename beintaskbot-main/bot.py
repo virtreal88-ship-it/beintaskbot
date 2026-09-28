@@ -19140,13 +19140,19 @@ async def handle_platform_register(request: web.Request) -> web.Response:
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
     try:
-        tenant = await asyncio.to_thread(
-            create_tenant,
-            name=str(data.get("company_name") or ""),
-            industry=str(data.get("industry") or ""),
-            owner_telegram_id=chat_id,
-            owner_name=_telegram_display_name(telegram),
-        )
+        # The first screen should not make a future customer fill a CRM
+        # questionnaire.  Telegram creates a private draft workspace; the AI
+        # asks for the company details after Kommo is safely connected.
+        existing = await asyncio.to_thread(tenants_for_user, chat_id)
+        tenant = next((item for item in existing if item.get("role") == "owner" and item.get("status") == "onboarding"), None)
+        if tenant is None:
+            tenant = await asyncio.to_thread(
+                create_tenant,
+                name=str(data.get("company_name") or "Yeni şirkət"),
+                industry=str(data.get("industry") or ""),
+                owner_telegram_id=chat_id,
+                owner_name=_telegram_display_name(telegram),
+            )
     except TenantPlatformError as exc:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
     except Exception:
@@ -19268,10 +19274,18 @@ def _safe_platform_patch(value) -> dict:
     return result
 
 
-def _platform_ai_fallback(message: str) -> tuple[str, dict]:
+def _platform_ai_fallback(message: str, current: dict | None = None) -> tuple[str, dict]:
+    """Keep the setup conversational even if the optional AI call is down."""
     text = str(message or "").strip()
+    onboarding = current if isinstance(current, dict) else {}
+    if not onboarding.get("team"):
+        question = "Əla. Komandada kimlər işləyir: menecerlər, satış əməkdaşları və ya ustalar? Təxminən neçə nəfərdir?"
+    elif not onboarding.get("sources"):
+        question = "Müştəriləriniz əsasən haradan yazır: WhatsApp, Instagram, TikTok, sayt, telefon və ya başqa kanal?"
+    else:
+        question = "Başa düşdüm. Hansı müraciətləri daha tez görmək istəyirsiniz: yeni satış, təkrar müraciət, yoxsa təcili sifariş?"
     return (
-        "Başa düşdüm. İndi müştərilərinizin əsasən haradan gəldiyini yazın: WhatsApp, Instagram, sayt, telefon və ya başqa kanal?",
+        question,
         {"notes": [text] if text else []},
     )
 
@@ -19292,7 +19306,8 @@ async def handle_platform_ai_onboarding(request: web.Request) -> web.Response:
         "Sən CRM Smart Assistant üçün ilkin quraşdırma köməkçisisən. Azərbaycan dilində qısa, anlayışlı cavab ver. "
         "İstifadəçinin sözlərindən yalnız bu JSON sahələrini təklif et: company_name, industry, team, sources, pipeline, "
         "modules, notifications, notes, completed_steps. Heç vaxt giriş məlumatı, token və ya parol istəmə. "
-        "Cavabı yalnız JSON kimi qaytar: {\"reply\":\"...\",\"patch\":{...}}. "
+        "Cavabı yalnız JSON kimi qaytar: {\"reply\":\"...\",\"patch\":{...}}. Reply yalnız bir növbəti, qısa sual olsun; "
+        "bir cavabda çox sual vermə. İlk cavabdan company_name və industry-ni çıxarmağa çalış. "
         "modules yalnız deals,tasks,customers,hot_orders,finance boolean açarlarından; notifications yalnız new_lead,incoming_message,task_assigned,task_overdue boolean açarlarından ibarət olsun."
     )
     prompt = f"Mövcud quraşdırma: {json.dumps(current, ensure_ascii=False)}\nİstifadəçinin cavabı: {message}"
@@ -19306,7 +19321,7 @@ async def handle_platform_ai_onboarding(request: web.Request) -> web.Response:
         )
         return str((response.choices[0].message.content if response.choices else "") or "").strip()
 
-    reply, patch = _platform_ai_fallback(message)
+    reply, patch = _platform_ai_fallback(message, current)
     try:
         raw = await asyncio.to_thread(_ask)
         parsed = json.loads(raw[raw.find("{"):raw.rfind("}") + 1]) if "{" in raw and "}" in raw else {}
