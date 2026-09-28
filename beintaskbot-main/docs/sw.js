@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-28-summary-layer';
+const CACHE_NAME = 'beintaskbot-v2026-09-28-nizami-queue';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

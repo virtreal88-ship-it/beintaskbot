@@ -9450,6 +9450,22 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         # path performs individual lead lookups and can delay the whole CRM.
         # The two business queues that Nizami must see (Yeni müraciətlər and
         # Nömrə alınıb) were added above directly from their Kommo stages.
+        # Finished records are not an active queue. A declined deal returns
+        # only after a new client message, which preserves the re-entry rule.
+        terminal_ids = {
+            int(item.get("id") or 0)
+            for item in deals
+            if _is_successful_deal(item)
+            or (_is_declined_deal(item) and not _has_terminal_reentry(int(item.get("id") or 0)))
+        }
+        if terminal_ids:
+            deals[:] = [item for item in deals if int(item.get("id") or 0) not in terminal_ids]
+            for key, stage_items in list(deals_by_stage.items()):
+                deals_by_stage[key] = [
+                    item for item in (stage_items or [])
+                    if int(item.get("id") or 0) not in terminal_ids
+                ]
+            stage_counts = {key: len(items or []) for key, items in deals_by_stage.items()}
 
     now = datetime.now(tz=BAKU_TZ)
     normal_tasks: list[dict] = []
@@ -12617,31 +12633,53 @@ def _nizami_sovdelesmeler_queue_kind(lead: dict | None) -> str:
         status_id = int(lead.get("status_id") or 0)
     except (TypeError, ValueError):
         return ""
-    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
-    label = _fold_stage_name(names.get(status_id, ""))
-    if "yeni muraciet" in label:
+    _stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID), fallback=False)
+    return _nizami_queue_kind_for_stage_label(names.get(status_id, ""))
+
+
+def _nizami_queue_kind_for_stage_label(name: str) -> str:
+    """Recognise the two working stages despite small label spelling changes."""
+    label = _fold_stage_name(name)
+    if "yeni" in label and ("muraciet" in label or "sorgu" in label):
         return "new_request"
-    if "nomre alin" in label:
+    if "nomre" in label and "alin" in label:
         return "hot"
     return ""
 
 
 async def _nizami_sovdelesmeler_queue_stages() -> list[tuple[int, str]]:
     """Return the Sövdələşmələr stages that must always be visible to Nizami."""
-    _stages, names, _ui = await asyncio.to_thread(
-        load_pipeline_stage_maps, int(SOVDELESMELER_PIPELINE_ID)
-    )
+    pipeline_id = int(SOVDELESMELER_PIPELINE_ID)
+    # A former fallback could cache another funnel's stage map after a short
+    # Kommo outage. Fetch this small catalogue directly so Yeni müraciətlər
+    # and Nömrə alınıb do not silently disappear from Nizami's queue.
+    names: dict[int, str] = {}
+    try:
+        response = await _kommo_get_async(
+            f"{KOMMO_BASE_URL}/api/v4/leads/pipelines/{pipeline_id}", timeout=12
+        )
+        if response.status_code == 200:
+            statuses = (response.json().get("_embedded") or {}).get("statuses") or []
+            stages, names, ui = _stage_maps_from_statuses(statuses)
+            if stages:
+                _pipeline_stage_cache[pipeline_id] = (stages, names, ui)
+        else:
+            logger.warning("Nizami queue stage catalogue returned %s", response.status_code)
+    except Exception as exc:
+        logger.warning("Nizami queue stage catalogue failed: %s", exc)
+    if not names:
+        _stages, names, _ui = await asyncio.to_thread(
+            load_pipeline_stage_maps, pipeline_id, fallback=False
+        )
     result: list[tuple[int, str]] = []
     for raw_status_id, raw_name in names.items():
         try:
             status_id = int(raw_status_id)
         except (TypeError, ValueError):
             continue
-        label = _fold_stage_name(raw_name)
-        if "yeni muraciet" in label:
-            result.append((status_id, "new_request"))
-        elif "nomre alin" in label:
-            result.append((status_id, "hot"))
+        queue_kind = _nizami_queue_kind_for_stage_label(raw_name)
+        if queue_kind:
+            result.append((status_id, queue_kind))
     # Keep the hot-lead queue available if the live stage catalogue happens
     # to be temporarily unavailable during an overview refresh.
     if not any(kind == "hot" for _status_id, kind in result):

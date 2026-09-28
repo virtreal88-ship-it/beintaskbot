@@ -872,8 +872,8 @@
     </div>
     <div class="sidebar-brand">
         <div class="sidebar-brand-text">
-        <h1>Bein Systems</h1>
-        <span>CRM</span>
+        <h1>CRM Smart Assistant</h1>
+        <span>BeinSystems</span>
         </div>
     </div>
     <div class="sidebar-nav">
@@ -917,8 +917,8 @@
 <div id="mobile-header" class="text-white pt-6 pb-3 px-4 flex justify-between items-center z-10 shrink-0">
     <div class="flex items-center gap-2">
     <div>
-        <h2 class="text-base font-extrabold tracking-wide">Bein Systems</h2>
-            <span class="text-[10px] text-gray-300">CRM Smart Assistant</span>
+        <h2 class="text-base font-extrabold tracking-wide">CRM Smart Assistant</h2>
+            <span class="text-[10px] text-gray-300">BeinSystems</span>
         </div>
     </div>
     <div class="text-right flex flex-col items-end">
@@ -2266,6 +2266,18 @@ function setPendingTabVisible() {
     paintMobileTabBar();
 }
 const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees','tab-settings'];
+const ACTIVE_TAB_STORAGE_PREFIX = 'crm_active_tab_v1_';
+function activeTabStorageKey() { return ACTIVE_TAB_STORAGE_PREFIX + String(CURRENT_USER_ID || 'guest'); }
+function getSavedActiveTab() {
+    try {
+        const tabId = String(localStorage.getItem(activeTabStorageKey()) || '');
+        return ALL_TAB_IDS.includes(tabId) && tabId !== 'tab-create' ? tabId : '';
+    } catch(_error) { return ''; }
+}
+function saveActiveTab(tabId) {
+    if(!ALL_TAB_IDS.includes(tabId) || tabId === 'tab-create') return;
+    try { localStorage.setItem(activeTabStorageKey(), tabId); } catch(_error) {}
+}
 const MOBILE_TAB_ORDERS = {
     default: ['tab-samil-deals','tab-tasks','tab-hot-orders','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
     // Nizami works first from tasks, then immediately from the client queue.
@@ -2392,11 +2404,12 @@ async function initApp() {
     setPendingTabVisible();
     applyDesktopSidebar();
     startAppPulse();
-    // The first screen after login is the employee's work queue.  Opening a
-    // funnel first made Nizami miss urgent tasks and was inconsistent with
-    // the mobile menu order.
-    if(HAS_NOTICES) await switchTab('tab-tasks', false);
-    else if(HAS_OWN_FUNNEL) await switchTab('tab-samil-deals', false);
+    // Keep the employee on the section they were using before a reload. The
+    // saved value is per Telegram user, so one phone cannot reopen another
+    // employee's previously selected section.
+    const savedTab = getSavedActiveTab();
+    const defaultTab = HAS_NOTICES ? 'tab-tasks' : (HAS_OWN_FUNNEL ? 'tab-samil-deals' : 'tab-tasks');
+    await switchTab(savedTab || defaultTab, false);
     applyHashRoute();
     await maybeOpenSharedDeal();
 }
@@ -7224,14 +7237,49 @@ async function requestDealSummary() {
     } catch(err) { toast(err.message || 'Xülasə alınmadı', true); }
     finally { if(btn) { btn.disabled = false; btn.classList.remove('loading'); } }
 }
-function closeDealSummaryModal() { document.getElementById('deal-summary-modal')?.remove(); }
+let _dealSummarySpeech = null;
+function stopDealSummarySpeech() {
+    try { window.speechSynthesis?.cancel(); } catch(_error) {}
+    _dealSummarySpeech = null;
+    const button = document.getElementById('deal-summary-speak');
+    if(button) button.textContent = '🔊 Səsləndir';
+}
+function speakDealSummary() {
+    const modal = document.getElementById('deal-summary-modal');
+    const text = String(modal?.dataset.summary || '').trim();
+    if(!text) return;
+    if(!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+        toast('Bu brauzerdə səsli oxuma dəstəklənmir.', true);
+        return;
+    }
+    const button = document.getElementById('deal-summary-speak');
+    if(_dealSummarySpeech) { stopDealSummarySpeech(); return; }
+    try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'az-AZ';
+        utterance.rate = 0.94;
+        const voice = window.speechSynthesis.getVoices().find(item => /(^az[-_]|azerbaijani)/i.test(String(item.lang || '') + ' ' + String(item.name || '')));
+        if(voice) utterance.voice = voice;
+        _dealSummarySpeech = utterance;
+        if(button) button.textContent = '■ Dayandır';
+        utterance.onend = utterance.onerror = () => {
+            if(_dealSummarySpeech === utterance) stopDealSummarySpeech();
+        };
+        window.speechSynthesis.speak(utterance);
+    } catch(_error) {
+        stopDealSummarySpeech();
+        toast('Səsli oxuma başladılmadı.', true);
+    }
+}
+function closeDealSummaryModal() { stopDealSummarySpeech(); document.getElementById('deal-summary-modal')?.remove(); }
 function openDealSummaryModal(summary, leadId, voiceCount) {
     const modal = document.createElement('div');
     modal.id = 'deal-summary-modal';
     // Summary must sit above the client card and the right-side details drawer.
     modal.style.cssText = 'position:fixed;inset:0;z-index:16000;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
     modal.onclick = event => { if(event.target === modal) closeDealSummaryModal(); };
-    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><div class="grid grid-cols-2 gap-2 mt-4"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
+    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><button id="deal-summary-speak" type="button" onclick="speakDealSummary()" class="mt-3 w-full border border-[#2481cc] text-[#2481cc] font-bold py-2.5 rounded-xl text-xs">🔊 Səsləndir</button><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
     modal.dataset.leadId = String(leadId || '');
     modal.dataset.summary = String(summary || '');
     document.body.appendChild(modal);
@@ -11205,7 +11253,9 @@ function showHotOrderProgress(message, error = false) {
     if(!progress) {
         progress = document.createElement('div');
         progress.id = 'hot-order-progress';
-        progress.style.cssText = 'position:fixed;left:16px;right:16px;top:max(16px, env(safe-area-inset-top));z-index:10150;box-shadow:0 12px 30px rgba(15,23,42,.22)';
+        // This must be above the customer card and every sheet. Previously it
+        // loaded correctly but was hidden behind the open deal dialog.
+        progress.style.cssText = 'position:fixed;left:16px;right:16px;top:max(16px, env(safe-area-inset-top));z-index:16100;box-shadow:0 12px 30px rgba(15,23,42,.22);pointer-events:none';
         document.body.appendChild(progress);
     }
     progress.className = `rounded-xl px-3 py-2 text-xs font-bold flex items-center gap-2 ${error ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-[#2481cc]'}`;
@@ -11364,6 +11414,7 @@ function switchTab(tabId, updateHash = true) {
     }
     closeMobileMoreMenu();
     paintMobileTabBar(tabId);
+    saveActiveTab(tabId);
 }
 
 // KPI System (salary employees)
@@ -11909,7 +11960,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=292');
+    const reg = await navigator.serviceWorker.register('sw.js?v=293');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();
