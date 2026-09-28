@@ -489,9 +489,15 @@ def employee_access_profile(chat_id: int) -> dict:
     # IDs of former staff stay closed by default.  A current employee can
     # occasionally inherit/reuse one of those Telegram accounts; in that
     # case only an explicit save by an administrator may reactivate it.
-    if cid in _RETIRED_EMPLOYEE_CHAT_IDS and not (
-        isinstance(stored, dict) and stored.get("reactivated_by_admin")
-    ):
+    explicit_admin_reactivation = isinstance(stored, dict) and (
+        stored.get("reactivated_by_admin")
+        # The first version of the employee form already persisted an active
+        # record with ``updated_by``. Honour that explicit admin action too,
+        # rather than requiring the administrator to save the same card a
+        # second time after this migration.
+        or (bool(stored.get("active")) and bool(stored.get("updated_by")))
+    )
+    if cid in _RETIRED_EMPLOYEE_CHAT_IDS and not explicit_admin_reactivation:
         return {"active": False, "role": "Əməkdaş", "permissions": [], "hot_order_skills": []}
     if isinstance(stored, dict):
         # Nizami is the canonical system administrator. An accidental edit in
@@ -526,11 +532,14 @@ def remove_retired_employee_access() -> None:
     records = _load_employee_access_records(force=True)
     reactivated_retired_ids = {
         str(key) for key, value in records.items()
-        if str(key) in retired_keys and isinstance(value, dict) and value.get("reactivated_by_admin")
+        if str(key) in retired_keys and isinstance(value, dict) and (
+            value.get("reactivated_by_admin")
+            or (bool(value.get("active")) and bool(value.get("updated_by")))
+        )
     }
     cleaned_records = {
         key: value for key, value in records.items()
-        if key not in retired_keys or bool(isinstance(value, dict) and value.get("reactivated_by_admin"))
+        if key not in retired_keys or key in reactivated_retired_ids
     }
     users = load_users()
     cleaned_users = {key: value for key, value in users.items() if key not in retired_keys or key in reactivated_retired_ids}
