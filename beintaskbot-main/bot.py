@@ -531,6 +531,38 @@ def remove_retired_employee_access() -> None:
     """
     retired_keys = {str(chat_id) for chat_id in _RETIRED_EMPLOYEE_CHAT_IDS}
     records = _load_employee_access_records(force=True)
+    stored_records = dict(records)
+    users = load_users()
+    stored_users = dict(users)
+
+    # A previous build could remove the destination of a deliberately moved
+    # employee card when that destination happened to be an old Telegram ID.
+    # The source keeps ``migrated_to`` and is proof of the admin's action, so
+    # recover that one card rather than making the person disappear.
+    for old_id, record in list(records.items()):
+        target_id = str(record.get("migrated_to") or "") if isinstance(record, dict) else ""
+        if not target_id or target_id not in retired_keys or target_id in records:
+            continue
+        restored = {key: value for key, value in record.items() if key != "migrated_to"}
+        restored.update({
+            "active": True,
+            "reactivated_by_admin": record.get("updated_by") or ADMIN_CHAT_ID,
+        })
+        records[target_id] = restored
+        if target_id not in users:
+            source_user = users.get(str(old_id)) if isinstance(users.get(str(old_id)), dict) else {}
+            try:
+                source_known = _KNOWN_EMPLOYEE_REGISTRATIONS.get(int(old_id), ("Əməkdaş", 0))
+            except (TypeError, ValueError):
+                source_known = ("Əməkdaş", 0)
+            users[target_id] = {
+                **source_user,
+                "name": str(source_user.get("name") or source_known[0] or "Əməkdaş"),
+                "role": str(source_user.get("role") or restored.get("role") or "Əməkdaş"),
+                "telegram_id": int(target_id),
+            }
+            if not users[target_id].get("kommo_user_id") and source_known[1]:
+                users[target_id]["kommo_user_id"] = source_known[1]
     reactivated_retired_ids = {
         str(key) for key, value in records.items()
         if str(key) in retired_keys and isinstance(value, dict) and (
@@ -542,7 +574,6 @@ def remove_retired_employee_access() -> None:
         key: value for key, value in records.items()
         if key not in retired_keys or key in reactivated_retired_ids
     }
-    users = load_users()
     cleaned_users = {key: value for key, value in users.items() if key not in retired_keys or key in reactivated_retired_ids}
 
     # The confirmed roster replacement is a one-time migration.  It removes
@@ -578,9 +609,9 @@ def remove_retired_employee_access() -> None:
             str(key): value for key, value in cleaned_records.items()
             if roster_chat_id(key, users.get(str(key), {})) in _ACTIVE_TEAM_CHAT_IDS
         }
-    if cleaned_records != records:
+    if cleaned_records != stored_records:
         _save_employee_access_records(cleaned_records)
-    if cleaned_users != users:
+    if cleaned_users != stored_users:
         save_users(cleaned_users)
     if should_mark_roster_cleanup:
         write_json(_ROSTER_CLEANUP_FILE, {"completed": True, "completed_at": datetime.now(tz=BAKU_TZ).isoformat()})
