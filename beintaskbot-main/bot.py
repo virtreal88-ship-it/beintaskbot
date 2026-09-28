@@ -18350,7 +18350,15 @@ def _employee_directory_rows() -> list[dict]:
     # Keep one key type throughout. Without this normalization an integer
     # built-in ID and the same string ID from users.json survive a set union
     # as two values and generate two identical cards.
-    ids = set(access) | {str(chat_id) for chat_id in _KNOWN_EMPLOYEE_REGISTRATIONS} | set(users_by_chat_id)
+    # When an administrator corrects a staff member's Telegram ID, retain a
+    # disabled alias for security but do not render that old identity as a
+    # second employee card.
+    migrated_old_ids = {
+        str(record.get("migrated_to")) and str(raw_id)
+        for raw_id, record in raw_access.items()
+        if isinstance(record, dict) and record.get("migrated_to")
+    }
+    ids = (set(access) | {str(chat_id) for chat_id in _KNOWN_EMPLOYEE_REGISTRATIONS} | set(users_by_chat_id)) - migrated_old_ids
     rows = []
     for raw_id in ids:
         try:
@@ -18402,6 +18410,10 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         employee_id = 0
     if employee_id <= 0:
         return web.json_response({"success": False, "error": "Telegram ID yanlışdır."}, status=400)
+    try:
+        previous_employee_id = int(data.get("previous_employee_id") or 0)
+    except (TypeError, ValueError):
+        previous_employee_id = 0
 
     records = _load_employee_access_records()
     users = load_users()
@@ -18416,6 +18428,8 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "updated_at": now, "updated_by": manager_id,
         }
     elif action == "upsert":
+        if previous_employee_id and previous_employee_id != employee_id and previous_employee_id == manager_id:
+            return web.json_response({"success": False, "error": "Öz Telegram ID-nizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
         name = str(data.get("name") or "").strip()[:120]
         if not name:
             current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
@@ -18433,7 +18447,25 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "hot_order_skills": hot_order_skills,
             "updated_at": now, "updated_by": manager_id,
         }
+        # A Telegram ID can change when a colleague starts using another
+        # account. Move the card rather than leaving the old ID active and
+        # creating an identical second card.
+        if previous_employee_id and previous_employee_id != employee_id:
+            old_record = records.get(str(previous_employee_id)) or {}
+            records[str(previous_employee_id)] = {
+                "role": old_record.get("role") or role,
+                "permissions": old_record.get("permissions") or permissions,
+                "active": False,
+                "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
+                "migrated_to": employee_id,
+                "updated_at": now,
+                "updated_by": manager_id,
+            }
         current = users.get(str(employee_id)) if isinstance(users.get(str(employee_id)), dict) else {}
+        if (not current) and previous_employee_id:
+            previous = users.get(str(previous_employee_id))
+            if isinstance(previous, dict):
+                current = dict(previous)
         # Persist the identity inside the card too, not only as a JSON key.
         # This keeps Telegram-ID login stable if older data used a CRM key.
         current.update({"name": name, "role": role, "telegram_id": employee_id})
@@ -18444,6 +18476,8 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         if kommo_user_id:
             current["kommo_user_id"] = kommo_user_id
         users[str(employee_id)] = current
+        if previous_employee_id and previous_employee_id != employee_id:
+            users.pop(str(previous_employee_id), None)
         save_users(users)
     else:
         return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
