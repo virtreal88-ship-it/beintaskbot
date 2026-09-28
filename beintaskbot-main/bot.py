@@ -695,6 +695,30 @@ def get_kommo_user_id_for_chat(chat_id: int) -> int | None:
         return 15532668  # Legacy display identity; new assignments use Admin
     return None
 
+
+def get_employee_whatsapp_number(chat_id: int) -> str:
+    """Return the WhatsApp Lite line assigned by the administrator.
+
+    The number is an employee property, not a hard-coded Telegram-ID rule.
+    It is used only to choose the matching Kommo Talk; the grey integration
+    itself remains responsible for delivery.
+    """
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return ""
+    info = load_users().get(str(cid))
+    if isinstance(info, dict):
+        digits = re.sub(r"\D", "", str(info.get("whatsapp_number") or ""))
+        if 8 <= len(digits) <= 15:
+            return digits
+    if is_rufat_chat(cid):
+        return re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
+    if is_admin(cid):
+        return re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER))
+    return ""
+
+
 def is_admin(chat_id: int) -> bool:
     """Return whether a Telegram chat belongs to an active administrator."""
     try:
@@ -10275,35 +10299,36 @@ def _wa_sender_digits_for_chat(chat_id) -> str:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return NIZAMI_WHATSAPP_NUMBER
+    configured = get_employee_whatsapp_number(cid)
+    if configured:
+        return configured
     mapped = WA_SENDER_NUMBERS.get(cid)
     if mapped:
         return re.sub(r"\D", "", str(mapped))
-    if is_rufat_chat(cid):
-        return re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
-    # Everyone except Rüfət writes through the shared WhatsApp Lite number.
     return NIZAMI_WHATSAPP_NUMBER
 
 
 def _known_wa_sender_digits() -> set[str]:
-    return {
+    numbers = {
         re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER)),
         re.sub(r"\D", "", str(NIZAMI_WHATSAPP_NUMBER)),
     }
+    for info in (load_users() or {}).values():
+        if not isinstance(info, dict):
+            continue
+        digits = re.sub(r"\D", "", str(info.get("whatsapp_number") or ""))
+        if 8 <= len(digits) <= 15:
+            numbers.add(digits)
+    return numbers
 
 
 def _hinted_wa_sender_digits(chat_id, hinted) -> str:
     default = _wa_sender_digits_for_chat(chat_id)
     wanted = re.sub(r"\D", "", str(hinted or ""))
-    if not wanted or wanted not in _known_wa_sender_digits():
-        return default
-    rufat_digits = re.sub(r"\D", "", str(RUFAT_WHATSAPP_NUMBER))
-    if wanted != rufat_digits:
-        return wanted
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return default
-    if is_admin(cid) or is_rufat_chat(cid):
+    # A browser must never select another employee's line.  The administrator
+    # assigns the one permitted line in the employee card; any stale client
+    # hint is ignored in favour of that saved value.
+    if wanted and wanted == default:
         return wanted
     return default
 
@@ -16542,7 +16567,6 @@ async def handle_api_deal_kommo_reply(request: web.Request) -> web.Response:
 
 
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
-    return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
@@ -16623,7 +16647,11 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
     sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
-    use_cloud = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
+    # Customer conversations in this CRM use Kommo's grey WhatsApp
+    # integration.  Sending via a leftover Cloud/WABA token bypasses the
+    # selected employee line and may deliver from the wrong account (or fail
+    # entirely).  Templates keep their own explicit WABA route elsewhere.
+    use_cloud = False
     if use_cloud:
         if not is_funnel_chat(chat_id) and not is_admin(chat_id):
             return web.json_response({"success": False, "error": "Access denied"}, status=403)
@@ -16715,7 +16743,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             sent_via_cloud = False
             if not last_error:
                 last_error = "WhatsApp mesajı göndərilmədi."
-    if not ok and reply_talk_id and channel != "whatsapp":
+    # Send through the resolved Kommo Talk for every supported channel.
+    # The prior condition excluded WhatsApp while the Cloud path is disabled,
+    # leaving the actual grey-WhatsApp send branch unreachable.
+    if not ok and reply_talk_id:
         kommo_text = text
         if upload_raw and not kommo_text:
             if is_voice:
@@ -18472,6 +18503,7 @@ def _employee_directory_rows() -> list[dict]:
             "chat_id": chat_id,
             "name": str(info.get("name") or _KNOWN_EMPLOYEE_REGISTRATIONS.get(chat_id, ("", 0))[0] or "Əməkdaş").strip(),
             "kommo_user_id": int(info.get("kommo_user_id") or 0) or None,
+            "whatsapp_number": get_employee_whatsapp_number(chat_id),
             "role": profile["role"],
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
@@ -18576,8 +18608,15 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             kommo_user_id = int(data.get("kommo_user_id") or 0)
         except (TypeError, ValueError):
             kommo_user_id = 0
+        whatsapp_number = re.sub(r"\D", "", str(data.get("whatsapp_number") or ""))
+        if whatsapp_number and not 8 <= len(whatsapp_number) <= 15:
+            return web.json_response({"success": False, "error": "WhatsApp nömrəsini düzgün yazın."}, status=400)
         if kommo_user_id:
             current["kommo_user_id"] = kommo_user_id
+        if whatsapp_number:
+            current["whatsapp_number"] = whatsapp_number
+        else:
+            current.pop("whatsapp_number", None)
         users[str(employee_id)] = current
         if previous_employee_id and previous_employee_id != employee_id:
             users.pop(str(previous_employee_id), None)
@@ -18749,6 +18788,7 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "role": profile["role"],
         "is_admin": is_admin(chat_id),
         "permissions": profile["permissions"],
+        "whatsapp_number": get_employee_whatsapp_number(chat_id),
     })
 
 

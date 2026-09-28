@@ -1596,6 +1596,7 @@ const PERSISTED_FORM_IDS = [
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeePermissions = new Set();
 let employeeDirectory = [];
+let employeeWhatsAppNumber = '';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
 const SALARY_IDS = ['6824377548','7329891614','1289510272','6596538872','1142054888'];
@@ -2227,6 +2228,7 @@ async function loadEmployeeSession() {
     }
     isAdmin = !!data.is_admin;
     employeePermissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
+    employeeWhatsAppNumber = String(data.whatsapp_number || '').replace(/\D/g, '');
     HAS_OWN_FUNNEL = hasEmployeePermission('deals');
     HAS_NOTICES = hasEmployeePermission('tasks');
     HAS_CHATS = hasEmployeePermission('customers');
@@ -5864,11 +5866,13 @@ function formatWaPretty(value) {
     return digits ? '+' + digits : '';
 }
 function dealStaffLine() {
+    if(employeeWhatsAppNumber) return {name: '', phone:formatWaPretty(employeeWhatsAppNumber)};
     if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return {name:'Rüfət Həsənzadə', phone:'+994 10 213 51 05'};
     if(CURRENT_USER_ID === '1628569350') return {name:'Nizami Qasımov', phone:'+994 50 207 22 40'};
     return null;
 }
 function dealWaSenderPhone() {
+    if(employeeWhatsAppNumber) return '+' + employeeWhatsAppNumber;
     if(['6824377548','7962757442'].includes(CURRENT_USER_ID)) return '+994102135105';
     return '+994502072240';
 }
@@ -9678,7 +9682,7 @@ function noticeClientHeaderHtml(deal) {
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
     const backLabel = _noticeClientOverlay ? '← Sövdələşmələr' : '‹';
-    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə: yalnız oxumaq üçün</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
+    return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə · Kommo ilə cavab</span></div></div><div class="notice-history-actions"><button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
 }
 function openNoticeDealInfo() {
     const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
@@ -9690,6 +9694,17 @@ function refreshNoticeHistory() {
 }
 let _noticeReplyBusy = false;
 let _noticeLastSentForLearning = null;
+function noticeReplyTarget() {
+    const rows = ((_dealViewState && _dealViewState.messages) || []).filter(Boolean);
+    const supported = new Set(['whatsapp', 'instagram', 'facebook', 'tiktok', 'telegram']);
+    const preferred = [...rows].reverse().find(row => row.incoming && supported.has(String(row.channel || '').toLowerCase()));
+    const fallback = preferred || [...rows].reverse().find(row => supported.has(String(row.channel || '').toLowerCase()));
+    return {
+        channel: String((fallback && fallback.channel) || 'whatsapp').toLowerCase(),
+        talkId: Number((fallback && fallback.talk_id) || 0),
+        incomingPhone: String((fallback && fallback.phone) || '')
+    };
+}
 function noticeAiPayload() {
     const input = document.getElementById('notice-reply-input');
     return {
@@ -9734,10 +9749,11 @@ async function sendNoticeKommoReply() {
     _noticeReplyBusy = true;
     if(button) { button.disabled = true; button.textContent = '...'; }
     try {
-        const response = await fetch(API_BASE + '/api/deal/chat/kommo-reply', {
+        const target = noticeReplyTarget();
+        const response = await fetch(API_BASE + '/api/deal/chat/send', {
             method: 'POST',
             headers: {'Content-Type':'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({lead_id: _noticeHistoryLeadId, text})
+            body: JSON.stringify({lead_id: _noticeHistoryLeadId, text, channel:target.channel, talk_id:target.talkId, sender_phone:dealWaSenderPhone(), customer_phone:openChatCustomerPhone(), incoming_phone:target.incomingPhone})
         });
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Mesaj göndərilmədi');
@@ -10978,6 +10994,7 @@ function openEmployeeEditor(chatId = null) {
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">Telegram ID <span class="text-rose-500">— giriş üçün yeganə kod</span></label><input id="employee-editor-chat-id" value="${employee?.chat_id || ''}" inputmode="numeric" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Məsələn: 123456789">
         <p class="text-[10px] leading-4 text-slate-400 mt-1.5">Əməkdaş giriş düyməsinə basanda bot ona öz Telegram ID-sini göstərir. Həmin rəqəmi yalnız buraya yazın.</p>
         <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
+        <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
         <label class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span><select id="employee-editor-hot-skills" multiple class="mt-1.5 w-full min-h-[84px] p-2 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="all" ${skills.has('all') ? 'selected' : ''}>Bütün sifarişlər</option><option value="montaj" ${skills.has('montaj') ? 'selected' : ''}>Montaj</option><option value="temir" ${skills.has('temir') ? 'selected' : ''}>Təmir</option><option value="catdirilma" ${skills.has('catdirilma') ? 'selected' : ''}>Çatdırılma</option><option value="servis" ${skills.has('servis') ? 'selected' : ''}>Servis</option><option value="digər" ${skills.has('digər') ? 'selected' : ''}>Digər</option></select></label>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
@@ -11015,7 +11032,7 @@ async function saveEmployee() {
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
     const hotOrderSkills = [...(document.getElementById('employee-editor-hot-skills')?.selectedOptions || [])].map(option => option.value);
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
-    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked};
+    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));
