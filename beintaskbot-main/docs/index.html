@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="336">
+    <meta name="pwa-build" content="337">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -243,6 +243,14 @@
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
             #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
+            /* The Linear queue is intentionally a long vertical list.  Keep
+               the page header fixed and give its cards their own scrollbar. */
+            #screen-pending.active { overflow:hidden; }
+            #screen-pending.active #linear-tesdiq-section:not([hidden]),
+            #screen-pending.active #system-pending-section:not([hidden]) { flex:1; min-height:0; }
+            #screen-pending.active #linear-tesdiq-section:not([hidden]) { display:flex; flex-direction:column; }
+            #screen-pending.active #linear-tesdiq-list { min-height:0; overflow-y:auto; }
+            #screen-pending.active #system-pending-section:not([hidden]) { overflow-y:auto; }
             #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
             #pending-actions-container.samil-kanban-board { grid-auto-columns:minmax(300px, 320px); height:100%; min-height:0; gap:14px; overflow-x:visible; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
@@ -1243,10 +1251,16 @@
             <button onclick="refreshPendingQueue()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
         <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
-            <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Linear</button>
-            <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Sistem sorğuları</button>
+            <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
+            <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
         </div>
-        <section id="linear-tesdiq-section" class="bg-white rounded-2xl border border-violet-100 shadow-sm overflow-hidden">
+        <section id="system-pending-section">
+            <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none mb-3" aria-label="Növ"></select>
+            <div class="samil-kanban-wrap custom-scroll">
+                <div id="pending-actions-container" class="samil-kanban-board"></div>
+            </div>
+        </section>
+        <section id="linear-tesdiq-section" class="bg-white rounded-2xl border border-violet-100 shadow-sm overflow-hidden" hidden>
             <div class="flex items-center justify-between px-3 py-2.5 bg-violet-50/70 border-b border-violet-100">
                 <div>
                     <div class="text-xs font-extrabold text-violet-900">Linear tapşırıqları</div>
@@ -1255,12 +1269,6 @@
                 <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
             </div>
             <div id="linear-tesdiq-list" class="divide-y divide-violet-50"></div>
-        </section>
-        <section id="system-pending-section" hidden>
-            <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none mb-3" aria-label="Növ"></select>
-            <div class="samil-kanban-wrap custom-scroll">
-                <div id="pending-actions-container" class="samil-kanban-board"></div>
-            </div>
         </section>
     </div>
 
@@ -3014,7 +3022,9 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 let linearTesdiqLoaded = false;
 let linearTesdiqActionPending = false;
-let pendingQueue = localStorage.getItem('pending_queue') || 'linear';
+// System requests are the primary confirmation work. Linear is a separate
+// queue opened explicitly from the second tab.
+let pendingQueue = 'system';
 async function loadLinearTesdiq(forceRefresh = false) {
     const section = document.getElementById('linear-tesdiq-section');
     const list = document.getElementById('linear-tesdiq-list');
@@ -3056,14 +3066,15 @@ async function loadLinearTesdiq(forceRefresh = false) {
             const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
             const url = String(item.url || '');
             const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
-            const actionButtons = sourceId ? `<div class="mt-3 flex items-center gap-2">
-                    <label class="sr-only" for="linear-status-${sourceId}">Status</label>
-                    <select id="linear-status-${sourceId}" onchange="selectLinearStatus(this, '${sourceId}')" class="min-w-0 flex-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-bold text-violet-800 outline-none">
-                        <option value="" selected disabled>Statusu dəyiş</option>
-                        <option value="confirm">Triage</option>
-                        <option value="discussion">Backlog</option>
-                    </select>
-                    <button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="shrink-0 rounded-lg border border-rose-200 px-2 py-1.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50 active:scale-[.98]">Sil</button>
+            const priorityOptions = [
+                [0, 'Prioritet yoxdur'], [1, 'Təcili'], [2, 'Yüksək'], [3, 'Orta'], [4, 'Aşağı']
+            ].map(([value, label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
+            const actionButtons = sourceId ? `<div class="mt-3 flex flex-wrap items-center gap-1.5">
+                    <label class="sr-only" for="linear-priority-${sourceId}">Prioritet</label>
+                    <select id="linear-priority-${sourceId}" onchange="changeLinearPriority(this, '${sourceId}', ${Number(item.priority) || 0})" class="min-w-[138px] flex-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1.5 text-[10px] font-bold text-violet-800 outline-none">${priorityOptions}</select>
+                    <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Triage</button>
+                    <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>
+                    <button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="rounded-lg border border-rose-200 px-2 py-1.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50 active:scale-[.98]">Sil</button>
                 </div>` : '';
             return `<article class="px-3 py-3 bg-white">
                 <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="text-[10px] font-extrabold text-violet-500">${issueId}</div><div class="text-sm font-bold text-slate-800 mt-0.5">${title}</div></div>${safeLink}</div>
@@ -3089,27 +3100,30 @@ async function loadLinearTesdiq(forceRefresh = false) {
     }
 }
 
-function selectLinearStatus(select, issueId) {
-    const action = select && select.value;
-    if(!action) return;
-    select.value = '';
-    runLinearTesdiqAction(action, issueId);
+function changeLinearPriority(select, issueId, previousPriority) {
+    const priority = Number(select && select.value);
+    if(!Number.isInteger(priority) || priority < 0 || priority > 4 || priority === Number(previousPriority)) return;
+    runLinearTesdiqAction('priority', issueId, priority, select, Number(previousPriority));
 }
 
-async function runLinearTesdiqAction(action, issueId) {
+async function runLinearTesdiqAction(action, issueId, priority = null, select = null, previousPriority = null) {
     if(linearTesdiqActionPending || !issueId) return;
     const texts = {
         confirm: 'Bu tapşırıq Triage mərhələsinə keçirilsin?',
         discussion: 'Bu tapşırıq Backlog mərhələsinə keçirilsin?',
-        delete: 'Bu tapşırıq Linear-dan həmişəlik silinsin? Bu əməliyyat geri qaytarılmır.'
+        delete: 'Bu tapşırıq Linear-dan həmişəlik silinsin? Bu əməliyyat geri qaytarılmır.',
+        priority: 'Tapşırığın prioriteti dəyişdirilsin?'
     };
-    if(!window.confirm(texts[action] || 'Əməliyyatı yerinə yetirmək istəyirsiniz?')) return;
+    if(!window.confirm(texts[action] || 'Əməliyyatı yerinə yetirmək istəyirsiniz?')) {
+        if(select && previousPriority !== null) select.value = String(previousPriority);
+        return;
+    }
     linearTesdiqActionPending = true;
     try {
         const response = await fetch(API_BASE + '/api/linear/tesdiq', {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-TG-User-ID': CURRENT_USER_ID},
-            body: JSON.stringify({action, issue_id: issueId})
+            body: JSON.stringify({action, issue_id: issueId, priority})
         });
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırığı dəyişdirilmədi.');
@@ -3118,6 +3132,7 @@ async function runLinearTesdiqAction(action, issueId) {
         await loadLinearTesdiq(true);
     } catch(error) {
         toast(error.message || 'Linear tapşırığı dəyişdirilmədi.', true);
+        if(select && previousPriority !== null) select.value = String(previousPriority);
     } finally {
         linearTesdiqActionPending = false;
     }
@@ -3557,7 +3572,6 @@ function stopPendingActionPolling() {
 async function showPendingQueue(queue, forceRefresh = false) {
     if(!isAdmin) return;
     pendingQueue = queue === 'system' ? 'system' : 'linear';
-    localStorage.setItem('pending_queue', pendingQueue);
     const linearSection = document.getElementById('linear-tesdiq-section');
     const systemSection = document.getElementById('system-pending-section');
     const linearButton = document.getElementById('pending-queue-linear');
@@ -7494,6 +7508,9 @@ async function requestDealAiReply() {
             persistOpenChatDraft();
         }
         toast('AI cavab hazırdır');
+        if(Number(d.untranscribed_voice_count || 0) > 0) {
+            toast(`${d.untranscribed_voice_count} səs yazısı AI üçün mətnə çevrilmədi.`, true);
+        }
     } catch(err) { toast(err.message || 'AI cavab alınmadı', true); }
     finally {
         _dealAiBusy = false;
@@ -7514,7 +7531,7 @@ async function requestDealSummary() {
         });
         const d = await r.json().catch(() => ({}));
         if(!r.ok || !d.success) throw new Error(d.error || 'Xülasə alınmadı');
-        openDealSummaryModal(d.summary, _dealViewState.id, d.transcribed_voice_count || 0);
+        openDealSummaryModal(d.summary, _dealViewState.id, d.transcribed_voice_count || 0, d.untranscribed_voice_count || 0);
     } catch(err) { toast(err.message || 'Xülasə alınmadı', true); }
     finally {
         hideDealSummaryProgress();
@@ -7532,13 +7549,16 @@ function showDealSummaryProgress() {
 }
 function hideDealSummaryProgress() { document.getElementById('deal-summary-progress')?.remove(); }
 function closeDealSummaryModal() { document.getElementById('deal-summary-modal')?.remove(); }
-function openDealSummaryModal(summary, leadId, voiceCount) {
+function openDealSummaryModal(summary, leadId, voiceCount, untranscribedVoiceCount = 0) {
     const modal = document.createElement('div');
     modal.id = 'deal-summary-modal';
     // Summary must sit above the client card and the right-side details drawer.
     modal.style.cssText = 'position:fixed;inset:0;z-index:16000;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
     modal.onclick = event => { if(event.target === modal) closeDealSummaryModal(); };
-    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-sm font-bold text-slate-500 px-2 py-1">Bağla</button></div><textarea id="deal-summary-text" class="mt-3 w-full min-h-[180px] rounded-2xl bg-slate-50 border border-slate-100 p-3 text-sm leading-6 text-slate-700" aria-label="Xülasəni redaktə edin">${escapeHtml(summary || '')}</textarea><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
+    const voiceStatus = Number(untranscribedVoiceCount || 0) > 0
+        ? `${Number(untranscribedVoiceCount)} səs yazısı mətnə çevrilmədi və xülasəyə daxil edilmədi.`
+        : (voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.');
+    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceStatus}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-sm font-bold text-slate-500 px-2 py-1">Bağla</button></div><textarea id="deal-summary-text" class="mt-3 w-full min-h-[180px] rounded-2xl bg-slate-50 border border-slate-100 p-3 text-sm leading-6 text-slate-700" aria-label="Xülasəni redaktə edin">${escapeHtml(summary || '')}</textarea><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
     modal.dataset.leadId = String(leadId || '');
     modal.dataset.summary = String(summary || '');
     document.body.appendChild(modal);
@@ -10138,7 +10158,7 @@ async function requestNoticeSummary() {
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({mode:'summary', lead_id:_noticeHistoryLeadId, messages})});
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Xülasə alınmadı');
-        openDealSummaryModal(payload.summary, _noticeHistoryLeadId, payload.transcribed_voice_count || 0);
+        openDealSummaryModal(payload.summary, _noticeHistoryLeadId, payload.transcribed_voice_count || 0, payload.untranscribed_voice_count || 0);
     } catch(error) { toast(error.message || 'Xülasə alınmadı', true); }
     finally {
         hideDealSummaryProgress();
@@ -10162,6 +10182,9 @@ async function requestNoticeAiReply() {
         if(!response.ok || !payload.success || !payload.text) throw new Error(payload.error || 'AI cavab alınmadı');
         if(input) { input.value = payload.text; resizeDealChatInput(input); input.focus(); }
         toast('AI cavab hazırdır');
+        if(Number(payload.untranscribed_voice_count || 0) > 0) {
+            toast(`${payload.untranscribed_voice_count} səs yazısı AI üçün mətnə çevrilmədi.`, true);
+        }
     } catch(error) { toast(error.message || 'AI cavab alınmadı', true); }
     finally {
         _noticeReplyBusy = false;

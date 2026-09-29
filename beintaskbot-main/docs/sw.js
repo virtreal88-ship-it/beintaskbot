@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-tesdiq';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-scroll';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

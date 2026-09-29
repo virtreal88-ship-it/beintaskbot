@@ -17736,7 +17736,7 @@ def _is_history_audio(item: dict) -> bool:
     return kind in {"audio", "voice", "ptt", "call", "call_in", "call_out"} or bool(re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", source, re.I))
 
 
-async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple[list[str], int]:
+async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple[list[str], int, int]:
     """Use the complete recent 30-message context for both reply and summary.
 
     Audio is processed in order and persisted after the first transcription.
@@ -17745,6 +17745,7 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
     """
     lines: list[str] = []
     transcribed = 0
+    unavailable_voice = 0
     for item in rows[-30:]:
         if not isinstance(item, dict):
             continue
@@ -17758,7 +17759,11 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
                 label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
                 lines.append(f"{who} ({label}): {transcript}")
                 transcribed += 1
-    return lines, transcribed
+            else:
+                # Never silently present an incomplete voice context as if it
+                # had been included in the AI answer or summary.
+                unavailable_voice += 1
+    return lines, transcribed, unavailable_voice
 
 
 _AI_REPLY_EXAMPLES_FILE = "ai_reply_examples.json"
@@ -17930,8 +17935,18 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         mode = "reply"
     # The same recent context powers both an AI reply and a summary.  A reply
     # must understand a voice note or call recording just as much as Xülasə.
-    lines, transcribed_count = await _ai_history_lines(history_rows, lead)
+    lines, transcribed_count, untranscribed_voice_count = await _ai_history_lines(history_rows, lead)
     history = "\n".join(lines) or "Yazışma yoxdur."
+    def _ai_error_message(exc: Exception) -> str:
+        detail = str(exc or "").casefold()
+        if "credit_balance_exhausted" in detail or "no credits remaining" in detail:
+            return "OpenAI API balansında kredit qalmayıb. Davam etmək üçün OpenAI Billing bölməsində kredit əlavə edin."
+        if "insufficient_quota" in detail or "spend limit" in detail:
+            return "OpenAI API limiti bitib. OpenAI Billing bölməsində balans və limitləri yoxlayın."
+        if "model does not exist" in detail or "model_not_found" in detail:
+            return "OpenAI modeli bu açar üçün əlçatan deyil. Administrator AI inteqrasiyasını yoxlamalıdır."
+        return "AI cavab alınmadı. Bir az sonra yenidən yoxlayın."
+
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)
         system = (
@@ -17965,10 +17980,16 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             suggestion = await asyncio.to_thread(_ask_reply)
         except Exception as exc:
             logger.error("Deal AI reply failed: %s", exc)
-            return web.json_response({"success": False, "error": "AI cavab alınmadı."}, status=502)
+            return web.json_response({"success": False, "error": _ai_error_message(exc)}, status=502)
         if not suggestion:
             return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
-        return web.json_response({"success": True, "mode": "reply", "text": suggestion})
+        return web.json_response({
+            "success": True,
+            "mode": "reply",
+            "text": suggestion,
+            "transcribed_voice_count": transcribed_count,
+            "untranscribed_voice_count": untranscribed_voice_count,
+        })
 
     system = (
         "Sən CRM köməkçisisən. Dialoqu Azərbaycan dilində qısa xülasə et: məqsəd, razılaşma, "
@@ -17992,18 +18013,19 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         )
         return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
 
-    summary = ""
     try:
         summary = await asyncio.to_thread(_ask_summary)
     except Exception as exc:
         logger.error("Deal AI summary failed: %s", exc)
+        return web.json_response({"success": False, "error": _ai_error_message(exc)}, status=502)
     if not summary:
-        summary = _fallback_chat_summary(history)
+        return web.json_response({"success": False, "error": "AI boş xülasə verdi."}, status=502)
     return web.json_response({
         "success": True,
         "mode": "summary",
         "summary": summary,
         "transcribed_voice_count": transcribed_count,
+        "untranscribed_voice_count": untranscribed_voice_count,
     })
 
 
@@ -19414,6 +19436,26 @@ def _linear_move_issue(issue_id: str, state_id: str) -> dict:
     return result.get("issue") or {}
 
 
+def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
+    """Update only the Linear priority while the issue remains in Təsdiq."""
+    if priority not in {0, 1, 2, 3, 4}:
+        raise RuntimeError("Linear prioriteti düzgün deyil.")
+    _linear_assert_confirmation_issue(issue_id)
+    payload = _linear_graphql("""
+    mutation UpdateLinearIssuePriority($id: String!, $priority: Int!) {
+      issueUpdate(id: $id, input: { priority: $priority }) {
+        success
+        issue { id identifier priority }
+      }
+    }
+    """, {"id": issue_id, "priority": priority})
+    result = payload.get("issueUpdate") or {}
+    if not result.get("success"):
+        raise RuntimeError("Linear tapşırığının prioriteti dəyişdirilmədi.")
+    _invalidate_linear_tesdiq_cache()
+    return result.get("issue") or {}
+
+
 def _linear_delete_issue(issue_id: str) -> None:
     """Delete an issue using Linear's native mutation.
 
@@ -19446,7 +19488,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
-        if not issue_id or action not in {"confirm", "discussion", "delete"}:
+        if not issue_id or action not in {"confirm", "discussion", "priority", "delete"}:
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
             if action == "confirm":
@@ -19455,6 +19497,13 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             if action == "discussion":
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, LINEAR_BACKLOG_STATE_ID)
                 return web.json_response({"success": True, "message": "Tapşırıq Backlog mərhələsinə keçirildi.", "issue": moved})
+            if action == "priority":
+                try:
+                    priority = int(data.get("priority"))
+                except (TypeError, ValueError):
+                    return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
+                updated = await asyncio.to_thread(_linear_update_issue_priority, issue_id, priority)
+                return web.json_response({"success": True, "message": "Tapşırığın prioriteti dəyişdirildi.", "issue": updated})
             await asyncio.to_thread(_linear_delete_issue, issue_id)
             return web.json_response({"success": True, "message": "Tapşırıq Linear-dan silindi."})
         except RuntimeError as exc:
