@@ -17799,6 +17799,39 @@ def _is_history_audio(item: dict) -> bool:
     return kind in {"audio", "voice", "ptt", "call", "call_in", "call_out"} or bool(re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", source, re.I))
 
 
+def _history_message_is_incoming(item: dict) -> bool:
+    """Normalize Kommo's mixed direction fields for the AI conversation.
+
+    Different history sources represent booleans as actual booleans, integers,
+    or strings.  In particular, ``"false"`` is truthy in Python and used to
+    make an outgoing manager message look like a customer message to AI.
+    """
+    incoming = item.get("incoming")
+    if isinstance(incoming, bool):
+        return incoming
+    if isinstance(incoming, (int, float)):
+        return bool(incoming)
+    if isinstance(incoming, str):
+        normalized = incoming.strip().casefold()
+        if normalized in {"true", "1", "yes", "in", "incoming", "received", "client", "contact"}:
+            return True
+        if normalized in {"false", "0", "no", "out", "outgoing", "sent", "manager", "user"}:
+            return False
+
+    direction = str(item.get("direction") or item.get("message_direction") or "").strip().casefold()
+    if direction in {"in", "incoming", "received", "client", "contact"}:
+        return True
+    if direction in {"out", "outgoing", "sent", "manager", "user"}:
+        return False
+
+    outgoing = item.get("outgoing")
+    if isinstance(outgoing, bool):
+        return not outgoing
+    if isinstance(outgoing, (int, float)):
+        return not bool(outgoing)
+    return False
+
+
 async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple[list[str], int, int]:
     """Use the complete recent 30-message context for both reply and summary.
 
@@ -17813,7 +17846,10 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
-        who = "Müştəri" if item.get("incoming") else "Menecer"
+        # This is deliberately independent from the visible author field:
+        # customer messages are always inbound; every outbound row is the
+        # sales manager's message, even when Kommo did not return a name.
+        who = "Müştəri" if _history_message_is_incoming(item) else "Satış meneceri"
         if text:
             lines.append(f"{who}: {text[:400]}")
         if _is_history_audio(item):
@@ -18020,6 +18056,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         system = (
             "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp cavabı yaz. "
             "Məqsəd: söhbəti irəli aparmaq, etirazı yumşaq bağlamaq, növbəti addımı təklif etmək. "
+            "Tarixçədə ‘Müştəri’ yalnız qarşı tərəfin daxil olan mesajıdır; ‘Satış meneceri’ yalnız bizim çıxan mesajımızdır. "
+            "Bu rolları heç vaxt qarışdırma və müştərinin artıq dediyini menecerin sözü kimi təkrar etmə. "
             "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
         )
         user = (
@@ -18061,7 +18099,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
     system = (
         "Sən CRM köməkçisisən. Dialoqu Azərbaycan dilində qısa xülasə et: məqsəd, razılaşma, "
-        "açıq suallar və növbəti addım. 5-8 cümlə. Yalnız xülasəni yaz."
+        "açıq suallar və növbəti addım. ‘Müştəri’ daxil olan, ‘Satış meneceri’ isə çıxan mesajlardır; rolları dəqiq saxla. "
+        "5-8 cümlə. Yalnız xülasəni yaz."
     )
     user = (
         f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
