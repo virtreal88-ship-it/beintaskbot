@@ -17502,8 +17502,8 @@ def _fallback_chat_summary(history: str) -> str:
 
 
 def _summary_audio_source(item: dict) -> str:
-    """Return a safe direct source for a voice note included in chat history."""
-    source = str(item.get("media_url") or item.get("media") or "").strip()
+    """Return a safe direct source for a voice or call recording in history."""
+    source = str(item.get("media_url") or item.get("media") or item.get("voice_url") or "").strip()
     file_uuid = str(item.get("file_uuid") or "").strip()
     if source.startswith("/api/voice/"):
         voice_id = source.rsplit("/", 1)[-1]
@@ -17518,12 +17518,30 @@ def _summary_audio_source(item: dict) -> str:
     return source if _is_allowed_media_url(source) else ""
 
 
+_AI_AUDIO_TRANSCRIPTS_FILE = "ai_audio_transcripts_v1.json"
+_ai_audio_transcripts_lock = threading.Lock()
+_ai_audio_transcripts = read_json(_AI_AUDIO_TRANSCRIPTS_FILE) or {}
+if not isinstance(_ai_audio_transcripts, dict):
+    _ai_audio_transcripts = {}
+
+
+def _audio_transcript_key(item: dict, source: str) -> str:
+    """Stable cache key without exposing a protected Kommo media URL."""
+    raw = str(item.get("file_uuid") or item.get("id") or source or "").strip()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _transcribe_summary_audio(item: dict) -> str:
-    """Transcribe one Kommo voice file for an AI summary; failures stay visible."""
+    """Transcribe and cache one Kommo voice file or call recording for AI."""
     source = _summary_audio_source(item)
     if not source:
         return ""
-    input_path = output_path = ""
+    cache_key = _audio_transcript_key(item, source)
+    with _ai_audio_transcripts_lock:
+        saved = _ai_audio_transcripts.get(cache_key)
+    if isinstance(saved, dict) and str(saved.get("text") or "").strip():
+        return str(saved["text"])[:3000]
+    input_path = output_path = transcript_path = ""
     before = {path for path in glob.glob("/tmp/*transcription*.txt")}
     try:
         headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(source) else {}
@@ -17544,12 +17562,22 @@ def _transcribe_summary_audio(item: dict) -> str:
             return ""
         transcript_path = max(candidates, key=os.path.getctime)
         with open(transcript_path, "r", encoding="utf-8", errors="ignore") as handle:
-            return clean_transcription(handle.read())[:3000]
+            text = clean_transcription(handle.read())[:3000]
+        if text:
+            with _ai_audio_transcripts_lock:
+                _ai_audio_transcripts[cache_key] = {"text": text, "saved_at": int(_time_module.time())}
+                # Keep the cache bounded; it is only a transcription cache,
+                # never the source of truth for the call recording itself.
+                if len(_ai_audio_transcripts) > 1000:
+                    for stale in list(_ai_audio_transcripts)[:200]:
+                        _ai_audio_transcripts.pop(stale, None)
+                write_json(_AI_AUDIO_TRANSCRIPTS_FILE, _ai_audio_transcripts)
+        return text
     except Exception as exc:
         logger.info("Summary voice transcription skipped: %s", exc)
         return ""
     finally:
-        for path in (input_path, output_path):
+        for path in (input_path, output_path, transcript_path):
             if path:
                 try:
                     os.remove(path)
@@ -17557,27 +17585,34 @@ def _transcribe_summary_audio(item: dict) -> str:
                     pass
 
 
-async def _summary_history_lines(rows: list[dict]) -> tuple[list[str], int]:
-    """Build readable dialogue context, including up to four recent voice notes."""
+def _is_history_audio(item: dict) -> bool:
+    kind = str(item.get("message_type") or item.get("type") or "").casefold()
+    source = " ".join(str(item.get(key) or "") for key in ("media_url", "media", "voice_url", "file_name"))
+    return kind in {"audio", "voice", "ptt", "call", "call_in", "call_out"} or bool(re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", source, re.I))
+
+
+async def _ai_history_lines(rows: list[dict]) -> tuple[list[str], int]:
+    """Use the complete recent 30-message context for both reply and summary.
+
+    Audio is processed in order and persisted after the first transcription.
+    Sequential handling is intentional because the speech tool writes one
+    temporary transcript file and parallel calls could mix two conversations.
+    """
     lines: list[str] = []
-    pending_voice: list[tuple[int, dict]] = []
-    for index, item in enumerate(rows[-40:]):
+    transcribed = 0
+    for item in rows[-30:]:
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
         who = "Müştəri" if item.get("incoming") else "Menecer"
-        kind = str(item.get("message_type") or item.get("type") or "").casefold()
         if text:
             lines.append(f"{who}: {text[:400]}")
-        if kind in {"audio", "voice", "ptt"} or re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", str(item.get("media_url") or ""), re.I):
-            pending_voice.append((index, item))
-    transcribed = 0
-    for _index, item in pending_voice[-4:]:
-        text = await asyncio.to_thread(_transcribe_summary_audio, item)
-        if text:
-            who = "Müştəri" if item.get("incoming") else "Menecer"
-            lines.append(f"{who} (səsli mesajın mətni): {text}")
-            transcribed += 1
+        if _is_history_audio(item):
+            transcript = await asyncio.to_thread(_transcribe_summary_audio, item)
+            if transcript:
+                label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
+                lines.append(f"{who} ({label}): {transcript}")
+                transcribed += 1
     return lines, transcribed
 
 
@@ -17740,24 +17775,13 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         except Exception as exc:
             logger.warning("AI history load failed: %s", exc)
             history_rows = []
-    lines = []
-    for item in history_rows[-30:]:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or "").strip()
-        if not text:
-            continue
-        who = "Müştəri" if item.get("incoming") else "Menecer"
-        lines.append(f"{who}: {text[:400]}")
     draft = str(data.get("draft") or "").strip()
     mode = str(data.get("mode") or "reply").strip().lower()
     if mode not in {"reply", "summary"}:
         mode = "reply"
-    transcribed_count = 0
-    if mode == "summary":
-        voice_lines, transcribed_count = await _summary_history_lines(history_rows)
-        if voice_lines:
-            lines = voice_lines
+    # The same recent context powers both an AI reply and a summary.  A reply
+    # must understand a voice note or call recording just as much as Xülasə.
+    lines, transcribed_count = await _ai_history_lines(history_rows)
     history = "\n".join(lines) or "Yazışma yoxdur."
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)

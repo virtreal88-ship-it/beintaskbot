@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="329">
+    <meta name="pwa-build" content="330">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -7239,13 +7239,14 @@ function dealAiPayload(mode) {
             author: item.author || '',
             message_type: item.message_type || item.type || '',
             media_url: item.media_url || item.media || '',
-            file_uuid: item.file_uuid || ''
+            file_uuid: item.file_uuid || '',
+            voice_url: item.voice_url || '',
+            file_name: item.file_name || ''
         }))
     };
 }
 let _dealAiBusy = false;
 async function requestDealAiReply() {
-    return;
     const btn = document.getElementById('deal-chat-ai');
     const input = document.getElementById('deal-chat-input');
     if(_dealAiBusy || !_dealViewState || !CURRENT_USER_ID) return;
@@ -7261,6 +7262,7 @@ async function requestDealAiReply() {
         if(!r.ok || !d.success || !d.text) throw new Error(d.error || 'AI cavab alınmadı');
         if(input) {
             input.value = d.text;
+            resizeDealChatInput(input);
             input.focus();
             persistOpenChatDraft();
         }
@@ -9900,7 +9902,9 @@ function noticeAiPayload() {
             author: item.author || '',
             message_type: item.message_type || item.type || '',
             media_url: item.media_url || item.media || '',
-            file_uuid: item.file_uuid || ''
+            file_uuid: item.file_uuid || '',
+            voice_url: item.voice_url || '',
+            file_name: item.file_name || ''
         }))
     };
 }
@@ -9909,7 +9913,7 @@ async function requestNoticeSummary() {
     _noticeReplyBusy = true;
     showDealSummaryProgress();
     try {
-        const messages = ((_dealViewState && _dealViewState.messages) || []).slice(-40).map(item => ({incoming:!!item.incoming, text:item.text || '', author:item.author || '', message_type:item.message_type || item.type || '', media_url:item.media_url || item.media || '', file_uuid:item.file_uuid || ''}));
+        const messages = ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({incoming:!!item.incoming, text:item.text || '', author:item.author || '', message_type:item.message_type || item.type || '', media_url:item.media_url || item.media || '', file_uuid:item.file_uuid || '', voice_url:item.voice_url || '', file_name:item.file_name || ''}));
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({mode:'summary', lead_id:_noticeHistoryLeadId, messages})});
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Xülasə alınmadı');
@@ -9934,7 +9938,7 @@ async function requestNoticeAiReply() {
         });
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success || !payload.text) throw new Error(payload.error || 'AI cavab alınmadı');
-        if(input) { input.value = payload.text; input.focus(); }
+        if(input) { input.value = payload.text; resizeDealChatInput(input); input.focus(); }
         toast('AI cavab hazırdır');
     } catch(error) { toast(error.message || 'AI cavab alınmadı', true); }
     finally {
