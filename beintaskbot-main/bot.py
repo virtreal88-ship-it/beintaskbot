@@ -103,6 +103,15 @@ llm_client = OpenAI(
     base_url=os.environ.get("OPENAI_API_BASE", "https://api.manus.im/api/llm-proxy/v1"),
 )
 
+# Linear is intentionally a read-only source in the legacy CRM.  Only issues
+# waiting for Nizami's confirmation are exposed; no Linear issue is created,
+# edited or moved from this application.
+LINEAR_API_KEY = str(os.environ.get("LINEAR_API_KEY") or "").strip()
+LINEAR_TEAM_ID = str(os.environ.get("LINEAR_TEAM_ID") or "c4106f85-9a15-4f8b-8ec9-ef894ca746e4").strip()
+LINEAR_TESDIQ_STATE_ID = str(os.environ.get("LINEAR_TESDIQ_STATE_ID") or "dd221372-cd7a-4dfc-9361-214ef920ebc0").strip()
+_LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
+_LINEAR_TESDIQ_CACHE_TTL = 45.0
+
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
 # Rüfət's current Telegram account is canonical. Do not let an old deployment
@@ -19270,6 +19279,81 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
     return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
 
 
+def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
+    """Fetch the administrator's Linear confirmation queue without mutating it."""
+    if not LINEAR_API_KEY:
+        raise RuntimeError("Linear hələ qoşulmayıb. Railway-də LINEAR_API_KEY əlavə edin.")
+    now = _time_module.monotonic()
+    cached_at = float(_LINEAR_TESDIQ_CACHE.get("at") or 0)
+    cached_items = _LINEAR_TESDIQ_CACHE.get("items")
+    if not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
+        return list(cached_items)
+
+    query = """
+    query ConfirmationIssues($teamId: String!, $stateId: String!) {
+      issues(first: 100, orderBy: updatedAt, filter: {
+        team: { id: { eq: $teamId } },
+        state: { id: { eq: $stateId } }
+      }) {
+        nodes {
+          identifier title description priority dueDate updatedAt url
+          state { name }
+          assignee { name }
+          project { name }
+          labels { nodes { name } }
+        }
+      }
+    }
+    """
+    response = requests.post(
+        "https://api.linear.app/graphql",
+        headers={"Authorization": LINEAR_API_KEY, "Content-Type": "application/json"},
+        json={"query": query, "variables": {"teamId": LINEAR_TEAM_ID, "stateId": LINEAR_TESDIQ_STATE_ID}},
+        timeout=15,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Linear cavab vermədi ({response.status_code}).")
+    payload = response.json()
+    if payload.get("errors"):
+        logger.warning("Linear GraphQL error: %s", payload.get("errors"))
+        raise RuntimeError("Linear sorğusunu yoxlamaq mümkün olmadı.")
+    nodes = (((payload.get("data") or {}).get("issues") or {}).get("nodes") or [])
+    items = []
+    for row in nodes:
+        if not isinstance(row, dict):
+            continue
+        items.append({
+            "id": str(row.get("identifier") or ""),
+            "title": str(row.get("title") or "Tapşırıq"),
+            "description": str(row.get("description") or "")[:1200],
+            "priority": int(row.get("priority") or 0),
+            "due_date": row.get("dueDate"),
+            "updated_at": row.get("updatedAt"),
+            "url": str(row.get("url") or ""),
+            "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
+            "project": str((row.get("project") or {}).get("name") or ""),
+            "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
+        })
+    _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})
+    return items
+
+
+async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
+    """Read-only Linear queue for the owner.  This never changes Linear."""
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    if not chat_id or not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Bu siyahı yalnız Admin üçündür."}, status=403)
+    force = str(request.query.get("refresh") or "").strip() == "1"
+    try:
+        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force)
+        return web.json_response({"success": True, "connected": True, "issues": issues})
+    except RuntimeError as exc:
+        return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
+    except Exception:
+        logger.exception("Could not load Linear confirmation issues")
+        return web.json_response({"success": False, "error": "Linear tapşırıqları yüklənmədi."}, status=502)
+
+
 async def handle_api_settings_integrations(request: web.Request) -> web.Response:
     """Safe integration health summary for the legacy administrator workspace."""
     chat_id = int(request.get("authenticated_chat_id") or 0)
@@ -19288,6 +19372,7 @@ async def handle_api_settings_integrations(request: web.Request) -> web.Response
             {"id": "instagram", "name": "Instagram", "status": "via_kommo", "detail": "Mesajlar Kommo tarixçəsindən alınır"},
             {"id": "telegram", "name": "Telegram", "status": "connected" if TELEGRAM_TOKEN else "not_connected", "detail": "Giriş və bildirişlər"},
             {"id": "push", "name": "Push bildirişləri", "status": "connected" if VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY else "not_connected", "detail": "PWA bildirişləri"},
+            {"id": "linear", "name": "Linear", "status": "connected" if LINEAR_API_KEY else "not_connected", "detail": "Yalnız Təsdiq statuslu tapşırıqlar göstərilir"},
         ],
     })
 
@@ -21147,6 +21232,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/admin/employees', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/admin/integrations', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/hot-orders', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/linear/tesdiq', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/api/notices", handle_api_notices)
@@ -21227,6 +21313,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/admin/integrations", handle_api_settings_integrations)
     app_web.router.add_get("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_post("/api/hot-orders", handle_api_hot_orders)
+    app_web.router.add_get("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)

@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="333">
+    <meta name="pwa-build" content="334">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -990,6 +990,16 @@
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
         </div>
+        <section id="linear-tesdiq-section" class="bg-white rounded-2xl border border-violet-100 shadow-sm overflow-hidden" hidden>
+            <div class="flex items-center justify-between px-3 py-2.5 bg-violet-50/70 border-b border-violet-100">
+                <div>
+                    <div class="text-xs font-extrabold text-violet-900">Linear · Təsdiq</div>
+                    <div id="linear-tesdiq-meta" class="text-[10px] text-violet-500 mt-0.5">Yalnız baxış</div>
+                </div>
+                <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
+            </div>
+            <div id="linear-tesdiq-list" class="divide-y divide-violet-50"></div>
+        </section>
         <div id="filter-row" style="display:none;" class="flex gap-2">
             <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
@@ -2996,8 +3006,58 @@ function submitClose() {
 }
 
 /* ================= NOTIFICATIONS & SWR ================= */
+let linearTesdiqLoaded = false;
+async function loadLinearTesdiq(forceRefresh = false) {
+    const section = document.getElementById('linear-tesdiq-section');
+    const list = document.getElementById('linear-tesdiq-list');
+    const meta = document.getElementById('linear-tesdiq-meta');
+    if(!section || !list || !meta) return;
+    if(!isAdmin) { section.hidden = true; return; }
+    section.hidden = false;
+    if(linearTesdiqLoaded && !forceRefresh) return;
+    list.innerHTML = '<div class="px-3 py-3 text-xs text-violet-500">Linear tapşırıqları yüklənir…</div>';
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq?refresh=' + (forceRefresh ? '1' : '0') + '&_ts=' + Date.now(), {
+            headers: {'X-TG-User-ID': CURRENT_USER_ID}, cache: 'no-store'
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırıqları yüklənmədi.');
+        if(!data.connected) {
+            meta.textContent = 'Qoşulmayıb';
+            list.innerHTML = `<div class="px-3 py-3 text-xs text-slate-500">${escapeHtml(data.error || 'Linear qoşulmayıb.')}</div>`;
+            return;
+        }
+        const rows = Array.isArray(data.issues) ? data.issues : [];
+        linearTesdiqLoaded = true;
+        meta.textContent = `${rows.length} təsdiq gözləyir · yalnız baxış`;
+        if(!rows.length) {
+            list.innerHTML = '<div class="px-3 py-3 text-xs text-slate-500">Təsdiq gözləyən Linear tapşırığı yoxdur.</div>';
+            return;
+        }
+        list.innerHTML = rows.map(item => {
+            const title = escapeHtml(item.title || 'Tapşırıq');
+            const issueId = escapeHtml(item.id || 'Linear');
+            const project = escapeHtml(item.project || 'Layihə göstərilməyib');
+            const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
+            const description = escapeHtml(String(item.description || '').trim().slice(0, 220));
+            const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
+            const url = String(item.url || '');
+            const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
+            return `<article class="px-3 py-3">
+                <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="text-[10px] font-extrabold text-violet-500">${issueId}</div><div class="text-sm font-bold text-slate-800 mt-0.5">${title}</div></div>${safeLink}</div>
+                <div class="text-[11px] text-slate-500 mt-1">${project} · ${assignee}${date ? ' · ' + escapeHtml(date) : ''}</div>
+                ${description ? `<div class="text-xs leading-5 text-slate-600 mt-2 whitespace-pre-line">${description}</div>` : ''}
+            </article>`;
+        }).join('');
+    } catch(error) {
+        meta.textContent = 'Yüklənmədi';
+        list.innerHTML = `<div class="px-3 py-3 text-xs text-red-500">${escapeHtml(error.message || 'Linear tapşırıqları yüklənmədi.')}</div>`;
+    }
+}
+
 async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
+    loadLinearTesdiq(forceRefresh);
     if(HAS_OWN_FUNNEL) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored || mockTasks.length) renderNotifications();
@@ -12185,7 +12245,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=333');
+    const reg = await navigator.serviceWorker.register('sw.js?v=334');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

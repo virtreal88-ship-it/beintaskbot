@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-ai-access-control';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-tesdiq';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
