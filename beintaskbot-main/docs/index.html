@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="327">
+    <meta name="pwa-build" content="328">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -741,7 +741,7 @@
         .notice-history-actions button:active { background:#dbeafe; color:#1d4ed8; }
         .notice-reply-wrap { flex:none; background:#fff; border-top:1px solid #e8ecf0; padding:8px; }
         .notice-reply-field { display:flex; gap:6px; align-items:flex-end; }
-        .notice-reply-field textarea { flex:1; min-width:0; min-height:42px; max-height:96px; resize:vertical; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:10px; padding:9px 10px; font:inherit; font-size:13px; }
+        .notice-reply-field textarea { flex:1; min-width:0; min-height:42px; max-height:none; resize:none; overflow-y:hidden; box-sizing:border-box; border:0 !important; outline:0; box-shadow:none !important; border-radius:10px; padding:10px 12px; font:inherit; font-size:13px; line-height:1.42; background:#f8fafc; }
         .notice-reply-field button { height:42px; border:0; border-radius:10px; padding:0 11px; font:inherit; font-size:12px; font-weight:700; }
         .notice-reply-ai { background:#dbeafe; color:#1d4ed8; }
         .notice-reply-send { background:#2563eb; color:#fff; }
@@ -7308,7 +7308,7 @@ function openDealSummaryModal(summary, leadId, voiceCount) {
     // Summary must sit above the client card and the right-side details drawer.
     modal.style.cssText = 'position:fixed;inset:0;z-index:16000;background:rgba(15,23,42,.5);display:flex;align-items:flex-end;justify-content:center;padding:0;';
     modal.onclick = event => { if(event.target === modal) closeDealSummaryModal(); };
-    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-xl text-slate-400 px-2">×</button></div><div class="mt-3 rounded-2xl bg-slate-50 border border-slate-100 p-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">${escapeHtml(summary || '')}</div><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
+    modal.innerHTML = `<div class="bg-white rounded-t-[22px] w-full max-w-[620px] max-h-[86vh] overflow-auto p-4 pb-[calc(16px+env(safe-area-inset-bottom))]"><div class="flex justify-between items-start gap-3"><div><div class="text-base font-extrabold text-slate-800">AI dialoq xülasəsi</div><div class="text-[11px] text-slate-400 mt-0.5">${voiceCount ? voiceCount + ' səsli mesaj da dinlənib və mətnə əlavə olunub.' : 'Mətn yazışmasına əsasən hazırlanıb.'}</div></div><button type="button" onclick="closeDealSummaryModal()" class="text-sm font-bold text-slate-500 px-2 py-1">Bağla</button></div><textarea id="deal-summary-text" class="mt-3 w-full min-h-[180px] rounded-2xl bg-slate-50 border border-slate-100 p-3 text-sm leading-6 text-slate-700" aria-label="Xülasəni redaktə edin">${escapeHtml(summary || '')}</textarea><div class="grid grid-cols-2 gap-2 mt-3"><button type="button" onclick="saveDealSummary('task')" class="bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Tapşırıq yarat</button><button type="button" onclick="saveDealSummary('note')" class="bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Qeyd əlavə et</button></div></div>`;
     modal.dataset.leadId = String(leadId || '');
     modal.dataset.summary = String(summary || '');
     document.body.appendChild(modal);
@@ -7316,7 +7316,7 @@ function openDealSummaryModal(summary, leadId, voiceCount) {
 async function saveDealSummary(kind) {
     const modal = document.getElementById('deal-summary-modal');
     const lead_id = String(modal?.dataset.leadId || '');
-    const summary = String(modal?.dataset.summary || '');
+    const summary = String(modal?.querySelector('#deal-summary-text')?.value || modal?.dataset.summary || '').trim();
     if(!lead_id || !summary) return;
     try {
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({lead_id, mode:'summary', summary_action:kind, summary})});
@@ -10040,6 +10040,8 @@ async function openNoticeClient(leadId) {
     document.getElementById('notice-reply-input')?.addEventListener('keydown', event => {
         if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendNoticeKommoReply(); }
     });
+    document.getElementById('notice-reply-input')?.addEventListener('input', event => resizeDealChatInput(event.currentTarget));
+    resizeDealChatInput(document.getElementById('notice-reply-input'));
     fillKommoHistory(id, document.getElementById('notice-client-history'));
 }
 function noticeTimeLabel(stamp) {

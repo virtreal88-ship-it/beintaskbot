@@ -705,6 +705,9 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     current = member(tenant_id, owner_id)
     if not current or current.get("role") != "owner":
         raise TenantPlatformError("İcazə yoxdur.")
+    name = str(display_name or "").strip()[:120]
+    if not name:
+        raise TenantPlatformError("Əməkdaşın adını yazın.")
     selected_role = _role(str(role or ""))
     token = secrets.token_urlsafe(24)
     # Store only a one-way digest. The original token appears once in the
@@ -715,10 +718,18 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            # A newly generated personal link replaces a still-open link for
+            # the same employee card.  The old URL can no longer be used.
+            cur.execute("""
+                UPDATE saas_tenant_invites
+                SET accepted_at = now()
+                WHERE tenant_id = %s::uuid AND display_name = %s
+                    AND accepted_at IS NULL AND expires_at > now()
+            """, (tenant_id, name))
             cur.execute("""
                 INSERT INTO saas_tenant_invites (id, tenant_id, token_hash, display_name, role, permissions, created_by, expires_at)
                 VALUES (%s, %s::uuid, %s, %s, %s, %s::jsonb, %s, %s)
-            """, (invite_id, tenant_id, token_hash, str(display_name or "").strip()[:120], selected_role, _json(_permissions(permissions, selected_role)), int(owner_id), expires))
+            """, (invite_id, tenant_id, token_hash, name, selected_role, _json(_permissions(permissions, selected_role)), int(owner_id), expires))
         conn.commit()
     return {"id": str(invite_id), "token": token, "role": selected_role, "expires_at": expires.isoformat()}
 
@@ -729,14 +740,14 @@ def request_invite_acceptance(*, token: str, telegram_id: int, display_name: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT * FROM saas_tenant_invites
-                WHERE token_hash = %s AND accepted_at IS NULL AND expires_at > now()
-                FOR UPDATE
-            """, (token_hash,))
+            cur.execute("SELECT * FROM saas_tenant_invites WHERE token_hash = %s FOR UPDATE", (token_hash,))
             invite = cur.fetchone()
             if not invite:
-                raise TenantPlatformError("Dəvət etibarsızdır və ya müddəti bitib.")
+                raise TenantPlatformError("Dəvət linki etibarlı deyil. Administratorla əlaqə saxlayın.")
+            if invite.get("accepted_at"):
+                raise TenantPlatformError("Bu dəvət linki artıq istifadə olunub.")
+            if invite.get("expires_at") and invite["expires_at"] <= datetime.now(timezone.utc):
+                raise TenantPlatformError("Dəvət linkinin müddəti bitib. Administratorla əlaqə saxlayın.")
             cur.execute("SELECT * FROM saas_tenant_invite_requests WHERE invite_id = %s FOR UPDATE", (invite["id"],))
             existing = cur.fetchone()
             if existing:

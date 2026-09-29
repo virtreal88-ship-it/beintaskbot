@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-nizami-stage-catalog';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-invite-summary-editor';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

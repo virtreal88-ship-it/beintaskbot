@@ -20650,15 +20650,17 @@ def _owner_chat_for_lead(lead_id: int) -> int:
 
 
 def remember_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: int = 0) -> None:
-    """Store a Bildiriş row. Salary only keeps a task assigned by someone else."""
+    """Store a Bildiriş row for every active employee.
+
+    Salary employees (including Rüfət) used to lose all but ``new_task``
+    rows here.  That also prevented their PWA push path from running.
+    """
     try:
         cid = int(chat_id)
         lead = int(lead_id or 0)
     except (TypeError, ValueError):
         return
     if not cid:
-        return
-    if kind != "new_task" and _salary_funnel_user(cid):
         return
     text = " ".join(str(body or "").split())[:180]
     row = {
