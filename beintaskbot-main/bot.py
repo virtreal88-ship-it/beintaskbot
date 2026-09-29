@@ -12877,12 +12877,14 @@ def _overview_nizami_stage_deal(
     ts: int,
     channel: str,
     incoming_at: int,
+    contacts_by_id: dict[int, dict] | None = None,
 ) -> dict:
-    """Make a lightweight queue row from the filtered lead response.
+    """Build a Nizami queue row without losing the linked client's details.
 
-    The overview request already asked Kommo to embed contacts.  Do not make a
-    separate request per hot lead here: this path runs while a user waits for
-    the client list and must never block the history endpoint.
+    Kommo's ``with=contacts`` lead response normally embeds only contact IDs.
+    ``contacts_by_id`` is loaded in one batched request by the caller, so this
+    function can use the same name and phone as the full deal card without a
+    request for every row.
     """
     try:
         lead_id = int(lead.get("id") or 0)
@@ -12895,6 +12897,14 @@ def _overview_nizami_stage_deal(
     contact_ids, phones = _lead_phones_fast(lead)
     linked_contacts = (lead.get("_embedded") or {}).get("contacts") or []
     first_contact = linked_contacts[0] if linked_contacts and isinstance(linked_contacts[0], dict) else {}
+    for contact_id in contact_ids:
+        full_contact = (contacts_by_id or {}).get(contact_id)
+        if isinstance(full_contact, dict):
+            first_contact = full_contact
+            break
+    full_phones = _contact_phones(first_contact)
+    if full_phones:
+        phones = list(dict.fromkeys([*full_phones, *phones]))
     contact_name = str(first_contact.get("name") or lead.get("name") or "").strip()
     if not contact_name:
         contact_name = phones[0] if phones else "Müştəri"
@@ -12949,6 +12959,12 @@ async def _inject_nizami_sovdelesmeler_stage_deals(
             continue
     staged = await _load_nizami_sovdelesmeler_stage_leads()
     staged.sort(key=lambda item: int(item[0].get("updated_at") or 0), reverse=True)
+    contact_ids = {
+        contact_id
+        for lead, _queue_kind in staged
+        for contact_id in _lead_contact_ids(lead)
+    }
+    contacts_by_id = await _load_rufat_contacts(contact_ids) if contact_ids else {}
     for lead, queue_kind in staged:
         try:
             lead_id = int(lead.get("id") or 0)
@@ -12969,6 +12985,7 @@ async def _inject_nizami_sovdelesmeler_stage_deals(
             max(updated_at, talk_at),
             channel_by_lead.get(lead_id) or "whatsapp",
             incoming_at,
+            contacts_by_id,
         )
         if avatar_by_lead.get(lead_id):
             row["contact_avatar"] = avatar_by_lead[lead_id]
