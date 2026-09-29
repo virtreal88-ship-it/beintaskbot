@@ -19316,6 +19316,14 @@ def _linear_client_hint(description: str) -> str:
     return "Göstərilməyib"
 
 
+def _linear_uuid(value: str, label: str) -> str:
+    """Return a GraphQL-safe Linear UUID from trusted integration settings."""
+    candidate = str(value or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}", candidate):
+        raise RuntimeError(f"Linear üçün {label} düzgün qurulmayıb.")
+    return candidate
+
+
 def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     """Fetch the administrator's Linear confirmation queue without mutating it."""
     now = _time_module.monotonic()
@@ -19324,22 +19332,24 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     if not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
         return list(cached_items)
 
-    payload = _linear_graphql("""
-    query ConfirmationIssues($teamId: ID!, $stateId: ID!) {
-      issues(first: 100, orderBy: updatedAt, filter: {
-        team: { id: { eq: $teamId } },
-        state: { id: { eq: $stateId } }
-      }) {
-        nodes {
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    state_id = _linear_uuid(LINEAR_TESDIQ_STATE_ID, "Təsdiq statusu")
+    payload = _linear_graphql(f"""
+    query ConfirmationIssues {{
+      issues(first: 100, orderBy: updatedAt, filter: {{
+        team: {{ id: {{ eq: \"{team_id}\" }} }},
+        state: {{ id: {{ eq: \"{state_id}\" }} }}
+      }}) {{
+        nodes {{
           id identifier title description priority dueDate updatedAt url
-          state { name }
-          assignee { name }
-          project { name }
-          labels { nodes { name } }
-        }
-      }
-    }
-    """, {"teamId": LINEAR_TEAM_ID, "stateId": LINEAR_TESDIQ_STATE_ID})
+          state {{ name }}
+          assignee {{ name }}
+          project {{ name }}
+          labels {{ nodes {{ name }} }}
+        }}
+      }}
+    }}
+    """)
     nodes = ((payload.get("issues") or {}).get("nodes") or [])
     items = []
     for row in nodes:
