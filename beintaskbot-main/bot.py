@@ -814,6 +814,25 @@ def get_pending_actions() -> list:
     return actions
 
 
+def _is_salary_completion_action(action: dict) -> bool:
+    """Whether a pending card is the manager review for a salary task.
+
+    Completion reviews use the historical ``change_stage`` action type.  That
+    is also used by ordinary deal-stage requests, so terminal-stage cleanup
+    must distinguish them instead of hiding a completed salary task.
+    """
+    if not isinstance(action, dict) or action.get("type") != "change_stage":
+        return False
+    data = action.get("data") or {}
+    if str(data.get("completion_kind") or "").strip().lower() == "salary":
+        return True
+    try:
+        sender_chat_id = int(data.get("sender_chat_id") or 0)
+    except (TypeError, ValueError):
+        sender_chat_id = 0
+    return bool(sender_chat_id and get_employee_type(sender_chat_id) == "salary")
+
+
 def get_open_pending_actions() -> list:
     """Return actionable confirmations, closing ones invalidated in Kommo.
 
@@ -824,17 +843,41 @@ def get_open_pending_actions() -> list:
     actions = get_pending_actions()
     changed = False
     open_actions = []
-    terminal_types = {"change_stage", "confirm_stage", "assign_executor"}
+    terminal_types = {"confirm_stage", "assign_executor"}
     lead_status_cache: dict[int, int] = {}
     for action in actions:
+        salary_completion = _is_salary_completion_action(action)
         if action.get("resolved"):
+            # Restore only salary confirmations that the previous terminal
+            # filter closed automatically.  They were never approved or
+            # rejected by the administrator, so they must remain actionable.
+            if (
+                salary_completion
+                and action.get("resolved_choice") == "auto_terminal_not_realized"
+            ):
+                action["resolved"] = False
+                action.pop("resolved_at", None)
+                action.pop("resolved_by", None)
+                action.pop("resolved_choice", None)
+                changed = True
+            else:
+                continue
+        # A regular stage-change request is obsolete after the deal is closed
+        # as not realized.  A completed salary task is a payment/KPI review,
+        # not a stage request, and stays in Təsdiq even if its deal moved.
+        action_type = action.get("type")
+        should_check_terminal = action_type in terminal_types or (
+            action_type == "change_stage" and not salary_completion
+        )
+        if not should_check_terminal:
+            open_actions.append(action)
             continue
         data = action.get("data") or {}
         try:
             lead_id = int(data.get("lead_id") or 0)
         except (TypeError, ValueError):
             lead_id = 0
-        if action.get("type") in terminal_types and lead_id:
+        if lead_id:
             if lead_id not in lead_status_cache:
                 lead = get_lead_details(lead_id) or {}
                 try:
@@ -8649,6 +8692,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
                             "task_price": task_price_match.group(1) if task_price_match else "",
                             "note": note_text or "",
+                            "completion_kind": "salary" if get_employee_type(chat_id) == "salary" else "standard",
                             "stage_name": current_stage_name,
                             "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
                             "link": link,
