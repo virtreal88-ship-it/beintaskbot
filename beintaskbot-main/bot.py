@@ -814,6 +814,47 @@ def get_pending_actions() -> list:
     return actions
 
 
+def get_open_pending_actions() -> list:
+    """Return actionable confirmations, closing ones invalidated in Kommo.
+
+    A completed-task confirmation can legitimately stay open while the owner
+    decides the next step.  It must not survive when the owner has already
+    moved that same deal to the terminal "not realized" stage in Kommo.
+    """
+    actions = get_pending_actions()
+    changed = False
+    open_actions = []
+    terminal_types = {"change_stage", "confirm_stage", "assign_executor"}
+    lead_status_cache: dict[int, int] = {}
+    for action in actions:
+        if action.get("resolved"):
+            continue
+        data = action.get("data") or {}
+        try:
+            lead_id = int(data.get("lead_id") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        if action.get("type") in terminal_types and lead_id:
+            if lead_id not in lead_status_cache:
+                lead = get_lead_details(lead_id) or {}
+                try:
+                    lead_status_cache[lead_id] = int(lead.get("status_id") or 0)
+                except (TypeError, ValueError):
+                    lead_status_cache[lead_id] = 0
+            # 143 is Kommo's universal "closed and not realized" status.
+            # Never ask the director to select an executor/stage for it.
+            if lead_status_cache[lead_id] == 143:
+                action["resolved"] = True
+                action["resolved_at"] = datetime.now(tz=BAKU_TZ).isoformat()
+                action["resolved_choice"] = "auto_terminal_not_realized"
+                changed = True
+                continue
+        open_actions.append(action)
+    if changed and not write_json(_PENDING_ACTIONS_FILE, actions):
+        logger.error("Failed to close terminal pending actions")
+    return open_actions
+
+
 def save_pending_action(action_type: str, data: dict, options: list) -> dict:
     """Persist a new admin action and return its public representation."""
     actions = get_pending_actions()
@@ -7156,7 +7197,7 @@ async def handle_get_pending_actions(request: web.Request) -> web.Response:
     chat_id = request.rel_url.query.get("chat_id") or request.headers.get("X-TG-User-ID", "")
     if not is_admin(chat_id):
         return web.json_response({"error": "Unauthorized"}, status=403)
-    actions = [action for action in get_pending_actions() if not action.get("resolved")]
+    actions = get_open_pending_actions()
     # Inject voice_url for each action
     for a in actions:
         eid = str(a.get("data", {}).get("lead_id") or a.get("data", {}).get("entity_id") or "")
@@ -19374,6 +19415,28 @@ def _linear_client_hint(description: str) -> str:
     return "Göstərilməyib"
 
 
+def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]:
+    """Move structured Linear text out of the human-readable description."""
+    metadata: dict[str, str] = {}
+    visible_lines: list[str] = []
+    key_map = {
+        "layihə": "project", "project": "project",
+        "operator": "operator", "icraçı": "operator", "assignee": "operator",
+        "müştəri": "client", "client": "client", "account": "client", "hesab": "client",
+    }
+    for raw_line in str(description or "").splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^([^:]{1,40}):\s*(.+)$", line)
+        if match:
+            key = key_map.get(match.group(1).strip().casefold())
+            value = match.group(2).strip()
+            if key and value:
+                metadata.setdefault(key, value)
+                continue
+        visible_lines.append(raw_line)
+    return metadata, "\n".join(visible_lines).strip()
+
+
 def _linear_uuid(value: str, label: str) -> str:
     """Return a GraphQL-safe Linear UUID from trusted integration settings."""
     candidate = str(value or "").strip()
@@ -19414,12 +19477,14 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     for row in nodes:
         if not isinstance(row, dict):
             continue
+        raw_description = str(row.get("description") or "")
+        description_meta, clean_description = _linear_description_metadata(raw_description)
         items.append({
             "id": str(row.get("identifier") or ""),
             "source_id": str(row.get("id") or ""),
             "title": str(row.get("title") or "Tapşırıq"),
-            "description": str(row.get("description") or "")[:1200],
-            "client": _linear_client_hint(str(row.get("description") or "")),
+            "description": clean_description[:1200],
+            "client": description_meta.get("client") or _linear_client_hint(raw_description),
             "priority": int(row.get("priority") or 0),
             "due_date": row.get("dueDate"),
             "updated_at": row.get("updatedAt"),
@@ -19430,8 +19495,8 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
                 "color": str((row.get("state") or {}).get("color") or ""),
             },
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
-            "operator": str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
-            "project": str((row.get("project") or {}).get("name") or ""),
+            "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
+            "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
             "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
         })
     _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-cards-audio-v2';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-manual-refresh';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
