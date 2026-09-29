@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="328">
+    <meta name="pwa-build" content="329">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9450,7 +9450,10 @@ function chatBelongsToViewer(deal) {
     if(isAdmin && !isNizamiQueueDeal(deal)) return false;
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
     if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
-    if(deal && (deal.inbox_only || deal.outbox || Number(deal.id) >= 9000000000000)) return !!deal.needs_reply;
+    // Qualified Sövdələşmələr leads are lightweight inbox rows. They remain
+    // visible to Nizami even before Kommo has created a Talk or unread flag.
+    const adminStageQueue = isAdmin && ['new_request', 'hot'].includes(String(deal && deal.nizami_queue_kind || ''));
+    if(deal && (deal.inbox_only || deal.outbox || Number(deal.id) >= 9000000000000)) return adminStageQueue || !!deal.needs_reply;
     return true;
 }
 const NIZAMI_PIPELINE_ID = 14243944;

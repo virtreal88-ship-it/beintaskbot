@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-invite-summary-editor';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-nizami-sovdelesmeler-queue';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
