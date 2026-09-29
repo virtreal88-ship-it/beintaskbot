@@ -544,6 +544,7 @@ def employee_access_profile(chat_id: int) -> dict:
             "role": role,
             "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
             "hot_order_skills": _normalize_hot_order_skills(stored.get("hot_order_skills")),
+            "completion_requires_admin": bool(stored.get("completion_requires_admin", False)),
         }
     users = load_users()
     known = cid in _KNOWN_EMPLOYEE_REGISTRATIONS or str(cid) in users
@@ -552,7 +553,20 @@ def employee_access_profile(chat_id: int) -> dict:
     # Existing people keep their currently working access until the admin
     # explicitly changes it from the new employee page.
     role = "Admin" if cid == ADMIN_CHAT_ID else "Əməkdaş"
-    return {"active": True, "role": role, "permissions": list(_ALL_EMPLOYEE_PERMISSIONS), "hot_order_skills": ["all"]}
+    return {
+        "active": True,
+        "role": role,
+        "permissions": list(_ALL_EMPLOYEE_PERMISSIONS),
+        "hot_order_skills": ["all"],
+        "completion_requires_admin": False,
+    }
+
+
+def employee_requires_completion_approval(chat_id: int) -> bool:
+    """Whether this employee's completed work must be reviewed by Admin."""
+    if is_admin(chat_id):
+        return False
+    return bool(employee_access_profile(chat_id).get("completion_requires_admin"))
 
 
 def get_rufat_compat_chat_ids() -> set[int]:
@@ -814,8 +828,8 @@ def get_pending_actions() -> list:
     return actions
 
 
-def _is_salary_completion_action(action: dict) -> bool:
-    """Whether a pending card is the manager review for a salary task.
+def _is_completion_review_action(action: dict) -> bool:
+    """Whether a pending card is an employee-completion review.
 
     Completion reviews use the historical ``change_stage`` action type.  That
     is also used by ordinary deal-stage requests, so terminal-stage cleanup
@@ -824,7 +838,7 @@ def _is_salary_completion_action(action: dict) -> bool:
     if not isinstance(action, dict) or action.get("type") != "change_stage":
         return False
     data = action.get("data") or {}
-    if str(data.get("completion_kind") or "").strip().lower() == "salary":
+    if str(data.get("completion_kind") or "").strip().lower() in {"salary", "employee_review"}:
         return True
     try:
         sender_chat_id = int(data.get("sender_chat_id") or 0)
@@ -843,16 +857,24 @@ def get_open_pending_actions() -> list:
     actions = get_pending_actions()
     changed = False
     open_actions = []
-    terminal_types = {"confirm_stage", "assign_executor"}
+    terminal_types = {"assign_executor"}
     lead_status_cache: dict[int, int] = {}
     for action in actions:
-        salary_completion = _is_salary_completion_action(action)
+        # Stage changes no longer require approval. Close legacy cards so they
+        # cannot appear beside the single employee-completion review.
+        if action.get("type") == "confirm_stage" and not action.get("resolved"):
+            action["resolved"] = True
+            action["resolved_at"] = datetime.now(tz=BAKU_TZ).isoformat()
+            action["resolved_choice"] = "stage_confirmation_disabled"
+            changed = True
+            continue
+        completion_review = _is_completion_review_action(action)
         if action.get("resolved"):
-            # Restore only salary confirmations that the previous terminal
+            # Restore only completion confirmations that the previous terminal
             # filter closed automatically.  They were never approved or
             # rejected by the administrator, so they must remain actionable.
             if (
-                salary_completion
+                completion_review
                 and action.get("resolved_choice") == "auto_terminal_not_realized"
             ):
                 action["resolved"] = False
@@ -862,12 +884,11 @@ def get_open_pending_actions() -> list:
                 changed = True
             else:
                 continue
-        # A regular stage-change request is obsolete after the deal is closed
-        # as not realized.  A completed salary task is a payment/KPI review,
-        # not a stage request, and stays in Təsdiq even if its deal moved.
+        # A regular stage-change request is obsolete after the deal is closed.
+        # An employee-completion review stays until Admin resolves it.
         action_type = action.get("type")
         should_check_terminal = action_type in terminal_types or (
-            action_type == "change_stage" and not salary_completion
+            action_type == "change_stage" and not completion_review
         )
         if not should_check_terminal:
             open_actions.append(action)
@@ -1505,34 +1526,18 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
             _send_telegram_text(creator_chat_id, "✅ Dəyişiklik təsdiq edildi!")
 
     elif action_type == "change_stage":
-        # Təsdiq et = only confirm KPI, do NOT change stage (stage is changed via stage_change: or Mərhələ dəyiş button)
+        # Historical type name retained for stored completion cards. This
+        # action approves or rejects completed work and never changes a stage.
         if choice == "Təsdiq et":
-            # Only apply KPI score, no stage change
             if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
                 employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
                 if employee_tg_id:
                     set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
             result_message = "Təsdiq edildi."
+        elif choice in ("Rədd et", "İmtina"):
+            result_message = "Tamamlanma təsdiqi rədd edildi."
         else:
-            # Explicit stage selection from options list
-            status_id = next(
-                (sid for sid, display_name in STAGE_NAMES.items() if display_name.casefold() == choice.casefold()),
-                None,
-            )
-            if not lead_id or not status_id:
-                return False, "Seçilmiş mərhələ tapılmadı."
-            if not update_lead_kommo(
-                int(lead_id),
-                {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
-            ):
-                return False, "Kommo mərhələsi dəyişdirilmədi."
-            stage_name = STAGE_NAMES.get(int(status_id), choice)
-            # Apply KPI score if provided
-            if kpi_score and action_data.get("task_id") and action_data.get("sender_name"):
-                employee_tg_id = NAME_TO_CHAT.get(action_data["sender_name"])
-                if employee_tg_id:
-                    set_kpi_score(int(employee_tg_id), int(action_data["task_id"]), kpi_score, corrected_by=ADMIN_CHAT_ID)
-            result_message = f"Mərhələ dəyişdirildi: {stage_name}."
+            return False, "Yanlış seçim."
 
     else:
         return False, "Naməlum sorğu növü."
@@ -3962,7 +3967,7 @@ def execute_tool_change_stage(phone: str, stage: str, chat_id: int) -> dict:
     if not status_id:
         return {"success": False, "message": f"❌ Naməlum mərhələ: {stage}"}
     return {
-        "success": True, "needs_confirmation": not is_admin(chat_id) and not is_funnel_chat(chat_id),
+        "success": True, "needs_confirmation": False,
         "lead_id": lead_id, "status_id": status_id, "stage": stage,
         "contact_name": contact.get("name", "Adsız"), "phone": phone
     }
@@ -8415,50 +8420,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     else:
                         logger.error("Rüfət completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
                         stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
-                    if target_status_id == 142:
-                        conf_key = str(uuid.uuid4())[:8]
-                        completion_sender = get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
-                        deadline_display = (
-                            datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-                            if task_deadline_ts else "—"
-                        )
-                        task_desc = re.sub(r"^\[[^\]]+\]\s*", "", task_data.get("text", "")).strip() or "—"
-                        admin_chat = get_chat_id_for_kommo_user(ADMIN_KOMMO_USER_ID) or ADMIN_CHAT_ID
-                        sent = None
-                        if _bot_app and admin_chat:
-                            _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                                "lead_id": int(lead_id), "status_id": int(target_status_id),
-                                "stage": selected_stage, "stage_name": target_stage_name,
-                                "pipeline_id": int(target_pipeline_id), "sender_chat_id": int(chat_id),
-                                "phone": phone or "—",
-                            }
-                            try:
-                                keyboard = InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"),
-                                    InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
-                                ]])
-                                sent = await _bot_app.bot.send_message(
-                                    int(admin_chat),
-                                    f"🔄 *{completion_sender}* uğurla tamamladı — məbləğ təsdiqi:\n\n"
-                                    f"👤 {contact_name or '—'}\n📝 {task_desc}\n📞 {phone or '—'}\n"
-                                    f"⏰ {deadline_display}\n📌 {target_pipeline_name}: {target_stage_name}\n🔗 {link}",
-                                    parse_mode="Markdown", reply_markup=keyboard, disable_web_page_preview=True,
-                                )
-                            except Exception as exc:
-                                logger.error(f"Rüfət completion confirmation send error: {exc}")
-                        save_pending_action("confirm_stage", {
-                            "contact_name": contact_name or "—", "phone": phone or "—", "lead_id": int(lead_id),
-                            "task_id": int(task_id),
-                            "status_id": int(target_status_id), "stage_name": target_stage_name,
-                            "stage_key": selected_stage, "pipeline_id": int(target_pipeline_id),
-                            "sender_name": completion_sender, "sender_chat_id": int(chat_id), "conf_key": conf_key,
-                            "link": link, "telegram_chat_id": admin_chat,
-                            "telegram_message_id": sent.message_id if sent else None,
-                        }, ["Təsdiq et", "Rədd et"])
-                        send_push_to_admin(
-                            f"{completion_sender}: {contact_name or '—'} → {target_stage_name}",
-                            title="🔄 Uğurla tamamlandı — məbləğ", url="#pending",
-                        )
                 else:
                     # Existing behaviour for every employee other than Rüfət.
                     try:
@@ -8478,34 +8439,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     if stage_result.get("success"):
                         lead_id = stage_result["lead_id"]
                         contact_name = stage_result.get("contact_name", "")
-                        if stage_result.get("needs_confirmation") and not _task_creator_is_rufat:
-                            admin_chat = get_chat_id_for_kommo_user(10932455)
-                            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
-                            stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
-                            conf_key = str(uuid.uuid4())[:8]
-                            if _bot_app:
-                                _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                                    "phone": phone, "stage": new_stage,
-                                    "lead_id": lead_id, "status_id": stage_result["status_id"],
-                                    "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
-                                }
-                            sent = None
-                            if admin_chat and _bot_app:
-                                try:
-                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
-                                    sent = await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udc64 {contact_name}\n\ud83d\udcde {phone}\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
-                                except Exception as e:
-                                    logger.error(f"complete_task confirmation send error: {e}")
-                            send_push_to_admin(
-                                f"{sender_name}: {contact_name} → {stage_display}",
-                                title="🔄 Mərhələ təsdiqi",
-                                url="#pending",
-                            )
-                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
-                        else:
-                            update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
-                            stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
-                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                        update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
+                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
                 else:
                     # No phone - try to get lead from task entity
@@ -8525,34 +8461,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                                         lead_id = leads[0]["id"]
                     except: pass
                     if lead_id and status_id:
-                        if is_admin(chat_id) or _task_creator_is_rufat:
-                            update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
-                            stage_display = STAGE_NAMES.get(status_id, new_stage)
-                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
-                        else:
-                            admin_chat = get_chat_id_for_kommo_user(10932455)
-                            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
-                            stage_display = STAGE_NAMES.get(status_id, new_stage)
-                            conf_key = str(uuid.uuid4())[:8]
-                            if _bot_app:
-                                _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                                    "phone": phone, "stage": new_stage,
-                                    "lead_id": lead_id, "status_id": status_id,
-                                    "sender_chat_id": chat_id, "sender_kommo_id": get_kommo_user_id_for_chat(chat_id)
-                                }
-                            sent = None
-                            if admin_chat and _bot_app:
-                                try:
-                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u2705 T\u0259sdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("\u274c R\u0259dd et", callback_data=f"conftr_{conf_key}_no")]])
-                                    sent = await _bot_app.bot.send_message(admin_chat, f"\ud83d\udd04 *{sender_name}* m\u0259rh\u0259l\u0259 d\u0259yi\u015fikliyi ist\u0259yir:\n\n\ud83d\udccc {stage_display}", parse_mode="Markdown", reply_markup=keyboard)
-                                except Exception as e:
-                                    logger.error(f"complete_task confirmation (no phone) error: {e}")
-                            send_push_to_admin(
-                                f"{sender_name}: {stage_display}",
-                                title="🔄 Mərhələ təsdiqi",
-                                url="#pending",
-                            )
-                            stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: Admin-\u0259 t\u0259sdiq sor\u011fusu g\u00f6nd\u0259rildi"
+                        update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
+                        stage_display = STAGE_NAMES.get(status_id, new_stage)
+                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
                         link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
             # The employee note is both the task result (set above) and a
             # common note on the related deal.
@@ -8620,11 +8531,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
                 logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
 
-                # Tasks created by Rüfət must never create a confirmation request
-                # for Nizami. They are reported to Rüfət as a regular completion
-                # notification below. All other employee-created tasks keep the
-                # existing Nizami confirmation flow.
-                if admin_chat and not is_rufat_chat(chat_id) and not _task_creator_is_rufat:
+                # Completion review is an explicit per-employee setting. No
+                # stage change ever creates an Admin confirmation.
+                if admin_chat and employee_requires_completion_approval(chat_id):
                     deadline_display = (
                         datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
                         if task_deadline_ts else "—"
@@ -8663,25 +8572,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
 
                     raw_task_text = task_data.get("text", "").strip()
                     task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
-                    callback_key = str(uuid.uuid4())[:8]
-                    if _bot_app:
-                        _bot_app.bot_data.setdefault("pending_stage_change", {})[callback_key] = {
-                            "lead_id": lead_id,
-                            "task_id": int(task_id),
-                            "employee_tg_id": int(chat_id),
-                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
-                            "task_price": task_price_match.group(1) if task_price_match else "",
-                        }
-                    kb_json = {"inline_keyboard": [[{"text": "📋 Mərhələni dəyiş", "callback_data": f"chgstg-{callback_key}"}]]}
                     try:
                         _http.post(
                             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": admin_chat, "text": completion_message, "reply_markup": kb_json, "disable_web_page_preview": True},
+                            json={
+                                "chat_id": admin_chat,
+                                "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
+                                "disable_web_page_preview": True,
+                            },
                             timeout=8
                         )
-                        # Completion is delivered to its creator in Telegram.
-                        # It is not urgent enough to duplicate as a PWA push
-                        # to Nizami.
                         save_pending_action("change_stage", {
                             "contact_name": contact_name or "—",
                             "phone": phone or "—",
@@ -8692,12 +8592,16 @@ async def handle_api_action(request: web.Request) -> web.Response:
                             "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
                             "task_price": task_price_match.group(1) if task_price_match else "",
                             "note": note_text or "",
-                            "completion_kind": "salary" if get_employee_type(chat_id) == "salary" else "standard",
+                            "completion_kind": "employee_review",
                             "stage_name": current_stage_name,
-                            "description": "Tapşırıq tamamlandı. Yeni mərhələni seçin.",
+                            "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
                             "link": link,
-                            "callback_key": callback_key,
-                        }, ["Təsdiq et"] + [STAGE_NAMES.get(sid, sk) for sk, sid in STAGES.items()])
+                        }, ["Təsdiq et", "Rədd et"])
+                        send_push_to_admin(
+                            f"{completion_sender}: {contact_name or '—'}",
+                            title="✅ Sifariş tamamlandı — təsdiq gözləyir",
+                            url="#pending",
+                        )
                     except Exception as notify_error:
                         logger.error(f"Completion notification error: {notify_error}")
 
@@ -19187,6 +19091,7 @@ def _employee_directory_rows() -> list[dict]:
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
             "hot_order_skills": profile.get("hot_order_skills") or [],
+            "completion_requires_admin": bool(profile.get("completion_requires_admin")),
             "updated_at": str((access.get(str(chat_id)) or {}).get("updated_at") or ""),
         })
     return sorted(rows, key=lambda row: (not row["active"], row["name"].casefold(), row["chat_id"]))
@@ -19237,6 +19142,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "hot_order_skills": existing.get("hot_order_skills") or [],
+            "completion_requires_admin": bool(existing.get("completion_requires_admin")),
             "updated_at": now, "updated_by": manager_id,
         }
         if action == "activate" and employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -19270,9 +19176,11 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Öz admin girişinizi dəyişə bilməzsiniz."}, status=400)
         permissions = _normalize_employee_permissions(data.get("permissions"), role)
         hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
+        completion_requires_admin = bool(data.get("completion_requires_admin", False))
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
             "hot_order_skills": hot_order_skills,
+            "completion_requires_admin": completion_requires_admin,
             "updated_at": now, "updated_by": manager_id,
         }
         if employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -19287,6 +19195,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "permissions": old_record.get("permissions") or permissions,
                 "active": False,
                 "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
+                "completion_requires_admin": bool(
+                    old_record.get("completion_requires_admin", completion_requires_admin)
+                ),
                 "migrated_to": employee_id,
                 "updated_at": now,
                 "updated_by": manager_id,

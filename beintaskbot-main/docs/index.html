@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="343">
+    <meta name="pwa-build" content="344">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -3202,8 +3202,7 @@ async function openNotifications(forceRefresh = false) {
 function pendingActionTitle(type) {
     return {
         assign_executor: 'İcraçı seçimi',
-        confirm_stage: 'Mərhələ təsdiqi',
-        change_stage: 'Tapşırıq tamamlandı — mərhələ seç',
+        change_stage: 'Sifariş tamamlandı',
         reassign_task: 'İcraçı dəyişikliyi',
     }[type] || 'Admin sorğusu';
 }
@@ -3290,32 +3289,20 @@ function createPendingActionCard(action) {
             audioDiv.innerHTML = '<audio controls preload="none" style="height:28px;width:100%" src="'+(data.voice_url.startsWith('http')?data.voice_url:API_BASE+data.voice_url)+'"></audio>';
             card.appendChild(audioDiv);
         }
-        // Card face button: İcraçı seç only (Mərhələ dəyiş removed - stage changes automatically with executor)
-        const controls = document.createElement('div');
-        controls.className = 'flex gap-2';
-        const execBtn = document.createElement('button');
-        execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
-        execBtn.textContent = '👷 İcraçı seç';
-        execBtn.addEventListener('click', () => {
-            showPendingSelectModal('İcraçı seç', ['Rüfət','Hüseyn','Rasim','Sərmayə','Asya','Nuranə','Özüm'], (choice) => {
-                resolvePendingAction(action.id, choice, execBtn);
+        if(action.type === 'assign_executor') {
+            const controls = document.createElement('div');
+            controls.className = 'flex gap-2';
+            const execBtn = document.createElement('button');
+            execBtn.className = 'flex-1 bg-blue-500 text-white font-bold py-2.5 px-3 rounded-xl text-[12px]';
+            execBtn.textContent = '👷 İcraçı seç';
+            execBtn.addEventListener('click', () => {
+                showPendingSelectModal('İcraçı seç', ['Rüfət','Hüseyn','Rasim','Sərmayə','Asya','Nuranə','Özüm'], (choice) => {
+                    resolvePendingAction(action.id, choice, execBtn);
+                });
             });
-        });
-        // Edit button - only if task_id exists (change_stage type = completed task)
-        if(action.task_id) {
-            const editBtn = document.createElement('button');
-            editBtn.className = 'flex-1 bg-gray-100 text-gray-700 font-bold py-2.5 px-3 rounded-xl text-[12px] border border-gray-200';
-            editBtn.textContent = '\u270f\ufe0f Redakt\u0259';
-            editBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const t = mockTasks.find(n => String(n.task_id || n.id) === String(action.task_id));
-                if(t) { selectedTaskId = t.id || t.task_id; handleBarAction('edit'); }
-                else { toast('Tap\u015f\u0131r\u0131q siyah\u0131da tap\u0131lmad\u0131.', true); }
-            });
-            controls.append(editBtn);
+            controls.append(execBtn);
+            card.appendChild(controls);
         }
-        controls.append(execBtn);
-        card.appendChild(controls);
 
         // Desktop click actions (≥ 1024px): confirm / reject buttons instead of swipe
         const desktopControls = document.createElement('div');
@@ -3704,10 +3691,9 @@ let taskDateFilter = localStorage.getItem('task_date_bucket') || 'all';
 let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_bucket') || 'all';
 let pendingKanbanFilter = localStorage.getItem('pending_type_bucket') || 'all';
 const PENDING_KANBAN_COLS = [
-    {key:'change_stage', label:'Tapşırıq tamamlandı', color:'#10b981'},
+    {key:'change_stage', label:'Sifariş tamamlandı', color:'#10b981'},
     {key:'reassign_task', label:'İcraçı dəyişikliyi', color:'#8b5cf6'},
     {key:'assign_executor', label:'İcraçı seçimi', color:'#2563eb'},
-    {key:'confirm_stage', label:'Mərhələ təsdiqi', color:'#f59e0b'},
     {key:'other', label:'Admin sorğusu', color:'#64748b'}
 ];
 function pendingTypeKey(action) {
@@ -11513,6 +11499,7 @@ function openEmployeeEditor(chatId = null) {
         <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
+        <label class="mt-3 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-900"><input id="employee-editor-completion-approval" type="checkbox" class="mt-0.5" ${employee?.completion_requires_admin ? 'checked' : ''}><span>Sövdələşmənin tamamlanmasını Admin təsdiqləsin<span class="mt-1 block text-[10px] font-normal leading-4 text-emerald-700">Bu əməkdaş işi tamamladıqda Təsdiq səhifəsində yalnız bir “Sifariş tamamlandı” sorğusu yaranacaq.</span></span></label>
         <div class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span>${employeeHotSkillDropdown([...skills])}</div>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
         ${isEditing && !isSelf ? `<div class="grid grid-cols-2 gap-2 mt-4"><button type="button" onclick="copyEmployeeInviteLink(${employee.chat_id})" class="bg-sky-50 text-sky-700 font-bold py-2.5 rounded-xl text-xs">Dəvət linki</button><button type="button" onclick="setEmployeeAccess(${employee.chat_id}, ${employee.active ? 'false' : 'true'})" class="${employee.active ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'} font-bold py-2.5 rounded-xl text-xs">${employee.active ? 'Girişi bağla' : 'Girişi aktiv et'}</button></div><button type="button" onclick="deleteEmployee(${employee.chat_id})" class="w-full mt-2 text-rose-600 font-bold py-2 text-xs">Əməkdaşı sil</button>` : ''}
@@ -11549,7 +11536,7 @@ async function saveEmployee() {
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
     const hotOrderSkills = [...document.querySelectorAll('[data-employee-hot-skill]:checked')].map(option => option.getAttribute('data-employee-hot-skill'));
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
-    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked};
+    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-customer-list-name-phone';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-completion-approval-settings';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
