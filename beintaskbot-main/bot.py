@@ -740,6 +740,26 @@ def is_admin(chat_id: int) -> bool:
         return False
 
 
+def can_use_deal_ai(chat_id: int) -> bool:
+    """AI tools are deliberately limited to the owner and Rüfət.
+
+    The browser hides the controls too, but this server-side check is the
+    access boundary: a staff member cannot call an AI endpoint directly.
+    """
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    return is_admin(cid) or is_rufat_chat(cid)
+
+
+def _deal_ai_access_denied() -> web.Response:
+    return web.json_response(
+        {"success": False, "error": "AI funksiyası yalnız administrator və Rüfət üçün açıqdır."},
+        status=403,
+    )
+
+
 _PENDING_ACTIONS_FILE = "pending_actions.json"
 _TASK_PRIORITIES_FILE = "task_priorities.json"
 _TASK_CREATORS_FILE = "task_creators.json"
@@ -17777,6 +17797,8 @@ async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not can_use_deal_ai(chat_id):
+        return _deal_ai_access_denied()
     try:
         data = await request.json()
     except Exception:
@@ -17832,6 +17854,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not can_use_deal_ai(chat_id):
+        return _deal_ai_access_denied()
     try:
         data = await request.json()
     except Exception:
@@ -17976,6 +18000,8 @@ async def handle_api_deal_chat_transcribe(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not can_use_deal_ai(chat_id):
+        return _deal_ai_access_denied()
     try:
         data = await request.json()
     except Exception:
