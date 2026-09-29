@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="325">
+    <meta name="pwa-build" content="326">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9029,7 +9029,7 @@ function renderChatsStageFilter() {
     if(!box) return;
     const options = new Map();
     (samilDeals || []).forEach(deal => {
-        if(!deal || !deal.id || !chatBelongsToViewer(deal) || isSuccessfulChatDeal(deal)) return;
+        if(!deal || !deal.id || !chatBelongsToViewer(deal) || isTerminalChatDeal(deal)) return;
         const key = chatStageFilterKey(deal);
         if(!options.has(key)) options.set(key, chatStageFilterLabel(deal));
     });
@@ -9449,7 +9449,9 @@ function isDeclinedChatDeal(deal) {
 }
 function isNizamiQueueDeal(deal) {
     if(!deal || deal.outbox) return true;
-    if(isSuccessfulChatDeal(deal)) return false;
+    // Terminal Kommo stages are never part of Nizami's active client queue.
+    // A revived lead must first be moved back to a working stage in Kommo.
+    if(isTerminalChatDeal(deal)) return false;
     if(deal.nizami_funnel === true) return true;
     const kind = String(deal.nizami_queue_kind || '');
     if(kind === 'new_request' || kind === 'hot') return true;

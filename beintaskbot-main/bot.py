@@ -9462,13 +9462,14 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         # path performs individual lead lookups and can delay the whole CRM.
         # The two business queues that Nizami must see (Yeni müraciətlər and
         # Nömrə alınıb) were added above directly from their Kommo stages.
-        # Finished records are not an active queue. A declined deal returns
-        # only after a new client message, which preserves the re-entry rule.
+        # Nizami's client queue never contains either Kommo terminal state.
+        # Even if a client writes again after a declined deal, it must be
+        # moved back to a working stage first; otherwise old closed records
+        # pollute the active client list.
         terminal_ids = {
             int(item.get("id") or 0)
             for item in deals
-            if _is_successful_deal(item)
-            or (_is_declined_deal(item) and not _has_terminal_reentry(int(item.get("id") or 0)))
+            if _is_successful_deal(item) or _is_declined_deal(item)
         }
         if terminal_ids:
             deals[:] = [item for item in deals if int(item.get("id") or 0) not in terminal_ids]
