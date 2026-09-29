@@ -17533,7 +17533,9 @@ def _audio_transcript_key(item: dict, source: str) -> str:
 
 def _transcribe_audio_with_ai(audio_path: str) -> str:
     """Use the configured OpenAI-compatible speech endpoint when available."""
-    model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
+    # The configured Manus/OpenAI-compatible proxy currently exposes the
+    # standard Whisper transcription interface only.
+    model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "whisper-1").strip() or "whisper-1"
     try:
         with open(audio_path, "rb") as audio_file:
             result = llm_client.audio.transcriptions.create(
