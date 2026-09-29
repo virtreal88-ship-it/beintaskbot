@@ -102,10 +102,10 @@ VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
 # OpenAI client
 llm_client = OpenAI(
     api_key=_required_env("OPENAI_API_KEY"),
-    # Direct OpenAI is the normal path.  OPENAI_API_BASE remains an optional
-    # Railway override for a customer's own compatible endpoint, but a clean
-    # installation must never silently fall back to a third-party gateway.
-    base_url=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+    # This production workspace deliberately uses OpenAI directly.  Do not
+    # route chat or recordings through a gateway merely because an old Railway
+    # variable is still present.
+    base_url="https://api.openai.com/v1",
 )
 
 # Linear confirmation queue for the owner.  Only the configured ``Təsdiq``
