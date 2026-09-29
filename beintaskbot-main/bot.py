@@ -102,7 +102,10 @@ VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
 # OpenAI client
 llm_client = OpenAI(
     api_key=_required_env("OPENAI_API_KEY"),
-    base_url=os.environ.get("OPENAI_API_BASE", "https://api.manus.im/api/llm-proxy/v1"),
+    # Direct OpenAI is the normal path.  OPENAI_API_BASE remains an optional
+    # Railway override for a customer's own compatible endpoint, but a clean
+    # installation must never silently fall back to a third-party gateway.
+    base_url=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
 )
 
 # Linear confirmation queue for the owner.  Only the configured ``Təsdiq``
@@ -17568,22 +17571,45 @@ def _audio_transcript_key(item: dict, source: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _transcribe_audio_with_ai(audio_path: str) -> str:
-    """Use the configured OpenAI-compatible speech endpoint when available."""
-    # The configured Manus/OpenAI-compatible proxy currently exposes the
-    # standard Whisper transcription interface only.
-    model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "whisper-1").strip() or "whisper-1"
-    try:
-        with open(audio_path, "rb") as audio_file:
-            result = llm_client.audio.transcriptions.create(
-                model=model,
-                file=("recording.mp3", audio_file, "audio/mpeg"),
-            )
-        text = getattr(result, "text", result)
-        return clean_transcription(str(text or ""))[:3000]
-    except Exception as exc:
-        logger.info("Configured speech transcription unavailable: %s", exc)
-        return ""
+def _transcribe_audio_with_ai(audio_path: str) -> tuple[str, str]:
+    """Transcribe with a direct OpenAI speech model and retain a safe error.
+
+    Both current OpenAI transcription model names are tried by default.  A
+    tenant may pin one via OPENAI_TRANSCRIPTION_MODEL (or provide a
+    comma-separated fallback list) without changing source code.
+    """
+    configured = str(os.environ.get("OPENAI_TRANSCRIPTION_MODEL") or "").strip()
+    model_names = [name.strip() for name in configured.split(",") if name.strip()]
+    if not model_names:
+        model_names = ["gpt-4o-mini-transcribe", "whisper-1"]
+    last_error = ""
+    for model in dict.fromkeys(model_names):
+        try:
+            with open(audio_path, "rb") as audio_file:
+                result = llm_client.audio.transcriptions.create(
+                    model=model,
+                    file=("recording.mp3", audio_file, "audio/mpeg"),
+                )
+            text = clean_transcription(str(getattr(result, "text", result) or ""))[:3000]
+            if text:
+                return text, ""
+            last_error = "empty transcription"
+        except Exception as exc:
+            last_error = str(exc)
+            logger.warning("OpenAI transcription model %s failed: %s", model, exc)
+    return "", last_error
+
+
+def _public_transcription_error(detail: str) -> str:
+    """Turn a provider failure into a useful UI message without leaking keys."""
+    low = str(detail or "").casefold()
+    if any(token in low for token in ("model", "not found", "404", "does not exist", "unsupported")):
+        return "OpenAI səs modeli əlçatan deyil. Railway-də OPENAI_TRANSCRIPTION_MODEL üçün gpt-4o-mini-transcribe və ya whisper-1 aktiv olmalıdır."
+    if any(token in low for token in ("credit", "billing", "quota", "insufficient")):
+        return "OpenAI səs tanıma limiti və ya balansı bitib."
+    if "timeout" in low or "timed out" in low:
+        return "Səs yazısını oxumaq çox vaxt apardı. Yenidən cəhd edin."
+    return "Səs yazısını mətnə çevirmək alınmadı."
 
 
 def _find_history_audio_item(lead: dict, probe: dict) -> dict | None:
@@ -17683,11 +17709,11 @@ def _transcribe_summary_audio(item: dict, lead: dict | None = None) -> str:
         saved = _ai_audio_transcripts.get(cache_key)
     if isinstance(saved, dict) and str(saved.get("text") or "").strip():
         return str(saved["text"])[:3000]
-    input_path = output_path = transcript_path = ""
-    before = {path for path in glob.glob("/tmp/*transcription*.txt")}
+    input_path = output_path = ""
     try:
         audio_bytes, file_name, source = _download_history_audio(lead, item)
         if not audio_bytes:
+            item["_transcription_error"] = "audio download failed"
             return ""
         suffix = ".ogg" if audio_bytes[:4] == b"OggS" else ".audio"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
@@ -17696,18 +17722,11 @@ def _transcribe_summary_audio(item: dict, lead: dict | None = None) -> str:
         output_path = input_path + ".mp3"
         converted = subprocess.run(["ffmpeg", "-i", input_path, "-y", output_path], capture_output=True, text=True, timeout=60)
         if converted.returncode != 0:
+            item["_transcription_error"] = "audio conversion failed"
             return ""
-        text = _transcribe_audio_with_ai(output_path)
-        # The old Railway image did not always include a speech CLI. Keep it
-        # as a compatibility fallback for environments that do have one, but
-        # make the configured AI endpoint the normal production path.
+        text, provider_error = _transcribe_audio_with_ai(output_path)
         if not text:
-            subprocess.run(["manus-speech-to-text", output_path], capture_output=True, text=True, timeout=90)
-            candidates = [path for path in glob.glob("/tmp/*transcription*.txt") if path not in before]
-            if candidates:
-                transcript_path = max(candidates, key=os.path.getctime)
-                with open(transcript_path, "r", encoding="utf-8", errors="ignore") as handle:
-                    text = clean_transcription(handle.read())[:3000]
+            item["_transcription_error"] = provider_error or "transcription unavailable"
         if text:
             with _ai_audio_transcripts_lock:
                 _ai_audio_transcripts[cache_key] = {"text": text, "saved_at": int(_time_module.time())}
@@ -17719,10 +17738,11 @@ def _transcribe_summary_audio(item: dict, lead: dict | None = None) -> str:
                 write_json(_AI_AUDIO_TRANSCRIPTS_FILE, _ai_audio_transcripts)
         return text
     except Exception as exc:
-        logger.info("Summary voice transcription skipped: %s", exc)
+        item["_transcription_error"] = str(exc)
+        logger.warning("Summary voice transcription skipped: %s", exc)
         return ""
     finally:
-        for path in (input_path, output_path, transcript_path):
+        for path in (input_path, output_path):
             if path:
                 try:
                     os.remove(path)
@@ -18073,7 +18093,10 @@ async def handle_api_deal_chat_transcribe(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Səs yazısı Kommo-da tapılmadı."}, status=404)
     transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
     if not transcript:
-        return web.json_response({"success": False, "error": "Səs yazısını mətnə çevirmək alınmadı."}, status=502)
+        return web.json_response({
+            "success": False,
+            "error": _public_transcription_error(item.get("_transcription_error") or ""),
+        }, status=502)
     return web.json_response({"success": True, "text": transcript, "message_id": str(item.get("id") or "")})
 
 

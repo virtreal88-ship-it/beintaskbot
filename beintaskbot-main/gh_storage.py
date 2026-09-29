@@ -66,7 +66,7 @@ def _ensure_postgres_schema(conn) -> None:
         _pg_schema_ready = True
 
 
-def _postgres_load_file(filename: str, force: bool = False) -> dict:
+def _postgres_load_file(filename: str, force: bool = False):
     """Read a document from PostgreSQL, importing its GitHub legacy value once."""
     try:
         with psycopg.connect(_DATABASE_URL, row_factory=dict_row) as conn:
@@ -76,7 +76,12 @@ def _postgres_load_file(filename: str, force: bool = False) -> dict:
                 row = cur.fetchone()
             if row is not None:
                 data = row["value"]
-                if not isinstance(data, dict):
+                # Most documents are objects, but a few important records
+                # (notably pending_actions.json) are arrays.  Converting an
+                # array to {} here made every unresolved confirmation vanish
+                # after a Railway restart even though PostgreSQL still held
+                # the original value.
+                if not isinstance(data, (dict, list)):
                     data = {}
                 with _lock:
                     _cache[filename] = data

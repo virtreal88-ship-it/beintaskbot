@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-compact';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-priority-audio';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
