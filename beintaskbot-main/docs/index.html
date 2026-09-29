@@ -63,7 +63,19 @@
         .stage-row.selected { background:#2481cc !important; color:#fff !important; }
         button { transition: transform 0.1s ease, opacity 0.15s ease; }
         button:active { transform: scale(0.95); opacity:0.85; }
-        #bottom-action-bar { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1); }
+        #bottom-action-bar {
+            transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+            z-index:11100;
+            max-height:90vh;
+            max-height:90dvh;
+            overflow-y:auto;
+            overscroll-behavior:contain;
+            padding-bottom:calc(20px + env(safe-area-inset-bottom, 0px));
+        }
+        #complete-panel .complete-actions {
+            position:sticky; bottom:0; background:#fff;
+            padding:12px 0; margin-top:4px;
+        }
         #complete-panel, #note-panel { animation: slideUp 0.25s ease forwards; }
         @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
         /* Desktop sidebar (hidden below 1024px) */
@@ -1369,7 +1381,7 @@
             </div>
             <audio id="complete-voice-preview" style="display:none; margin-top:8px; width:100%;" controls></audio>
         </div>
-        <div class="flex gap-2">
+        <div class="complete-actions flex gap-2">
             <button id="btn-confirm-complete" onclick="confirmComplete()" class="flex-1 bg-[#10b981] text-white font-bold py-3 rounded-xl text-xs">Göndər</button>
             <button onclick="closeBottomBar()" class="bg-gray-100 text-gray-700 font-bold px-4 py-3 rounded-xl text-xs">Ləğv et</button>
         </div>
