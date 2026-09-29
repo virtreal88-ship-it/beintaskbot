@@ -19291,9 +19291,14 @@ def _linear_graphql(query: str, variables: dict | None = None) -> dict:
         json={"query": query, "variables": variables or {}},
         timeout=15,
     )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
     if response.status_code >= 400:
-        raise RuntimeError(f"Linear cavab vermədi ({response.status_code}).")
-    payload = response.json()
+        messages = [str(item.get("message") or "") for item in (payload.get("errors") or []) if isinstance(item, dict)]
+        detail = "; ".join(message for message in messages if message)[:260]
+        raise RuntimeError(detail or f"Linear cavab vermədi ({response.status_code}).")
     if payload.get("errors"):
         logger.warning("Linear GraphQL error: %s", payload.get("errors"))
         raise RuntimeError("Linear sorğusunu yoxlamaq mümkün olmadı.")
@@ -19320,7 +19325,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
         return list(cached_items)
 
     payload = _linear_graphql("""
-    query ConfirmationIssues($teamId: String!, $stateId: String!) {
+    query ConfirmationIssues($teamId: ID!, $stateId: ID!) {
       issues(first: 100, orderBy: updatedAt, filter: {
         team: { id: { eq: $teamId } },
         state: { id: { eq: $stateId } }
