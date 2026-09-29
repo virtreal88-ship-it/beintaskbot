@@ -10575,29 +10575,27 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
     channels = _channels_from_talks(talks, sender_digits)
     row = next((item for item in channels if item.get("key") == wanted), None)
 
-    def same_reply_profile(actual: str) -> bool:
-        # Kommo often represents Instagram and TikTok through one social
-        # profile. They must use the Talk that received the last message,
-        # rather than a stale per-channel dropdown value in the browser.
-        social = {"instagram", "tiktok"}
-        return actual == wanted or (actual in social and wanted in social)
+    def is_requested_channel(actual: str) -> bool:
+        # The Instagram/TikTok widget can share one Kommo profile, but these
+        # are still distinct conversations.  Never cross-route between them:
+        # an answer belongs to the exact source of the last incoming message.
+        return str(actual or "").strip().lower() == wanted
 
+    if hinted_id:
+        hinted_talk = next((talk for talk in talks if _talk_id_of(talk) == hinted_id), None)
+        hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
+        # The Talk stored on the visible incoming message is more precise than
+        # a previously opened chat in another browser tab.
+        if hinted_talk and is_requested_channel(_talk_channel_key(hinted_talk)):
+            return hinted_id, _talk_chat_id(hinted_talk)
+        if hinted_row and is_requested_channel(str(hinted_row.get("key") or "")):
+            return hinted_id, str(hinted_row.get("chat_id") or "")
     remembered_id = int(_lead_open_talk.get(lid) or 0)
     if remembered_id:
         remembered = next((talk for talk in talks if _talk_id_of(talk) == remembered_id), None)
         remembered_channel = _talk_channel_key(remembered or {})
-        if remembered and same_reply_profile(remembered_channel):
+        if remembered and is_requested_channel(remembered_channel):
             return remembered_id, _talk_chat_id(remembered)
-    if hinted_id:
-        hinted_talk = next((talk for talk in talks if _talk_id_of(talk) == hinted_id), None)
-        hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
-        # A browser can retain an old Talk id after a customer switches from
-        # WhatsApp to Instagram (or TikTok).  Never send a social reply to a
-        # Talk belonging to another channel.
-        if hinted_talk and same_reply_profile(_talk_channel_key(hinted_talk)):
-            return hinted_id, _talk_chat_id(hinted_talk)
-        if hinted_row and same_reply_profile(str(hinted_row.get("key") or "")):
-            return hinted_id, str(hinted_row.get("chat_id") or "")
     if row and row.get("talk_id"):
         return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
     # Falling back to an arbitrary "most recent" Talk is acceptable only for

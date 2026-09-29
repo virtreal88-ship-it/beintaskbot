@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-28-customer-filter-access-requests';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-social-reply-routing';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

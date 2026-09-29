@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="323">
+    <meta name="pwa-build" content="324">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -5992,13 +5992,18 @@ function paintDealChannels(channels, active) {
 }
 function preferredDealChannel(channels, messages) {
     const rows = Array.isArray(channels) ? channels : [];
-    if(rows.some(row => row.key === 'whatsapp')) return 'whatsapp';
     const list = Array.isArray(messages) ? messages : [];
-    const lastIn = [...list].reverse().find(item => item && item.incoming) || list[list.length - 1];
-    if(lastIn) {
-        const key = chatChannelKey(lastIn);
+    // A reply must always start in the channel of the most recent customer
+    // message.  WhatsApp used to win here merely because its tab was present,
+    // which routed Instagram/TikTok replies to the wrong Talk.
+    const supported = row => row && rows.some(channel => channel.key === chatChannelKey(row));
+    const lastIncoming = [...list].reverse().find(row => row && row.incoming && supported(row));
+    const lastKnown = lastIncoming || [...list].reverse().find(row => row && supported(row));
+    if(lastKnown) {
+        const key = chatChannelKey(lastKnown);
         if(rows.some(row => row.key === key)) return key;
     }
+    if(rows.some(row => row.key === 'whatsapp')) return 'whatsapp';
     return rows[0] ? rows[0].key : '';
 }
 function applyDealChannels(channels) {
@@ -7830,7 +7835,6 @@ async function toggleDealVoice() {
     _dealVoiceTimer = setInterval(paintDealVoiceTime, 1000);
 }
 async function sendDealChatMessage(fileArg) {
-    return;
     if(_dealVoiceRec && _dealVoiceRec.state !== 'inactive') {
         const file = await stopDealVoiceAndGetFile();
         if(!file) return;
