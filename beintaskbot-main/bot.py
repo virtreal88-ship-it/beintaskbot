@@ -103,12 +103,14 @@ llm_client = OpenAI(
     base_url=os.environ.get("OPENAI_API_BASE", "https://api.manus.im/api/llm-proxy/v1"),
 )
 
-# Linear is intentionally a read-only source in the legacy CRM.  Only issues
-# waiting for Nizami's confirmation are exposed; no Linear issue is created,
-# edited or moved from this application.
+# Linear confirmation queue for the owner.  Only the configured ``Təsdiq``
+# issues are exposed here; the owner may route a task to Triage/Backlog or
+# delete it.  The API key itself always remains in Railway, never in the UI.
 LINEAR_API_KEY = str(os.environ.get("LINEAR_API_KEY") or "").strip()
 LINEAR_TEAM_ID = str(os.environ.get("LINEAR_TEAM_ID") or "c4106f85-9a15-4f8b-8ec9-ef894ca746e4").strip()
 LINEAR_TESDIQ_STATE_ID = str(os.environ.get("LINEAR_TESDIQ_STATE_ID") or "dd221372-cd7a-4dfc-9361-214ef920ebc0").strip()
+LINEAR_TRIAGE_STATE_ID = str(os.environ.get("LINEAR_TRIAGE_STATE_ID") or "f115d79d-a711-40a1-996a-cac9a5790ea4").strip()
+LINEAR_BACKLOG_STATE_ID = str(os.environ.get("LINEAR_BACKLOG_STATE_ID") or "e3bd0665-1e8c-4e94-afe8-dae7d7c531e8").strip()
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 
@@ -19279,36 +19281,14 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
     return web.json_response({"success": False, "error": "Naməlum əməliyyat."}, status=400)
 
 
-def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
-    """Fetch the administrator's Linear confirmation queue without mutating it."""
+def _linear_graphql(query: str, variables: dict | None = None) -> dict:
+    """Make one authenticated Linear GraphQL call and normalize API errors."""
     if not LINEAR_API_KEY:
         raise RuntimeError("Linear hələ qoşulmayıb. Railway-də LINEAR_API_KEY əlavə edin.")
-    now = _time_module.monotonic()
-    cached_at = float(_LINEAR_TESDIQ_CACHE.get("at") or 0)
-    cached_items = _LINEAR_TESDIQ_CACHE.get("items")
-    if not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
-        return list(cached_items)
-
-    query = """
-    query ConfirmationIssues($teamId: String!, $stateId: String!) {
-      issues(first: 100, orderBy: updatedAt, filter: {
-        team: { id: { eq: $teamId } },
-        state: { id: { eq: $stateId } }
-      }) {
-        nodes {
-          identifier title description priority dueDate updatedAt url
-          state { name }
-          assignee { name }
-          project { name }
-          labels { nodes { name } }
-        }
-      }
-    }
-    """
     response = requests.post(
         "https://api.linear.app/graphql",
         headers={"Authorization": LINEAR_API_KEY, "Content-Type": "application/json"},
-        json={"query": query, "variables": {"teamId": LINEAR_TEAM_ID, "stateId": LINEAR_TESDIQ_STATE_ID}},
+        json={"query": query, "variables": variables or {}},
         timeout=15,
     )
     if response.status_code >= 400:
@@ -19317,15 +19297,55 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     if payload.get("errors"):
         logger.warning("Linear GraphQL error: %s", payload.get("errors"))
         raise RuntimeError("Linear sorğusunu yoxlamaq mümkün olmadı.")
-    nodes = (((payload.get("data") or {}).get("issues") or {}).get("nodes") or [])
+    return payload.get("data") or {}
+
+
+def _linear_client_hint(description: str) -> str:
+    """Expose the customer/account field prominently without guessing data."""
+    for line in str(description or "").splitlines():
+        clean = line.strip()
+        lowered = clean.casefold()
+        for prefix in ("müştəri:", "client:", "account:", "hesab:"):
+            if lowered.startswith(prefix):
+                return clean.split(":", 1)[1].strip() or "Göstərilməyib"
+    return "Göstərilməyib"
+
+
+def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
+    """Fetch the administrator's Linear confirmation queue without mutating it."""
+    now = _time_module.monotonic()
+    cached_at = float(_LINEAR_TESDIQ_CACHE.get("at") or 0)
+    cached_items = _LINEAR_TESDIQ_CACHE.get("items")
+    if not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
+        return list(cached_items)
+
+    payload = _linear_graphql("""
+    query ConfirmationIssues($teamId: String!, $stateId: String!) {
+      issues(first: 100, orderBy: updatedAt, filter: {
+        team: { id: { eq: $teamId } },
+        state: { id: { eq: $stateId } }
+      }) {
+        nodes {
+          id identifier title description priority dueDate updatedAt url
+          state { name }
+          assignee { name }
+          project { name }
+          labels { nodes { name } }
+        }
+      }
+    }
+    """, {"teamId": LINEAR_TEAM_ID, "stateId": LINEAR_TESDIQ_STATE_ID})
+    nodes = ((payload.get("issues") or {}).get("nodes") or [])
     items = []
     for row in nodes:
         if not isinstance(row, dict):
             continue
         items.append({
             "id": str(row.get("identifier") or ""),
+            "source_id": str(row.get("id") or ""),
             "title": str(row.get("title") or "Tapşırıq"),
             "description": str(row.get("description") or "")[:1200],
+            "client": _linear_client_hint(str(row.get("description") or "")),
             "priority": int(row.get("priority") or 0),
             "due_date": row.get("dueDate"),
             "updated_at": row.get("updatedAt"),
@@ -19338,11 +19358,90 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     return items
 
 
+def _invalidate_linear_tesdiq_cache() -> None:
+    _LINEAR_TESDIQ_CACHE.update({"at": 0.0, "items": []})
+
+
+def _linear_assert_confirmation_issue(issue_id: str) -> None:
+    """Refuse actions for issues outside this CRM's controlled queue."""
+    payload = _linear_graphql("""
+    query ConfirmationIssue($id: String!) {
+      issue(id: $id) { id team { id } state { id } }
+    }
+    """, {"id": issue_id})
+    issue = payload.get("issue") or {}
+    team_id = str((issue.get("team") or {}).get("id") or "")
+    state_id = str((issue.get("state") or {}).get("id") or "")
+    if team_id != LINEAR_TEAM_ID or state_id != LINEAR_TESDIQ_STATE_ID:
+        raise RuntimeError("Bu tapşırıq artıq Təsdiq siyahısında deyil.")
+
+
+def _linear_move_issue(issue_id: str, state_id: str) -> dict:
+    _linear_assert_confirmation_issue(issue_id)
+    payload = _linear_graphql("""
+    mutation MoveLinearIssue($id: String!, $stateId: String!) {
+      issueUpdate(id: $id, input: { stateId: $stateId }) {
+        success
+        issue { id identifier state { name } }
+      }
+    }
+    """, {"id": issue_id, "stateId": state_id})
+    result = payload.get("issueUpdate") or {}
+    if not result.get("success"):
+        raise RuntimeError("Linear tapşırığının statusu dəyişdirilmədi.")
+    _invalidate_linear_tesdiq_cache()
+    return result.get("issue") or {}
+
+
+def _linear_delete_issue(issue_id: str) -> None:
+    """Delete an issue using Linear's native mutation.
+
+    The precise mutation is verified with GraphQL introspection immediately
+    after the integration key is connected.  Keeping it isolated makes any
+    future Linear schema rename a safe, single-place correction.
+    """
+    _linear_assert_confirmation_issue(issue_id)
+    payload = _linear_graphql("""
+    mutation DeleteLinearIssue($id: String!) {
+      issueDelete(id: $id) { success }
+    }
+    """, {"id": issue_id})
+    result = payload.get("issueDelete") or {}
+    if not result.get("success"):
+        raise RuntimeError("Linear tapşırığını silmək mümkün olmadı.")
+    _invalidate_linear_tesdiq_cache()
+
+
 async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
-    """Read-only Linear queue for the owner.  This never changes Linear."""
+    """Owner-only Linear confirmation queue and explicit routing actions."""
     chat_id = int(request.get("authenticated_chat_id") or 0)
     if not chat_id or not is_admin(chat_id):
         return web.json_response({"success": False, "error": "Bu siyahı yalnız Admin üçündür."}, status=403)
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        data = data if isinstance(data, dict) else {}
+        action = str(data.get("action") or "").strip().lower()
+        issue_id = str(data.get("issue_id") or "").strip()
+        if not issue_id or action not in {"confirm", "discussion", "delete"}:
+            return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
+        try:
+            if action == "confirm":
+                moved = await asyncio.to_thread(_linear_move_issue, issue_id, LINEAR_TRIAGE_STATE_ID)
+                return web.json_response({"success": True, "message": "Tapşırıq Triage mərhələsinə keçirildi.", "issue": moved})
+            if action == "discussion":
+                moved = await asyncio.to_thread(_linear_move_issue, issue_id, LINEAR_BACKLOG_STATE_ID)
+                return web.json_response({"success": True, "message": "Tapşırıq Backlog mərhələsinə keçirildi.", "issue": moved})
+            await asyncio.to_thread(_linear_delete_issue, issue_id)
+            return web.json_response({"success": True, "message": "Tapşırıq Linear-dan silindi."})
+        except RuntimeError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=502)
+        except Exception:
+            logger.exception("Could not change Linear confirmation issue")
+            return web.json_response({"success": False, "error": "Linear tapşırığı dəyişdirilmədi."}, status=502)
+
     force = str(request.query.get("refresh") or "").strip() == "1"
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force)
@@ -21314,6 +21413,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_post("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_get("/api/linear/tesdiq", handle_api_linear_tesdiq)
+    app_web.router.add_post("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)
