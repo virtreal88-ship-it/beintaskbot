@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="330">
+    <meta name="pwa-build" content="331">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -454,6 +454,10 @@
         .photo-wait.loading .audio-spin { display:block; }
         .photo-wait.loading .photo-miss { display:none; }
         .audio-wait .audio-dl { flex:none; font-size:11px; font-weight:600; color:#2563eb; text-decoration:underline; }
+        .audio-transcript { margin-top:7px; font-size:12px; line-height:1.45; color:#334155; }
+        .audio-transcript-btn { border:0; padding:3px 0; background:transparent; color:#0f766e; font:inherit; font-size:12px; font-weight:700; cursor:pointer; text-decoration:underline; }
+        .audio-transcript-btn.loading { color:#94a3b8; pointer-events:none; text-decoration:none; }
+        .audio-transcript-text { margin-top:4px; padding:7px 9px; border-radius:9px; background:rgba(255,255,255,.58); white-space:pre-wrap; }
         .deal-side-form textarea, .deal-side-form input, .deal-side-form select { width:100%; margin-top:6px; padding:8px 10px; border:1px solid #e2e8f0; border-radius:10px; font-size:12px; }
         .deal-side-form button { margin-top:8px; width:100%; padding:9px; border:0; border-radius:10px; background:#008069; color:#fff; font-weight:600; font-size:12px; }
         .wa-pane { min-width:0; min-height:0; height:100%; overflow:hidden; display:flex; flex-direction:column; background:#f4f6f8; }
@@ -4277,6 +4281,7 @@ function bindVideoProgress(root) {
 function bindAudioWait(root) {
     bindPhotoWait(root);
     bindVideoProgress(root);
+    bindAudioTranscript(root);
     (root || document).querySelectorAll('.wa-audio-player, .audio-wait').forEach(wrap => {
         if(wrap.dataset.bound) return;
         wrap.dataset.bound = '1';
@@ -4518,6 +4523,62 @@ function bindAudioWait(root) {
                 }
             });
         }
+    });
+}
+function audioTranscriptControl(item) {
+    if(!item || !(isChatAudioItem(item) || /call/i.test(String(item.message_type || item.type || '')))) return '';
+    const id = String(item.id || item.msgid || item.external_id || '');
+    const uuid = String(item.file_uuid || '');
+    const at = Number(item.created_at || 0);
+    if(!id && !uuid && !at) return '';
+    const channel = String(item.channel || item.origin || '');
+    const kind = String(item.message_type || item.type || 'audio');
+    return `<div class="audio-transcript"><button type="button" class="audio-transcript-btn" data-message-id="${escapeHtml(id)}" data-file-uuid="${escapeHtml(uuid)}" data-created-at="${escapeHtml(String(at))}" data-channel="${escapeHtml(channel)}" data-message-type="${escapeHtml(kind)}">Mətnə çevir</button></div>`;
+}
+async function requestAudioTranscript(button) {
+    if(!button || button.classList.contains('loading')) return;
+    const leadId = String((_dealViewState && _dealViewState.id) || _noticeHistoryLeadId || '');
+    if(!leadId || !CURRENT_USER_ID) {
+        toast('Səs yazısı üçün sövdələşmə açılmalıdır', true);
+        return;
+    }
+    const original = button.textContent;
+    button.classList.add('loading');
+    button.textContent = 'Mətnə çevrilir…';
+    try {
+        const response = await fetch(API_BASE + '/api/deal/chat/transcribe', {
+            method: 'POST',
+            headers: Object.assign({'Content-Type':'application/json'}, authFetchHeaders()),
+            body: JSON.stringify({
+                lead_id: leadId,
+                message_id: button.dataset.messageId || '',
+                file_uuid: button.dataset.fileUuid || '',
+                created_at: Number(button.dataset.createdAt || 0),
+                channel: button.dataset.channel || '',
+                message_type: button.dataset.messageType || 'audio'
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok || !payload.success || !String(payload.text || '').trim()) throw new Error(payload.error || 'Mətn alınmadı');
+        const text = document.createElement('div');
+        text.className = 'audio-transcript-text';
+        text.textContent = payload.text;
+        button.replaceWith(text);
+    } catch(error) {
+        button.classList.remove('loading');
+        button.textContent = original || 'Mətnə çevir';
+        toast((error && error.message) || 'Səs yazısını mətnə çevirmək alınmadı', true);
+    }
+}
+function bindAudioTranscript(root) {
+    (root || document).querySelectorAll('.audio-transcript-btn').forEach(button => {
+        if(button.dataset.bound) return;
+        button.dataset.bound = '1';
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            requestAudioTranscript(button);
+        });
     });
 }
 document.addEventListener('play', event => {
@@ -4912,7 +4973,8 @@ function dealChatItemHtml(item, token, readonly) {
     const failed = !item.incoming && /^(error|failed|undelivered)$/i.test(String(item.delivery_status || item.status || ''));
     const isAudio = isChatAudioItem(item) || /voice|audio|call/i.test(String(item && (item.message_type || item.type) || ''));
     const hasAudioClass = !item.history_face && isAudio ? ' has-audio' : '';
-    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}${hasAudioClass}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${item.history_face ? '' : dealMediaBlock(item, token)}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
+    const transcript = !item.history_face && isAudio ? audioTranscriptControl(item) : '';
+    const row = `<div class="deal-chat-row ${cls}${pinned ? ' pinned' : ''}${failed ? ' failed' : ''}${hasAudioClass}"${reactAttr}${msgAttr} data-channel="${escapeHtml(channel)}"><div class="chat-row-head">${avatar}${meta.svg}${headName}</div>${quote}<div>${text}</div>${item.history_face ? '' : dealMediaBlock(item, token)}${transcript}<div class="wa-time">${reaction}${pinMark}<span class="wa-when">${escapeHtml(when)}</span>${dealChatTicks(item)}${reactBtn}</div></div>`;
     const body = carousel ? `<div class="wa-carousel-stack">${row}${carousel}</div>` : row;
     return `<div class="deal-chat-wrap ${cls}${carousel ? ' has-carousel' : ''}">${body}${replyBtn}</div>`;
 }
@@ -12115,7 +12177,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=294');
+    const reg = await navigator.serviceWorker.register('sw.js?v=331');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

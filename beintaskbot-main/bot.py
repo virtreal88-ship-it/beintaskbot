@@ -17531,11 +17531,114 @@ def _audio_transcript_key(item: dict, source: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _transcribe_summary_audio(item: dict) -> str:
-    """Transcribe and cache one Kommo voice file or call recording for AI."""
-    source = _summary_audio_source(item)
-    if not source:
+def _transcribe_audio_with_ai(audio_path: str) -> str:
+    """Use the configured OpenAI-compatible speech endpoint when available."""
+    model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
+    try:
+        with open(audio_path, "rb") as audio_file:
+            result = llm_client.audio.transcriptions.create(
+                model=model,
+                file=("recording.mp3", audio_file, "audio/mpeg"),
+            )
+        text = getattr(result, "text", result)
+        return clean_transcription(str(text or ""))[:3000]
+    except Exception as exc:
+        logger.info("Configured speech transcription unavailable: %s", exc)
         return ""
+
+
+def _find_history_audio_item(lead: dict, probe: dict) -> dict | None:
+    """Find the audio shown in a lead timeline without trusting a browser URL."""
+    target_id = str(probe.get("id") or probe.get("message_id") or "").strip()
+    target_uuid = str(probe.get("file_uuid") or "").strip()
+    target_channel = str(probe.get("channel") or "").strip().lower()
+    try:
+        target_at = int(probe.get("created_at") or probe.get("at") or 0)
+    except (TypeError, ValueError):
+        target_at = 0
+    try:
+        lead_id = int(lead.get("id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return None
+    rows: list[dict] = []
+    channels = [target_channel] if target_channel in CHAT_CHANNEL_LABELS else []
+    # A voice can be on a non-default source. A short fallback scan preserves
+    # the exact channel choice when it is known without making a wide CRM scan.
+    channels.extend(key for key in CHAT_CHANNEL_LABELS if key not in channels)
+    for channel in channels:
+        try:
+            page, *_rest = _collect_deal_chat(
+                lead_id, _lead_contact_ids(lead), limit=50, channel=channel,
+                link_media=True,
+            )
+        except Exception:
+            continue
+        for row in page:
+            if not isinstance(row, dict) or not _is_history_audio(row):
+                continue
+            if target_uuid and target_uuid == str(row.get("file_uuid") or ""):
+                return row
+            row_ids = {str(row.get(key) or "").strip() for key in ("id", "msgid", "external_id")}
+            if target_id and target_id in row_ids:
+                return row
+            try:
+                row_at = int(row.get("created_at") or 0)
+            except (TypeError, ValueError):
+                row_at = 0
+            if target_at and row_at and abs(row_at - target_at) <= 2:
+                return row
+    # Some older Kommo widgets only expose the recording through a note/file.
+    # Resolve that server-side by timestamp; the browser never passes a URL.
+    candidate = _find_click_media(
+        lead_id,
+        _lead_contact_ids(lead),
+        target_at,
+        "audio",
+        target_id,
+    )
+    return candidate if isinstance(candidate, dict) and _is_history_audio(candidate) else None
+
+
+def _download_history_audio(lead: dict | None, item: dict) -> tuple[bytes, str, str]:
+    """Download one authorised history recording and return bytes, name, source."""
+    resolved = dict(item or {})
+    source = _summary_audio_source(resolved)
+    if not source and lead:
+        found = _find_history_audio_item(lead, resolved)
+        if found:
+            resolved.update(found)
+            source = _summary_audio_source(resolved)
+    if not source:
+        return b"", "", ""
+
+    def _get(url: str):
+        headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(url) else {}
+        response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+        if response.status_code != 200 and headers:
+            response = requests.get(url, timeout=30, allow_redirects=True)
+        return response
+
+    response = _get(source)
+    # Media links from chat widgets can be short-lived. On failure, refresh
+    # the exact message from Kommo once before declaring transcription failed.
+    if (response.status_code != 200 or not response.content) and lead:
+        found = _find_history_audio_item(lead, resolved)
+        if found:
+            resolved.update(found)
+            refreshed = _summary_audio_source(resolved)
+            if refreshed and refreshed != source:
+                source = refreshed
+                response = _get(source)
+    if response.status_code != 200 or not response.content:
+        return b"", "", source
+    return response.content, str(resolved.get("file_name") or ""), source
+
+
+def _transcribe_summary_audio(item: dict, lead: dict | None = None) -> str:
+    """Transcribe and cache one authorised Kommo voice file or call recording."""
+    source = _summary_audio_source(item)
     cache_key = _audio_transcript_key(item, source)
     with _ai_audio_transcripts_lock:
         saved = _ai_audio_transcripts.get(cache_key)
@@ -17544,25 +17647,28 @@ def _transcribe_summary_audio(item: dict) -> str:
     input_path = output_path = transcript_path = ""
     before = {path for path in glob.glob("/tmp/*transcription*.txt")}
     try:
-        headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(source) else {}
-        response = requests.get(source, headers=headers, timeout=25, allow_redirects=True)
-        if response.status_code != 200:
+        audio_bytes, file_name, source = _download_history_audio(lead, item)
+        if not audio_bytes:
             return ""
-        suffix = ".ogg" if response.content[:4] == b"OggS" else ".audio"
+        suffix = ".ogg" if audio_bytes[:4] == b"OggS" else ".audio"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
-            handle.write(response.content)
+            handle.write(audio_bytes)
             input_path = handle.name
         output_path = input_path + ".mp3"
         converted = subprocess.run(["ffmpeg", "-i", input_path, "-y", output_path], capture_output=True, text=True, timeout=60)
         if converted.returncode != 0:
             return ""
-        subprocess.run(["manus-speech-to-text", output_path], capture_output=True, text=True, timeout=90)
-        candidates = [path for path in glob.glob("/tmp/*transcription*.txt") if path not in before]
-        if not candidates:
-            return ""
-        transcript_path = max(candidates, key=os.path.getctime)
-        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as handle:
-            text = clean_transcription(handle.read())[:3000]
+        text = _transcribe_audio_with_ai(output_path)
+        # The old Railway image did not always include a speech CLI. Keep it
+        # as a compatibility fallback for environments that do have one, but
+        # make the configured AI endpoint the normal production path.
+        if not text:
+            subprocess.run(["manus-speech-to-text", output_path], capture_output=True, text=True, timeout=90)
+            candidates = [path for path in glob.glob("/tmp/*transcription*.txt") if path not in before]
+            if candidates:
+                transcript_path = max(candidates, key=os.path.getctime)
+                with open(transcript_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    text = clean_transcription(handle.read())[:3000]
         if text:
             with _ai_audio_transcripts_lock:
                 _ai_audio_transcripts[cache_key] = {"text": text, "saved_at": int(_time_module.time())}
@@ -17591,7 +17697,7 @@ def _is_history_audio(item: dict) -> bool:
     return kind in {"audio", "voice", "ptt", "call", "call_in", "call_out"} or bool(re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", source, re.I))
 
 
-async def _ai_history_lines(rows: list[dict]) -> tuple[list[str], int]:
+async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple[list[str], int]:
     """Use the complete recent 30-message context for both reply and summary.
 
     Audio is processed in order and persisted after the first transcription.
@@ -17608,7 +17714,7 @@ async def _ai_history_lines(rows: list[dict]) -> tuple[list[str], int]:
         if text:
             lines.append(f"{who}: {text[:400]}")
         if _is_history_audio(item):
-            transcript = await asyncio.to_thread(_transcribe_summary_audio, item)
+            transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
             if transcript:
                 label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
                 lines.append(f"{who} ({label}): {transcript}")
@@ -17781,7 +17887,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         mode = "reply"
     # The same recent context powers both an AI reply and a summary.  A reply
     # must understand a voice note or call recording just as much as Xülasə.
-    lines, transcribed_count = await _ai_history_lines(history_rows)
+    lines, transcribed_count = await _ai_history_lines(history_rows, lead)
     history = "\n".join(lines) or "Yazışma yoxdur."
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)
@@ -17856,6 +17962,47 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         "summary": summary,
         "transcribed_voice_count": transcribed_count,
     })
+
+
+async def handle_api_deal_chat_transcribe(request: web.Request) -> web.Response:
+    """Transcribe one visible voice/call recording on demand.
+
+    Only a lead id plus non-sensitive message identifiers cross the browser
+    boundary. The recording location is looked up again on the server after
+    the normal deal permission check, preventing an arbitrary URL fetch.
+    """
+    chat_id = _deal_request_user(request)
+    if not chat_id:
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        lead_id = int(data.get("lead_id") or 0)
+    except (TypeError, ValueError):
+        lead_id = 0
+    if not lead_id:
+        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
+    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    if err:
+        return err
+    probe = {
+        "id": str(data.get("message_id") or "")[:180],
+        "file_uuid": str(data.get("file_uuid") or "")[:180],
+        "created_at": data.get("created_at") or 0,
+        "channel": str(data.get("channel") or "")[:40],
+        "message_type": str(data.get("message_type") or "audio")[:40],
+    }
+    item = await asyncio.to_thread(_find_history_audio_item, lead, probe)
+    if not item:
+        return web.json_response({"success": False, "error": "Səs yazısı Kommo-da tapılmadı."}, status=404)
+    transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
+    if not transcript:
+        return web.json_response({"success": False, "error": "Səs yazısını mətnə çevirmək alınmadı."}, status=502)
+    return web.json_response({"success": True, "text": transcript, "message_id": str(item.get("id") or "")})
 
 
 async def handle_api_deal_public(request: web.Request) -> web.Response:
@@ -20996,6 +21143,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/whatsapp/templates", handle_api_whatsapp_templates)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/suggest', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/suggest", handle_api_deal_chat_suggest)
+    app_web.router.add_route('OPTIONS', '/api/deal/chat/transcribe', lambda r: web.Response())
+    app_web.router.add_post("/api/deal/chat/transcribe", handle_api_deal_chat_transcribe)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/ai-example', lambda r: web.Response())
     app_web.router.add_post("/api/deal/chat/ai-example", handle_api_deal_ai_example)
     app_web.router.add_route('OPTIONS', '/api/deal/chat/react', lambda r: web.Response())
