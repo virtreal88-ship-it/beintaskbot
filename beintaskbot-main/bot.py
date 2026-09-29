@@ -17754,7 +17754,12 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
         if text:
             lines.append(f"{who}: {text[:400]}")
         if _is_history_audio(item):
-            transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
+            # Reuse text produced by the visible “Mətnə çevir” action when
+            # it is present in the submitted 30-message context.  This avoids
+            # a second transcription request for the same recording.
+            transcript = str(item.get("transcript") or item.get("transcription") or "").strip()
+            if not transcript:
+                transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
             if transcript:
                 label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
                 lines.append(f"{who} ({label}): {transcript}")
@@ -19370,8 +19375,9 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
       }}) {{
         nodes {{
           id identifier title description priority dueDate updatedAt url
-          state {{ name }}
+          state {{ id name color }}
           assignee {{ name }}
+          creator {{ name }}
           project {{ name }}
           labels {{ nodes {{ name }} }}
         }}
@@ -19393,7 +19399,13 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
             "due_date": row.get("dueDate"),
             "updated_at": row.get("updatedAt"),
             "url": str(row.get("url") or ""),
+            "status": {
+                "id": str((row.get("state") or {}).get("id") or ""),
+                "name": str((row.get("state") or {}).get("name") or "Təsdiq"),
+                "color": str((row.get("state") or {}).get("color") or ""),
+            },
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
+            "operator": str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": str((row.get("project") or {}).get("name") or ""),
             "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
         })

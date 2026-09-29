@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-scroll';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-linear-compact';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
