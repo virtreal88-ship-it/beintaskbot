@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="331">
+    <meta name="pwa-build" content="332">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -12175,7 +12175,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=331');
+    const reg = await navigator.serviceWorker.register('sw.js?v=332');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

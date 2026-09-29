@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-audio-transcription';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-ai-audio-identity';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
