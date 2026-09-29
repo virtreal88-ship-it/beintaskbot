@@ -82,7 +82,9 @@ KOMMO_TOKEN = _required_env("KOMMO_TOKEN")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
 BAKU_TZ = timezone(timedelta(hours=4))
-LLM_MODEL = "gpt-4.1-mini"
+# Keep the model configurable per Railway environment.  This project key is
+# currently granted access to this stable, low-latency chat model.
+LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
 WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or f"{CANONICAL_WEB_ORIGIN}/webapp").rstrip("/")
@@ -158,6 +160,10 @@ ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
 HUSEYN_CHAT_ID = 7329891614
 RASIM_CHAT_ID = 7920785774
+# Historical Kommo tasks can still contain this marker.  It is a label only,
+# not an active employee account, so resolving an old task never crashes the
+# notification scheduler.
+TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
 NIZAMI_PIPELINE_ID = 14243944
 # Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it, including NÖMRƏ ALINIB.
 SOVDELESMELER_PIPELINE_ID = 8329347

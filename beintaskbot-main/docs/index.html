@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="335">
+    <meta name="pwa-build" content="336">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -990,16 +990,6 @@
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
         </div>
-        <section id="linear-tesdiq-section" class="bg-white rounded-2xl border border-violet-100 shadow-sm overflow-hidden" hidden>
-            <div class="flex items-center justify-between px-3 py-2.5 bg-violet-50/70 border-b border-violet-100">
-                <div>
-                    <div class="text-xs font-extrabold text-violet-900">Linear · Təsdiq</div>
-                    <div id="linear-tesdiq-meta" class="text-[10px] text-violet-500 mt-0.5">Direktorun təsdiqi gözlənilir</div>
-                </div>
-                <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
-            </div>
-            <div id="linear-tesdiq-list" class="divide-y divide-violet-50"></div>
-        </section>
         <div id="filter-row" style="display:none;" class="flex gap-2">
             <select id="filter-assignee" onchange="filterTasks()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
                 <option value="all">Hamısı</option>
@@ -1248,14 +1238,30 @@
         <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Təsdiq</div>
-                <div class="text-[10px] text-gray-400 font-medium mt-0.5">Telegram və webhook sorğularını idarə edin</div>
+                <div id="pending-page-subtitle" class="text-[10px] text-gray-400 font-medium mt-0.5">Direktorun qərar gözləyən işləri</div>
             </div>
-            <button onclick="loadPendingActions(true)" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+            <button onclick="refreshPendingQueue()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
         </div>
-        <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Növ"></select>
-        <div class="samil-kanban-wrap custom-scroll">
-            <div id="pending-actions-container" class="samil-kanban-board"></div>
+        <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
+            <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Linear</button>
+            <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Sistem sorğuları</button>
         </div>
+        <section id="linear-tesdiq-section" class="bg-white rounded-2xl border border-violet-100 shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between px-3 py-2.5 bg-violet-50/70 border-b border-violet-100">
+                <div>
+                    <div class="text-xs font-extrabold text-violet-900">Linear tapşırıqları</div>
+                    <div id="linear-tesdiq-meta" class="text-[10px] text-violet-500 mt-0.5">Təsdiq gözləyir</div>
+                </div>
+                <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
+            </div>
+            <div id="linear-tesdiq-list" class="divide-y divide-violet-50"></div>
+        </section>
+        <section id="system-pending-section" hidden>
+            <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none mb-3" aria-label="Növ"></select>
+            <div class="samil-kanban-wrap custom-scroll">
+                <div id="pending-actions-container" class="samil-kanban-board"></div>
+            </div>
+        </section>
     </div>
 
     <!-- SCREEN: EMPLOYEES (employee managers only) -->
@@ -2479,7 +2485,7 @@ document.addEventListener('visibilitychange', () => {
             loadSamilWorkspace();
         } else {
             syncNotifications();
-            if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+            if(document.getElementById('screen-pending')?.classList.contains('active')) refreshPendingQueue();
             if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
         }
     }
@@ -3008,13 +3014,13 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 let linearTesdiqLoaded = false;
 let linearTesdiqActionPending = false;
+let pendingQueue = localStorage.getItem('pending_queue') || 'linear';
 async function loadLinearTesdiq(forceRefresh = false) {
     const section = document.getElementById('linear-tesdiq-section');
     const list = document.getElementById('linear-tesdiq-list');
     const meta = document.getElementById('linear-tesdiq-meta');
     if(!section || !list || !meta) return;
     if(!isAdmin) { section.hidden = true; return; }
-    section.hidden = false;
     if(linearTesdiqLoaded && !forceRefresh) return;
     list.innerHTML = '<div class="px-3 py-3 text-xs text-violet-500">Linear tapşırıqları yüklənir…</div>';
     try {
@@ -3050,10 +3056,14 @@ async function loadLinearTesdiq(forceRefresh = false) {
             const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
             const url = String(item.url || '');
             const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
-            const actionButtons = sourceId ? `<div class="grid grid-cols-2 gap-2 mt-3">
-                    <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-extrabold text-white active:scale-[.98]">Təsdiqlə → Triage</button>
-                    <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-xl bg-amber-100 px-3 py-2 text-xs font-extrabold text-amber-800 active:scale-[.98]">Diskussiya → Backlog</button>
-                    <button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="col-span-2 rounded-xl border border-rose-200 px-3 py-2 text-xs font-bold text-rose-600 active:scale-[.98]">Tapşırığı sil</button>
+            const actionButtons = sourceId ? `<div class="mt-3 flex items-center gap-2">
+                    <label class="sr-only" for="linear-status-${sourceId}">Status</label>
+                    <select id="linear-status-${sourceId}" onchange="selectLinearStatus(this, '${sourceId}')" class="min-w-0 flex-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1.5 text-[11px] font-bold text-violet-800 outline-none">
+                        <option value="" selected disabled>Statusu dəyiş</option>
+                        <option value="confirm">Triage</option>
+                        <option value="discussion">Backlog</option>
+                    </select>
+                    <button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="shrink-0 rounded-lg border border-rose-200 px-2 py-1.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50 active:scale-[.98]">Sil</button>
                 </div>` : '';
             return `<article class="px-3 py-3 bg-white">
                 <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="text-[10px] font-extrabold text-violet-500">${issueId}</div><div class="text-sm font-bold text-slate-800 mt-0.5">${title}</div></div>${safeLink}</div>
@@ -3077,6 +3087,13 @@ async function loadLinearTesdiq(forceRefresh = false) {
         meta.textContent = 'Yüklənmədi';
         list.innerHTML = `<div class="px-3 py-3 text-xs text-red-500">${escapeHtml(error.message || 'Linear tapşırıqları yüklənmədi.')}</div>`;
     }
+}
+
+function selectLinearStatus(select, issueId) {
+    const action = select && select.value;
+    if(!action) return;
+    select.value = '';
+    runLinearTesdiqAction(action, issueId);
 }
 
 async function runLinearTesdiqAction(action, issueId) {
@@ -3108,7 +3125,6 @@ async function runLinearTesdiqAction(action, issueId) {
 
 async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
-    loadLinearTesdiq(forceRefresh);
     if(HAS_OWN_FUNNEL) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored || mockTasks.length) renderNotifications();
@@ -3525,7 +3541,9 @@ async function submitSubtaskFromPending(actionId) {
 function startPendingActionPolling() {
     stopPendingActionPolling();
     pendingActionsTimer = setInterval(() => {
-        if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
+        if(!document.getElementById('screen-pending')?.classList.contains('active')) return;
+        if(pendingQueue === 'linear') loadLinearTesdiq(true);
+        else loadPendingActions();
     }, 30000);
 }
 
@@ -3536,11 +3554,36 @@ function stopPendingActionPolling() {
     }
 }
 
+async function showPendingQueue(queue, forceRefresh = false) {
+    if(!isAdmin) return;
+    pendingQueue = queue === 'system' ? 'system' : 'linear';
+    localStorage.setItem('pending_queue', pendingQueue);
+    const linearSection = document.getElementById('linear-tesdiq-section');
+    const systemSection = document.getElementById('system-pending-section');
+    const linearButton = document.getElementById('pending-queue-linear');
+    const systemButton = document.getElementById('pending-queue-system');
+    const subtitle = document.getElementById('pending-page-subtitle');
+    const activeClass = 'rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm';
+    const inactiveClass = 'rounded-lg px-3 py-2 text-xs font-bold text-slate-500';
+    const linearActive = pendingQueue === 'linear';
+    if(linearSection) linearSection.hidden = !linearActive;
+    if(systemSection) systemSection.hidden = linearActive;
+    if(linearButton) linearButton.className = linearActive ? activeClass : inactiveClass;
+    if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
+    if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
+    if(linearActive) await loadLinearTesdiq(forceRefresh);
+    else await loadPendingActions(forceRefresh);
+}
+
+async function refreshPendingQueue() {
+    await showPendingQueue(pendingQueue, true);
+}
+
 async function openPendingActions() {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
     nav('screen-pending');
     startPendingActionPolling();
-    await loadPendingActions();
+    await showPendingQueue(pendingQueue);
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || (CURRENT_USER_ID === '1628569350' ? 'Nizami Qasımov' : 'all');
@@ -12257,7 +12300,7 @@ async function submitMexaric() {
     ca.addEventListener('touchend', async () => {
         if(ptrActive && ptrDist > 80) {
             showSyncIndicator();
-            if(document.getElementById('screen-pending')?.classList.contains('active')) await loadPendingActions();
+            if(document.getElementById('screen-pending')?.classList.contains('active')) await refreshPendingQueue();
             else if(document.getElementById('screen-gozleme')?.classList.contains('active')) await loadGozleme();
             else await syncNotifications();
             hideSyncIndicator();
