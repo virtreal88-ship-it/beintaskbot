@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="342">
+    <meta name="pwa-build" content="343">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -4967,6 +4967,13 @@ function dealChatReplyPreview(item) {
 }
 function dealClientName(deal) {
     return String((deal && deal.contact_name) || '').trim();
+}
+function chatsClientDisplayName(deal) {
+    const raw = dealClientName(deal);
+    // Kommo can create placeholder deal titles such as “Lead #78080049”
+    // before a contact is named. They are deal names, not customer names.
+    if(!raw || /^(?:lead|sövdələşmə)\s*#?\s*\d+$/i.test(raw)) return 'Müştəri';
+    return raw;
 }
 function isGenericChatLabel(name) {
     const folded = String(name || '').trim().toLowerCase();
@@ -10386,9 +10393,8 @@ function renderChatsList(preserveScroll) {
             : '<div class="chats-empty-list"><span class="yt-spin" aria-label="Müştərilər yüklənir"></span></div>';
     } else {
         box.innerHTML = deals.map(deal => {
-            const name = dealClientName(deal) || String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || 'Müştəri');
-            const draft = chatDraftText(deal.id);
-            const preview = dealLastClientMessage(deal) || String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || deal.stage_name || 'Müştəri');
+            const name = chatsClientDisplayName(deal);
+            const clientPhone = dealNoticePhone(deal) || 'Nömrə göstərilməyib';
             const unread = chatsIsUnread(deal, seen);
             const on = openId && openId === String(deal.id);
             const pinned = isChatPinned(deal.id);
@@ -10400,7 +10406,7 @@ function renderChatsList(preserveScroll) {
                 ${chatsAvatarHtml(deal, name)}
                 <span class="chats-row-main">
                     <span class="chats-row-top"><span class="chats-row-name">${escapeHtml(name)}</span><span class="chats-row-time">${pinned ? '<span class="chats-pin">📌</span>' : ''}${escapeHtml(chatsTimeLabel(chatsListAt(deal)))}</span></span>
-                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview${draft ? ' draft' : ''}">${escapeHtml(preview)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${queueBadge}${followupHtml}
+                    <span class="chats-row-bottom">${chip}<span class="chats-row-preview">${escapeHtml(clientPhone)}</span>${unread ? '<span class="chats-unread">1</span>' : ''}</span>${queueBadge}${followupHtml}
                 </span>
             </div>`;
         }).join('') + (deals.length < allDeals.length ? `<div class="chats-load-more">Aşağı sürüşdürün · daha ${allDeals.length - deals.length} müştəri</div>` : '');

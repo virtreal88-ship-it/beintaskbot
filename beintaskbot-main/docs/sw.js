@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-confirmations-linear-created-ai-spinner';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-customer-list-name-phone';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
