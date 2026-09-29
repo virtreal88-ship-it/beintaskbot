@@ -19501,7 +19501,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
         state: {{ id: {{ eq: \"{state_id}\" }} }}
       }}) {{
         nodes {{
-          id identifier title description priority dueDate updatedAt url
+          id identifier title description priority dueDate createdAt updatedAt url
           state {{ id name color }}
           assignee {{ name }}
           creator {{ name }}
@@ -19526,6 +19526,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
             "client": description_meta.get("client") or _linear_client_hint(raw_description),
             "priority": int(row.get("priority") or 0),
             "due_date": row.get("dueDate"),
+            "created_at": row.get("createdAt"),
             "updated_at": row.get("updatedAt"),
             "url": str(row.get("url") or ""),
             "status": {
@@ -19538,6 +19539,9 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
             "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
         })
+    # Linear's default order is mutable (updatedAt). The director queue is
+    # easier to process chronologically, with the newest request always first.
+    items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})
     return items
 

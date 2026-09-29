@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="341">
+    <meta name="pwa-build" content="342">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -400,7 +400,11 @@
         .deal-sum-btn svg { width:16px; height:16px; display:block; }
         .deal-sum-btn.loading { color:transparent; pointer-events:none; position:relative; }
         .deal-sum-btn.loading svg { visibility:hidden; }
-        .deal-sum-btn.loading::after { content:''; position:absolute; inset:8px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .deal-sum-btn.loading::after { content:''; position:absolute; inset:8px; border:2px solid rgba(255,255,255,.38); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; }
+        .notice-reply-ai.loading { position:relative; color:transparent; pointer-events:none; }
+        .notice-reply-ai.loading::after { content:''; position:absolute; inset:7px; border:2px solid rgba(29,78,216,.28); border-top-color:#1d4ed8; border-radius:50%; animation:spin .8s linear infinite; }
+        .notice-history-actions button.loading { position:relative; color:transparent; pointer-events:none; }
+        .notice-history-actions button.loading::after { content:''; position:absolute; inset:8px; border:2px solid rgba(255,255,255,.38); border-top-color:#fff; border-radius:50%; animation:spin .8s linear infinite; }
         .wa-send-in { position:absolute; right:6px; top:50%; transform:translateY(-50%); z-index:2; width:28px; height:28px; border:0; border-radius:8px; background:#2b8cff; color:#fff; font-size:13px; font-weight:600; padding:0; }
         .wa-composer-field.sending textarea { color:inherit; }
         .wa-composer-field.sending::after { display:none; }
@@ -3064,6 +3068,7 @@ async function loadLinearTesdiq(forceRefresh = false) {
             const priorityNames = {0:'Prioritet yoxdur',1:'Təcili',2:'Yüksək',3:'Orta',4:'Aşağı'};
             const priority = escapeHtml(priorityNames[Number(item.priority)] || 'Prioritet yoxdur');
             const dueDate = item.due_date ? escapeHtml(new Date(item.due_date + 'T12:00:00').toLocaleDateString('az-AZ', {day:'2-digit', month:'long', year:'numeric'})) : 'Müddət qoyulmayıb';
+            const createdDate = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
             const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
             const url = String(item.url || '');
             const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
@@ -3089,6 +3094,7 @@ async function loadLinearTesdiq(forceRefresh = false) {
                     <div><dt class="text-slate-400">Operator</dt><dd class="font-semibold text-slate-700">${operator}</dd></div>
                     <div><dt class="text-slate-400">Son tarix</dt><dd class="font-semibold text-slate-700">${dueDate}</dd></div>
                     <div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
+                    ${createdDate ? `<div class="col-span-3 text-[10px] text-slate-400">Yaradılıb: ${escapeHtml(createdDate)}</div>` : ''}
                     ${date ? `<div class="col-span-3 text-[10px] text-slate-400">Yenilənib: ${escapeHtml(date)}</div>` : ''}
                 </dl>
                 <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}${actionsMenu}</div>
@@ -3608,7 +3614,9 @@ async function openPendingActions() {
     if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
     nav('screen-pending');
     startPendingActionPolling();
-    await showPendingQueue(pendingQueue);
+    // System confirmations are the primary director workflow. Linear is
+    // intentionally never restored as the default after navigation/reload.
+    await showPendingQueue('system', true);
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || (CURRENT_USER_ID === '1628569350' ? 'Nizami Qasımov' : 'all');
@@ -7510,7 +7518,7 @@ async function requestDealAiReply() {
     if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
     if(_dealAiBusy || !_dealViewState || !CURRENT_USER_ID) return;
     _dealAiBusy = true;
-    if(btn) btn.classList.add('loading');
+    if(btn) { btn.disabled = true; btn.classList.add('loading'); }
     try {
         const r = await fetch(API_BASE + '/api/deal/chat/suggest', {
             method: 'POST',
@@ -7532,7 +7540,7 @@ async function requestDealAiReply() {
     } catch(err) { toast(err.message || 'AI cavab alınmadı', true); }
     finally {
         _dealAiBusy = false;
-        if(btn) btn.classList.remove('loading');
+        if(btn) { btn.disabled = false; btn.classList.remove('loading'); }
     }
 }
 async function requestDealSummary() {
@@ -10133,7 +10141,7 @@ function noticeClientHeaderHtml(deal) {
     const phone = String((Array.isArray(deal.phones) && deal.phones[0]) || deal.phone || '').trim();
     const source = dealSourceLabel(deal);
     const backLabel = _noticeClientOverlay ? '← Sövdələşmələr' : '‹';
-    const aiSummaryButton = canUseAi() ? '<button type="button" onclick="requestNoticeSummary()" title="AI xülasə" aria-label="AI xülasə">✦</button>' : '';
+    const aiSummaryButton = canUseAi() ? '<button type="button" id="notice-chat-summary" onclick="requestNoticeSummary()" title="AI xülasə" aria-label="AI xülasə">✦</button>' : '';
     return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə · Kommo ilə cavab</span></div></div><div class="notice-history-actions">${aiSummaryButton}<button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
 }
 function openNoticeDealInfo() {
@@ -10167,9 +10175,11 @@ function noticeAiPayload() {
     };
 }
 async function requestNoticeSummary() {
+    const button = document.getElementById('notice-chat-summary');
     if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
     if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
     _noticeReplyBusy = true;
+    if(button) { button.disabled = true; button.classList.add('loading'); }
     showDealSummaryProgress();
     try {
         const messages = aiHistoryMessages();
@@ -10181,6 +10191,7 @@ async function requestNoticeSummary() {
     finally {
         hideDealSummaryProgress();
         _noticeReplyBusy = false;
+        if(button) { button.disabled = false; button.classList.remove('loading'); }
     }
 }
 async function requestNoticeAiReply() {
@@ -10189,7 +10200,7 @@ async function requestNoticeAiReply() {
     if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
     if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
     _noticeReplyBusy = true;
-    if(button) { button.disabled = true; button.textContent = '...'; }
+    if(button) { button.disabled = true; button.classList.add('loading'); }
     try {
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {
             method: 'POST',
@@ -10206,7 +10217,7 @@ async function requestNoticeAiReply() {
     } catch(error) { toast(error.message || 'AI cavab alınmadı', true); }
     finally {
         _noticeReplyBusy = false;
-        if(button) { button.disabled = false; button.textContent = 'AI'; }
+        if(button) { button.disabled = false; button.classList.remove('loading'); }
     }
 }
 async function sendNoticeKommoReply() {
@@ -11751,6 +11762,8 @@ async function loadSettingsIntegrations() {
                 ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Yenidən qoş / idarə et</a>'
                 : item.id === 'waba'
                     ? '<span class="text-[10px] text-slate-400">WABA istifadə olunmur. Aktivləşdirmə yeni kabinetin inteqrasiyalar bölməsindən edilir.</span>'
+                    : item.id === 'linear'
+                        ? '<a href="https://linear.app" target="_blank" rel="noopener" class="text-[10px] font-bold text-[#2481cc]">Linear-da aç ↗</a>'
                     : item.status === 'not_connected'
                         ? '<a href="/setup" class="text-[10px] font-bold text-[#2481cc]">Qoşulmanı qur</a>'
                         : '';
