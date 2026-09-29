@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="326">
+    <meta name="pwa-build" content="327">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -9018,7 +9018,11 @@ const CHAT_FOLLOWUP_AFTER_SECONDS = 24 * 60 * 60;
 let _chatsStageFilters = new Set();
 function chatStageFilterKey(deal) {
     const pipeline = String((deal && (deal.pipeline_id || deal.pipeline)) || '');
-    const stage = String((deal && (deal.status_id || deal.stage_id || deal.stage_key || deal.stage_name)) || '');
+    // Personal funnels have stable stage keys from Kommo. Prefer them so the
+    // filter can show every configured stage, including a stage with no deals.
+    // Cross-funnel queue rows do not always include a key, so retain their
+    // numeric Kommo status as the fallback.
+    const stage = String((deal && (deal.stage_key || deal.status_id || deal.stage_id || deal.stage_name)) || '');
     return pipeline + ':' + stage;
 }
 function chatStageFilterLabel(deal) {
@@ -9028,6 +9032,17 @@ function renderChatsStageFilter() {
     const box = document.getElementById('chats-stage-filter');
     if(!box) return;
     const options = new Map();
+    // For Nizami, the filter is a map of the working funnel—not merely a
+    // reflection of the three stages that happen to contain deals today.
+    // Terminal stages are deliberately omitted everywhere in this queue.
+    if(isAdmin) {
+        (SAMIL_ALL_STAGES || []).forEach(pair => {
+            const key = String(Array.isArray(pair) ? pair[0] : '');
+            const label = String(Array.isArray(pair) ? pair[1] : key);
+            if(!key || key === 'ugurlu' || key === 'imtina') return;
+            options.set(String(NIZAMI_PIPELINE_ID) + ':' + key, label);
+        });
+    }
     (samilDeals || []).forEach(deal => {
         if(!deal || !deal.id || !chatBelongsToViewer(deal) || isTerminalChatDeal(deal)) return;
         const key = chatStageFilterKey(deal);
