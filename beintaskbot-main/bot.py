@@ -12959,9 +12959,24 @@ async def _inject_nizami_sovdelesmeler_stage_deals(
             continue
     staged = await _load_nizami_sovdelesmeler_stage_leads()
     staged.sort(key=lambda item: int(item[0].get("updated_at") or 0), reverse=True)
+    # The browser initially renders only the first page of the inbox.  Loading
+    # every contact from a long queue here can mean hundreds of sequential
+    # Kommo requests and leaves the whole CRM unavailable.  Enrich just the
+    # newest visible queue rows; the rest keep their lightweight lead payload
+    # until the user reaches them.
+    visible_staged: list[tuple[dict, str]] = []
+    for lead, queue_kind in staged:
+        try:
+            lead_id = int(lead.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lead_id and lead_id not in seen:
+            visible_staged.append((lead, queue_kind))
+        if len(visible_staged) >= 80:
+            break
     contact_ids = {
         contact_id
-        for lead, _queue_kind in staged
+        for lead, _queue_kind in visible_staged
         for contact_id in _lead_contact_ids(lead)
     }
     contacts_by_id = await _load_rufat_contacts(contact_ids) if contact_ids else {}
