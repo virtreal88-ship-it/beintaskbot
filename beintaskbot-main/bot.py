@@ -8840,14 +8840,23 @@ async def _rufat_load_all(url: str, embedded_key: str, params: dict | None = Non
 
 
 async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
-    """Fetch linked contacts in batches, preserving every phone field."""
+    """Fetch linked contacts in batches, preserving every name and phone.
+
+    Kommo accepts numbered ``filter[id][N]`` entries reliably.  Supplying a
+    Python list as one ``filter[id][]`` value looked valid in the request but
+    intermittently returned no contacts, leaving the inbox with placeholder
+    names even though the individual deal card had the real contact.
+    """
     result: dict[int, dict] = {}
     ids = sorted(contact_ids)
-    for start in range(0, len(ids), 250):
+    for start in range(0, len(ids), 50):
+        chunk = ids[start:start + 50]
+        params = {f"filter[id][{index}]": contact_id for index, contact_id in enumerate(chunk)}
+        params["limit"] = 50
         try:
             response = await _kommo_get_async(
                 f"{KOMMO_BASE_URL}/api/v4/contacts",
-                params={"filter[id][]": ids[start:start + 250], "limit": 250},
+                params=params,
                 timeout=12,
             )
         except Exception as exc:
