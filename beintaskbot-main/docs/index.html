@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="324">
+    <meta name="pwa-build" content="325">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -7969,7 +7969,10 @@ async function deliverQueuedDealSend(job) {
             throw new Error((d.error || 'Göndərilmədi') + detail);
         }
 
-        optimisticMsg.delivery_status = 'sent';
+        // A Talk request can be accepted by Kommo before Instagram/TikTok
+        // confirms it. Keep the clock visible until a history refresh brings
+        // back the final delivery state.
+        optimisticMsg.delivery_status = String(d.delivery_status || 'pending');
         keepSentChatVisible(leadId);
 
         if(voiceNow && localBlobUrl && serverChat.length) {
@@ -9944,7 +9947,7 @@ async function sendNoticeKommoReply() {
         if(deal) deal.last_outgoing_at = Number(payload.sent_at || Math.floor(Date.now() / 1000));
         renderChatsList();
         refreshNoticeHistory();
-        toast('Mesaj Kommo vasitəsilə göndərildi');
+        toast(payload.delivery_status === 'pending' ? 'Mesaj Kommo-ya verildi, çatdırılma yoxlanılır' : 'Mesaj Kommo vasitəsilə göndərildi');
     } catch(error) { toast(error.message || 'Mesaj göndərilmədi', true); }
     finally {
         _noticeReplyBusy = false;

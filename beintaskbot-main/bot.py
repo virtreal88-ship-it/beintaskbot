@@ -14653,6 +14653,51 @@ def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> 
     return rows, blocked, maybe_more
 
 
+def _recent_talk_delivery_status(talk_id: int, text: str, sent_at: int) -> str:
+    """Return the provider status for a message we have just put into a Talk.
+
+    A successful ``send_message`` response only means that Kommo accepted the
+    request. Instagram and TikTok can reject it a moment later (for example,
+    if their connection has expired). Looking up the fresh Talk message keeps
+    the UI from claiming that such a reply was delivered.
+    """
+    expected = _clean_body_text(text).casefold()
+    try:
+        messages, blocked, _more = _fetch_talk_messages(int(talk_id), pages=1, page_limit=12)
+    except Exception as exc:
+        logger.warning("Could not verify Talk delivery %s: %s", talk_id, exc)
+        return "pending"
+    if blocked:
+        return "pending"
+
+    newest: tuple[int, str] | None = None
+    for raw in messages:
+        item = _format_chat_message(raw)
+        if not item or item.get("incoming"):
+            continue
+        created = int(item.get("created_at") or 0)
+        # Do not accidentally match an older outgoing message with the same
+        # short text (for example, repeated "Salam").
+        if sent_at and created and abs(created - sent_at) > 90:
+            continue
+        body = _clean_body_text(str(item.get("text") or "")).casefold()
+        if expected and body != expected:
+            continue
+        status = str(item.get("delivery_status") or "").strip().lower()
+        if not newest or created > newest[0]:
+            newest = (created, status)
+    if not newest:
+        return "pending"
+    status = newest[1]
+    if status in {"error", "failed", "undelivered"}:
+        return "error"
+    if status in {"read", "seen", "viewed"}:
+        return "read"
+    if status == "delivered":
+        return "delivered"
+    return "pending"
+
+
 def _extract_messages_payload(payload) -> list[dict]:
     if not isinstance(payload, dict):
         return []
@@ -16907,6 +16952,27 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
             last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
         return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
+    # Kommo returns 2xx before an external social network confirms delivery.
+    # Verify just once, without polling, so provider-side failures are not
+    # shown to employees as a false successful send.
+    delivery_status = "sent"
+    if not sent_via_cloud and channel in {"instagram", "tiktok", "facebook", "telegram"}:
+        delivery_status = "pending"
+        sent_at_for_check = int(_time_module.time())
+        delivery_status = await asyncio.to_thread(
+            _recent_talk_delivery_status,
+            reply_talk_id,
+            sent_text or text,
+            sent_at_for_check,
+        )
+        if delivery_status == "error":
+            channel_label = CHAT_CHANNEL_LABELS.get(channel, channel)
+            message = (
+                f"{channel_label} mesajı Kommo-da qəbul edildi, amma kanal çatdırmadı. "
+                "Kommo-da həmin kanalın bağlantısını yenidən qoşun və müştərinin son mesajından sonra cavab müddətini yoxlayın."
+            )
+            logger.warning("Social chat provider rejected: lead=%s channel=%s talk=%s", lead_id, channel, reply_talk_id)
+            return web.json_response({"success": False, "error": message, "delivery_status": "error"}, status=409)
     tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and is_voice else upload_name or text)
     cloud_media_url = f"/api/wa/media/{sent_media_id}" if sent_media_id else ""
     if sent_via_cloud:
@@ -16936,7 +17002,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "message_type": local_type if sent_via_cloud else ("audio" if upload_raw and is_voice else "text"),
         "channel": channel,
         "author": employee_name_for_lead(lead),
-        "delivery_status": "sent",
+        "delivery_status": delivery_status,
         "file_name": "" if upload_raw and is_voice else upload_name,
         "file_uuid": drive_uuid,
         "media_url": cloud_media_url,
@@ -16999,7 +17065,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         "has_more": has_more,
         "channel": channel,
         "channels": channels,
-        "delivery_status": "sent",
+        "delivery_status": delivery_status,
         "media_url": cloud_media_url,
     })
 

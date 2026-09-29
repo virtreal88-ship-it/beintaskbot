@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-29-social-reply-routing';
+const CACHE_NAME = 'beintaskbot-v2026-09-29-social-delivery-status';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
