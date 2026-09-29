@@ -7287,6 +7287,22 @@ let _dealSendChain = Promise.resolve();
 function stopDealChatPolling() {
     if(_dealChatPollTimer) { clearInterval(_dealChatPollTimer); _dealChatPollTimer = null; }
 }
+function aiHistoryMessages() {
+    return ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({
+        id: item.id || item.msgid || item.external_id || '',
+        external_id: item.external_id || '',
+        created_at: Number(item.created_at || 0),
+        channel: item.channel || item.origin || '',
+        incoming: !!item.incoming,
+        text: item.text || '',
+        author: item.author || '',
+        message_type: item.message_type || item.type || '',
+        media_url: item.media_url || item.media || '',
+        file_uuid: item.file_uuid || '',
+        voice_url: item.voice_url || '',
+        file_name: item.file_name || ''
+    }));
+}
 function dealAiPayload(mode) {
     const input = document.getElementById('deal-chat-input');
     return {
@@ -7295,16 +7311,7 @@ function dealAiPayload(mode) {
         channel: (_dealViewState && _dealViewState.channel) || '',
         sender_phone: dealWaSenderPhone(),
         draft: String(input && input.value || '').trim(),
-        messages: ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({
-            incoming: !!item.incoming,
-            text: item.text || '',
-            author: item.author || '',
-            message_type: item.message_type || item.type || '',
-            media_url: item.media_url || item.media || '',
-            file_uuid: item.file_uuid || '',
-            voice_url: item.voice_url || '',
-            file_name: item.file_name || ''
-        }))
+        messages: aiHistoryMessages()
     };
 }
 let _dealAiBusy = false;
@@ -9958,16 +9965,7 @@ function noticeAiPayload() {
         mode: 'reply',
         lead_id: _noticeHistoryLeadId,
         draft: String(input && input.value || '').trim(),
-        messages: ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({
-            incoming: !!item.incoming,
-            text: item.text || '',
-            author: item.author || '',
-            message_type: item.message_type || item.type || '',
-            media_url: item.media_url || item.media || '',
-            file_uuid: item.file_uuid || '',
-            voice_url: item.voice_url || '',
-            file_name: item.file_name || ''
-        }))
+        messages: aiHistoryMessages()
     };
 }
 async function requestNoticeSummary() {
@@ -9975,7 +9973,7 @@ async function requestNoticeSummary() {
     _noticeReplyBusy = true;
     showDealSummaryProgress();
     try {
-        const messages = ((_dealViewState && _dealViewState.messages) || []).slice(-30).map(item => ({incoming:!!item.incoming, text:item.text || '', author:item.author || '', message_type:item.message_type || item.type || '', media_url:item.media_url || item.media || '', file_uuid:item.file_uuid || '', voice_url:item.voice_url || '', file_name:item.file_name || ''}));
+        const messages = aiHistoryMessages();
         const response = await fetch(API_BASE + '/api/deal/chat/suggest', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({mode:'summary', lead_id:_noticeHistoryLeadId, messages})});
         const payload = await response.json().catch(() => ({}));
         if(!response.ok || !payload.success) throw new Error(payload.error || 'Xülasə alınmadı');
