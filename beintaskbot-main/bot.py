@@ -17579,9 +17579,11 @@ def _transcribe_audio_with_ai(audio_path: str) -> tuple[str, str]:
     comma-separated fallback list) without changing source code.
     """
     configured = str(os.environ.get("OPENAI_TRANSCRIPTION_MODEL") or "").strip()
+    # A prior deployment may have pinned whisper-1 in Railway. Keep that
+    # preference first, but never let it prevent the two current OpenAI
+    # transcription models from being attempted as fallbacks.
     model_names = [name.strip() for name in configured.split(",") if name.strip()]
-    if not model_names:
-        model_names = ["gpt-4o-mini-transcribe", "whisper-1"]
+    model_names.extend(["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"])
     last_error = ""
     for model in dict.fromkeys(model_names):
         try:
@@ -17604,7 +17606,7 @@ def _public_transcription_error(detail: str) -> str:
     """Turn a provider failure into a useful UI message without leaking keys."""
     low = str(detail or "").casefold()
     if any(token in low for token in ("model", "not found", "404", "does not exist", "unsupported")):
-        return "OpenAI səs modeli əlçatan deyil. Railway-də OPENAI_TRANSCRIPTION_MODEL üçün gpt-4o-mini-transcribe və ya whisper-1 aktiv olmalıdır."
+        return "Bu OpenAI API layihəsində səs tanıma modeli əlçatan deyil. gpt-4o-mini-transcribe, gpt-4o-transcribe və whisper-1 yoxlanıldı."
     if any(token in low for token in ("credit", "billing", "quota", "insufficient")):
         return "OpenAI səs tanıma limiti və ya balansı bitib."
     if "timeout" in low or "timed out" in low:

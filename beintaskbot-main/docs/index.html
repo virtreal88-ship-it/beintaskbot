@@ -6,7 +6,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <title>Bein Systems Pro</title>
-    <meta name="pwa-build" content="339">
+    <meta name="pwa-build" content="340">
     <meta name="theme-color" content="#1c2b28">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=251">
@@ -1268,7 +1268,7 @@
                 </div>
                 <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
             </div>
-            <div id="linear-tesdiq-list" class="divide-y divide-violet-50"></div>
+            <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
     </div>
 
@@ -3070,19 +3070,19 @@ async function loadLinearTesdiq(forceRefresh = false) {
             const priorityOptions = [
                 [0, 'Prioritet yoxdur'], [1, 'Təcili'], [2, 'Yüksək'], [3, 'Orta'], [4, 'Aşağı']
             ].map(([value, label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
-            const priorityColors = {0:'#64748b', 1:'#dc2626', 2:'#ea580c', 3:'#2563eb', 4:'#16a34a'};
-            const priorityBadge = sourceId ? `<select aria-label="Prioritet" onchange="changeLinearPriority(this, '${sourceId}', ${Number(item.priority) || 0})" class="max-w-[132px] cursor-pointer rounded-full px-2 py-1 text-[10px] font-extrabold text-white outline-none" style="background:${priorityColors[Number(item.priority)] || '#64748b'}">${priorityOptions}</select>` : `<span class="rounded-full px-2 py-1 text-[10px] font-extrabold text-white" style="background:${priorityColors[Number(item.priority)] || '#64748b'}">${priority}</span>`;
+            const priorityColors = {0:'#94a3b8', 1:'#ef4444', 2:'#f97316', 3:'#3b82f6', 4:'#22c55e'};
+            const priorityDot = `<span aria-hidden="true" class="inline-block h-1.5 w-1.5 rounded-full" style="background:${priorityColors[Number(item.priority)] || '#94a3b8'}"></span>`;
+            const priorityBadge = sourceId ? `<label class="flex max-w-[144px] items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 shadow-sm">${priorityDot}<select aria-label="Prioritet" onchange="changeLinearPriority(this, '${sourceId}', ${Number(item.priority) || 0})" class="min-w-0 cursor-pointer bg-transparent text-[10px] font-bold text-slate-700 outline-none">${priorityOptions}</select></label>` : `<span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm">${priorityDot}${priority}</span>`;
             const actionButtons = sourceId ? `<div class="mt-2 flex flex-wrap items-center gap-1.5">
                     <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Təsdiq edirəm</button>
                     <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>
-                    <button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="rounded-lg border border-rose-200 px-2 py-1.5 text-[10px] font-bold text-rose-600 hover:bg-rose-50 active:scale-[.98]">Sil</button>
                 </div>` : '';
-            return `<article class="px-3 py-2.5 bg-white">
+            const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-32 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button></div></details>` : '';
+            return `<article class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
                 <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}</div><div class="text-sm font-bold leading-5 text-slate-800">${title}</div></div>${priorityBadge}</div>
                 <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
                     <span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span>
                 </div>
-                ${description ? `<div class="mt-2 max-h-[40px] overflow-hidden whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div>` : ''}
                 <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
                     <div><dt class="text-slate-400">Layihə</dt><dd class="font-semibold text-slate-700">${project}</dd></div>
                     <div><dt class="text-slate-400">İcraçı</dt><dd class="font-semibold text-slate-700">${assignee}</dd></div>
@@ -3091,7 +3091,8 @@ async function loadLinearTesdiq(forceRefresh = false) {
                     <div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
                     ${date ? `<div class="col-span-3 text-[10px] text-slate-400">Yenilənib: ${escapeHtml(date)}</div>` : ''}
                 </dl>
-                ${actionButtons}
+                <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}${actionsMenu}</div>
+                ${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
             </article>`;
         }).join('');
     } catch(error) {
