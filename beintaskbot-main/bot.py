@@ -7464,6 +7464,40 @@ async def handle_api_action(request: web.Request) -> web.Response:
             lead_id = int(data.get("lead_id") or 0)
             if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Доступ запрещён."}, status=403)
+            # The deal editor uses the same executor names as task creation.
+            # Resolve the selected executor through the existing funnel router
+            # instead of requiring the browser to know pipeline IDs/stages.
+            assignee_name = normalize_assignee_name(data.get("assignee_name") or data.get("executor"))
+            if assignee_name:
+                if not is_admin(chat_id):
+                    return web.json_response({"success": False, "error": "Yalnız administrator icraçı seçə bilər."}, status=403)
+                if not move_lead_to_icraci(lead_id, assignee_name):
+                    return web.json_response({"success": False, "error": "İcraçı üçün vərəq tapılmadı."}, status=400)
+                route = route_deal_for_employee(assignee_name)
+                routed_pipeline = int(route[0]) if route else 0
+                routed_status = int(route[1]) if route else 0
+                stage_key = ""
+                stage_name = ""
+                if routed_pipeline and routed_status:
+                    _routed_stages, _routed_names, _routed_ui = load_pipeline_stage_maps(routed_pipeline)
+                    stage_name = str(_routed_names.get(routed_status) or "")
+                    stage_key = next((key for key, status_id in _routed_stages.items() if int(status_id) == routed_status), "")
+                partner_name = str(data.get("partner") or "").strip()
+                if partner_name:
+                    set_deal_partner(lead_id, partner_name, chat_id)
+                    add_partner_for_chat(chat_id, partner_name)
+                invalidate_rufat_overview_cache()
+                record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=routed_pipeline, stage_key=stage_key)
+                return web.json_response({
+                    "success": True,
+                    "message": f"Sövdələşmə {assignee_name}-ə yönləndirildi.",
+                    "assignee_name": assignee_name,
+                    "pipeline_id": routed_pipeline,
+                    "stage_key": stage_key,
+                    "stage_name": stage_name,
+                    "partner": get_deal_partner(lead_id),
+                    "partners": get_partner_list_for_chat(chat_id),
+                })
             stage_key = str(data.get("stage_key") or "")
             lead = get_lead_details(lead_id) or {}
             pipeline_id = _lead_pipeline_id(lead) or get_pipeline_id_for_chat(chat_id)

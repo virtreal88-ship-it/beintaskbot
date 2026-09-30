@@ -3277,7 +3277,6 @@ function linearBoardCardHtml(item) {
     const sourceId = escapeHtml(String(item.source_id || ''));
     const issueId = escapeHtml(item.id || 'Linear');
     const status = item.status || {};
-    const statusColor = /^#[0-9a-f]{3,8}$/i.test(String(status.color || '')) ? status.color : '#64748b';
     const title = escapeHtml(item.title || 'Tapşırıq');
     const client = escapeHtml(item.client || 'Göstərilməyib');
     const project = escapeHtml(item.project || 'Göstərilməyib');
@@ -3292,8 +3291,8 @@ function linearBoardCardHtml(item) {
     const actionButtons = item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
     const menu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
     return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="true" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
-        <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md text-white" style="background:${statusColor}">${escapeHtml(status.name || 'Status')}</span></div><div class="text-sm font-semibold text-slate-900 leading-5">${title}</div></div>${menu}</div>
-        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">👤 <b>Hesab:</b> <span class="font-extrabold text-slate-900">${client}</span></div><div class="truncate">⭐ <b>Prioritet:</b> <select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
+        <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950 truncate" title="${client}">${client}</div><div class="text-sm font-semibold text-slate-900 leading-5">${title}</div></div>${menu}</div>
+        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">⭐ <b>Prioritet:</b> <select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
         ${actionButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
 }
@@ -9289,39 +9288,25 @@ function showDealModal(deal, mode) {
     modal.id = 'deal-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:#0006;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     const title = mode === 'edit' ? 'Redaktə et' : mode === 'task' ? 'Tapşırıq əlavə et' : 'Qeyd əlavə et';
-    const ownerName = FUNNEL_OWNER_NAME || 'Rüfət Həsənzadə';
-    const assigneeOptions = ['Rüfət Həsənzadə','Hüseyn Səfərov','Nizami Qasımov','Rasim Əsgərov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova']
-        .map(name => `<option value="${name}" ${name === ownerName ? 'selected' : ''}>${name}</option>`).join('');
+    const ownerName = String(deal?.funnel_owner_name || deal?.responsible_name || FUNNEL_OWNER_NAME || '').trim();
+    const dealAssigneeOptions = ['Rüfət Həsənzadə','Hüseyn Səfərov','Nizami Qasımov','Rasim Əsgərov','Sərmayə Əhmədsoy','Asya Agayeva','Nuranə Şirinova'];
+    const assigneeOptions = dealAssigneeOptions
+        .map(name => `<option value="${escapeHtml(name)}" ${name === ownerName ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('');
+    const taskAssigneeOptions = dealAssigneeOptions
+        .map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
     let body = '';
     if(mode === 'edit') {
-        const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
-        const ownerOptions = isAdmin
-            ? (KOMMO_PIPELINES.filter(pipe => pipe.owner_chat_id).map(pipe => `<option value="${escapeHtml(String(pipe.id))}" ${Number(pipe.id) === Number(pid) ? 'selected' : ''}>${escapeHtml(pipe.owner_name || pipe.name || String(pipe.id))}</option>`).join('') || '<option value="">Əməkdaşlar yüklənir…</option>')
-            : SAMIL_ALL_STAGES.map(([k,v]) => `<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('');
-        body = isAdmin
-        ? `<label class="text-xs font-bold text-gray-400 block mb-1">Əməkdaş seçin</label><select id="deal-modal-owner" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${ownerOptions}</select><div class="mt-1 text-[10px] text-slate-400">Sövdələşmə seçilmiş əməkdaşın ilk mərhələsinə keçiriləcək.</div>`
-        : `<label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label><select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${ownerOptions}</select>`;
-        body += `
-        <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Partner</label>
-        <div class="mt-1">${partnerFieldHtml('deal-modal-partner', dealPartnerLabel(deal))}</div>`;
+        body = `<label class="text-xs font-bold text-gray-400 block mb-1">İcraçı</label><select id="deal-modal-assignee" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${assigneeOptions}</select><div class="mt-1 text-[10px] text-slate-400">Sövdələşmə seçilmiş icraçının vərəqində ilk mərhələyə keçiriləcək.</div>`;
     } else {
         body = `<textarea id="deal-modal-text" placeholder="Mətni yazın..." style="width:100%;min-height:110px;padding:11px;border:1px solid #ddd;border-radius:10px"></textarea>`;
         if(mode === 'task') {
             body += `<select id="deal-modal-task-type" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">${TASK_TYPE_OPTIONS_HTML}</select>`;
             body += '<input id="deal-modal-deadline" type="datetime-local" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">';
-            body += `<select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">${assigneeOptions}</select>`;
+            body += `<select id="deal-modal-assignee" style="width:100%;margin-top:8px;padding:11px;border:1px solid #ddd;border-radius:10px">${taskAssigneeOptions}</select>`;
         }
     }
     modal.innerHTML = `<div style="background:#fff;border-radius:16px;padding:16px;width:min(420px,100%);box-shadow:0 8px 30px #0003;max-height:92vh;overflow:auto"><div style="font-size:16px;font-weight:600;margin-bottom:12px">${title}</div>${body}<div style="display:flex;gap:8px;margin-top:12px"><button type="button" id="deal-modal-cancel" style="flex:1;padding:11px;border:0;border-radius:10px;background:#f1f5f9">Ləğv et</button><button type="button" id="deal-modal-save" style="flex:1;padding:11px;border:0;border-radius:10px;background:#2481cc;color:#fff;font-weight:600">Yadda saxla</button></div></div>`;
     document.body.appendChild(modal);
-    if(mode === 'edit' && isAdmin) {
-        ensureAdminPipelines().then(() => {
-            const ownerEl = document.getElementById('deal-modal-owner');
-            if(!document.getElementById('deal-modal') || !ownerEl) return;
-            const pipes = KOMMO_PIPELINES.filter(pipe => pipe.owner_chat_id);
-            ownerEl.innerHTML = pipes.map(pipe => `<option value="${escapeHtml(String(pipe.id))}" ${Number(pipe.id) === Number(deal.pipeline_id || CURRENT_PIPELINE_ID) ? 'selected' : ''}>${escapeHtml(pipe.owner_name || pipe.name || String(pipe.id))}</option>`).join('') || '<option value="">Əməkdaş tapılmadı</option>';
-        });
-    }
     modal.querySelector('#deal-modal-cancel').onclick = () => modal.remove();
     const saveBtn = modal.querySelector('#deal-modal-save');
     let saving = false;
@@ -9330,12 +9315,9 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
-            const selectedPipe = isAdmin ? KOMMO_PIPELINES.find(pipe => String(pipe.id) === String(modal.querySelector('#deal-modal-owner')?.value || '')) : null;
-            const firstStage = selectedPipe ? pipelineStagePairs(selectedPipe)[0] : null;
-            if(isAdmin && (!selectedPipe || !firstStage)) { toast('Əməkdaşın mərhələləri tapılmadı.', true); return; }
-            payload = {...base, action:'deal_edit', stage_key: isAdmin ? firstStage[0] : modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
-            if(isAdmin) payload.pipeline_id = Number(selectedPipe.id);
-            else if(deal.pipeline_id) payload.pipeline_id = Number(deal.pipeline_id);
+            const assignee = String(modal.querySelector('#deal-modal-assignee')?.value || '').trim();
+            if(!assignee) { toast('İcraçı seçin!', true); return; }
+            payload = {...base, action:'deal_edit', assignee_name: assignee};
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
@@ -9383,29 +9365,7 @@ function showDealModal(deal, mode) {
             modal.remove();
             toast('Uğurla yadda saxlanıldı', false);
             if(mode === 'edit') {
-                const nextStageKey = payload.stage_key;
-                const nextPartner = payload.partner || '';
-                if(payload.pipeline_id) deal.pipeline_id = Number(payload.pipeline_id);
-                deal.partner = nextPartner;
-                (samilDeals || []).forEach(item => {
-                    if(String(item.id) === String(deal.id)) item.partner = nextPartner;
-                });
-                (mockTasks || []).concat(gozlemeItems || []).forEach(item => {
-                    if(String(item.lead_id) === String(deal.id)) item.partner = nextPartner;
-                });
-                if(nextStageKey && nextStageKey !== deal.stage_key) {
-                    updateLocalSamilDealStage(deal.id, nextStageKey);
-                    samilStageFilter = nextStageKey;
-                    localStorage.setItem('samil_stage_filter', nextStageKey);
-                }
-                if(payload.pipeline_id) {
-                    const selectedPipe = KOMMO_PIPELINES.find(pipe => Number(pipe.id) === Number(payload.pipeline_id));
-                    const firstStage = selectedPipe ? pipelineStagePairs(selectedPipe)[0] : null;
-                    if(firstStage) deal.stage_name = firstStage[1];
-                    (samilDeals || []).forEach(item => { if(String(item.id) === String(deal.id)) { item.pipeline_id = Number(payload.pipeline_id); if(firstStage) { item.stage_key = firstStage[0]; item.stage_name = firstStage[1]; } } });
-                }
-                renderSamilDeals();
-                persistLocalSamilWorkspace();
+                await loadSamilWorkspace(false, null, true);
             } else {
                 await loadSamilWorkspace(false, null, true);
             }
