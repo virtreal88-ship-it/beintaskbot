@@ -17144,9 +17144,10 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
             channel_label = CHAT_CHANNEL_LABELS.get(channel, channel)
             if channel == "whatsapp":
                 message = (
-                    "WhatsApp mesajı Kommo-da qəbul edildi, amma göndərilmədi. "
-                    "Kommo WhatsApp Manager-də göndərən nömrənin aktiv və qoşulu olduğunu yoxlayın "
-                    "(xəta 3136)."
+                    "WhatsApp mesajı Kommo tərəfindən qəbul edildi, amma bu WhatsApp Business "
+                    "söhbəti göndərişi rədd etdi (xəta 3136). Nömrə aktivdir; problem seçilmiş "
+                    "söhbətin qaydası ilə bağlıdır. Son müştəri mesajı köhnədirsə, WhatsApp Business "
+                    "sərbəst mətn əvəzinə təsdiqli şablon tələb edir."
                 )
             else:
                 message = (
