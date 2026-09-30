@@ -116,6 +116,7 @@ LINEAR_TEAM_ID = str(os.environ.get("LINEAR_TEAM_ID") or "c4106f85-9a15-4f8b-8ec
 LINEAR_TESDIQ_STATE_ID = str(os.environ.get("LINEAR_TESDIQ_STATE_ID") or "dd221372-cd7a-4dfc-9361-214ef920ebc0").strip()
 LINEAR_TRIAGE_STATE_ID = str(os.environ.get("LINEAR_TRIAGE_STATE_ID") or "f115d79d-a711-40a1-996a-cac9a5790ea4").strip()
 LINEAR_BACKLOG_STATE_ID = str(os.environ.get("LINEAR_BACKLOG_STATE_ID") or "e3bd0665-1e8c-4e94-afe8-dae7d7c531e8").strip()
+LINEAR_TODO_STATE_ID = str(os.environ.get("LINEAR_TODO_STATE_ID") or "").strip()
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 
@@ -19967,9 +19968,9 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
             if action == "confirm":
-                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TRIAGE_STATE_ID, "Triage")
+                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TODO_STATE_ID, "Todo")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
-                return web.json_response({"success": True, "message": "Tapşırıq Triage mərhələsinə keçirildi.", "issue": moved})
+                return web.json_response({"success": True, "message": "Tapşırıq Todo mərhələsinə keçirildi.", "issue": moved})
             if action == "discussion":
                 target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_BACKLOG_STATE_ID, "Backlog")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
