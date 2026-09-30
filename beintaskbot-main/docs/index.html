@@ -210,6 +210,8 @@
         .search-icon-btn { width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .search-icon-btn svg { width:18px; height:18px; display:block; }
         .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
+        .page-toolbar { position:relative; }
+        .toolbar-select { max-width:132px; height:36px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#475569; padding:0 28px 0 9px; font-size:11px; font-weight:700; outline:none; }
         .search-expand { display:none; align-items:center; gap:8px; position:relative; }
         .search-expand.on { display:flex; }
         .search-expand input { flex:1; min-width:0; }
@@ -220,6 +222,14 @@
         .sidebar-item .sidebar-icon { display:inline-flex; align-items:center; justify-content:center; width:20px; }
         #task-date-select, #gozleme-date-select, #pending-type-select { display:block; width:100%; }
         @media (max-width: 1023px) {
+            .page-toolbar { margin:-12px -16px 0; padding:12px 16px !important; border:0 !important; border-radius:0 !important; background:#0b6158 !important; box-shadow:none !important; color:#fff; min-height:62px; }
+            .page-toolbar .text-gray-800, .page-toolbar .page-toolbar-title { color:#fff !important; }
+            .page-toolbar .text-gray-400, .page-toolbar .page-user-name, .page-toolbar .page-toolbar-subtitle { color:#cce9e4 !important; }
+            .page-toolbar .icon-action-btn, .page-toolbar .search-icon-btn { color:#fff; background:#ffffff18; border-color:transparent; }
+            .page-toolbar .icon-action-btn.primary { color:#0b6158; background:#fff; border-color:#fff; }
+            .page-toolbar .toolbar-select { display:block !important; width:auto; max-width:92px; color:#134e4a; background:#fff; border-color:#fff; }
+            .page-toolbar .icon-action-btn.labeled { width:36px; padding:0; }
+            .page-toolbar .icon-action-btn.labeled span { display:none; }
             /* A horizontal board makes a phone list hard to scan. Keep the
                stage header, but render its items as one full-width list. */
             #screen-samil-deals .samil-kanban-wrap, #screen-notifications .samil-kanban-wrap,
@@ -995,12 +1005,13 @@
 
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
                 <div>
                 <div class="text-sm font-extrabold text-gray-800">Tapşırıqlar</div>
                 <div id="tasks-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
                 </div>
             <div class="flex items-center gap-2">
+                <select id="task-date-select" class="toolbar-select" aria-label="Tarix"></select>
                 <button type="button" id="task-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="openNotifications(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary labeled" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq</span></button>
@@ -1010,7 +1021,6 @@
             <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
             <button type="button" class="search-close" aria-label="Bağla">×</button>
         </div>
-        <select id="task-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="task-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="overdue-count"></span></span>
         </div>
@@ -1034,12 +1044,13 @@
 
     <!-- SCREEN: ŞAMIL DEALS -->
     <div id="screen-samil-deals" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Sövdələşmələr</div>
                 <div id="deals-employee-name" class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
+                <select id="samil-stage-select" class="toolbar-select" aria-label="Mərhələ"></select>
                 <button type="button" id="deal-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                 <button type="button" onclick="loadSamilWorkspace(true, samilStageFilter, true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
                 <button type="button" onclick="openCreateDealModal()" class="icon-action-btn primary labeled" aria-label="Yeni sifariş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Sifariş</span></button>
@@ -1050,7 +1061,6 @@
             <button type="button" class="search-close" aria-label="Bağla">×</button>
             <div id="deal-search-results" class="chats-search-results" hidden></div>
         </div>
-        <select id="samil-stage-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Mərhələ"></select>
         <div id="samil-stage-nav" class="flex gap-2 overflow-x-auto pb-1 custom-scroll" aria-label="Mərhələlər"></div>
         <div id="samil-deals-count" class="text-xs font-bold text-gray-600"></div>
         <div class="samil-kanban-wrap custom-scroll">
@@ -1133,7 +1143,7 @@
     </div>
 
     <div id="screen-hesabatlar" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Hesabatlar</div>
                 <div class="text-[10px] text-gray-400 font-medium mt-0.5">KPI, bonus və iş göstəriciləri</div>
@@ -1260,19 +1270,18 @@
 
     <!-- SCREEN: PENDING ACTIONS (admin only) -->
     <div id="screen-pending" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Təsdiq</div>
                 <div id="pending-page-subtitle" class="text-[10px] text-gray-400 font-medium mt-0.5">Direktorun qərar gözləyən işləri</div>
             </div>
-            <button onclick="refreshPendingQueue()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yenilə</button>
+            <div class="flex items-center gap-2"><select id="pending-type-select" class="toolbar-select" aria-label="Növ"></select><button onclick="refreshPendingQueue()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
         </div>
         <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
             <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
             <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
         </div>
         <section id="system-pending-section">
-            <select id="pending-type-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none mb-3" aria-label="Növ"></select>
             <div class="samil-kanban-wrap custom-scroll">
                 <div id="pending-actions-container" class="samil-kanban-board"></div>
             </div>
@@ -1296,7 +1305,7 @@
     <!-- SCREEN: EMPLOYEES (employee managers only) -->
     <div id="screen-employees" class="screen space-y-3">
         <div class="flex gap-2 overflow-x-auto pb-1" aria-label="Ayarlar bölmələri"><button type="button" class="shrink-0 bg-[#2481cc] text-white px-3 py-2 rounded-xl text-xs font-bold">Əməkdaşlar</button><button type="button" onclick="openSettingsIntegrationsSection()" class="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-bold">İnteqrasiyalar</button></div>
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">Əməkdaşlar</div><div class="text-[10px] text-gray-400 font-medium mt-0.5">Əməkdaşın üzərinə toxunun: giriş və hüquqlar açılacaq</div></div>
             <button type="button" onclick="openEmployeeEditor()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yeni əməkdaş</button>
         </div>
@@ -1311,7 +1320,7 @@
     </div>
 
     <div id="screen-hot-orders" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">İsti sifarişlər</div><div class="text-[10px] text-gray-400 mt-0.5">İlk götürən əməkdaşın sifarişi olur</div></div>
             <div class="flex items-center gap-2"><button type="button" id="hot-order-create-button" class="icon-action-btn primary labeled" aria-label="Yeni isti sifariş" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button><button type="button" id="hot-order-refresh-button" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
         </div>
@@ -1320,16 +1329,16 @@
 
     <!-- SCREEN: GÖZLƏMƏ -->
     <div id="screen-gozleme" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Gözləmə</div>
                 <div class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
             </div>
             <div class="flex items-center gap-2">
+                <select id="gozleme-date-select" class="toolbar-select" aria-label="Tarix"></select>
                 <button type="button" onclick="loadGozleme(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
         </div>
         </div>
-        <select id="gozleme-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
         <div class="flex justify-between items-center">
             <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="gozleme-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="gozleme-overdue-count"></span></span>
         </div>
@@ -1580,7 +1589,8 @@ function getUserId() {
 let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = CURRENT_USER_ID === '6824377548';
-function canUseAi() { return !!isAdmin || IS_RUFAT; }
+let employeeAiEnabled = false;
+function canUseAi() { return !!employeeAiEnabled; }
 let HAS_OWN_FUNNEL = ['6824377548','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
 let HAS_CHATS = ['6824377548','1628569350'].includes(CURRENT_USER_ID);
 let HAS_NOTICES = ['6824377548','1628569350','7329891614','7920785774','1289510272','6596538872','1142054888'].includes(CURRENT_USER_ID);
@@ -2315,6 +2325,7 @@ async function loadEmployeeSession() {
     }
     isAdmin = !!data.is_admin;
     employeePermissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
+    employeeAiEnabled = !!data.ai_enabled;
     employeeWhatsAppNumber = String(data.whatsapp_number || '').replace(/\D/g, '');
     HAS_OWN_FUNNEL = hasEmployeePermission('deals');
     HAS_NOTICES = hasEmployeePermission('tasks');
@@ -3048,6 +3059,8 @@ function submitClose() {
 let linearTesdiqLoaded = false;
 let linearTesdiqActionPending = false;
 let linearTesdiqRows = [];
+let linearSearchTimer = null;
+let linearSearchSequence = 0;
 // System requests are the primary confirmation work. Linear is a separate
 // queue opened explicitly from the second tab.
 let pendingQueue = 'system';
@@ -3149,18 +3162,37 @@ function focusLinearTask(issueId) {
 }
 
 function filterLinearTasks(rawValue) {
-    const query = String(rawValue || '').trim().toLocaleLowerCase('az');
-    const cards = [...document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]')];
-    cards.forEach(card => { card.hidden = !!query && !String(card.dataset.linearSearch || '').toLocaleLowerCase('az').includes(query); });
+    const query = String(rawValue || '').trim();
     const results = document.getElementById('linear-search-results');
     if(!results) return;
-    if(!query) { results.hidden = true; results.innerHTML = ''; return; }
-    const matches = linearTesdiqRows.filter(item => String(item.client || '').toLocaleLowerCase('az').includes(query)).slice(0, 10);
-    results.innerHTML = matches.length ? matches.map(item => `<button type="button" data-linear-focus="${escapeHtml(String(item.source_id || ''))}" class="block w-full rounded-lg px-3 py-2 text-left hover:bg-violet-50"><b class="block text-xs text-slate-800">${escapeHtml(item.client || 'Müştəri')}</b><span class="block truncate text-[10px] text-slate-500">${escapeHtml(item.id || '')} · ${escapeHtml(item.title || '')}</span></button>`).join('') : '<div class="px-3 py-2 text-xs text-slate-400">Müştəri tapılmadı</div>';
+    clearTimeout(linearSearchTimer);
+    if(query.length < 2) { linearSearchSequence += 1; results.hidden = true; results.innerHTML = ''; return; }
     results.hidden = false;
+    results.innerHTML = '<div class="px-3 py-2 text-xs text-violet-500">Linear-da axtarılır…</div>';
+    const sequence = ++linearSearchSequence;
+    linearSearchTimer = window.setTimeout(async () => {
+        try {
+            const response = await fetch(API_BASE + '/api/linear/tesdiq?q=' + encodeURIComponent(query) + '&_ts=' + Date.now(), {
+                headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'
+            });
+            const data = await response.json().catch(() => ({}));
+            if(sequence !== linearSearchSequence) return;
+            if(!response.ok || !data.success) throw new Error(data.error || 'Linear axtarışı alınmadı.');
+            const matches = Array.isArray(data.issues) ? data.issues : [];
+            results.innerHTML = matches.length ? matches.map(item => {
+                const local = linearTesdiqRows.some(row => String(row.source_id) === String(item.source_id));
+                const status = item.status?.name || '';
+                return `<button type="button" data-linear-focus="${escapeHtml(String(item.source_id || ''))}" data-linear-url="${escapeHtml(String(item.url || ''))}" data-linear-local="${local ? '1' : '0'}" class="block w-full rounded-lg px-3 py-2 text-left hover:bg-violet-50"><b class="block text-xs text-slate-800">${escapeHtml(item.client || item.title || 'Müştəri')}</b><span class="block truncate text-[10px] text-slate-500">${escapeHtml(item.id || '')} · ${escapeHtml(item.title || '')}${status ? ' · ' + escapeHtml(status) : ''}</span></button>`;
+            }).join('') : '<div class="px-3 py-2 text-xs text-slate-400">Linear-da nəticə tapılmadı</div>';
+        } catch(error) {
+            if(sequence === linearSearchSequence) results.innerHTML = `<div class="px-3 py-2 text-xs text-rose-500">${escapeHtml(error.message || 'Axtarış alınmadı')}</div>`;
+        }
+    }, 350);
     results.onclick = event => {
         const button = event.target.closest('[data-linear-focus]');
-        if(button) focusLinearTask(button.dataset.linearFocus);
+        if(!button) return;
+        if(button.dataset.linearLocal === '1') focusLinearTask(button.dataset.linearFocus);
+        else if(/^https:\/\/linear\.app\//i.test(button.dataset.linearUrl || '')) window.open(button.dataset.linearUrl, '_blank', 'noopener');
     };
 }
 
@@ -3631,6 +3663,7 @@ async function showPendingQueue(queue, forceRefresh = false) {
     const linearButton = document.getElementById('pending-queue-linear');
     const systemButton = document.getElementById('pending-queue-system');
     const subtitle = document.getElementById('pending-page-subtitle');
+    const typeSelect = document.getElementById('pending-type-select');
     const activeClass = 'rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm';
     const inactiveClass = 'rounded-lg px-3 py-2 text-xs font-bold text-slate-500';
     const linearActive = pendingQueue === 'linear';
@@ -3639,6 +3672,7 @@ async function showPendingQueue(queue, forceRefresh = false) {
     if(linearButton) linearButton.className = linearActive ? activeClass : inactiveClass;
     if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
     if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
+    if(typeSelect) typeSelect.style.display = linearActive ? 'none' : '';
     if(linearActive) {
         if(forceRefresh) await loadLinearTesdiq(true);
         else if(!linearTesdiqLoaded && !linearSection?.dataset.manualHint) {
@@ -4768,7 +4802,7 @@ function audioTranscriptControl(item) {
     return `<div class="audio-transcript"><button type="button" class="audio-transcript-btn" data-message-id="${escapeHtml(id)}" data-file-uuid="${escapeHtml(uuid)}" data-created-at="${escapeHtml(String(at))}" data-channel="${escapeHtml(channel)}" data-message-type="${escapeHtml(kind)}">Mətnə çevir</button></div>`;
 }
 async function requestAudioTranscript(button) {
-    if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
+    if(!canUseAi()) { toast('AI funksiyası sizin üçün aktiv deyil.', true); return; }
     if(!button || button.classList.contains('loading')) return;
     const leadId = String((_dealViewState && _dealViewState.id) || _noticeHistoryLeadId || '');
     if(!leadId || !CURRENT_USER_ID) {
@@ -7565,7 +7599,7 @@ let _dealAiBusy = false;
 async function requestDealAiReply() {
     const btn = document.getElementById('deal-chat-ai');
     const input = document.getElementById('deal-chat-input');
-    if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
+    if(!canUseAi()) { toast('AI funksiyası sizin üçün aktiv deyil.', true); return; }
     if(_dealAiBusy || !_dealViewState || !CURRENT_USER_ID) return;
     _dealAiBusy = true;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
@@ -7595,7 +7629,7 @@ async function requestDealAiReply() {
 }
 async function requestDealSummary() {
     const btn = document.getElementById('deal-chat-summary');
-    if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
+    if(!canUseAi()) { toast('AI funksiyası sizin üçün aktiv deyil.', true); return; }
     if(!_dealViewState || !CURRENT_USER_ID) return;
     if(btn) { btn.disabled = true; btn.classList.add('loading'); }
     showDealSummaryProgress();
@@ -10232,7 +10266,7 @@ function noticeAiPayload() {
 }
 async function requestNoticeSummary() {
     const button = document.getElementById('notice-chat-summary');
-    if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
+    if(!canUseAi()) { toast('AI funksiyası sizin üçün aktiv deyil.', true); return; }
     if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
     _noticeReplyBusy = true;
     if(button) { button.disabled = true; button.classList.add('loading'); }
@@ -10253,7 +10287,7 @@ async function requestNoticeSummary() {
 async function requestNoticeAiReply() {
     const input = document.getElementById('notice-reply-input');
     const button = document.getElementById('notice-reply-ai');
-    if(!canUseAi()) { toast('AI funksiyası yalnız administrator və Rüfət üçün açıqdır.', true); return; }
+    if(!canUseAi()) { toast('AI funksiyası sizin üçün aktiv deyil.', true); return; }
     if(_noticeReplyBusy || !_noticeHistoryLeadId || !CURRENT_USER_ID) return;
     _noticeReplyBusy = true;
     if(button) { button.disabled = true; button.classList.add('loading'); }
@@ -11575,6 +11609,7 @@ function openEmployeeEditor(chatId = null) {
         <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
+        <label class="mt-3 flex items-start gap-2 rounded-xl border border-violet-100 bg-violet-50 p-3 text-xs font-bold text-violet-900"><input id="employee-editor-ai" type="checkbox" class="mt-0.5" ${employee?.ai_enabled ? 'checked' : ''}><span>AI funksiyalarını aktiv et<span class="mt-1 block text-[10px] font-normal leading-4 text-violet-700">AI cavab, xülasə və transkripsiya düymələri yalnız bu seçim aktiv olan əməkdaşa göstərilir.</span></span></label>
         <label class="mt-3 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-900"><input id="employee-editor-completion-approval" type="checkbox" class="mt-0.5" ${employee?.completion_requires_admin ? 'checked' : ''}><span>Sövdələşmənin tamamlanmasını Admin təsdiqləsin<span class="mt-1 block text-[10px] font-normal leading-4 text-emerald-700">Bu əməkdaş işi tamamladıqda Təsdiq səhifəsində yalnız bir “Sifariş tamamlandı” sorğusu yaranacaq.</span></span></label>
         <div class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span>${employeeHotSkillDropdown([...skills])}</div>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
@@ -11612,7 +11647,7 @@ async function saveEmployee() {
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
     const hotOrderSkills = [...document.querySelectorAll('[data-employee-hot-skill]:checked')].map(option => option.getAttribute('data-employee-hot-skill'));
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
-    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
+    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, ai_enabled:!!document.getElementById('employee-editor-ai')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));
@@ -12495,7 +12530,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=335');
+    const reg = await navigator.serviceWorker.register('sw.js?v=336');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

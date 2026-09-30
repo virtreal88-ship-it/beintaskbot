@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-30-chat-routing-permissions';
+const CACHE_NAME = 'beintaskbot-v2026-09-30-ai-mobile-linear-search';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

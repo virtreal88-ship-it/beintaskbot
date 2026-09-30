@@ -462,9 +462,6 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
     # Hot orders is an independent menu.  It used to follow task access,
     # which made the switch ineffective: removing the hot-order checkbox and
     # retaining tasks silently brought it back on every save.
-    # Creating an order is meaningful only together with access to its board.
-    if "hot_orders_create" in values:
-        values.add("hot_orders")
     return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
 
 
@@ -535,6 +532,9 @@ def employee_access_profile(chat_id: int) -> dict:
             "active": True if canonical_admin else bool(stored.get("active", True)),
             "role": role,
             "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
+            # AI is a capability, not a page. Legacy Nizami/Rufat profiles
+            # keep the access they had before this switch was introduced.
+            "ai_enabled": bool(stored.get("ai_enabled", cid in {ADMIN_CHAT_ID, RUFAT_CHAT_ID})),
             "hot_order_skills": _normalize_hot_order_skills(stored.get("hot_order_skills")),
             "completion_requires_admin": bool(stored.get("completion_requires_admin", False)),
         }
@@ -549,6 +549,7 @@ def employee_access_profile(chat_id: int) -> dict:
         "active": True,
         "role": role,
         "permissions": list(_ALL_EMPLOYEE_PERMISSIONS),
+        "ai_enabled": cid in {ADMIN_CHAT_ID, RUFAT_CHAT_ID},
         "hot_order_skills": ["all"],
         "completion_requires_admin": False,
     }
@@ -767,21 +768,18 @@ def is_admin(chat_id: int) -> bool:
 
 
 def can_use_deal_ai(chat_id: int) -> bool:
-    """AI tools are deliberately limited to the owner and Rüfət.
-
-    The browser hides the controls too, but this server-side check is the
-    access boundary: a staff member cannot call an AI endpoint directly.
-    """
+    """Return the per-employee AI capability enforced by the backend."""
     try:
         cid = int(chat_id)
     except (TypeError, ValueError):
         return False
-    return is_admin(cid) or is_rufat_chat(cid)
+    profile = employee_access_profile(cid)
+    return bool(profile.get("active")) and bool(profile.get("ai_enabled"))
 
 
 def _deal_ai_access_denied() -> web.Response:
     return web.json_response(
-        {"success": False, "error": "AI funksiyası yalnız administrator və Rüfət üçün açıqdır."},
+        {"success": False, "error": "AI funksiyası bu əməkdaş üçün aktiv deyil."},
         status=403,
     )
 
@@ -19137,6 +19135,7 @@ def _employee_directory_rows() -> list[dict]:
             "role": profile["role"],
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
+            "ai_enabled": bool(profile.get("ai_enabled")),
             "hot_order_skills": profile.get("hot_order_skills") or [],
             "completion_requires_admin": bool(profile.get("completion_requires_admin")),
             "updated_at": str((access.get(str(chat_id)) or {}).get("updated_at") or ""),
@@ -19188,6 +19187,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Öz girişinizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
+            "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
             "updated_at": now, "updated_by": manager_id,
@@ -19224,8 +19224,10 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         permissions = _normalize_employee_permissions(data.get("permissions"), role)
         hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
         completion_requires_admin = bool(data.get("completion_requires_admin", False))
+        ai_enabled = bool(data.get("ai_enabled", False))
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
+            "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
             "updated_at": now, "updated_by": manager_id,
@@ -19241,6 +19243,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "role": old_record.get("role") or role,
                 "permissions": old_record.get("permissions") or permissions,
                 "active": False,
+                "ai_enabled": bool(old_record.get("ai_enabled", ai_enabled)),
                 "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
                 "completion_requires_admin": bool(
                     old_record.get("completion_requires_admin", completion_requires_admin)
@@ -19527,33 +19530,56 @@ def _linear_uuid(value: str, label: str) -> str:
     return candidate
 
 
-def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
-    """Fetch the administrator's Linear confirmation queue without mutating it."""
+def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "") -> list[dict]:
+    """Fetch the confirmation queue or search Linear directly by client text."""
+    search = str(search or "").strip()[:120]
     now = _time_module.monotonic()
     cached_at = float(_LINEAR_TESDIQ_CACHE.get("at") or 0)
     cached_items = _LINEAR_TESDIQ_CACHE.get("items")
-    if not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
+    if not search and not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
         return list(cached_items)
 
     team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
     state_id = _linear_uuid(LINEAR_TESDIQ_STATE_ID, "Təsdiq statusu")
-    payload = _linear_graphql(f"""
-    query ConfirmationIssues {{
-      issues(first: 100, orderBy: updatedAt, filter: {{
-        team: {{ id: {{ eq: \"{team_id}\" }} }},
-        state: {{ id: {{ eq: \"{state_id}\" }} }}
-      }}) {{
-        nodes {{
-          id identifier title description priority dueDate createdAt updatedAt url
-          state {{ id name color }}
-          assignee {{ name }}
-          creator {{ name }}
-          project {{ name }}
-          labels {{ nodes {{ name }} }}
+    if search:
+        payload = _linear_graphql("""
+        query SearchClientIssues($teamId: ID!, $search: String!) {
+          issues(first: 30, orderBy: updatedAt, filter: {
+            team: { id: { eq: $teamId } },
+            or: [
+              { title: { containsIgnoreCase: $search } },
+              { description: { containsIgnoreCase: $search } }
+            ]
+          }) {
+            nodes {
+              id identifier title description priority dueDate createdAt updatedAt url
+              state { id name color }
+              assignee { name }
+              creator { name }
+              project { name }
+              labels { nodes { name } }
+            }
+          }
+        }
+        """, {"teamId": team_id, "search": search})
+    else:
+        payload = _linear_graphql(f"""
+        query ConfirmationIssues {{
+          issues(first: 100, orderBy: updatedAt, filter: {{
+            team: {{ id: {{ eq: \"{team_id}\" }} }},
+            state: {{ id: {{ eq: \"{state_id}\" }} }}
+          }}) {{
+            nodes {{
+              id identifier title description priority dueDate createdAt updatedAt url
+              state {{ id name color }}
+              assignee {{ name }}
+              creator {{ name }}
+              project {{ name }}
+              labels {{ nodes {{ name }} }}
+            }}
+          }}
         }}
-      }}
-    }}
-    """)
+        """)
     nodes = ((payload.get("issues") or {}).get("nodes") or [])
     items = []
     for row in nodes:
@@ -19577,6 +19603,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
                 "name": str((row.get("state") or {}).get("name") or "Təsdiq"),
                 "color": str((row.get("state") or {}).get("color") or ""),
             },
+            "in_confirmation": str((row.get("state") or {}).get("id") or "") == state_id,
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
             "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
@@ -19585,7 +19612,8 @@ def _load_linear_tesdiq_issues(*, force: bool = False) -> list[dict]:
     # Linear's default order is mutable (updatedAt). The director queue is
     # easier to process chronologically, with the newest request always first.
     items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
-    _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})
+    if not search:
+        _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})
     return items
 
 
@@ -19726,9 +19754,10 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Linear tapşırığı dəyişdirilmədi."}, status=502)
 
     force = str(request.query.get("refresh") or "").strip() == "1"
+    search = str(request.query.get("q") or "").strip()[:120]
     try:
-        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force)
-        return web.json_response({"success": True, "connected": True, "issues": issues})
+        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search)
+        return web.json_response({"success": True, "connected": True, "issues": issues, "search": search})
     except RuntimeError as exc:
         return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
     except Exception:
@@ -19769,6 +19798,7 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "role": profile["role"],
         "is_admin": is_admin(chat_id),
         "permissions": profile["permissions"],
+        "ai_enabled": bool(profile.get("ai_enabled")),
         "whatsapp_number": get_employee_whatsapp_number(chat_id),
     })
 
