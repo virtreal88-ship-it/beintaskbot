@@ -7469,8 +7469,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # instead of requiring the browser to know pipeline IDs/stages.
             assignee_name = normalize_assignee_name(data.get("assignee_name") or data.get("executor"))
             if assignee_name:
-                if not is_admin(chat_id):
-                    return web.json_response({"success": False, "error": "Yalnız administrator icraçı seçə bilər."}, status=403)
+                # Changing the deal executor is intentionally available to
+                # every employee who can see the deal.  The old admin-only
+                # guard made the same executor selector work in task creation
+                # but fail from Sövdələşmələr for regular staff.
                 if not move_lead_to_icraci(lead_id, assignee_name):
                     return web.json_response({"success": False, "error": "İcraçı üçün vərəq tapılmadı."}, status=400)
                 route = route_deal_for_employee(assignee_name)
@@ -9053,6 +9055,10 @@ def _apply_talk_to_inbox(
     incoming_at_by_lead: dict[int, int] | None = None,
     outside_by_lead: dict[int, dict] | None = None,
 ) -> None:
+    if _talk_is_whatsapp_business(talk):
+        # Retired WABA conversations must not create inbox rows or unread
+        # badges.  Only grey Kommo WhatsApp talks are live customer chats.
+        return
     lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
     if not lids:
         if outside_by_lead is not None:
@@ -10493,6 +10499,31 @@ def _talk_blob(talk: dict) -> str:
         return str(talk or "").lower()
 
 
+def _talk_is_whatsapp_business(talk: dict) -> bool:
+    """Return True for the legacy WhatsApp Business/WABA channel.
+
+    Customer chats are now handled only by the grey Kommo WhatsApp
+    integration.  Kommo still returns old WABA talks together with the grey
+    talks, so they must not be selected as a reply target (that is what
+    produced provider error 3136).  Keep this check limited to talk metadata;
+    message text is not part of the Talk object returned by the API.
+    """
+    blob = _talk_blob(talk)
+    if not blob:
+        return False
+    markers = (
+        "whatsapp business",
+        "whatsapp_business",
+        "whatsapp-business",
+        "whatsapp cloud",
+        "whatsapp_cloud",
+        "cloud api",
+        "cloud_api",
+        '"waba"',
+    )
+    return any(marker in blob for marker in markers)
+
+
 def _talk_has_digits(talk: dict, digits: str) -> bool:
     wanted = re.sub(r"\D", "", str(digits or ""))
     if len(wanted) < 8:
@@ -10594,6 +10625,10 @@ def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dic
     for talk in talks or []:
         key = _talk_channel_key(talk)
         if key not in CHAT_CHANNEL_LABELS:
+            continue
+        # Never expose the retired WABA talk as a live customer chat.  The
+        # grey Kommo talk remains available and is the only valid sender.
+        if key == "whatsapp" and _talk_is_whatsapp_business(talk):
             continue
         grouped.setdefault(key, []).append(talk)
     rows = []
@@ -10717,15 +10752,10 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
             return remembered_id, _talk_chat_id(remembered)
     if row and row.get("talk_id"):
         return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
-    # Falling back to an arbitrary "most recent" Talk is acceptable only for
-    # legacy WhatsApp chats.  For social messengers it can send a message to
-    # the wrong channel, so return an actionable "chat not found" error.
-    if wanted != "whatsapp":
-        return 0, ""
-    ranked = _ranked_reply_talk_ids(talks)
-    talk_id = int(ranked[0]) if ranked else 0
-    fallback = next((item for item in channels if int(item.get("talk_id") or 0) == talk_id), None)
-    return talk_id, str((fallback or {}).get("chat_id") or "")
+    # Never fall back to an arbitrary Talk.  In particular, selecting an old
+    # WhatsApp Business/WABA Talk is what caused Kommo error 3136.  The grey
+    # Kommo conversation must be resolved explicitly from its channel metadata.
+    return 0, ""
 
 
 def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
@@ -14351,33 +14381,6 @@ def _collect_deal_chat(
     wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
     if wanted not in CHAT_CHANNEL_LABELS:
         wanted = "whatsapp"
-    if wanted == "whatsapp":
-        rows = _sent_messages_for_lead(lid)
-        rows.sort(key=lambda item: int(item.get("created_at") or 0))
-        if before:
-            older = [item for item in rows if int(item.get("created_at") or 0) < before]
-            page = older[-limit:] if older else []
-            has_more = len(older) > limit
-        else:
-            page = rows[-limit:] if rows else []
-            has_more = len(rows) > limit
-        _apply_saved_replies(page)
-        _overlay_sent_delivery(page, lid)
-        reactions = _reactions_for_lead(lid)
-        if reactions:
-            for item in page:
-                emoji = reactions.get(str(item.get("external_id") or "")) or reactions.get(str(item.get("id") or ""))
-                if emoji:
-                    item["my_reaction"] = emoji
-        channels = [{
-            "key": "whatsapp",
-            "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
-            "talk_id": 0,
-            "chat_id": "",
-            "open": True,
-            "sender_phone": _wa_display_number(sender_digits),
-        }]
-        return page, False, 0, has_more, channels, "whatsapp"
     chat: list[dict] = []
     seen_chat: set[tuple] = set()
     chat_blocked = False
@@ -14443,11 +14446,11 @@ def _collect_deal_chat(
         seen_chat.add(key)
         chat.append(item)
 
-    _channel_hit = _WA_CHANNEL_CACHE.get(int(lid)) if wanted == "whatsapp" else None
-    if wanted == "whatsapp":
-        talks = []
-    else:
-        talks = _fetch_talks(lid, contact_ids, include_contacts=True)
+    # Every customer channel, including WhatsApp, is loaded from Kommo Talks.
+    # The previous WhatsApp-only branch read the local Cloud/WABA outbox and
+    # returned a synthetic talk_id=0, which caused stale Business API messages
+    # and provider error 3136 to leak into the chat.
+    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
     channels = _channels_from_talks(talks, sender_digits)
     if not channels:
         ranked = _ranked_reply_talk_ids(talks)
@@ -14464,7 +14467,7 @@ def _collect_deal_chat(
                 "open": True,
                 "sender_phone": _wa_display_number(sender_digits) if fallback_key == "whatsapp" else "",
             }]
-        else:
+        elif wanted != "whatsapp":
             channels = [{
                 "key": "whatsapp",
                 "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
@@ -14476,21 +14479,8 @@ def _collect_deal_chat(
     for row in channels:
         if row.get("key") == "whatsapp" and not str(row.get("sender_phone") or "").strip():
             row["sender_phone"] = _wa_display_number(sender_digits)
-    if not any(str(row.get("key") or "") == "whatsapp" for row in channels):
-        channels.insert(0, {
-            "key": "whatsapp",
-            "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
-            "talk_id": 0,
-            "chat_id": "",
-            "open": True,
-            "sender_phone": _wa_display_number(sender_digits),
-        })
-    if wanted == "whatsapp" and not (_channel_hit and _time_module.monotonic() - _channel_hit[0] < 90):
-        _WA_CHANNEL_CACHE[int(lid)] = (_time_module.monotonic(), list(channels))
-    elif wanted == "whatsapp" and _channel_hit:
-        channels = list(_channel_hit[1])
     reply_talk_id = next((int(row.get("talk_id") or 0) for row in channels if row.get("key") == wanted), 0)
-    if not reply_talk_id and channels:
+    if not reply_talk_id and channels and wanted != "whatsapp":
         reply_talk_id = int(channels[0].get("talk_id") or 0)
     if lid and reply_talk_id:
         _lead_open_talk[lid] = reply_talk_id
@@ -14498,10 +14488,8 @@ def _collect_deal_chat(
     page_limit = max(1, min(int(limit or 20), 50))
     talk_has_more = False
     target_rows = [row for row in channels if str(row.get("key") or "") == wanted]
-    if not target_rows and channels:
+    if not target_rows and channels and wanted != "whatsapp":
         target_rows = [channels[0]]
-    if wanted == "whatsapp":
-        target_rows = []
     for row in target_rows:
         talk_id = int(row.get("talk_id") or 0)
         chat_ref = str(row.get("chat_id") or "")
@@ -14532,11 +14520,10 @@ def _collect_deal_chat(
             _add_chat(fb_item)
     with _deal_chat_cache_lock:
         preview_tail = list(_chat_open_preview.get(lid) or [])
-    if wanted != "whatsapp":
-        for tail_item in preview_tail:
-            _add_chat(tail_item)
-        if link_media:
-            _link_missing_chat_media(chat, lid, contact_ids)
+    for tail_item in preview_tail:
+        _add_chat(tail_item)
+    if link_media:
+        _link_missing_chat_media(chat, lid, contact_ids)
     for item in chat:
         txt = str(item.get("text") or "")
         if _message_is_voice(item) or _looks_audio_name(str(item.get("file_name") or "")) or _looks_audio_name(str(item.get("media_url") or "")):
@@ -14550,62 +14537,9 @@ def _collect_deal_chat(
                 item["text"] = item.get("file_name") or ""
             else:
                 item["text"] = "📷 Şəkil"
-    # Cloud API sends are not returned by Kommo talks, so replay our own log and
-    # drop the copies Kommo did mirror back.
-    known_external = {str(item.get("external_id") or "") for item in chat if item.get("external_id")}
-    outgoing_seen = [
-        (str(item.get("text") or ""), int(item.get("created_at") or 0))
-        for item in chat
-        if not item.get("incoming")
-    ]
-    cloud_rows = _sent_messages_for_lead(lid) if wanted == "whatsapp" else []
-    for item in cloud_rows:
-        external = str(item.get("external_id") or "")
-        cards = item.get("cards") if isinstance(item.get("cards"), list) else []
-        text = str(item.get("text") or "")
-        created = int(item.get("created_at") or 0)
-        if cards:
-            for existing in chat:
-                if existing.get("incoming"):
-                    continue
-                same_ext = bool(external) and str(existing.get("external_id") or "") == external
-                same_text = (
-                    text
-                    and str(existing.get("text") or "") == text
-                    and abs(int(existing.get("created_at") or 0) - created) <= 180
-                )
-                if same_ext or same_text:
-                    if not existing.get("cards"):
-                        existing["cards"] = cards
-                        existing["message_type"] = "carousel"
-                    break
-        if external and external in known_external:
-            continue
-        if text and any(
-            text == other_text and abs(created - other_created) <= 180
-            for other_text, other_created in outgoing_seen
-        ):
-            continue
-        if not item.get("is_bot"):
-            item.setdefault("author", employee_name or "")
-        if _message_is_voice(item):
-            chat[:] = [
-                row for row in chat
-                if not (
-                    row.get("incoming")
-                    and abs(int(row.get("created_at") or 0) - created) <= 180
-                    and (
-                        _is_media_notice_text(str(row.get("text") or ""))
-                        or str(row.get("text") or "").strip() in {"📷 Şəkil", "Şəkil"}
-                        or (
-                            str(row.get("message_type") or "").lower() == "picture"
-                            and not _looks_image_name(str(row.get("file_name") or ""))
-                            and not _looks_image_name(str(row.get("media_url") or ""))
-                        )
-                    )
-                )
-            ]
-        _add_chat(item)
+    # Kommo Talk is the source of truth for all customer chats.  Do not replay
+    # the legacy local Cloud/WABA outbox here: those rows were never confirmed
+    # by the grey Kommo channel and made old Business messages look live.
     clean_chat: list[dict] = []
     for candidate in chat:
         txt = str(candidate.get("text") or "")
@@ -15597,6 +15531,10 @@ def _capture_incoming_tail(
     except (TypeError, ValueError):
         return
     if not lid:
+        return
+    # Do not reintroduce retired WhatsApp Business/WABA webhooks into the
+    # customer timeline.  Grey Kommo Talks are the only WhatsApp source now.
+    if _talk_is_whatsapp_business({"origin": origin, "source": origin}):
         return
     channel = _origin_channel_key(origin) or "whatsapp"
     mid = str(message_id or "").strip() or f"hook-{lid}-{created}"
@@ -16644,6 +16582,8 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         if not item:
             return
         value = dict(item)
+        if _talk_is_whatsapp_business(value):
+            return
         if entity_type:
             value["entity_type"] = entity_type
             value["entity_id"] = entity_id
@@ -16658,10 +16598,15 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         seen.add(key)
         rows.append(value)
 
-    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
+    talks = [
+        talk for talk in _fetch_talks(lid, contact_ids, include_contacts=True)
+        if not _talk_is_whatsapp_business(talk)
+    ]
     wanted_talk = int(talk_id or 0)
+    # A requested talk can come from an old WABA history row.  Do not
+    # reinsert that retired id as a synthetic Talk and accidentally display it.
     if wanted_talk and not any(_talk_id_of(row) == wanted_talk for row in talks):
-        talks.insert(0, {"talk_id": wanted_talk})
+        wanted_talk = 0
     # Talks are returned without a guaranteed order. Prefer the newest ones,
     # keeping a specifically requested talk at the top, and cap the first
     # screen load. The former 8 talks × 2 pages could consume 16+ Kommo calls

@@ -2326,7 +2326,7 @@ function toggleSidebarPin() {
 }
 applyDesktopSidebar();
 
-function hasEmployeePermission(permission) { return employeePermissions.has(permission); }
+function hasEmployeePermission(permission) { return isAdmin || employeePermissions.has(permission); }
 async function loadEmployeeSession() {
     // In browser mode the signed cookie, not an old pwa_uid, is the identity.
     const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
@@ -2360,7 +2360,7 @@ async function loadEmployeeSession() {
     applyEmployeePermissionUi();
 }
 function applyEmployeePermissionUi() {
-    const visible = (ids, allowed) => ids.forEach(id => { const el = document.getElementById(id); if(el) el.style.display = allowed ? '' : 'none'; });
+    const visible = (ids, allowed) => ids.forEach(id => { const el = document.getElementById(id); if(el) { el.style.display = allowed ? '' : 'none'; el.hidden = !allowed; } });
     visible(['tab-tasks','side-tab-tasks'], hasEmployeePermission('tasks'));
     visible(['tab-history','side-tab-history'], hasEmployeePermission('finance'));
     visible(['tab-samil-deals','side-tab-samil-deals'], hasEmployeePermission('deals'));
@@ -2370,6 +2370,13 @@ function applyEmployeePermissionUi() {
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
     visible(['tab-linear','side-tab-linear'], isAdmin);
     setPendingTabVisible();
+    // A saved tab or a restored mobile DOM can leave the old chat screen
+    // active after an administrator removes Müştərilər permission.  Close
+    // that screen immediately and move the employee to the first allowed tab.
+    const chatScreen = document.getElementById('screen-chats');
+    if(!HAS_CHATS && chatScreen?.classList.contains('active')) {
+        switchTab(firstAllowedTab(), false);
+    }
 }
 
 function setPendingTabVisible() {
