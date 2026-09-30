@@ -9037,10 +9037,10 @@ def _apply_talk_to_inbox(
     incoming_at_by_lead: dict[int, int] | None = None,
     outside_by_lead: dict[int, dict] | None = None,
 ) -> None:
-    if _talk_is_whatsapp_business(talk):
-        # Retired WABA conversations must not create inbox rows or unread
-        # badges.  Only grey Kommo WhatsApp talks are live customer chats.
-        return
+    # Historical WABA Talks remain visible in the inbox so that removing the
+    # old transport does not erase a customer's conversation.  They are still
+    # excluded from reply-target selection in _channels_from_talks and
+    # _resolve_channel_talk; this function is display/read-only state only.
     lids = _talk_inbox_lead_ids(talk, lead_ids, contact_to_lead)
     if not lids:
         if outside_by_lead is not None:
@@ -10722,7 +10722,7 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
         hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
         # The Talk stored on the visible incoming message is more precise than
         # a previously opened chat in another browser tab.
-        if hinted_talk and is_requested_channel(_talk_channel_key(hinted_talk)):
+        if hinted_talk and not _talk_is_whatsapp_business(hinted_talk) and is_requested_channel(_talk_channel_key(hinted_talk)):
             return hinted_id, _talk_chat_id(hinted_talk)
         if hinted_row and is_requested_channel(str(hinted_row.get("key") or "")):
             return hinted_id, str(hinted_row.get("chat_id") or "")
@@ -10730,7 +10730,7 @@ def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hin
     if remembered_id:
         remembered = next((talk for talk in talks if _talk_id_of(talk) == remembered_id), None)
         remembered_channel = _talk_channel_key(remembered or {})
-        if remembered and is_requested_channel(remembered_channel):
+        if remembered and not _talk_is_whatsapp_business(remembered) and is_requested_channel(remembered_channel):
             return remembered_id, _talk_chat_id(remembered)
     if row and row.get("talk_id"):
         return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
@@ -14425,9 +14425,13 @@ def _collect_deal_chat(
     # returned a synthetic talk_id=0, which caused stale Business API messages
     # and provider error 3136 to leak into the chat.
     talks = _fetch_talks(lid, contact_ids, include_contacts=True)
-    channels = _channels_from_talks(talks, sender_digits)
+    # Keep the channel picker/send target limited to the active grey Kommo
+    # talks.  The full list is still used below for read-only history, so
+    # retiring WABA does not make older messages disappear from the chat.
+    sendable_talks = [talk for talk in talks if not _talk_is_whatsapp_business(talk)]
+    channels = _channels_from_talks(sendable_talks, sender_digits)
     if not channels:
-        ranked = _ranked_reply_talk_ids(talks)
+        ranked = _ranked_reply_talk_ids(sendable_talks)
         if ranked:
             fallback_talk = next((t for t in talks if _talk_id_of(t) == ranked[0]), {})
             fallback_key = _talk_channel_key(fallback_talk)
@@ -14464,7 +14468,28 @@ def _collect_deal_chat(
     target_rows = [row for row in channels if str(row.get("key") or "") == wanted]
     if not target_rows and channels and wanted != "whatsapp":
         target_rows = [channels[0]]
-    for row in target_rows:
+    history_rows = list(target_rows)
+    history_ids = {int(row.get("talk_id") or 0) for row in history_rows}
+    # A customer may have a current grey WhatsApp Talk plus one or more older
+    # Business/WABA Talks.  Add those Talks only as read-only history rows;
+    # _resolve_channel_talk rejects them when a reply is sent.
+    if wanted == "whatsapp":
+        for talk in talks:
+            talk_id = _talk_id_of(talk)
+            if not talk_id or talk_id in history_ids:
+                continue
+            if _talk_channel_key(talk) != wanted:
+                continue
+            history_rows.append({
+                "key": wanted,
+                "label": CHAT_CHANNEL_LABELS.get(wanted, wanted),
+                "talk_id": talk_id,
+                "chat_id": _talk_chat_id(talk),
+                "open": _talk_is_open(talk),
+                "sender_phone": _wa_display_number(sender_digits),
+            })
+            history_ids.add(talk_id)
+    for row in history_rows:
         talk_id = int(row.get("talk_id") or 0)
         chat_ref = str(row.get("chat_id") or "")
         channel_key = str(row.get("key") or wanted)
@@ -16556,8 +16581,6 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         if not item:
             return
         value = dict(item)
-        if _talk_is_whatsapp_business(value):
-            return
         if entity_type:
             value["entity_type"] = entity_type
             value["entity_id"] = entity_id
@@ -16572,10 +16595,10 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         seen.add(key)
         rows.append(value)
 
-    talks = [
-        talk for talk in _fetch_talks(lid, contact_ids, include_contacts=True)
-        if not _talk_is_whatsapp_business(talk)
-    ]
+    # History is read-only and must retain older Business/WABA messages.  The
+    # send path still filters those Talks separately, so showing them here does
+    # not re-enable the retired transport.
+    talks = _fetch_talks(lid, contact_ids, include_contacts=True)
     wanted_talk = int(talk_id or 0)
     # A requested talk can come from an old WABA history row.  Do not
     # reinsert that retired id as a synthetic Talk and accidentally display it.
@@ -16591,9 +16614,10 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
     )
     if wanted_talk:
         talks.sort(key=lambda row: 0 if _talk_id_of(row) == wanted_talk else 1)
-    talks = talks[:3]
-    if talks:
-        _lead_open_talk[lid] = _talk_id_of(talks[0])
+    talks = talks[:8]
+    active_talk = next((row for row in talks if not _talk_is_whatsapp_business(row)), None)
+    if active_talk:
+        _lead_open_talk[lid] = _talk_id_of(active_talk)
 
     for talk in talks:
         tid = _talk_id_of(talk)
