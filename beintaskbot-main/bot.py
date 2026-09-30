@@ -19630,18 +19630,27 @@ def _invalidate_linear_tesdiq_cache() -> None:
     _LINEAR_TESDIQ_CACHE.update({"at": 0.0, "items": []})
 
 
-def _linear_assert_confirmation_issue(issue_id: str) -> None:
-    """Refuse actions for issues outside this CRM's controlled queue."""
+def _linear_issue_context(issue_id: str) -> dict:
+    """Load a Linear issue and refuse cross-team mutations."""
     payload = _linear_graphql("""
     query ConfirmationIssue($id: String!) {
-      issue(id: $id) { id team { id } state { id } }
+      issue(id: $id) { id identifier title description team { id } state { id name type } }
     }
     """, {"id": issue_id})
     issue = payload.get("issue") or {}
     team_id = str((issue.get("team") or {}).get("id") or "")
+    if not issue.get("id") or team_id != LINEAR_TEAM_ID:
+        raise RuntimeError("Bu Linear tapşırığı bu şirkətin komandasına aid deyil.")
+    return issue
+
+
+def _linear_assert_confirmation_issue(issue_id: str) -> dict:
+    """Refuse queue-routing actions after an issue leaves Təsdiq."""
+    issue = _linear_issue_context(issue_id)
     state_id = str((issue.get("state") or {}).get("id") or "")
-    if team_id != LINEAR_TEAM_ID or state_id != LINEAR_TESDIQ_STATE_ID:
+    if state_id != LINEAR_TESDIQ_STATE_ID:
         raise RuntimeError("Bu tapşırıq artıq Təsdiq siyahısında deyil.")
+    return issue
 
 
 def _linear_resolve_workflow_state_id(configured_id: str, wanted_name: str) -> str:
@@ -19667,6 +19676,26 @@ def _linear_resolve_workflow_state_id(configured_id: str, wanted_name: str) -> s
     return _linear_uuid(configured_id, f"{wanted_name} statusu")
 
 
+def _linear_resolve_cancelled_state_id() -> str:
+    """Resolve Linear's native cancelled workflow state without extra config."""
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    payload = _linear_graphql("""
+    query TeamCancelledState($id: String!) {
+      team(id: $id) { states { nodes { id name type } } }
+    }
+    """, {"id": team_id})
+    states = (((payload.get("team") or {}).get("states") or {}).get("nodes") or [])
+    accepted_names = {"canceled", "cancelled", "imtina", "ləğv edilib", "ləğv olunub"}
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        name = str(state.get("name") or "").strip().casefold()
+        state_type = str(state.get("type") or "").strip().casefold()
+        if state_type in {"canceled", "cancelled"} or name in accepted_names:
+            return _linear_uuid(str(state.get("id") or ""), "Cancelled statusu")
+    raise RuntimeError("Linear-da Cancelled statusu tapılmadı.")
+
+
 def _linear_move_issue(issue_id: str, state_id: str) -> dict:
     _linear_assert_confirmation_issue(issue_id)
     payload = _linear_graphql("""
@@ -19685,10 +19714,10 @@ def _linear_move_issue(issue_id: str, state_id: str) -> dict:
 
 
 def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
-    """Update only the Linear priority while the issue remains in Təsdiq."""
+    """Update priority for any issue belonging to the configured team."""
     if priority not in {0, 1, 2, 3, 4}:
         raise RuntimeError("Linear prioriteti düzgün deyil.")
-    _linear_assert_confirmation_issue(issue_id)
+    _linear_issue_context(issue_id)
     payload = _linear_graphql("""
     mutation UpdateLinearIssuePriority($id: String!, $priority: Int!) {
       issueUpdate(id: $id, input: { priority: $priority }) {
@@ -19702,6 +19731,96 @@ def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
         raise RuntimeError("Linear tapşırığının prioriteti dəyişdirilmədi.")
     _invalidate_linear_tesdiq_cache()
     return result.get("issue") or {}
+
+
+def _linear_update_issue_text(issue_id: str, title: str, description: str) -> dict:
+    """Edit a task while preserving structured CRM metadata in its description."""
+    issue = _linear_issue_context(issue_id)
+    title = str(title or "").strip()[:255]
+    description = str(description or "").strip()[:10000]
+    if not title:
+        raise RuntimeError("Tapşırığın adı boş ola bilməz.")
+    raw_description = str(issue.get("description") or "")
+    metadata_lines: list[str] = []
+    metadata_keys = {"layihə", "project", "operator", "icraçı", "assignee", "müştəri", "client", "account", "hesab"}
+    for raw_line in raw_description.splitlines():
+        match = re.match(r"^([^:]{1,40}):\s*(.+)$", raw_line.strip())
+        if match and match.group(1).strip().casefold() in metadata_keys:
+            metadata_lines.append(raw_line.strip())
+    saved_description = "\n".join(metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
+    payload = _linear_graphql("""
+    mutation EditLinearIssue($id: String!, $title: String!, $description: String!) {
+      issueUpdate(id: $id, input: { title: $title, description: $description }) {
+        success
+        issue { id identifier title description updatedAt }
+      }
+    }
+    """, {"id": issue_id, "title": title, "description": saved_description})
+    result = payload.get("issueUpdate") or {}
+    if not result.get("success"):
+        raise RuntimeError("Linear tapşırığı redaktə edilmədi.")
+    _invalidate_linear_tesdiq_cache()
+    return result.get("issue") or {}
+
+
+def _linear_cancel_issue(issue_id: str, reason: str) -> dict:
+    """Record the reason in Linear, then move the issue to its cancelled state."""
+    _linear_issue_context(issue_id)
+    reason = str(reason or "").strip()[:3000]
+    if not reason:
+        raise RuntimeError("İmtina səbəbini yazın.")
+    comment_payload = _linear_graphql("""
+    mutation AddLinearCancellationReason($issueId: String!, $body: String!) {
+      commentCreate(input: { issueId: $issueId, body: $body }) {
+        success
+        comment { id }
+      }
+    }
+    """, {"issueId": issue_id, "body": f"İmtina səbəbi:\n\n{reason}"})
+    if not (comment_payload.get("commentCreate") or {}).get("success"):
+        raise RuntimeError("İmtina səbəbi Linear-da yadda saxlanmadı.")
+    state_id = _linear_resolve_cancelled_state_id()
+    payload = _linear_graphql("""
+    mutation CancelLinearIssue($id: String!, $stateId: String!) {
+      issueUpdate(id: $id, input: { stateId: $stateId }) {
+        success
+        issue { id identifier state { id name type } }
+      }
+    }
+    """, {"id": issue_id, "stateId": state_id})
+    result = payload.get("issueUpdate") or {}
+    if not result.get("success"):
+        raise RuntimeError("Səbəb yazıldı, amma tapşırıq Cancelled statusuna keçmədi.")
+    _invalidate_linear_tesdiq_cache()
+    return result.get("issue") or {}
+
+
+def _linear_ai_rewrite(text: str, title: str = "") -> str:
+    """Improve Azerbaijani task prose without changing its facts."""
+    text = str(text or "").strip()[:8000]
+    title = str(title or "").strip()[:255]
+    if not text:
+        raise RuntimeError("Redaktə etmək üçün mətn yazın.")
+    response = llm_client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Sən iş tapşırıqlarını peşəkar Azərbaycan dilində redaktə edən köməkçisən. "
+                    "Qrammatikanı, durğu işarələrini və aydınlığı düzəlt. Faktları, adları, nömrələri, "
+                    "tarixləri və tələbləri dəyişmə, yeni məlumat uydurma. Yalnız hazır mətni qaytar."
+                ),
+            },
+            {"role": "user", "content": f"Tapşırıq adı: {title or '—'}\n\nMətn:\n{text}"},
+        ],
+        temperature=0.15,
+        max_tokens=1200,
+    )
+    rewritten = str((response.choices[0].message.content if response.choices else "") or "").strip()
+    if not rewritten:
+        raise RuntimeError("AI boş cavab verdi.")
+    return rewritten
 
 
 def _linear_delete_issue(issue_id: str) -> None:
@@ -19736,7 +19855,8 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
-        if not issue_id or action not in {"confirm", "discussion", "priority", "delete"}:
+        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite"}
+        if not issue_id or action not in allowed_actions:
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
             if action == "confirm":
@@ -19754,6 +19874,26 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
                 updated = await asyncio.to_thread(_linear_update_issue_priority, issue_id, priority)
                 return web.json_response({"success": True, "message": "Tapşırığın prioriteti dəyişdirildi.", "issue": updated})
+            if action == "edit":
+                updated = await asyncio.to_thread(
+                    _linear_update_issue_text,
+                    issue_id,
+                    str(data.get("title") or ""),
+                    str(data.get("description") or ""),
+                )
+                return web.json_response({"success": True, "message": "Tapşırıq Linear-da yeniləndi.", "issue": updated})
+            if action == "cancel":
+                cancelled = await asyncio.to_thread(_linear_cancel_issue, issue_id, str(data.get("reason") or ""))
+                return web.json_response({"success": True, "message": "Tapşırıq Cancelled statusuna keçirildi.", "issue": cancelled})
+            if action == "ai_rewrite":
+                if not can_use_deal_ai(chat_id):
+                    return _deal_ai_access_denied()
+                rewritten = await asyncio.to_thread(
+                    _linear_ai_rewrite,
+                    str(data.get("text") or ""),
+                    str(data.get("title") or ""),
+                )
+                return web.json_response({"success": True, "text": rewritten})
             await asyncio.to_thread(_linear_delete_issue, issue_id)
             return web.json_response({"success": True, "message": "Tapşırıq Linear-dan silindi."})
         except RuntimeError as exc:

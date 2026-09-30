@@ -1275,7 +1275,14 @@
                 <div class="text-sm font-extrabold text-gray-800">Təsdiq</div>
                 <div id="pending-page-subtitle" class="text-[10px] text-gray-400 font-medium mt-0.5">Direktorun qərar gözləyən işləri</div>
             </div>
-            <div class="flex items-center gap-2"><select id="pending-type-select" class="toolbar-select" aria-label="Növ"></select><button onclick="refreshPendingQueue()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button></div>
+            <div class="flex items-center gap-2">
+                <select id="pending-type-select" class="toolbar-select" aria-label="Növ"></select>
+                <button id="linear-search-toggle" type="button" onclick="toggleLinearSearch()" class="icon-action-btn" aria-label="Linear-da axtar" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+                <button onclick="refreshPendingQueue()" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+            </div>
+        </div>
+        <div id="linear-search-wrap" class="rounded-2xl border border-violet-100 bg-white p-2 shadow-sm" hidden>
+            <input id="linear-client-search" type="search" oninput="filterLinearTasks(this.value)" placeholder="Linear-da müştəri və ya tapşırıq axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
         </div>
         <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
             <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
@@ -1292,11 +1299,6 @@
                     <div class="text-xs font-extrabold text-violet-900">Linear tapşırıqları</div>
                     <div id="linear-tesdiq-meta" class="text-[10px] text-violet-500 mt-0.5">Təsdiq gözləyir</div>
                 </div>
-                <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
-            </div>
-            <div class="relative border-b border-slate-100 bg-white p-2">
-                <input id="linear-client-search" type="search" oninput="filterLinearTasks(this.value)" placeholder="Müştəri adı ilə axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
-                <div id="linear-search-results" class="absolute left-2 right-2 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl" hidden></div>
             </div>
             <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
@@ -3059,11 +3061,73 @@ function submitClose() {
 let linearTesdiqLoaded = false;
 let linearTesdiqActionPending = false;
 let linearTesdiqRows = [];
+let linearQueueRows = [];
 let linearSearchTimer = null;
 let linearSearchSequence = 0;
 // System requests are the primary confirmation work. Linear is a separate
 // queue opened explicitly from the second tab.
 let pendingQueue = 'system';
+
+function linearIssueCardHtml(item) {
+    const title = escapeHtml(item.title || 'Tapşırıq');
+    const issueId = escapeHtml(item.id || 'Linear');
+    const sourceId = escapeHtml(String(item.source_id || ''));
+    const project = escapeHtml(item.project || 'Layihə göstərilməyib');
+    const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
+    const operator = escapeHtml(item.operator || 'Göstərilməyib');
+    const client = escapeHtml(item.client || 'Göstərilməyib');
+    const description = escapeHtml(String(item.description || '').trim());
+    const labels = Array.isArray(item.labels) && item.labels.length
+        ? item.labels.map(label => `<span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">${escapeHtml(label)}</span>`).join('')
+        : '<span class="text-[10px] text-slate-400">Etiket yoxdur</span>';
+    const priorityNames = {0:'Prioritet yoxdur',1:'Təcili',2:'Yüksək',3:'Orta',4:'Aşağı'};
+    const dueDate = item.due_date ? escapeHtml(new Date(item.due_date + 'T12:00:00').toLocaleDateString('az-AZ', {day:'2-digit', month:'long', year:'numeric'})) : 'Müddət qoyulmayıb';
+    const createdDate = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+    const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
+    const url = String(item.url || '');
+    const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
+    const priorityOptions = [[0,'Prioritet yoxdur'],[1,'Təcili'],[2,'Yüksək'],[3,'Orta'],[4,'Aşağı']]
+        .map(([value, label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
+    const priorityColors = {0:'#94a3b8',1:'#ef4444',2:'#f97316',3:'#3b82f6',4:'#22c55e'};
+    const priorityDot = `<span aria-hidden="true" class="inline-block h-1.5 w-1.5 rounded-full" style="background:${priorityColors[Number(item.priority)] || '#94a3b8'}"></span>`;
+    const priorityBadge = sourceId
+        ? `<label class="flex max-w-[144px] items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 shadow-sm">${priorityDot}<select aria-label="Prioritet" onchange="changeLinearPriority(this, '${sourceId}', ${Number(item.priority) || 0})" class="min-w-0 cursor-pointer bg-transparent text-[10px] font-bold text-slate-700 outline-none">${priorityOptions}</select></label>`
+        : `<span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm">${priorityDot}${escapeHtml(priorityNames[Number(item.priority)] || priorityNames[0])}</span>`;
+    const status = item.status || {};
+    const statusColor = /^#[0-9a-f]{3,8}$/i.test(String(status.color || '')) ? status.color : '#64748b';
+    const statusBadge = `<span class="inline-flex rounded-full px-2 py-1 text-[10px] font-extrabold text-white" style="background:${statusColor}">${escapeHtml(status.name || 'Status yoxdur')}</span>`;
+    const queueButtons = item.in_confirmation ? `
+        <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Təsdiq edirəm</button>
+        <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>` : '';
+    const actionButtons = sourceId ? `<div class="flex flex-wrap items-center gap-1.5">${queueButtons}<button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700 active:scale-[.98]">İmtina</button></div>` : '';
+    const deleteButton = item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : '';
+    const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${deleteButton}</div></details>` : '';
+    return `<article data-linear-issue-id="${sourceId}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+        <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div><div class="text-sm font-bold leading-5 text-slate-800">${title}</div></div>${priorityBadge}</div>
+        <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5"><span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span></div>
+        <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
+            <div><dt class="text-slate-400">Layihə</dt><dd class="font-semibold text-slate-700">${project}</dd></div><div><dt class="text-slate-400">İcraçı</dt><dd class="font-semibold text-slate-700">${assignee}</dd></div><div><dt class="text-slate-400">Operator</dt><dd class="font-semibold text-slate-700">${operator}</dd></div>
+            <div><dt class="text-slate-400">Son tarix</dt><dd class="font-semibold text-slate-700">${dueDate}</dd></div><div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
+            ${createdDate ? `<div class="col-span-3 text-[10px] text-slate-400">Yaradılıb: ${escapeHtml(createdDate)}</div>` : ''}${date ? `<div class="col-span-3 text-[10px] text-slate-400">Yenilənib: ${escapeHtml(date)}</div>` : ''}
+        </dl>
+        <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}${actionsMenu}</div>
+        ${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
+    </article>`;
+}
+
+function renderLinearIssues(rows, searchQuery = '') {
+    const list = document.getElementById('linear-tesdiq-list');
+    const meta = document.getElementById('linear-tesdiq-meta');
+    if(!list || !meta) return;
+    linearTesdiqRows = Array.isArray(rows) ? rows : [];
+    meta.textContent = searchQuery
+        ? `“${searchQuery}” üzrə ${linearTesdiqRows.length} nəticə`
+        : `${linearTesdiqRows.length} təsdiq gözləyir · qərarınızı seçin`;
+    list.innerHTML = linearTesdiqRows.length
+        ? linearTesdiqRows.map(linearIssueCardHtml).join('')
+        : `<div class="px-3 py-4 text-center text-xs text-slate-500">${searchQuery ? 'Linear-da nəticə tapılmadı.' : 'Təsdiq gözləyən Linear tapşırığı yoxdur.'}</div>`;
+}
+
 async function loadLinearTesdiq(forceRefresh = false) {
     const section = document.getElementById('linear-tesdiq-section');
     const list = document.getElementById('linear-tesdiq-list');
@@ -3084,91 +3148,40 @@ async function loadLinearTesdiq(forceRefresh = false) {
             return;
         }
         const rows = Array.isArray(data.issues) ? data.issues : [];
-        linearTesdiqRows = rows;
+        linearQueueRows = rows;
         linearTesdiqLoaded = true;
-        meta.textContent = `${rows.length} təsdiq gözləyir · qərarınızı seçin`;
-        if(!rows.length) {
-            list.innerHTML = '<div class="px-3 py-3 text-xs text-slate-500">Təsdiq gözləyən Linear tapşırığı yoxdur.</div>';
-            return;
-        }
-        list.innerHTML = rows.map(item => {
-            const title = escapeHtml(item.title || 'Tapşırıq');
-            const issueId = escapeHtml(item.id || 'Linear');
-            const sourceId = String(item.source_id || '');
-            const project = escapeHtml(item.project || 'Layihə göstərilməyib');
-            const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
-            const operator = escapeHtml(item.operator || 'Göstərilməyib');
-            const client = escapeHtml(item.client || 'Göstərilməyib');
-            const description = escapeHtml(String(item.description || '').trim());
-            const labels = Array.isArray(item.labels) && item.labels.length ? item.labels.map(label => `<span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">${escapeHtml(label)}</span>`).join('') : '<span class="text-[10px] text-slate-400">Etiket yoxdur</span>';
-            const priorityNames = {0:'Prioritet yoxdur',1:'Təcili',2:'Yüksək',3:'Orta',4:'Aşağı'};
-            const priority = escapeHtml(priorityNames[Number(item.priority)] || 'Prioritet yoxdur');
-            const dueDate = item.due_date ? escapeHtml(new Date(item.due_date + 'T12:00:00').toLocaleDateString('az-AZ', {day:'2-digit', month:'long', year:'numeric'})) : 'Müddət qoyulmayıb';
-            const createdDate = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
-            const date = item.updated_at ? new Date(item.updated_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
-            const url = String(item.url || '');
-            const safeLink = /^https:\/\/linear\.app\//i.test(url) ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-[11px] font-bold text-violet-700">Linear-da aç ↗</a>` : '';
-            const priorityOptions = [
-                [0, 'Prioritet yoxdur'], [1, 'Təcili'], [2, 'Yüksək'], [3, 'Orta'], [4, 'Aşağı']
-            ].map(([value, label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
-            const priorityColors = {0:'#94a3b8', 1:'#ef4444', 2:'#f97316', 3:'#3b82f6', 4:'#22c55e'};
-            const priorityDot = `<span aria-hidden="true" class="inline-block h-1.5 w-1.5 rounded-full" style="background:${priorityColors[Number(item.priority)] || '#94a3b8'}"></span>`;
-            const priorityBadge = sourceId ? `<label class="flex max-w-[144px] items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 shadow-sm">${priorityDot}<select aria-label="Prioritet" onchange="changeLinearPriority(this, '${sourceId}', ${Number(item.priority) || 0})" class="min-w-0 cursor-pointer bg-transparent text-[10px] font-bold text-slate-700 outline-none">${priorityOptions}</select></label>` : `<span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 shadow-sm">${priorityDot}${priority}</span>`;
-            const actionButtons = sourceId ? `<div class="mt-2 flex flex-wrap items-center gap-1.5">
-                    <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Təsdiq edirəm</button>
-                    <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>
-                </div>` : '';
-            const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-32 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button></div></details>` : '';
-            const searchText = escapeHtml([item.client, item.title, item.id].filter(Boolean).join(' ').toLowerCase());
-            return `<article data-linear-issue-id="${sourceId}" data-linear-search="${searchText}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
-                <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}</div><div class="text-sm font-bold leading-5 text-slate-800">${title}</div></div>${priorityBadge}</div>
-                <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
-                    <span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span>
-                </div>
-                <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
-                    <div><dt class="text-slate-400">Layihə</dt><dd class="font-semibold text-slate-700">${project}</dd></div>
-                    <div><dt class="text-slate-400">İcraçı</dt><dd class="font-semibold text-slate-700">${assignee}</dd></div>
-                    <div><dt class="text-slate-400">Operator</dt><dd class="font-semibold text-slate-700">${operator}</dd></div>
-                    <div><dt class="text-slate-400">Son tarix</dt><dd class="font-semibold text-slate-700">${dueDate}</dd></div>
-                    <div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
-                    ${createdDate ? `<div class="col-span-3 text-[10px] text-slate-400">Yaradılıb: ${escapeHtml(createdDate)}</div>` : ''}
-                    ${date ? `<div class="col-span-3 text-[10px] text-slate-400">Yenilənib: ${escapeHtml(date)}</div>` : ''}
-                </dl>
-                <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}${actionsMenu}</div>
-                ${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
-            </article>`;
-        }).join('');
         const search = document.getElementById('linear-client-search');
-        if(search && search.value) filterLinearTasks(search.value);
+        if(search && search.value.trim().length >= 2) filterLinearTasks(search.value);
+        else renderLinearIssues(rows);
     } catch(error) {
         meta.textContent = 'Yüklənmədi';
         list.innerHTML = `<div class="px-3 py-3 text-xs text-red-500">${escapeHtml(error.message || 'Linear tapşırıqları yüklənmədi.')}</div>`;
     }
 }
 
-function focusLinearTask(issueId) {
-    const wanted = String(issueId || '');
-    document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]').forEach(card => {
-        card.hidden = String(card.dataset.linearIssueId || '') !== wanted;
-    });
-    const results = document.getElementById('linear-search-results');
-    if(results) results.hidden = true;
-    const card = [...document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]')].find(item => String(item.dataset.linearIssueId || '') === wanted);
-    if(card) {
-        card.scrollIntoView({behavior:'smooth', block:'center'});
-        card.classList.add('ring-2', 'ring-violet-300');
-        window.setTimeout(() => card.classList.remove('ring-2', 'ring-violet-300'), 1600);
+function toggleLinearSearch(forceOpen = null) {
+    const wrap = document.getElementById('linear-search-wrap');
+    const input = document.getElementById('linear-client-search');
+    if(!wrap || !input) return;
+    const shouldOpen = forceOpen === null ? wrap.hidden : !!forceOpen;
+    wrap.hidden = !shouldOpen;
+    if(shouldOpen) window.setTimeout(() => input.focus(), 30);
+    else {
+        input.value = '';
+        linearSearchSequence += 1;
+        renderLinearIssues(linearQueueRows);
     }
 }
 
 function filterLinearTasks(rawValue) {
     const query = String(rawValue || '').trim();
-    const results = document.getElementById('linear-search-results');
-    if(!results) return;
+    const list = document.getElementById('linear-tesdiq-list');
+    const meta = document.getElementById('linear-tesdiq-meta');
+    if(!list || !meta) return;
     clearTimeout(linearSearchTimer);
-    if(query.length < 2) { linearSearchSequence += 1; results.hidden = true; results.innerHTML = ''; return; }
-    results.hidden = false;
-    results.innerHTML = '<div class="px-3 py-2 text-xs text-violet-500">Linear-da axtarılır…</div>';
+    if(query.length < 2) { linearSearchSequence += 1; renderLinearIssues(linearQueueRows); return; }
+    meta.textContent = 'Linear-da axtarılır…';
+    list.innerHTML = '<div class="px-3 py-4 text-center text-xs text-violet-500">Axtarılır…</div>';
     const sequence = ++linearSearchSequence;
     linearSearchTimer = window.setTimeout(async () => {
         try {
@@ -3179,21 +3192,14 @@ function filterLinearTasks(rawValue) {
             if(sequence !== linearSearchSequence) return;
             if(!response.ok || !data.success) throw new Error(data.error || 'Linear axtarışı alınmadı.');
             const matches = Array.isArray(data.issues) ? data.issues : [];
-            results.innerHTML = matches.length ? matches.map(item => {
-                const local = linearTesdiqRows.some(row => String(row.source_id) === String(item.source_id));
-                const status = item.status?.name || '';
-                return `<button type="button" data-linear-focus="${escapeHtml(String(item.source_id || ''))}" data-linear-url="${escapeHtml(String(item.url || ''))}" data-linear-local="${local ? '1' : '0'}" class="block w-full rounded-lg px-3 py-2 text-left hover:bg-violet-50"><b class="block text-xs text-slate-800">${escapeHtml(item.client || item.title || 'Müştəri')}</b><span class="block truncate text-[10px] text-slate-500">${escapeHtml(item.id || '')} · ${escapeHtml(item.title || '')}${status ? ' · ' + escapeHtml(status) : ''}</span></button>`;
-            }).join('') : '<div class="px-3 py-2 text-xs text-slate-400">Linear-da nəticə tapılmadı</div>';
+            renderLinearIssues(matches, query);
         } catch(error) {
-            if(sequence === linearSearchSequence) results.innerHTML = `<div class="px-3 py-2 text-xs text-rose-500">${escapeHtml(error.message || 'Axtarış alınmadı')}</div>`;
+            if(sequence === linearSearchSequence) {
+                meta.textContent = 'Axtarış alınmadı';
+                list.innerHTML = `<div class="px-3 py-4 text-center text-xs text-rose-500">${escapeHtml(error.message || 'Axtarış alınmadı')}</div>`;
+            }
         }
     }, 350);
-    results.onclick = event => {
-        const button = event.target.closest('[data-linear-focus]');
-        if(!button) return;
-        if(button.dataset.linearLocal === '1') focusLinearTask(button.dataset.linearFocus);
-        else if(/^https:\/\/linear\.app\//i.test(button.dataset.linearUrl || '')) window.open(button.dataset.linearUrl, '_blank', 'noopener');
-    };
 }
 
 function changeLinearPriority(select, issueId, previousPriority) {
@@ -3224,7 +3230,9 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırığı dəyişdirilmədi.');
         toast(data.message || 'Hazırdır.');
-        if(action === 'confirm' || action === 'discussion' || action === 'delete') {
+        if(action === 'confirm' || action === 'discussion' || action === 'delete' || action === 'cancel') {
+            linearQueueRows = linearQueueRows.filter(row => String(row.source_id) !== String(issueId));
+            linearTesdiqRows = linearTesdiqRows.filter(row => String(row.source_id) !== String(issueId));
             document.querySelector(`[data-linear-issue-id="${issueId}"]`)?.remove();
         }
         linearTesdiqLoaded = false;
@@ -3236,6 +3244,103 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
     } finally {
         linearTesdiqActionPending = false;
     }
+}
+
+function findLinearIssue(issueId) {
+    return linearTesdiqRows.find(item => String(item.source_id || '') === String(issueId || ''))
+        || linearQueueRows.find(item => String(item.source_id || '') === String(issueId || ''));
+}
+
+function closeLinearModal() {
+    document.getElementById('linear-action-modal')?.remove();
+}
+
+function openLinearEditModal(issueId) {
+    const item = findLinearIssue(issueId);
+    if(!item) { toast('Tapşırıq tapılmadı.', true); return; }
+    closeLinearModal();
+    const modal = document.createElement('div');
+    modal.id = 'linear-action-modal';
+    modal.className = 'fixed inset-0 z-[10050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
+    modal.innerHTML = `<div class="w-full max-w-xl rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
+        <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığını redaktə et</div><div class="text-[11px] text-slate-400">${escapeHtml(item.id || '')}</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-edit-title" value="${escapeHtml(item.title || '')}" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300">
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama</label><div class="relative"><textarea id="linear-edit-description" rows="8" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın açıqlaması">${escapeHtml(item.description || '')}</textarea><button id="linear-ai-edit-button" type="button" onclick="rewriteLinearEditWithAI('${escapeHtml(issueId)}')" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
+        <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-edit-save" type="button" onclick="saveLinearEdit('${escapeHtml(issueId)}')" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yadda saxla</button></div>
+    </div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
+    document.body.appendChild(modal);
+}
+
+async function rewriteLinearEditWithAI(issueId) {
+    if(linearTesdiqActionPending) return;
+    const title = document.getElementById('linear-edit-title')?.value.trim() || '';
+    const textarea = document.getElementById('linear-edit-description');
+    const button = document.getElementById('linear-ai-edit-button');
+    const text = textarea?.value.trim() || '';
+    if(!text) { toast('Əvvəlcə mətn yazın.', true); return; }
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Düzəldilir…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'ai_rewrite', issue_id:issueId, title, text})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'AI mətni düzəltmədi.');
+        if(textarea) textarea.value = data.text || text;
+    } catch(error) { toast(error.message || 'AI mətni düzəltmədi.', true); }
+    finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = '✦ AI ilə düzəlt'; } }
+}
+
+async function saveLinearEdit(issueId) {
+    if(linearTesdiqActionPending) return;
+    const title = document.getElementById('linear-edit-title')?.value.trim() || '';
+    const description = document.getElementById('linear-edit-description')?.value.trim() || '';
+    if(!title) { toast('Başlığı yazın.', true); return; }
+    const button = document.getElementById('linear-edit-save');
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Yadda saxlanır…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'edit', issue_id:issueId, title, description})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Tapşırıq yenilənmədi.');
+        const patchRow = row => String(row.source_id) === String(issueId) ? {...row, title, description, updated_at:new Date().toISOString()} : row;
+        linearTesdiqRows = linearTesdiqRows.map(patchRow); linearQueueRows = linearQueueRows.map(patchRow);
+        const query = document.getElementById('linear-client-search')?.value.trim() || '';
+        renderLinearIssues(linearTesdiqRows, query.length >= 2 ? query : '');
+        closeLinearModal(); toast(data.message || 'Tapşırıq yeniləndi.');
+    } catch(error) { toast(error.message || 'Tapşırıq yenilənmədi.', true); }
+    finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = 'Yadda saxla'; } }
+}
+
+function openLinearCancelModal(issueId) {
+    const item = findLinearIssue(issueId);
+    if(!item) { toast('Tapşırıq tapılmadı.', true); return; }
+    closeLinearModal();
+    const modal = document.createElement('div');
+    modal.id = 'linear-action-modal';
+    modal.className = 'fixed inset-0 z-[10050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
+    modal.innerHTML = `<div class="w-full max-w-lg rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl"><div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">İmtina səbəbi</div><div class="text-[11px] text-slate-400">${escapeHtml(item.id || '')} · ${escapeHtml(item.title || '')}</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div><textarea id="linear-cancel-reason" rows="5" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 text-sm leading-6 outline-none focus:border-rose-300" placeholder="Tapşırığın niyə bağlandığını yazın"></textarea><div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-cancel-save" type="button" onclick="submitLinearCancel('${escapeHtml(issueId)}')" class="rounded-xl bg-rose-600 py-3 text-xs font-extrabold text-white">İmtina et</button></div></div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
+    document.body.appendChild(modal);
+    window.setTimeout(() => document.getElementById('linear-cancel-reason')?.focus(), 30);
+}
+
+async function submitLinearCancel(issueId) {
+    if(linearTesdiqActionPending) return;
+    const reason = document.getElementById('linear-cancel-reason')?.value.trim() || '';
+    if(!reason) { toast('İmtina səbəbini yazın.', true); return; }
+    const button = document.getElementById('linear-cancel-save');
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Göndərilir…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'cancel', issue_id:issueId, reason})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Tapşırıq bağlanmadı.');
+        linearQueueRows = linearQueueRows.filter(row => String(row.source_id) !== String(issueId));
+        linearTesdiqRows = linearTesdiqRows.filter(row => String(row.source_id) !== String(issueId));
+        document.querySelector(`[data-linear-issue-id="${issueId}"]`)?.remove();
+        closeLinearModal(); toast(data.message || 'Tapşırıq bağlandı.');
+    } catch(error) { toast(error.message || 'Tapşırıq bağlanmadı.', true); }
+    finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = 'İmtina et'; } }
 }
 
 async function openNotifications(forceRefresh = false) {
@@ -3664,6 +3769,8 @@ async function showPendingQueue(queue, forceRefresh = false) {
     const systemButton = document.getElementById('pending-queue-system');
     const subtitle = document.getElementById('pending-page-subtitle');
     const typeSelect = document.getElementById('pending-type-select');
+    const linearSearchToggle = document.getElementById('linear-search-toggle');
+    const linearSearchWrap = document.getElementById('linear-search-wrap');
     const activeClass = 'rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm';
     const inactiveClass = 'rounded-lg px-3 py-2 text-xs font-bold text-slate-500';
     const linearActive = pendingQueue === 'linear';
@@ -3673,6 +3780,14 @@ async function showPendingQueue(queue, forceRefresh = false) {
     if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
     if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
     if(typeSelect) typeSelect.style.display = linearActive ? 'none' : '';
+    if(linearSearchToggle) linearSearchToggle.hidden = !linearActive;
+    if(linearSearchWrap && !linearActive) {
+        linearSearchWrap.hidden = true;
+        const linearSearch = document.getElementById('linear-client-search');
+        if(linearSearch) linearSearch.value = '';
+        linearSearchSequence += 1;
+        if(linearQueueRows.length || linearTesdiqLoaded) renderLinearIssues(linearQueueRows);
+    }
     if(linearActive) {
         if(forceRefresh) await loadLinearTesdiq(true);
         else if(!linearTesdiqLoaded && !linearSection?.dataset.manualHint) {
@@ -12530,7 +12645,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=337');
+    const reg = await navigator.serviceWorker.register('sw.js?v=338');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();
