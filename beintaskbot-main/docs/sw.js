@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-30-linear-title-in-description';
+const CACHE_NAME = 'beintaskbot-v2026-09-30-triage-actions-wa-fix';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

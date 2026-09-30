@@ -3353,7 +3353,7 @@ async function moveLinearBoardTask(issueId, targetStateId, fromStateId) {
     const previous = item.status;
     const next = linearBoardStatuses.find(row => String(row.id) === String(targetStateId));
     if(!next) return;
-    item.status = {...next}; item.in_confirmation = ['testiq','təsdiq','tesdiq'].includes(String(next.name || '').trim().toLocaleLowerCase('az')); renderLinearBoard();
+    item.status = {...next}; item.in_confirmation = ['testiq','təsdiq','tesdiq','triage'].includes(String(next.name || '').trim().toLocaleLowerCase('az')); renderLinearBoard();
     try {
         const response = await fetch(API_BASE + '/api/linear/tasks', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'status', issue_id:issueId, status_id:targetStateId})});
         const data = await response.json().catch(() => ({}));
@@ -8626,8 +8626,10 @@ async function deliverQueuedDealSend(job) {
         const d = await r.json().catch(() => ({}));
         if(!requestMatchesDeal(seq, leadId)) return;
         const serverChat = Array.isArray(d.chat) ? d.chat : [];
-        const waAccepted = channel !== 'whatsapp' || serverChat.some(row => String(row && row.external_id || '').toLowerCase().startsWith('wamid'));
-        if(!r.ok || !d.success || !waAccepted) {
+        // Kommo grey WhatsApp sends do not return a WAMID. The backend has
+        // already confirmed the Kommo Talk send, so requiring a Cloud API
+        // message id here incorrectly marks valid grey replies as failed.
+        if(!r.ok || !d.success) {
             const sameDetail = String(d.detail || '').trim() === String(d.error || '').trim();
             const detail = isAdmin && d.detail && !sameDetail ? ` (${String(d.detail).slice(0, 160)})` : '';
             throw new Error((d.error || 'Göndərilmədi') + detail);

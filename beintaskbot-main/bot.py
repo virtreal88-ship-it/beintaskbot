@@ -19702,7 +19702,10 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
                 "type": str(state.get("type") or ""),
                 "color": str(state.get("color") or ""),
             },
-            "in_confirmation": str(state.get("id") or "") == state_id,
+            "in_confirmation": (
+                str(state.get("id") or "") in {str(LINEAR_TESDIQ_STATE_ID), str(LINEAR_TRIAGE_STATE_ID)}
+                or str(state_name).strip().casefold() in {"testiq", "təsdiq", "tesdiq", "triage"}
+            ),
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
             "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
@@ -19736,11 +19739,15 @@ def _linear_issue_context(issue_id: str) -> dict:
 
 
 def _linear_assert_confirmation_issue(issue_id: str) -> dict:
-    """Refuse queue-routing actions after an issue leaves Təsdiq."""
+    """Allow director actions while an issue is in Təsdiq or Triage."""
     issue = _linear_issue_context(issue_id)
-    state_id = str((issue.get("state") or {}).get("id") or "")
-    if state_id != LINEAR_TESDIQ_STATE_ID:
-        raise RuntimeError("Bu tapşırıq artıq Təsdiq siyahısında deyil.")
+    state = issue.get("state") or {}
+    state_id = str(state.get("id") or "")
+    state_name = str(state.get("name") or "").strip().casefold()
+    allowed_ids = {str(LINEAR_TESDIQ_STATE_ID or ""), str(LINEAR_TRIAGE_STATE_ID or "")}
+    allowed_names = {"testiq", "təsdiq", "tesdiq", "triage"}
+    if state_id not in allowed_ids and state_name not in allowed_names:
+        raise RuntimeError("Bu tapşırıq artıq Təsdiq/Triage siyahısında deyil.")
     return issue
 
 
