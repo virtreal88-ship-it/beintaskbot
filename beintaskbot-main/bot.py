@@ -17114,7 +17114,12 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     # Verify just once, without polling, so provider-side failures are not
     # shown to employees as a false successful send.
     delivery_status = "sent"
-    if not sent_via_cloud and channel in {"instagram", "tiktok", "facebook", "telegram"}:
+    # Kommo answers with 202 before the external messenger confirms delivery.
+    # Check WhatsApp as well as the social channels: a disconnected WhatsApp
+    # number is otherwise reported as sent for a few seconds and only later
+    # turns into a failed message in the chat.  This is especially important
+    # for the grey integration, where the provider error is asynchronous.
+    if not sent_via_cloud and channel in {"whatsapp", "instagram", "tiktok", "facebook", "telegram"}:
         delivery_status = "pending"
         sent_at_for_check = int(_time_module.time())
         delivery_status = await asyncio.to_thread(
@@ -17125,10 +17130,17 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
         if delivery_status == "error":
             channel_label = CHAT_CHANNEL_LABELS.get(channel, channel)
-            message = (
-                f"{channel_label} mesajı Kommo-da qəbul edildi, amma kanal çatdırmadı. "
-                "Kommo-da həmin kanalın bağlantısını yenidən qoşun və müştərinin son mesajından sonra cavab müddətini yoxlayın."
-            )
+            if channel == "whatsapp":
+                message = (
+                    "WhatsApp mesajı Kommo-da qəbul edildi, amma göndərilmədi. "
+                    "Kommo WhatsApp Manager-də göndərən nömrənin aktiv və qoşulu olduğunu yoxlayın "
+                    "(xəta 3136)."
+                )
+            else:
+                message = (
+                    f"{channel_label} mesajı Kommo-da qəbul edildi, amma kanal çatdırmadı. "
+                    "Kommo-da həmin kanalın bağlantısını yenidən qoşun və müştərinin son mesajından sonra cavab müddətini yoxlayın."
+                )
             logger.warning("Social chat provider rejected: lead=%s channel=%s talk=%s", lead_id, channel, reply_talk_id)
             return web.json_response({"success": False, "error": message, "delivery_status": "error"}, status=409)
     tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and is_voice else upload_name or text)
