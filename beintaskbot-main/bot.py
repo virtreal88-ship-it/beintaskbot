@@ -14478,7 +14478,11 @@ def _collect_deal_chat(
             talk_id = _talk_id_of(talk)
             if not talk_id or talk_id in history_ids:
                 continue
-            if _talk_channel_key(talk) != wanted:
+            talk_channel = _talk_channel_key(talk)
+            # Some historical WABA Talks expose only a provider name in
+            # `origin`, so their channel key is "other".  They still belong
+            # in the WhatsApp read-only history.
+            if talk_channel != wanted and not (wanted == "whatsapp" and _talk_is_whatsapp_business(talk)):
                 continue
             history_rows.append({
                 "key": wanted,
