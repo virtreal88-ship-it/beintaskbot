@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-30-linear-editing';
+const CACHE_NAME = 'beintaskbot-v2026-09-30-linear-board';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
