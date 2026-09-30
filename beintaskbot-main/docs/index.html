@@ -223,7 +223,7 @@
         #task-date-select, #gozleme-date-select, #pending-type-select { display:block; width:100%; }
         @media (max-width: 1023px) {
             .page-toolbar { margin:-12px -16px 0; padding:12px 16px !important; border:0 !important; border-radius:0 !important; background:#0b6158 !important; box-shadow:none !important; color:#fff; min-height:62px; }
-            .page-toolbar .text-gray-800, .page-toolbar .page-toolbar-title { color:#fff !important; }
+            .page-toolbar .text-gray-800, .page-toolbar .text-gray-600, .page-toolbar .page-toolbar-title { color:#fff !important; }
             .page-toolbar .text-gray-400, .page-toolbar .page-user-name, .page-toolbar .page-toolbar-subtitle { color:#cce9e4 !important; }
             .page-toolbar .icon-action-btn, .page-toolbar .search-icon-btn { color:#fff; background:#ffffff18; border-color:transparent; }
             .page-toolbar .icon-action-btn.primary { color:#0b6158; background:#fff; border-color:#fff; }
@@ -1100,7 +1100,7 @@
     </div>
 
     <div id="screen-balance-history" class="screen space-y-4">
-        <div class="border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
+        <div class="page-toolbar border-b border-gray-200 pb-2 mb-3 flex justify-between items-center gap-2">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə və İş Tarixçəsi</span>
             <div class="flex items-center gap-1.5">
                 <button id="btn-medaxil" style="display:none;" onclick="openMedaxil()" class="bg-emerald-500 text-white px-3 py-1 rounded-lg text-[11px] font-bold">Mədaxil</button>
@@ -1123,7 +1123,7 @@
     </div>
 
     <div id="screen-kpi-history" class="screen space-y-4">
-        <div class="border-b border-gray-200 pb-2 mb-3">
+        <div class="page-toolbar border-b border-gray-200 pb-2 mb-3">
             <span class="text-xs font-bold text-gray-600 uppercase tracking-wider">Maliyyə</span>
         </div>
         <div id="main-finance-widget" style="display:none;" class="bg-gradient-to-br from-[#2563eb] to-[#1e40af] text-white p-4 rounded-2xl shadow-lg">
@@ -1307,13 +1307,13 @@
         <div class="flex gap-2 overflow-x-auto pb-1" aria-label="Ayarlar bölmələri"><button type="button" class="shrink-0 bg-[#2481cc] text-white px-3 py-2 rounded-xl text-xs font-bold">Əməkdaşlar</button><button type="button" onclick="openSettingsIntegrationsSection()" class="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-bold">İnteqrasiyalar</button></div>
         <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">Əməkdaşlar</div><div class="text-[10px] text-gray-400 font-medium mt-0.5">Əməkdaşın üzərinə toxunun: giriş və hüquqlar açılacaq</div></div>
-            <button type="button" onclick="openEmployeeEditor()" class="bg-slate-100 text-slate-700 px-3 py-2 rounded-xl text-[11px] font-bold">Yeni əməkdaş</button>
+            <button type="button" onclick="openEmployeeEditor()" class="icon-action-btn primary labeled" aria-label="Yeni əməkdaş"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Əməkdaş</span></button>
         </div>
         <div id="employees-list" class="space-y-2"></div>
     </div>
 
     <div id="screen-settings" class="screen space-y-3">
-        <div class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="text-base font-extrabold text-slate-800">Ayarlar</div><div class="text-[11px] text-slate-400 mt-1">Komandanı və sistem bağlantılarını idarə edin</div></div>
+        <div class="page-toolbar bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="page-toolbar-title text-base font-extrabold text-slate-800">Ayarlar</div><div class="page-toolbar-subtitle text-[11px] text-slate-400 mt-1">Komandanı və sistem bağlantılarını idarə edin</div></div>
         <div class="flex gap-2 overflow-x-auto pb-1" aria-label="Ayarlar bölmələri"><button type="button" onclick="switchTab('tab-employees')" class="shrink-0 bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-xs font-bold">Əməkdaşlar</button><button type="button" class="shrink-0 bg-[#2481cc] text-white px-3 py-2 rounded-xl text-xs font-bold">İnteqrasiyalar</button></div>
         <button type="button" id="settings-employees-button" onclick="switchTab('tab-employees')" class="w-full text-left bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">Əməkdaşlar</div><div class="text-[11px] text-slate-400 mt-1">Giriş, hüquqlar, WhatsApp nömrəsi və bacarıqlar</div></div><span class="text-slate-400">›</span></div></button>
         <div id="settings-integrations-card" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">İnteqrasiyalar</div><div class="text-[11px] text-slate-400 mt-1">Aktiv və qoşulmamış bağlantılar</div></div><button type="button" onclick="loadSettingsIntegrations()" class="text-xs font-bold text-[#2481cc]">Yenilə</button></div><div id="settings-integrations-list" class="mt-3 space-y-2 text-xs text-slate-500"></div></div>
@@ -12530,7 +12530,7 @@ async function initPush() {
   // relevant only to the optional notification subscription below.
   if(!('serviceWorker' in navigator)) return;
   try {
-    const reg = await navigator.serviceWorker.register('sw.js?v=336');
+    const reg = await navigator.serviceWorker.register('sw.js?v=337');
     await navigator.serviceWorker.ready;
     if(!('PushManager' in window)) return;
     let sub = await reg.pushManager.getSubscription();

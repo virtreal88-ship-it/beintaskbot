@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-30-ai-mobile-linear-search';
+const CACHE_NAME = 'beintaskbot-v2026-09-30-unified-mobile-toolbar';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
