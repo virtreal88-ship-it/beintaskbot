@@ -3104,14 +3104,13 @@ let linearBoardDragState = null;
 let pendingQueue = 'system';
 
 function linearIssueCardHtml(item) {
-    const title = escapeHtml(item.title || 'Tapşırıq');
     const issueId = escapeHtml(item.id || 'Linear');
     const sourceId = escapeHtml(String(item.source_id || ''));
     const project = escapeHtml(item.project || 'Layihə göstərilməyib');
     const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
     const operator = escapeHtml(item.operator || 'Göstərilməyib');
     const client = escapeHtml(item.client || 'Göstərilməyib');
-    const description = escapeHtml(String(item.description || '').trim());
+    const description = escapeHtml([String(item.title || '').trim(), String(item.description || '').trim()].filter(Boolean).join('\n\n'));
     const labels = Array.isArray(item.labels) && item.labels.length
         ? item.labels.map(label => `<span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">${escapeHtml(label)}</span>`).join('')
         : '<span class="text-[10px] text-slate-400">Etiket yoxdur</span>';
@@ -3138,7 +3137,7 @@ function linearIssueCardHtml(item) {
     const deleteButton = item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : '';
     const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${deleteButton}</div></details>` : '';
     return `<article data-linear-issue-id="${sourceId}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
-        <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div><div class="text-sm font-bold leading-5 text-slate-800">${title}</div></div>${priorityBadge}</div>
+        <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div></div>${priorityBadge}</div>
         <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5"><span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span></div>
         <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
             <div><dt class="text-slate-400">Layihə</dt><dd class="font-semibold text-slate-700">${project}</dd></div><div><dt class="text-slate-400">İcraçı</dt><dd class="font-semibold text-slate-700">${assignee}</dd></div><div><dt class="text-slate-400">Operator</dt><dd class="font-semibold text-slate-700">${operator}</dd></div>
@@ -3280,7 +3279,6 @@ function linearBoardCardHtml(item) {
     const sourceId = escapeHtml(String(item.source_id || ''));
     const issueId = escapeHtml(item.id || 'Linear');
     const status = item.status || {};
-    const title = escapeHtml(item.title || 'Tapşırıq');
     const client = escapeHtml(item.client || 'Göstərilməyib');
     const project = escapeHtml(item.project || 'Göstərilməyib');
     const operator = escapeHtml(item.operator || 'Göstərilməyib');
@@ -3289,12 +3287,12 @@ function linearBoardCardHtml(item) {
     const created = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
     const priorityOptions = [[0,'Yoxdur'],[1,'Təcili'],[2,'Yüksək'],[3,'Orta'],[4,'Aşağı']].map(([value,label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
     const priorityStyle = linearBoardPriorityStyle(item.priority);
-    const description = escapeHtml(String(item.description || '').trim());
+    const description = escapeHtml([String(item.title || '').trim(), String(item.description || '').trim()].filter(Boolean).join('\n\n'));
     const link = /^https:\/\/linear\.app\//i.test(String(item.url || '')) ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-700">Linear ↗</a>` : '';
     const actionButtons = item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
     const menu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
     return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="true" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
-        <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950 truncate" title="${client}">${client}</div><div class="text-sm font-semibold text-slate-900 leading-5">${title}</div></div>${menu}</div>
+        <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950 truncate" title="${client}">${client}</div></div>${menu}</div>
         <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">⭐ <b>Prioritet:</b> <select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
         ${actionButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
