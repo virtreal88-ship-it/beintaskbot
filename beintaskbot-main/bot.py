@@ -19517,6 +19517,7 @@ def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]
         "layihə": "project", "project": "project",
         "operator": "operator", "icraçı": "operator", "assignee": "operator",
         "müştəri": "client", "client": "client", "account": "client", "hesab": "client",
+        "mühit": "environment", "muhit": "environment", "environment": "environment",
     }
     for raw_line in str(description or "").splitlines():
         line = raw_line.strip()
@@ -19539,12 +19540,42 @@ def _linear_uuid(value: str, label: str) -> str:
     return candidate
 
 
-def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "") -> list[dict]:
-    """Fetch the confirmation queue or search Linear directly by client text."""
+LINEAR_ALLOWED_STATUS_NAMES = {
+    "testiq", "təsdiq", "tesdiq", "triage", "todo", "in progress", "in review", "done",
+}
+
+
+def _linear_workflow_states() -> list[dict]:
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    payload = _linear_graphql("""
+    query LinearTeamWorkflowStates($id: String!) {
+      team(id: $id) { states { nodes { id name type color position } } }
+    }
+    """, {"id": team_id})
+    return [row for row in (((payload.get("team") or {}).get("states") or {}).get("nodes") or []) if isinstance(row, dict)]
+
+
+def _linear_allowed_state_options() -> list[dict]:
+    options = []
+    seen = set()
+    for state in _linear_workflow_states():
+        sid = str(state.get("id") or "")
+        name = str(state.get("name") or "").strip()
+        folded = name.casefold()
+        if sid == LINEAR_TESDIQ_STATE_ID or sid == LINEAR_TRIAGE_STATE_ID or folded in LINEAR_ALLOWED_STATUS_NAMES:
+            if sid and sid not in seen:
+                options.append({"id": sid, "name": name, "type": str(state.get("type") or ""), "color": str(state.get("color") or "")})
+                seen.add(sid)
+    return options
+
+
+def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tasks: bool = False) -> list[dict]:
+    """Fetch the confirmation queue, allowed Linear work, or direct search."""
     search = str(search or "").strip()[:120]
     now = _time_module.monotonic()
     cached_at = float(_LINEAR_TESDIQ_CACHE.get("at") or 0)
-    cached_items = _LINEAR_TESDIQ_CACHE.get("items")
+    cache_key = "all_items" if all_tasks else "items"
+    cached_items = _LINEAR_TESDIQ_CACHE.get(cache_key)
     if not search and not force and isinstance(cached_items, list) and now - cached_at < _LINEAR_TESDIQ_CACHE_TTL:
         return list(cached_items)
 
@@ -19571,6 +19602,21 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "") -> list
           }
         }
         """, {"teamId": team_id, "search": search})
+    elif all_tasks:
+        payload = _linear_graphql(f"""
+        query LinearWorkItems {{
+          issues(first: 100, orderBy: createdAt, filter: {{ team: {{ id: {{ eq: \"{team_id}\" }} }} }}) {{
+            nodes {{
+              id identifier title description priority dueDate createdAt updatedAt url
+              state {{ id name color type }}
+              assignee {{ name }}
+              creator {{ name }}
+              project {{ name }}
+              labels {{ nodes {{ name }} }}
+            }}
+          }}
+        }}
+        """)
     else:
         payload = _linear_graphql(f"""
         query ConfirmationIssues {{
@@ -19596,6 +19642,13 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "") -> list
             continue
         raw_description = str(row.get("description") or "")
         description_meta, clean_description = _linear_description_metadata(raw_description)
+        state = row.get("state") or {}
+        state_name = str(state.get("name") or "Təsdiq")
+        if all_tasks:
+            folded_state = state_name.strip().casefold()
+            state_id_value = str(state.get("id") or "")
+            if state_id_value not in {LINEAR_TESDIQ_STATE_ID, LINEAR_TRIAGE_STATE_ID} and folded_state not in LINEAR_ALLOWED_STATUS_NAMES:
+                continue
         items.append({
             "id": str(row.get("identifier") or ""),
             "source_id": str(row.get("id") or ""),
@@ -19608,21 +19661,23 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "") -> list
             "updated_at": row.get("updatedAt"),
             "url": str(row.get("url") or ""),
             "status": {
-                "id": str((row.get("state") or {}).get("id") or ""),
-                "name": str((row.get("state") or {}).get("name") or "Təsdiq"),
-                "color": str((row.get("state") or {}).get("color") or ""),
+                "id": str(state.get("id") or ""),
+                "name": state_name,
+                "type": str(state.get("type") or ""),
+                "color": str(state.get("color") or ""),
             },
-            "in_confirmation": str((row.get("state") or {}).get("id") or "") == state_id,
+            "in_confirmation": str(state.get("id") or "") == state_id,
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
             "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
+            "environment": description_meta.get("environment") or "Göstərilməyib",
             "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
         })
     # Linear's default order is mutable (updatedAt). The director queue is
     # easier to process chronologically, with the newest request always first.
     items.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
     if not search:
-        _LINEAR_TESDIQ_CACHE.update({"at": now, "items": items})
+        _LINEAR_TESDIQ_CACHE.update({"at": now, cache_key: items})
     return items
 
 
@@ -19634,7 +19689,7 @@ def _linear_issue_context(issue_id: str) -> dict:
     """Load a Linear issue and refuse cross-team mutations."""
     payload = _linear_graphql("""
     query ConfirmationIssue($id: String!) {
-      issue(id: $id) { id identifier title description team { id } state { id name type } }
+      issue(id: $id) { id identifier title description url team { id } state { id name type } }
     }
     """, {"id": issue_id})
     issue = payload.get("issue") or {}
@@ -19713,6 +19768,58 @@ def _linear_move_issue(issue_id: str, state_id: str) -> dict:
     return result.get("issue") or {}
 
 
+def _linear_move_any_issue(issue_id: str, state_id: str) -> dict:
+    """Move any issue inside the configured Linear team."""
+    _linear_issue_context(issue_id)
+    state_id = _linear_uuid(state_id, "statusu")
+    payload = _linear_graphql("""
+    mutation MoveLinearWorkIssue($id: String!, $stateId: String!) {
+      issueUpdate(id: $id, input: { stateId: $stateId }) {
+        success
+        issue { id identifier title description url state { id name type color } }
+      }
+    }
+    """, {"id": issue_id, "stateId": state_id})
+    result = payload.get("issueUpdate") or {}
+    if not result.get("success"):
+        raise RuntimeError("Linear tapşırığının statusu dəyişdirilmədi.")
+    _invalidate_linear_tesdiq_cache()
+    return result.get("issue") or {}
+
+
+async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
+    """Notify the administrator when an important Linear state is reached."""
+    state_name = str(target_state.get("name") or "").strip()
+    if state_name.casefold() not in {"testiq", "təsdiq", "tesdiq", "triage", "done"}:
+        return
+    identifier = str(issue.get("identifier") or issue.get("id") or "Linear")
+    title = str(issue.get("title") or "Tapşırıq")
+    raw_description = str(issue.get("description") or "")
+    metadata, visible = _linear_description_metadata(raw_description)
+    details = [
+        f"#{identifier} — {title}",
+        f"Status: {state_name}",
+        f"Hesab: {metadata.get('client') or _linear_client_hint(raw_description)}",
+    ]
+    for label, key in (("Layihə", "project"), ("Operator", "operator"), ("Mühit", "environment")):
+        if metadata.get(key):
+            details.append(f"{label}: {metadata[key]}")
+    if visible:
+        details.append(visible[:500])
+    body = "\n".join(details)
+    url = str(issue.get("url") or "").strip() or "#linear"
+    send_push_notification(str(ADMIN_CHAT_ID), f"Linear: {state_name}", body, url=url)
+    if _bot_app:
+        try:
+            await _bot_app.bot.send_message(
+                chat_id=int(ADMIN_CHAT_ID),
+                text=f"🔔 Linear: {state_name}\n\n{body}\n\n🔗 {url}",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            logger.exception("Linear status Telegram notification failed")
+
+
 def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
     """Update priority for any issue belonging to the configured team."""
     if priority not in {0, 1, 2, 3, 4}:
@@ -19742,7 +19849,7 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str) -> di
         raise RuntimeError("Tapşırığın adı boş ola bilməz.")
     raw_description = str(issue.get("description") or "")
     metadata_lines: list[str] = []
-    metadata_keys = {"layihə", "project", "operator", "icraçı", "assignee", "müştəri", "client", "account", "hesab"}
+    metadata_keys = {"layihə", "project", "operator", "icraçı", "assignee", "mühit", "muhit", "environment", "müştəri", "client", "account", "hesab"}
     for raw_line in raw_description.splitlines():
         match = re.match(r"^([^:]{1,40}):\s*(.+)$", raw_line.strip())
         if match and match.group(1).strip().casefold() in metadata_keys:
@@ -19855,7 +19962,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
-        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite"}
+        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status"}
         if not issue_id or action not in allowed_actions:
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
@@ -19867,6 +19974,22 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_BACKLOG_STATE_ID, "Backlog")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
                 return web.json_response({"success": True, "message": "Tapşırıq Backlog mərhələsinə keçirildi.", "issue": moved})
+            if action == "status":
+                target_id = str(data.get("status_id") or data.get("state_id") or "").strip()
+                if not target_id:
+                    return web.json_response({"success": False, "error": "Statusu seçin."}, status=400)
+                options = await asyncio.to_thread(_linear_allowed_state_options)
+                target = next((row for row in options if str(row.get("id") or "") == target_id), None)
+                if not target:
+                    return web.json_response({"success": False, "error": "Bu status Linear iş siyahısında icazəli deyil."}, status=400)
+                before = await asyncio.to_thread(_linear_issue_context, issue_id)
+                old_id = str((before.get("state") or {}).get("id") or "")
+                moved = await asyncio.to_thread(_linear_move_any_issue, issue_id, target_id)
+                issue_for_notice = dict(before)
+                issue_for_notice.update(moved if isinstance(moved, dict) else {})
+                if old_id != target_id:
+                    await _notify_linear_status_change(issue_for_notice, target)
+                return web.json_response({"success": True, "message": f"Tapşırıq {target.get('name') or 'status'} mərhələsinə keçirildi.", "issue": moved, "status": target})
             if action == "priority":
                 try:
                     priority = int(data.get("priority"))
@@ -19903,10 +20026,12 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Linear tapşırığı dəyişdirilmədi."}, status=502)
 
     force = str(request.query.get("refresh") or "").strip() == "1"
+    all_tasks = str(request.query.get("scope") or "").strip().lower() == "all"
     search = str(request.query.get("q") or "").strip()[:120]
     try:
-        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search)
-        return web.json_response({"success": True, "connected": True, "issues": issues, "search": search})
+        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search, all_tasks=all_tasks)
+        statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
+        return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "search": search, "scope": "all" if all_tasks else "tesdiq"})
     except RuntimeError as exc:
         return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
     except Exception:
@@ -21763,7 +21888,22 @@ async def handle_api_pipelines(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.warning("Admin pipelines failed: %s", exc)
         return web.json_response({"success": False, "error": "Hunilər yüklənmədi"}, status=502)
-    return web.json_response({"success": True, "pipelines": pipelines})
+    owners = {
+        int(NIZAMI_PIPELINE_ID): {"chat_id": int(ADMIN_CHAT_ID), "name": "Nizami Qasımov"},
+        int(RUFAT_PIPELINE_ID): {"chat_id": int(RUFAT_CHAT_ID), "name": "Rüfət Həsənzadə"},
+        int(RASIM_PIPELINE_ID): {"chat_id": int(RASIM_CHAT_ID), "name": "Rasim Əsgərov"},
+        int(HUSEYN_PIPELINE_ID): {"chat_id": int(HUSEYN_CHAT_ID), "name": "Hüseyn Səfərov"},
+    }
+    enriched = []
+    for pipeline in pipelines:
+        row = dict(pipeline)
+        owner = owners.get(int(row.get("id") or 0))
+        if owner:
+            row["owner_chat_id"] = owner["chat_id"]
+            row["owner_name"] = owner["name"]
+            row["first_stage"] = (row.get("stages") or [{}])[0]
+        enriched.append(row)
+    return web.json_response({"success": True, "pipelines": enriched})
 
 
 async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
@@ -21794,6 +21934,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/admin/integrations', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/hot-orders', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/linear/tesdiq', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/linear/tasks', lambda r: web.Response())
     app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/api/notices", handle_api_notices)
@@ -21876,6 +22017,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/hot-orders", handle_api_hot_orders)
     app_web.router.add_get("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_post("/api/linear/tesdiq", handle_api_linear_tesdiq)
+    app_web.router.add_get("/api/linear/tasks", handle_api_linear_tesdiq)
+    app_web.router.add_post("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)

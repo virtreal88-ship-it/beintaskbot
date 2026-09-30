@@ -168,8 +168,8 @@
         .desktop-task-actions, .desktop-pending-actions { display:none; }
         .task-board-actions { display:flex !important; }
         .samil-kanban-wrap { overflow-x:auto; padding:2px 0 18px; }
-        #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
-        #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > *, #pending-actions-container.samil-kanban-board > * { margin:0 !important; }
+        #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board, #linear-tasks-container .samil-kanban-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(270px,82vw); grid-template-columns:none; gap:12px; align-items:stretch; min-height:430px; }
+        #samil-deals-container.samil-kanban-board > *, #notifications-container.samil-kanban-board > *, #gozleme-container.samil-kanban-board > *, #pending-actions-container.samil-kanban-board > *, #linear-tasks-container .samil-kanban-board > * { margin:0 !important; }
         .samil-kanban-column { background:#eef1f4; border:1px solid transparent; border-radius:12px; display:flex; flex-direction:column; max-height:calc(100vh - 250px); min-height:390px; overflow:hidden; min-width:0; }
         .samil-kanban-column.drag-over { background:#e8eef8; border-color:#2563eb; }
         .samil-kanban-header { padding:12px 12px 8px; flex-shrink:0; }
@@ -233,26 +233,26 @@
             /* A horizontal board makes a phone list hard to scan. Keep the
                stage header, but render its items as one full-width list. */
             #screen-samil-deals .samil-kanban-wrap, #screen-notifications .samil-kanban-wrap,
-            #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap { overflow-x:hidden; margin-left:-16px; margin-right:-16px; padding:0; }
-            #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board {
+            #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap, #screen-linear .samil-kanban-wrap { overflow-x:hidden; margin-left:-16px; margin-right:-16px; padding:0; }
+            #samil-deals-container.samil-kanban-board, #notifications-container.samil-kanban-board, #gozleme-container.samil-kanban-board, #pending-actions-container.samil-kanban-board, #linear-tasks-container .samil-kanban-board {
                 display:flex; flex-direction:column; grid-auto-flow:row; grid-auto-columns:unset;
                 grid-template-columns:none; min-height:0; height:auto; gap:0;
             }
-            #screen-samil-deals .samil-kanban-column, #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column {
+            #screen-samil-deals .samil-kanban-column, #screen-notifications .samil-kanban-column, #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column, #screen-linear .samil-kanban-column {
                 background:transparent; border:0; border-radius:0; max-height:none; min-height:0; height:auto; overflow:visible;
             }
-            #screen-samil-deals .samil-kanban-header, #screen-notifications .samil-kanban-header, #screen-gozleme .samil-kanban-header, #screen-pending .samil-kanban-header {
+            #screen-samil-deals .samil-kanban-header, #screen-notifications .samil-kanban-header, #screen-gozleme .samil-kanban-header, #screen-pending .samil-kanban-header, #screen-linear .samil-kanban-header {
                 padding:12px 16px 8px; background:#fff; border-bottom:4px solid #22c55e;
             }
-            #screen-samil-deals .samil-kanban-list, #screen-notifications .samil-kanban-list, #screen-gozleme .samil-kanban-list, #screen-pending .samil-kanban-list { display:block; padding:0; overflow:visible; }
-            #screen-samil-deals .samil-deal-card, #screen-notifications .crm-task-card, #screen-gozleme .crm-task-card, #screen-pending .crm-task-card {
+            #screen-samil-deals .samil-kanban-list, #screen-notifications .samil-kanban-list, #screen-gozleme .samil-kanban-list, #screen-pending .samil-kanban-list, #screen-linear .samil-kanban-list { display:block; padding:0; overflow:visible; }
+            #screen-samil-deals .samil-deal-card, #screen-notifications .crm-task-card, #screen-gozleme .crm-task-card, #screen-pending .crm-task-card, #screen-linear .crm-task-card {
                 width:100%; max-width:none; border:0 !important; border-bottom:1px solid #e5e7eb !important;
                 border-radius:0 !important; box-shadow:none !important; padding:14px 16px; background:#fff;
             }
         }
         @media (min-width: 1024px) {
             #side-tab-settings { margin-top:auto; border-top:1px solid #e6e8eb; border-radius:0; padding-top:13px; }
-            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active, #content-area > #screen-pending.active, #content-area > #screen-chats.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
+            #content-area > #screen-samil-deals.active, #content-area > #screen-notifications.active, #content-area > #screen-gozleme.active, #content-area > #screen-pending.active, #content-area > #screen-linear.active, #content-area > #screen-chats.active { display:flex !important; flex-direction:column; max-width:none; height:calc(100vh - 36px); gap:10px; }
             #content-area > #screen-chats.active { max-width:none !important; height:100%; margin:0; gap:0; }
             #samil-stage-select { display:none !important; }
             #task-date-select, #gozleme-date-select, #pending-type-select { display:none !important; }
@@ -261,10 +261,10 @@
             #pin-sidebar-btn svg { width:14px; height:14px; }
             #pin-sidebar-btn:hover { color:#64748b; }
             .page-user-name { font-size:13px !important; }
-            #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between, #screen-pending > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
+            #screen-samil-deals > .flex.items-center.justify-between, #screen-notifications > .flex.items-center.justify-between, #screen-gozleme > .flex.items-center.justify-between, #screen-pending > .flex.items-center.justify-between, #screen-linear > .flex.items-center.justify-between { background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 !important; }
             #samil-stage-nav, #samil-deals-count, #task-total-count, #overdue-count, #gozleme-count, #gozleme-total-count, #gozleme-overdue-count { display:none; }
             .samil-kanban-wrap { flex:1; min-height:0; overflow-x:auto; overflow-y:hidden; padding-bottom:0; }
-            #samil-deals-container.samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
+            #samil-deals-container.samil-kanban-board, #linear-tasks-container .samil-kanban-board { grid-auto-columns:300px; height:100%; min-height:0; gap:14px; overflow-x:visible; }
             /* The Linear queue is intentionally a long vertical list.  Keep
                the page header fixed and give its cards their own scrollbar. */
             #screen-pending.active { overflow:hidden; }
@@ -273,6 +273,8 @@
             #screen-pending.active #linear-tesdiq-section:not([hidden]) { display:flex; flex-direction:column; }
             #screen-pending.active #linear-tesdiq-list { min-height:0; overflow-y:auto; }
             #screen-pending.active #system-pending-section:not([hidden]) { overflow-y:auto; }
+            #screen-linear.active { overflow:hidden; }
+            #screen-linear.active #linear-tasks-container { flex:1; min-height:0; overflow-y:auto; }
             #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
             #pending-actions-container.samil-kanban-board { grid-auto-columns:minmax(300px, 320px); height:100%; min-height:0; gap:14px; overflow-x:visible; }
             .samil-kanban-column { max-height:none; min-height:0; height:100%; overflow-x:hidden; }
@@ -969,6 +971,9 @@
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Təsdiq</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
+        <button id="side-tab-linear" class="sidebar-item" style="display:none;" onclick="switchTab('tab-linear')">
+            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg></span><span class="sidebar-item-label">Linear</span>
+        </button>
         <button id="side-tab-hesabat" class="sidebar-item" onclick="switchTab('tab-hesabat')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="sidebar-item-label">Hesabatlar</span>
         </button>
@@ -1284,9 +1289,9 @@
         <div id="linear-search-wrap" class="rounded-2xl border border-violet-100 bg-white p-2 shadow-sm" hidden>
             <input id="linear-client-search" type="search" oninput="filterLinearTasks(this.value)" placeholder="Linear-da müştəri və ya tapşırıq axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
         </div>
-        <div class="grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
+        <div class="grid grid-cols-1 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
             <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
-            <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
+            <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" style="display:none;" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
         </div>
         <section id="system-pending-section">
             <div class="samil-kanban-wrap custom-scroll">
@@ -1302,6 +1307,22 @@
             </div>
             <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
+    </div>
+
+    <!-- SCREEN: LINEAR WORKBOARD (administrator only) -->
+    <div id="screen-linear" class="screen space-y-3">
+        <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
+            <div><div class="text-sm font-extrabold text-gray-800">Linear tapşırıqları</div><div id="linear-page-meta" class="text-[10px] text-gray-400 font-medium mt-0.5">İcazəli mərhələlər</div></div>
+            <div class="flex items-center gap-2">
+                <select id="linear-status-filter" class="toolbar-select" aria-label="Mərhələ filtri" onchange="filterLinearBoard()"><option value="all">Bütün mərhələlər</option></select>
+                <button id="linear-page-search-toggle" type="button" onclick="toggleLinearBoardSearch()" class="icon-action-btn" aria-label="Linear-da axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+                <button id="linear-page-refresh" type="button" onclick="loadLinearBoard(true)" class="icon-action-btn" aria-label="Linear tapşırıqlarını yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
+            </div>
+        </div>
+        <div id="linear-board-search-wrap" class="rounded-2xl border border-violet-100 bg-white p-2 shadow-sm" hidden>
+            <input id="linear-board-search" type="search" oninput="filterLinearBoard(this.value)" placeholder="Nömrə, hesab, başlıq və ya layihə axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
+        </div>
+        <div id="linear-tasks-container" class="samil-kanban-wrap custom-scroll"><div class="samil-kanban-board"></div></div>
     </div>
 
     <!-- SCREEN: EMPLOYEES (employee managers only) -->
@@ -1452,6 +1473,9 @@
     </button>
     <button id="tab-chats" onclick="switchTab('tab-chats')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span class="mt-0.5">Müştərilər</span><span id="chats-menu-badge"></span>
+    </button>
+    <button id="tab-linear" onclick="switchTab('tab-linear')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span class="mt-0.5">Linear</span>
     </button>
     <button id="tab-hot-orders" onclick="switchTab('tab-hot-orders')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3c2 3-1 4 1 7 1.5-1.5 3-2.5 3-5 3 3 5 6 5 10a9 9 0 1 1-18 0c0-3 1-5 4-8-.3 3 1 4 2 5 0-3 2-5 3-9Z"/></svg><span class="mt-0.5">İsti sifariş</span>
@@ -2344,6 +2368,7 @@ function applyEmployeePermissionUi() {
     visible(['tab-hesabat','side-tab-hesabat'], false);
     visible(['tab-chats','side-tab-chats'], HAS_CHATS);
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
+    visible(['tab-linear','side-tab-linear'], isAdmin);
     setPendingTabVisible();
 }
 
@@ -2365,9 +2390,13 @@ function setPendingTabVisible() {
     if(settingsTab) settingsTab.style.display = settingsAllowed ? 'flex' : 'none';
     const sideSettings = document.getElementById('side-tab-settings');
     if(sideSettings) sideSettings.style.display = settingsAllowed ? 'flex' : 'none';
+    const linearTab = document.getElementById('tab-linear');
+    if(linearTab) linearTab.style.display = isAdmin ? 'flex' : 'none';
+    const sideLinear = document.getElementById('side-tab-linear');
+    if(sideLinear) sideLinear.style.display = isAdmin ? 'flex' : 'none';
     paintMobileTabBar();
 }
-const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees','tab-settings'];
+const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-linear','tab-employees','tab-settings'];
 const ACTIVE_TAB_STORAGE_PREFIX = 'crm_active_tab_v1_';
 function activeTabStorageKey() { return ACTIVE_TAB_STORAGE_PREFIX + String(CURRENT_USER_ID || 'guest'); }
 function getSavedActiveTab() {
@@ -2383,7 +2412,7 @@ function saveActiveTab(tabId) {
 const MOBILE_TAB_ORDERS = {
     default: ['tab-samil-deals','tab-tasks','tab-hot-orders','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
     // Nizami works first from tasks, then immediately from the client queue.
-    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-pending','tab-settings','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
+    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-pending','tab-linear','tab-settings','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
 };
 function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
@@ -2396,6 +2425,7 @@ function mobileTabWanted(id) {
     if(id === 'tab-gozleme') return hasEmployeePermission('passive_tasks');
     if(id === 'tab-hesabat') return false;
     if(id === 'tab-pending') return hasEmployeePermission('waiting');
+    if(id === 'tab-linear') return isAdmin;
     if(id === 'tab-employees') return false;
     if(id === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
     if(id === 'tab-hot-orders') return hasEmployeePermission('hot_orders');
@@ -2456,6 +2486,7 @@ function setSidebarActive(tabId) {
 
 function applyHashRoute(opts) {
     if(window.location.hash === '#pending' && hasEmployeePermission('waiting')) switchTab('tab-pending', false);
+    if(window.location.hash === '#linear' && isAdmin) switchTab('tab-linear', false);
     const dealMatch = String(window.location.hash || '').match(/^#deal-(\d+)/);
     if(dealMatch) {
         openDealViewById(dealMatch[1]);
@@ -3064,6 +3095,10 @@ let linearTesdiqRows = [];
 let linearQueueRows = [];
 let linearSearchTimer = null;
 let linearSearchSequence = 0;
+let linearBoardRows = [];
+let linearBoardStatuses = [];
+let linearBoardLoaded = false;
+let linearBoardDragState = null;
 // System requests are the primary confirmation work. Linear is a separate
 // queue opened explicitly from the second tab.
 let pendingQueue = 'system';
@@ -3200,6 +3235,133 @@ function filterLinearTasks(rawValue) {
             }
         }
     }, 350);
+}
+
+function toggleLinearBoardSearch(forceOpen = null) {
+    const wrap = document.getElementById('linear-board-search-wrap');
+    const input = document.getElementById('linear-board-search');
+    if(!wrap || !input) return;
+    const open = forceOpen === null ? wrap.hidden : !!forceOpen;
+    wrap.hidden = !open;
+    if(open) window.setTimeout(() => input.focus(), 30);
+    else { input.value = ''; filterLinearBoard(''); }
+}
+
+function linearBoardPriorityLabel(value) {
+    return ({0:'Yoxdur',1:'Təcili',2:'Yüksək',3:'Orta',4:'Aşağı'})[Number(value)] || 'Yoxdur';
+}
+
+function linearBoardTaskMatches(item, query) {
+    const q = String(query || '').trim().toLocaleLowerCase('az');
+    if(!q) return true;
+    return [item.id, item.client, item.title, item.project, item.operator, item.environment, item.assignee]
+        .some(value => String(value || '').toLocaleLowerCase('az').includes(q));
+}
+
+function linearBoardCardHtml(item) {
+    const sourceId = escapeHtml(String(item.source_id || ''));
+    const issueId = escapeHtml(item.id || 'Linear');
+    const status = item.status || {};
+    const statusColor = /^#[0-9a-f]{3,8}$/i.test(String(status.color || '')) ? status.color : '#64748b';
+    const title = escapeHtml(item.title || 'Tapşırıq');
+    const client = escapeHtml(item.client || 'Göstərilməyib');
+    const project = escapeHtml(item.project || 'Göstərilməyib');
+    const operator = escapeHtml(item.operator || 'Göstərilməyib');
+    const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
+    const environment = escapeHtml(item.environment || 'Göstərilməyib');
+    const created = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    const priorityOptions = [[0,'Yoxdur'],[1,'Təcili'],[2,'Yüksək'],[3,'Orta'],[4,'Aşağı']].map(([value,label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
+    const description = escapeHtml(String(item.description || '').trim());
+    const link = /^https:\/\/linear\.app\//i.test(String(item.url || '')) ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-700">Linear ↗</a>` : '';
+    const actionButtons = item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
+    const menu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
+    return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="true" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
+        <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}<span class="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-md text-white" style="background:${statusColor}">${escapeHtml(status.name || 'Status')}</span></div><div class="text-sm font-semibold text-slate-900 leading-5">${title}</div></div>${menu}</div>
+        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">👤 <b>Hesab:</b> ${client}</div><div class="truncate">⭐ <b>Prioritet:</b> <select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border border-slate-200 bg-white px-1 py-0.5 text-[10px] font-semibold text-slate-700">${priorityOptions}</select></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
+        ${actionButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
+    </article>`;
+}
+
+function renderLinearBoard() {
+    const wrap = document.getElementById('linear-tasks-container');
+    const board = wrap?.querySelector('.samil-kanban-board');
+    const filter = document.getElementById('linear-status-filter')?.value || 'all';
+    const query = document.getElementById('linear-board-search')?.value || '';
+    if(!board) return;
+    const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
+    let statuses = Array.isArray(linearBoardStatuses) ? linearBoardStatuses : [];
+    if(!statuses.length) statuses = linearBoardRows.map(row => row.status || {}).filter(row => row.id);
+    const unique = []; const seen = new Set();
+    statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
+    const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
+    const rowsFor = stateId => linearBoardRows.filter(row => String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query));
+    board.className = 'samil-kanban-board';
+    board.innerHTML = visibleStatuses.map(state => {
+        const rows = rowsFor(state.id);
+        const color = /^#[0-9a-f]{3,8}$/i.test(String(state.color || '')) ? state.color : '#64748b';
+        return `<section class="samil-kanban-column" data-linear-status-column="${escapeHtml(state.id)}"><div class="samil-kanban-header"><div class="flex items-center justify-between gap-2"><div class="flex items-center gap-2 min-w-0"><span class="stage-dot" style="background:${color}"></span><div class="text-[13px] font-semibold text-slate-800 truncate">${escapeHtml(state.name || 'Status')}</div></div><span class="bg-white/80 text-slate-500 text-[10px] font-semibold px-2 py-0.5 rounded-full">${rows.length}</span></div></div><div class="samil-kanban-list custom-scroll">${rows.length ? rows.map(linearBoardCardHtml).join('') : '<div class="samil-empty-column">Bu mərhələdə tapşırıq yoxdur.</div>'}</div></section>`;
+    }).join('') || '<div class="samil-empty-column">Linear tapşırığı yoxdur.</div>';
+    board.querySelectorAll('[data-linear-status-column]').forEach(bindLinearColumnDrop);
+    linearBoardRows.forEach(row => bindLinearTaskCard(board.querySelector(`[data-linear-board-id="${CSS.escape(String(row.source_id || ''))}"]`), row));
+    const meta = document.getElementById('linear-page-meta');
+    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardTaskMatches(row, query)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
+}
+
+function filterLinearBoard(value) { if(value !== undefined && document.getElementById('linear-board-search')) document.getElementById('linear-board-search').value = value; renderLinearBoard(); }
+
+function changeLinearBoardPriority(select, issueId, previousPriority) {
+    const priority = Number(select?.value);
+    if(!Number.isInteger(priority) || priority === Number(previousPriority)) return;
+    runLinearTesdiqAction('priority', issueId, priority, select, Number(previousPriority));
+}
+
+function bindLinearTaskCard(card, item) {
+    if(!card || card.dataset.bound === '1') return;
+    card.dataset.bound = '1';
+    card.addEventListener('dragstart', event => { linearBoardDragState = {issueId:String(item.source_id || ''), fromState:String((item.status || {}).id || '')}; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(item.source_id || '')); });
+    card.addEventListener('dragend', () => { card.classList.remove('dragging'); linearBoardDragState = null; document.querySelectorAll('[data-linear-status-column].drag-over').forEach(el => el.classList.remove('drag-over')); });
+}
+
+function bindLinearColumnDrop(column) {
+    if(!column || column.dataset.bound === '1') return;
+    column.dataset.bound = '1';
+    column.addEventListener('dragover', event => { event.preventDefault(); column.classList.add('drag-over'); });
+    column.addEventListener('dragleave', event => { if(!column.contains(event.relatedTarget)) column.classList.remove('drag-over'); });
+    column.addEventListener('drop', event => { event.preventDefault(); column.classList.remove('drag-over'); const state = linearBoardDragState || {issueId:event.dataTransfer.getData('text/plain'),fromState:''}; if(state.issueId) moveLinearBoardTask(state.issueId, column.dataset.linearStatusColumn, state.fromState); });
+}
+
+async function moveLinearBoardTask(issueId, targetStateId, fromStateId) {
+    if(!issueId || !targetStateId || targetStateId === fromStateId) return;
+    const item = linearBoardRows.find(row => String(row.source_id) === String(issueId));
+    if(!item) return;
+    const previous = item.status;
+    const next = linearBoardStatuses.find(row => String(row.id) === String(targetStateId));
+    if(!next) return;
+    item.status = {...next}; item.in_confirmation = String(next.id) === String(window.LINEAR_TESDIQ_STATE_ID || ''); renderLinearBoard();
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tasks', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'status', issue_id:issueId, status_id:targetStateId})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Status dəyişdirilmədi.');
+        toast(data.message || 'Status dəyişdirildi', false);
+    } catch(error) { item.status = previous; renderLinearBoard(); toast(error.message || 'Status dəyişdirilmədi.', true); }
+}
+
+async function loadLinearBoard(forceRefresh = false) {
+    if(!isAdmin) return;
+    const board = document.querySelector('#linear-tasks-container .samil-kanban-board');
+    if(board && !linearBoardLoaded) board.innerHTML = '<div class="samil-empty-column"><span class="yt-spin"></span> Linear yüklənir…</div>';
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tasks?scope=all&refresh=' + (forceRefresh ? '1' : '0') + '&_ts=' + Date.now(), {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırıqları yüklənmədi.');
+        if(!data.connected) throw new Error(data.error || 'Linear qoşulmayıb.');
+        linearBoardRows = Array.isArray(data.issues) ? data.issues : [];
+        linearBoardStatuses = Array.isArray(data.statuses) ? data.statuses : [];
+        linearBoardLoaded = true;
+        const filter = document.getElementById('linear-status-filter');
+        if(filter) { const current = filter.value; filter.innerHTML = '<option value="all">Bütün mərhələlər</option>' + linearBoardStatuses.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')}</option>`).join(''); if([...filter.options].some(option => option.value === current)) filter.value = current; }
+        renderLinearBoard();
+    } catch(error) { if(board) board.innerHTML = `<div class="samil-empty-column text-rose-500">${escapeHtml(error.message || 'Linear yüklənmədi.')}</div>`; toast(error.message || 'Linear yüklənmədi.', true); }
 }
 
 function changeLinearPriority(select, issueId, previousPriority) {
@@ -9106,8 +9268,13 @@ function showDealModal(deal, mode) {
     let body = '';
     if(mode === 'edit') {
         const pid = deal.pipeline_id || CURRENT_PIPELINE_ID;
-        body = `<label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label>
-        <select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${isAdmin && KOMMO_PIPELINES.length ? stageOptionsForPipelineHtml(pid, deal.stage_key) : SAMIL_ALL_STAGES.map(([k,v])=>`<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('')}</select>
+        const ownerOptions = isAdmin
+            ? (KOMMO_PIPELINES.filter(pipe => pipe.owner_chat_id).map(pipe => `<option value="${escapeHtml(String(pipe.id))}" ${Number(pipe.id) === Number(pid) ? 'selected' : ''}>${escapeHtml(pipe.owner_name || pipe.name || String(pipe.id))}</option>`).join('') || '<option value="">Vərdişə sahibləri yüklənir…</option>')
+            : SAMIL_ALL_STAGES.map(([k,v]) => `<option value="${k}" ${k===deal.stage_key?'selected':''}>${v}</option>`).join('');
+        body = isAdmin
+        ? `<label class="text-xs font-bold text-gray-400 block mb-1">Vərdişəsi olan əməkdaş</label><select id="deal-modal-owner" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${ownerOptions}</select><div class="mt-1 text-[10px] text-slate-400">Seçildikdə sövdələşmə həmin əməkdaşın vərdişəsinin ilk mərhələsinə keçəcək.</div>`
+        : `<label class="text-xs font-bold text-gray-400 block mb-1">Mərhələ</label><select id="deal-modal-stage" style="width:100%;padding:11px;border:1px solid #ddd;border-radius:10px">${ownerOptions}</select>`;
+        body += `
         <label class="text-xs font-bold text-gray-400 block mt-2 mb-1">Partner</label>
         <div class="mt-1">${partnerFieldHtml('deal-modal-partner', dealPartnerLabel(deal))}</div>`;
     } else {
@@ -9122,10 +9289,10 @@ function showDealModal(deal, mode) {
     document.body.appendChild(modal);
     if(mode === 'edit' && isAdmin) {
         ensureAdminPipelines().then(() => {
-            const stageEl = document.getElementById('deal-modal-stage');
-            if(!document.getElementById('deal-modal') || !stageEl) return;
-            // Redaktədə yalnız sövdələşmənin öz hunisinin mərhələləri göstərilir.
-            stageEl.innerHTML = stageOptionsForPipelineHtml(deal.pipeline_id || CURRENT_PIPELINE_ID, deal.stage_key);
+            const ownerEl = document.getElementById('deal-modal-owner');
+            if(!document.getElementById('deal-modal') || !ownerEl) return;
+            const pipes = KOMMO_PIPELINES.filter(pipe => pipe.owner_chat_id);
+            ownerEl.innerHTML = pipes.map(pipe => `<option value="${escapeHtml(String(pipe.id))}" ${Number(pipe.id) === Number(deal.pipeline_id || CURRENT_PIPELINE_ID) ? 'selected' : ''}>${escapeHtml(pipe.owner_name || pipe.name || String(pipe.id))}</option>`).join('') || '<option value="">Vərdişə sahibləri tapılmadı</option>';
         });
     }
     modal.querySelector('#deal-modal-cancel').onclick = () => modal.remove();
@@ -9136,8 +9303,12 @@ function showDealModal(deal, mode) {
         const base = {lead_id: deal.id};
         let payload;
         if(mode === 'edit') {
-            payload = {...base, action:'deal_edit', stage_key: modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
-            if(deal.pipeline_id) payload.pipeline_id = Number(deal.pipeline_id);
+            const selectedPipe = isAdmin ? KOMMO_PIPELINES.find(pipe => String(pipe.id) === String(modal.querySelector('#deal-modal-owner')?.value || '')) : null;
+            const firstStage = selectedPipe ? pipelineStagePairs(selectedPipe)[0] : null;
+            if(isAdmin && (!selectedPipe || !firstStage)) { toast('Əməkdaşın vərdişəsi tapılmadı.', true); return; }
+            payload = {...base, action:'deal_edit', stage_key: isAdmin ? firstStage[0] : modal.querySelector('#deal-modal-stage').value, partner: modal.querySelector('#deal-modal-partner')?.value || ''};
+            if(isAdmin) payload.pipeline_id = Number(selectedPipe.id);
+            else if(deal.pipeline_id) payload.pipeline_id = Number(deal.pipeline_id);
         } else if(mode === 'task') {
             const text = modal.querySelector('#deal-modal-text').value.trim();
             if(!text) { toast('Mətni yazın!', true); return; }
@@ -9187,6 +9358,7 @@ function showDealModal(deal, mode) {
             if(mode === 'edit') {
                 const nextStageKey = payload.stage_key;
                 const nextPartner = payload.partner || '';
+                if(payload.pipeline_id) deal.pipeline_id = Number(payload.pipeline_id);
                 deal.partner = nextPartner;
                 (samilDeals || []).forEach(item => {
                     if(String(item.id) === String(deal.id)) item.partner = nextPartner;
@@ -9198,6 +9370,12 @@ function showDealModal(deal, mode) {
                     updateLocalSamilDealStage(deal.id, nextStageKey);
                     samilStageFilter = nextStageKey;
                     localStorage.setItem('samil_stage_filter', nextStageKey);
+                }
+                if(payload.pipeline_id) {
+                    const selectedPipe = KOMMO_PIPELINES.find(pipe => Number(pipe.id) === Number(payload.pipeline_id));
+                    const firstStage = selectedPipe ? pipelineStagePairs(selectedPipe)[0] : null;
+                    if(firstStage) deal.stage_name = firstStage[1];
+                    (samilDeals || []).forEach(item => { if(String(item.id) === String(deal.id)) { item.pipeline_id = Number(payload.pipeline_id); if(firstStage) { item.stage_key = firstStage[0]; item.stage_name = firstStage[1]; } } });
                 }
                 renderSamilDeals();
                 persistLocalSamilWorkspace();
@@ -12014,6 +12192,7 @@ function firstAllowedTab() {
     if(hasEmployeePermission('waiting')) return 'tab-pending';
     if(hasEmployeePermission('finance')) return 'tab-history';
     if(hasEmployeePermission('passive_tasks')) return 'tab-gozleme';
+    if(isAdmin) return 'tab-linear';
     if(isAdmin || hasEmployeePermission('employees')) return 'tab-settings';
     return 'tab-tasks';
 }
@@ -12024,6 +12203,7 @@ function tabAllowed(tabId) {
         'tab-gozleme':'passive_tasks', 'tab-pending':'waiting', 'tab-employees':'employees'
     };
     if(tabId === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
+    if(tabId === 'tab-linear') return isAdmin;
     return !permissions[tabId] || hasEmployeePermission(permissions[tabId]);
 }
 
@@ -12078,6 +12258,12 @@ function switchTab(tabId, updateHash = true) {
         const pendingTab = document.getElementById('tab-pending');
         if(pendingTab) pendingTab.className = activeClass;
         openPendingActions();
+    } else if(tabId === 'tab-linear') {
+        if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+        const linearTab = document.getElementById('tab-linear');
+        if(linearTab) linearTab.className = activeClass;
+        nav('screen-linear');
+        loadLinearBoard();
     } else if(tabId === 'tab-employees') {
         if(!hasEmployeePermission('employees')) { toast('Bu bölmə üçün icazə yoxdur.', true); switchTab('tab-tasks'); return; }
         const employeesTab = document.getElementById('tab-employees');
@@ -12092,7 +12278,7 @@ function switchTab(tabId, updateHash = true) {
         loadSettingsIntegrations();
     }
     if(updateHash) {
-        const nextHash = tabId === 'tab-pending' ? '#pending' : '';
+        const nextHash = tabId === 'tab-pending' ? '#pending' : (tabId === 'tab-linear' ? '#linear' : '');
         if(window.location.hash !== nextHash) {
             history.replaceState(null, '', window.location.pathname + window.location.search + nextHash);
         }
