@@ -3154,7 +3154,10 @@ function renderLinearIssues(rows, searchQuery = '') {
     const list = document.getElementById('linear-tesdiq-list');
     const meta = document.getElementById('linear-tesdiq-meta');
     if(!list || !meta) return;
-    linearTesdiqRows = Array.isArray(rows) ? rows : [];
+    // Keep the mobile confirmation list consistent with the kanban: Linear
+    // tasks without an account/client are internal noise and must not be
+    // shown in either presentation.
+    linearTesdiqRows = (Array.isArray(rows) ? rows : []).filter(linearBoardHasAccount);
     meta.textContent = searchQuery
         ? `“${searchQuery}” üzrə ${linearTesdiqRows.length} nəticə`
         : `${linearTesdiqRows.length} təsdiq gözləyir · qərarınızı seçin`;

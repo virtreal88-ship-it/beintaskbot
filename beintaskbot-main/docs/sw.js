@@ -1,4 +1,4 @@
-const CACHE_NAME = 'beintaskbot-v2026-09-30-deal-assignee-card-fix';
+const CACHE_NAME = 'beintaskbot-v2026-09-30-deal-assignee-mobile-filter';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
