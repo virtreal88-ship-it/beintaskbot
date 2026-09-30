@@ -1067,6 +1067,7 @@
                         <span></span>
                         <span class="flex items-center gap-2">
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
+                            <button type="button" id="chats-sync-btn" onclick="syncCustomersList(this)" class="search-icon-btn" aria-label="Müştəriləri sinxronla" title="Müştəriləri sinxronla"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.8-2.6L20 11M4 13l2.1 4.6A7 7 0 0 0 17.9 15"/></svg></button>
                             <button type="button" id="chats-stage-toggle" class="search-icon-btn" aria-label="Mərhələlər" title="Mərhələlər"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12m-9 7h6"/></svg></button>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                         </span>
@@ -1283,6 +1284,10 @@
                     <div id="linear-tesdiq-meta" class="text-[10px] text-violet-500 mt-0.5">Təsdiq gözləyir</div>
                 </div>
                 <button type="button" onclick="loadLinearTesdiq(true)" class="text-[11px] font-bold text-violet-700 px-2 py-1 rounded-lg hover:bg-violet-100" aria-label="Linear siyahısını yenilə">Yenilə</button>
+            </div>
+            <div class="relative border-b border-slate-100 bg-white p-2">
+                <input id="linear-client-search" type="search" oninput="filterLinearTasks(this.value)" placeholder="Müştəri adı ilə axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
+                <div id="linear-search-results" class="absolute left-2 right-2 top-full z-30 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl" hidden></div>
             </div>
             <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
@@ -2123,8 +2128,10 @@ function applySamilWorkspace(payload) {
     const nextIds = new Set(nextDeals.map(deal => String(deal && deal.id)));
     (samilDeals || []).forEach(old => {
         if(!old || !old.id || nextIds.has(String(old.id))) return;
-        const channel = String(old.chat_channel || old.inbox_channel || '').toLowerCase();
-        if(!(old.inbox_only || old.wa_line || channel === 'whatsapp' || old.last_client_message)) return;
+        // Preserve only local, not-yet-bound WhatsApp rows. A real Kommo deal
+        // missing from the refreshed payload has moved to another funnel and
+        // must disappear from this user's customer list.
+        if(!(old.outbox || Number(old.id) >= 9000000000000)) return;
         if(typeof chatBelongsToViewer === 'function' && !chatBelongsToViewer(old)) return;
         nextDeals.unshift(old);
     });
@@ -2148,7 +2155,7 @@ function applySamilWorkspace(payload) {
 }
 
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
-    if(!HAS_OWN_FUNNEL) return false;
+    if(!HAS_OWN_FUNNEL && !HAS_CHATS) return false;
     if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
@@ -2283,7 +2290,7 @@ function toggleSidebarPin() {
 }
 applyDesktopSidebar();
 
-function hasEmployeePermission(permission) { return isAdmin || employeePermissions.has(permission); }
+function hasEmployeePermission(permission) { return employeePermissions.has(permission); }
 async function loadEmployeeSession() {
     // In browser mode the signed cookie, not an old pwa_uid, is the identity.
     const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
@@ -2369,9 +2376,11 @@ function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
 }
 function mobileTabWanted(id) {
-    if(id === 'tab-chats') return HAS_NOTICES;
+    if(id === 'tab-chats') return HAS_CHATS;
     if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
-    if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
+    if(id === 'tab-tasks') return hasEmployeePermission('tasks');
+    if(id === 'tab-history') return hasEmployeePermission('finance');
+    if(id === 'tab-gozleme') return hasEmployeePermission('passive_tasks');
     if(id === 'tab-hesabat') return false;
     if(id === 'tab-pending') return hasEmployeePermission('waiting');
     if(id === 'tab-employees') return false;
@@ -2495,7 +2504,7 @@ async function initApp() {
     // saved value is per Telegram user, so one phone cannot reopen another
     // employee's previously selected section.
     const savedTab = getSavedActiveTab();
-    const defaultTab = HAS_NOTICES ? 'tab-tasks' : (HAS_OWN_FUNNEL ? 'tab-samil-deals' : 'tab-tasks');
+    const defaultTab = firstAllowedTab();
     await switchTab(savedTab || defaultTab, false);
     applyHashRoute();
     await maybeOpenSharedDeal();
@@ -3038,6 +3047,7 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 let linearTesdiqLoaded = false;
 let linearTesdiqActionPending = false;
+let linearTesdiqRows = [];
 // System requests are the primary confirmation work. Linear is a separate
 // queue opened explicitly from the second tab.
 let pendingQueue = 'system';
@@ -3061,6 +3071,7 @@ async function loadLinearTesdiq(forceRefresh = false) {
             return;
         }
         const rows = Array.isArray(data.issues) ? data.issues : [];
+        linearTesdiqRows = rows;
         linearTesdiqLoaded = true;
         meta.textContent = `${rows.length} təsdiq gözləyir · qərarınızı seçin`;
         if(!rows.length) {
@@ -3095,7 +3106,8 @@ async function loadLinearTesdiq(forceRefresh = false) {
                     <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>
                 </div>` : '';
             const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-32 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button></div></details>` : '';
-            return `<article data-linear-issue-id="${sourceId}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+            const searchText = escapeHtml([item.client, item.title, item.id].filter(Boolean).join(' ').toLowerCase());
+            return `<article data-linear-issue-id="${sourceId}" data-linear-search="${searchText}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
                 <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}</div><div class="text-sm font-bold leading-5 text-slate-800">${title}</div></div>${priorityBadge}</div>
                 <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5">
                     <span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span>
@@ -3113,10 +3125,43 @@ async function loadLinearTesdiq(forceRefresh = false) {
                 ${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
             </article>`;
         }).join('');
+        const search = document.getElementById('linear-client-search');
+        if(search && search.value) filterLinearTasks(search.value);
     } catch(error) {
         meta.textContent = 'Yüklənmədi';
         list.innerHTML = `<div class="px-3 py-3 text-xs text-red-500">${escapeHtml(error.message || 'Linear tapşırıqları yüklənmədi.')}</div>`;
     }
+}
+
+function focusLinearTask(issueId) {
+    const wanted = String(issueId || '');
+    document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]').forEach(card => {
+        card.hidden = String(card.dataset.linearIssueId || '') !== wanted;
+    });
+    const results = document.getElementById('linear-search-results');
+    if(results) results.hidden = true;
+    const card = [...document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]')].find(item => String(item.dataset.linearIssueId || '') === wanted);
+    if(card) {
+        card.scrollIntoView({behavior:'smooth', block:'center'});
+        card.classList.add('ring-2', 'ring-violet-300');
+        window.setTimeout(() => card.classList.remove('ring-2', 'ring-violet-300'), 1600);
+    }
+}
+
+function filterLinearTasks(rawValue) {
+    const query = String(rawValue || '').trim().toLocaleLowerCase('az');
+    const cards = [...document.querySelectorAll('#linear-tesdiq-list [data-linear-issue-id]')];
+    cards.forEach(card => { card.hidden = !!query && !String(card.dataset.linearSearch || '').toLocaleLowerCase('az').includes(query); });
+    const results = document.getElementById('linear-search-results');
+    if(!results) return;
+    if(!query) { results.hidden = true; results.innerHTML = ''; return; }
+    const matches = linearTesdiqRows.filter(item => String(item.client || '').toLocaleLowerCase('az').includes(query)).slice(0, 10);
+    results.innerHTML = matches.length ? matches.map(item => `<button type="button" data-linear-focus="${escapeHtml(String(item.source_id || ''))}" class="block w-full rounded-lg px-3 py-2 text-left hover:bg-violet-50"><b class="block text-xs text-slate-800">${escapeHtml(item.client || 'Müştəri')}</b><span class="block truncate text-[10px] text-slate-500">${escapeHtml(item.id || '')} · ${escapeHtml(item.title || '')}</span></button>`).join('') : '<div class="px-3 py-2 text-xs text-slate-400">Müştəri tapılmadı</div>';
+    results.hidden = false;
+    results.onclick = event => {
+        const button = event.target.closest('[data-linear-focus]');
+        if(button) focusLinearTask(button.dataset.linearFocus);
+    };
 }
 
 function changeLinearPriority(select, issueId, previousPriority) {
@@ -9729,6 +9774,7 @@ function viewerWaLine() {
 }
 function chatBelongsToViewer(deal) {
     if(isAdmin && !isNizamiQueueDeal(deal)) return false;
+    if(!isAdmin && CURRENT_PIPELINE_ID && Number(deal && deal.pipeline_id || 0) && Number(deal.pipeline_id) !== Number(CURRENT_PIPELINE_ID)) return false;
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
     if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
     // Qualified Sövdələşmələr leads are lightweight inbox rows. They remain
@@ -9738,6 +9784,7 @@ function chatBelongsToViewer(deal) {
     return true;
 }
 const NIZAMI_PIPELINE_ID = 14243944;
+const SOVDELESMELER_PIPELINE_ID = 8329347;
 function isSuccessfulChatDeal(deal) {
     const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
     return key === 'ugurlu' || Number(deal && deal.status_id) === 142;
@@ -9754,6 +9801,10 @@ function isNizamiQueueDeal(deal) {
     if(deal.nizami_funnel === true) return true;
     const kind = String(deal.nizami_queue_kind || '');
     if(kind === 'new_request' || kind === 'hot') return true;
+    if(Number(deal.pipeline_id || 0) === SOVDELESMELER_PIPELINE_ID) {
+        const label = String(deal.stage_name || deal.stage_key || '').toLocaleLowerCase('az').replace(/[əıöüğşç]/g, char => ({'ə':'e','ı':'i','ö':'o','ü':'u','ğ':'g','ş':'s','ç':'c'}[char] || char));
+        return (label.includes('yeni') && (label.includes('muraciet') || label.includes('sorgu'))) || (label.includes('nomre') && label.includes('alin'));
+    }
     return Number(deal.pipeline_id || 0) === NIZAMI_PIPELINE_ID;
 }
 function chatsQueueBadge(deal) {
@@ -10648,6 +10699,16 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
             if(matched) freshDeal.stage_name = matched[1];
         }
 
+        if(!chatBelongsToViewer(freshDeal)) {
+            samilDeals = (samilDeals || []).filter(deal => String(deal.id) !== key);
+            Object.keys(samilDealsByStage || {}).forEach(stage => {
+                samilDealsByStage[stage] = (samilDealsByStage[stage] || []).filter(deal => String(deal.id) !== key);
+            });
+            persistLocalSamilWorkspace();
+            renderChatsList();
+            return;
+        }
+
         // Update in-memory samilDeals
         let oldStageKey = '';
         const idx = (samilDeals || []).findIndex(d => String(d.id) === key);
@@ -11056,7 +11117,7 @@ async function openInboxChat(leadId) {
     renderChatsList();
 }
 async function openChats() {
-    if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
+    if(!HAS_CHATS) { switchTab('tab-tasks'); return; }
     nav('screen-chats');
     resetChatsLazyList();
     fillChatsLineSelect();
@@ -11078,6 +11139,21 @@ async function openChats() {
     startChatsPolling();
     loadStaffNotices();
     loadSamilWorkspace(false);
+}
+
+async function syncCustomersList(button) {
+    if(!HAS_CHATS) return;
+    const icon = button && button.querySelector('svg');
+    if(button) button.disabled = true;
+    if(icon) icon.classList.add('animate-spin');
+    try {
+        await loadSamilWorkspace(true, null, true);
+        resetChatsLazyList();
+        renderChatsList();
+    } finally {
+        if(icon) icon.classList.remove('animate-spin');
+        if(button) button.disabled = false;
+    }
 }
 
 function desktopCompleteTask(taskId) {
@@ -11780,12 +11856,33 @@ function openSettingsIntegrationsSection() {
     switchTab('tab-settings');
     window.setTimeout(() => document.getElementById('settings-integrations-card')?.scrollIntoView({behavior:'smooth', block:'start'}), 40);
 }
+function firstAllowedTab() {
+    if(hasEmployeePermission('tasks')) return 'tab-tasks';
+    if(HAS_CHATS) return 'tab-chats';
+    if(HAS_OWN_FUNNEL) return 'tab-samil-deals';
+    if(hasEmployeePermission('hot_orders')) return 'tab-hot-orders';
+    if(hasEmployeePermission('waiting')) return 'tab-pending';
+    if(hasEmployeePermission('finance')) return 'tab-history';
+    if(hasEmployeePermission('passive_tasks')) return 'tab-gozleme';
+    if(isAdmin || hasEmployeePermission('employees')) return 'tab-settings';
+    return 'tab-tasks';
+}
+function tabAllowed(tabId) {
+    const permissions = {
+        'tab-tasks':'tasks', 'tab-samil-deals':'deals', 'tab-chats':'customers',
+        'tab-hot-orders':'hot_orders', 'tab-history':'finance',
+        'tab-gozleme':'passive_tasks', 'tab-pending':'waiting', 'tab-employees':'employees'
+    };
+    if(tabId === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
+    return !permissions[tabId] || hasEmployeePermission(permissions[tabId]);
+}
 
 function switchTab(tabId, updateHash = true) {
     if(tabId === 'tab-create') {
         openCreateTaskModal();
         return;
     }
+    if(!tabAllowed(tabId)) tabId = firstAllowedTab();
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
     ALL_TAB_IDS.forEach(id => {
@@ -11803,7 +11900,7 @@ function switchTab(tabId, updateHash = true) {
         if(dealsTab) dealsTab.className = activeClass;
         openSamilDeals();
     } else if(tabId === 'tab-chats') {
-        if(!HAS_NOTICES) { switchTab('tab-tasks'); return; }
+        if(!HAS_CHATS) { switchTab(firstAllowedTab()); return; }
         const chatsTab = document.getElementById('tab-chats');
         if(chatsTab) chatsTab.className = activeClass;
         openChats();

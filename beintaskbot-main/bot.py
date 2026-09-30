@@ -456,17 +456,9 @@ _employee_access_lock = threading.Lock()
 
 
 def _normalize_employee_permissions(value, role: str = "") -> list[str]:
-    if str(role).strip().casefold() == "admin":
-        return list(_EMPLOYEE_PERMISSIONS)
     values = {str(item) for item in value} if isinstance(value, (list, tuple, set)) else set()
-    # Profiles saved before the menu-based permission model keep their useful
-    # access instead of being silently locked out after this update.
-    if "customers" in values:
-        values.add("deals")
-    if "waiting" in values:
-        values.add("passive_tasks")
-    if "stages" in values or "reports" in values:
-        values.add("waiting")
+    # Every visible page is independent. In particular, closing Sövdələşmələr
+    # must not be undone merely because Müştərilər remains enabled.
     # Hot orders is an independent menu.  It used to follow task access,
     # which made the switch ineffective: removing the hot-order checkbox and
     # retaining tasks silently brought it back on every save.
@@ -6473,6 +6465,7 @@ def _apply_inbox_incoming(
     event_pipe = int(pipeline_id or 0)
     event_name = str(contact_name or "")
     event_phone = str(phone or "")
+    event_queue_kind = ""
     for overview in _personal_overview_cache.values():
         if not isinstance(overview, dict):
             continue
@@ -6494,15 +6487,21 @@ def _apply_inbox_incoming(
             deal["chat_at"] = max(chat_at, int(created_at or 0))
             if channel and not str(deal.get("chat_channel") or "").strip():
                 deal["chat_channel"] = channel
-            if wa_line:
-                deal["wa_line"] = str(wa_line)
-            if not event_pipe:
-                try:
-                    event_pipe = int(deal.get("pipeline_id") or 0)
-                except (TypeError, ValueError):
-                    event_pipe = 0
+            try:
+                current_pipe = int(deal.get("pipeline_id") or 0)
+            except (TypeError, ValueError):
+                current_pipe = 0
+            # Funnel ownership wins over a possibly stale phone-number hint.
+            # This also corrects old rows that were once painted with Nizami's
+            # number even though the deal currently belongs to Rüfət.
+            current_line = _wa_line_for_pipeline(current_pipe)
+            if current_line or wa_line:
+                deal["wa_line"] = current_line or str(wa_line)
+            if current_pipe:
+                event_pipe = current_pipe
             event_name = str(deal.get("contact_name") or event_name or "")
             event_phone = str(deal.get("phone") or event_phone or "")
+            event_queue_kind = str(deal.get("nizami_queue_kind") or event_queue_kind)
             if _is_declined_deal(deal):
                 _mark_terminal_reentry(int(lead_id), int(created_at or 0))
             found = True
@@ -6519,8 +6518,9 @@ def _apply_inbox_incoming(
             "last_client_message": preview,
             "last_incoming_at": int(created_at or 0),
             "chat_channel": channel,
-            "wa_line": str(wa_line or ""),
+            "wa_line": _wa_line_for_pipeline(event_pipe) or str(wa_line or ""),
             "external_id": str(external_id or ""),
+            "nizami_queue_kind": event_queue_kind,
             "needs_reply": needs_reply,
             "missing": bool(not found and channel != "whatsapp"),
             "refresh": False,
@@ -6660,38 +6660,58 @@ def _wa_line_for_phone_id(phone_number_id: str) -> str:
     return "rufat" if str(phone_number_id or "").strip() else ""
 
 
+def _wa_line_for_pipeline(pipeline_id: int) -> str:
+    """Return a fixed owner line only for the two line-owning funnels."""
+    try:
+        pipe = int(pipeline_id or 0)
+    except (TypeError, ValueError):
+        return ""
+    if pipe == int(RUFAT_PIPELINE_ID):
+        return "rufat"
+    if pipe == int(NIZAMI_PIPELINE_ID):
+        return "nizami"
+    return ""
+
+
+def _current_pipeline_for_inbox_lead(lead_id: int, fallback: int = 0) -> int:
+    """Resolve current funnel from cache, then Kommo, for inbound routing."""
+    try:
+        lid = int(lead_id or 0)
+    except (TypeError, ValueError):
+        return int(fallback or 0)
+    for overview in _personal_overview_cache.values():
+        for deal in (overview or {}).get("deals") or []:
+            try:
+                if int((deal or {}).get("id") or 0) == lid:
+                    return int((deal or {}).get("pipeline_id") or fallback or 0)
+            except (TypeError, ValueError):
+                continue
+    try:
+        lead = get_lead_details(lid) or {}
+        return int(lead.get("pipeline_id") or fallback or 0)
+    except (TypeError, ValueError):
+        return int(fallback or 0)
+
+
 def _pulse_event_visible(user_pipeline: int, row: dict, visible: dict, is_admin_user: bool = False) -> bool:
-    channel = str(row.get("chat_channel") or "")
-    line = str(row.get("wa_line") or "")
-    event_type = str(row.get("type") or "")
-    other_sources = {"instagram", "tiktok", "facebook", "telegram"}
-    if channel in other_sources:
-        return bool(is_admin_user)
-    if channel == "whatsapp" and line in {"rufat", "nizami"}:
-        if line == "nizami":
-            return bool(is_admin_user or int(user_pipeline) == int(NIZAMI_PIPELINE_ID))
-        return int(user_pipeline) == int(RUFAT_PIPELINE_ID)
-    if event_type == "incoming_message":
-        try:
-            lead_id = int(row.get("lead_id") or 0)
-            event_pipe = int(row.get("pipeline_id") or 0)
-        except (TypeError, ValueError):
-            return False
-        if lead_id and lead_id in visible:
-            return True
-        return bool(event_pipe and event_pipe == int(user_pipeline))
-    if is_admin_user:
-        return True
     try:
         lead_id = int(row.get("lead_id") or 0)
         event_pipe = int(row.get("pipeline_id") or 0)
     except (TypeError, ValueError):
         return False
+    # The current overview is authoritative.  A channel/phone hint may be
+    # stale (the same contact can write through two WhatsApp integrations),
+    # but it must never move a Rüfət deal into Nizami's customer list.
     if lead_id and lead_id in visible:
         return True
-    nizami = int(NIZAMI_PIPELINE_ID)
-    if int(user_pipeline) == nizami and event_pipe in {nizami, int(SOVDELESMELER_PIPELINE_ID)}:
-        return True
+    if is_admin_user:
+        return bool(
+            event_pipe == int(NIZAMI_PIPELINE_ID)
+            or (
+                event_pipe == int(SOVDELESMELER_PIPELINE_ID)
+                and str(row.get("nizami_queue_kind") or "") in {"new_request", "hot"}
+            )
+        )
     return bool(event_pipe and event_pipe == int(user_pipeline))
 
 
@@ -6879,7 +6899,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "status_id": int(deal.get("status_id") or 0),
                 "stage_key": str(deal.get("stage_key") or row.get("stage_key") or ""),
                 "stage_name": str(deal.get("stage_name") or ""),
-                "nizami_queue_kind": str(deal.get("nizami_queue_kind") or ""),
+                "nizami_queue_kind": str(deal.get("nizami_queue_kind") or row.get("nizami_queue_kind") or ""),
             })
     return {
         "success": True,
@@ -8787,6 +8807,9 @@ async def _rufat_load_all(url: str, embedded_key: str, params: dict | None = Non
     return rows
 
 
+_rufat_contact_sync_cache: dict[int, dict] = {}
+
+
 async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     """Fetch linked contacts in batches, preserving every name and phone.
 
@@ -8795,27 +8818,43 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
     intermittently returned no contacts, leaving the inbox with placeholder
     names even though the individual deal card had the real contact.
     """
-    result: dict[int, dict] = {}
+    # Keep successfully synchronized contacts between refreshes.  If Kommo
+    # throttles one batch, a later manual synchronization continues filling
+    # the list instead of replacing already resolved names with placeholders.
+    result: dict[int, dict] = {
+        contact_id: dict(_rufat_contact_sync_cache[contact_id])
+        for contact_id in contact_ids
+        if contact_id in _rufat_contact_sync_cache
+    }
     ids = sorted(contact_ids)
-    for start in range(0, len(ids), 50):
-        chunk = ids[start:start + 50]
+    for start in range(0, len(ids), 25):
+        chunk = ids[start:start + 25]
         params = {f"filter[id][{index}]": contact_id for index, contact_id in enumerate(chunk)}
-        params["limit"] = 50
-        try:
-            response = await _kommo_get_async(
-                f"{KOMMO_BASE_URL}/api/v4/contacts",
-                params=params,
-                timeout=12,
-            )
-        except Exception as exc:
-            logger.warning("Rüfət contact batch unavailable: %s", exc)
-            continue
-        if response.status_code != 200:
-            logger.warning("Rüfət contact batch failed: %s", response.status_code)
+        params["limit"] = 25
+        response = None
+        for attempt in range(3):
+            try:
+                response = await _kommo_get_async(
+                    f"{KOMMO_BASE_URL}/api/v4/contacts",
+                    params=params,
+                    timeout=15,
+                )
+            except Exception as exc:
+                logger.warning("Contact sync batch %s attempt %s unavailable: %s", start // 25 + 1, attempt + 1, exc)
+                response = None
+            if response is not None and response.status_code == 200:
+                break
+            if response is not None and response.status_code not in {429, 500, 502, 503, 504}:
+                break
+            await asyncio.sleep(0.45 * (attempt + 1))
+        if response is None or response.status_code != 200:
+            logger.warning("Contact sync batch %s failed: %s", start // 25 + 1, getattr(response, "status_code", "network"))
             continue
         for contact in response.json().get("_embedded", {}).get("contacts", []) or []:
             try:
-                result[int(contact["id"])] = contact
+                contact_id = int(contact["id"])
+                result[contact_id] = contact
+                _rufat_contact_sync_cache[contact_id] = dict(contact)
             except (KeyError, TypeError, ValueError):
                 continue
     return result
@@ -9418,6 +9457,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
             "last_note": "", "last_client_message": "", "last_incoming_at": 0, "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "wa_line": _wa_line_for_pipeline(pipeline_id),
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
         })
@@ -13105,7 +13145,7 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
         deal["last_outgoing_at"] = outgoing_at
     if not str(deal.get("chat_channel") or "").strip():
         deal["chat_channel"] = "whatsapp"
-    line = _lead_wa_line(lid)
+    line = _wa_line_for_pipeline(deal.get("pipeline_id")) or _lead_wa_line(lid)
     if line:
         deal["wa_line"] = line
     stamps = [int(ts or 0), int(deal.get("last_incoming_at") or 0), int(deal.get("last_outgoing_at") or 0), int(deal.get("chat_at") or 0)]
@@ -13549,6 +13589,11 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
     rows = _sent_messages_for_lead(real)
     newest = rows[-1] if rows else {}
     wa_line = _wa_line_for_phone_id(sender_phone_id)
+    actual_pipe = _current_pipeline_for_inbox_lead(
+        real,
+        int(NIZAMI_PIPELINE_ID) if wa_line == "nizami" else int(RUFAT_PIPELINE_ID),
+    )
+    routed_line = _wa_line_for_pipeline(actual_pipe) or wa_line
     record_lead_pulse_event(
         real,
         "deal_update",
@@ -13557,8 +13602,8 @@ def _bind_pending_cloud_lead(phone: str, contact_name: str, sender_phone_id: str
         channel="whatsapp",
         contact_name=contact_name,
         phone=phone,
-        pipeline_id=int(NIZAMI_PIPELINE_ID) if wa_line == "nizami" else int(RUFAT_PIPELINE_ID),
-        wa_line=wa_line,
+        pipeline_id=actual_pipe,
+        wa_line=routed_line,
         external_id=str(newest.get("external_id") or ""),
     )
     record_lead_pulse_event(pending, "deal_update", missing=True, channel="whatsapp", phone=phone, wa_line=wa_line, replaced_by=real)
@@ -13758,8 +13803,10 @@ def _ingest_cloud_incoming(value: dict) -> None:
             continue
         media_fields = _wa_cloud_media_fields(message)
         _prefetch_cloud_media(message)
-        target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
+        line_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
+        target_pipe = _current_pipeline_for_inbox_lead(lead_id, line_pipe)
         wa_line = _wa_line_for_phone_id(phone_number_id)
+        routed_line = _wa_line_for_pipeline(target_pipe) or wa_line
         quote_id, quote_text, quote_author = _quote_from_stored(lead_id, reaction_target_mid or str(context.get("id") or ""))
         item = _sent_message_item(
             wamid=wamid,
@@ -13793,12 +13840,12 @@ def _ingest_cloud_incoming(value: dict) -> None:
             pipeline_id=target_pipe,
             contact_name=name or phone,
             phone=phone,
-            wa_line=wa_line,
+            wa_line=routed_line,
             external_id=wamid,
         )
         _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
         try:
-            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=wa_line, external_id=wamid)
+            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=routed_line, external_id=wamid)
         except Exception:
             pass
         logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
@@ -19560,6 +19607,29 @@ def _linear_assert_confirmation_issue(issue_id: str) -> None:
         raise RuntimeError("Bu tapşırıq artıq Təsdiq siyahısında deyil.")
 
 
+def _linear_resolve_workflow_state_id(configured_id: str, wanted_name: str) -> str:
+    """Resolve a workflow state by its current Linear name."""
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    wanted = str(wanted_name or "").strip().casefold()
+    try:
+        payload = _linear_graphql("""
+        query TeamWorkflowStates($id: String!) {
+          team(id: $id) { states { nodes { id name type } } }
+        }
+        """, {"id": team_id})
+        states = (((payload.get("team") or {}).get("states") or {}).get("nodes") or [])
+        for state in states:
+            if not isinstance(state, dict):
+                continue
+            name = str(state.get("name") or "").strip().casefold()
+            state_type = str(state.get("type") or "").strip().casefold()
+            if name == wanted or state_type == wanted:
+                return _linear_uuid(str(state.get("id") or ""), f"{wanted_name} statusu")
+    except Exception as exc:
+        logger.warning("Linear %s state lookup failed, using configured id: %s", wanted_name, exc)
+    return _linear_uuid(configured_id, f"{wanted_name} statusu")
+
+
 def _linear_move_issue(issue_id: str, state_id: str) -> dict:
     _linear_assert_confirmation_issue(issue_id)
     payload = _linear_graphql("""
@@ -19633,10 +19703,12 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
             if action == "confirm":
-                moved = await asyncio.to_thread(_linear_move_issue, issue_id, LINEAR_TRIAGE_STATE_ID)
+                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TRIAGE_STATE_ID, "Triage")
+                moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
                 return web.json_response({"success": True, "message": "Tapşırıq Triage mərhələsinə keçirildi.", "issue": moved})
             if action == "discussion":
-                moved = await asyncio.to_thread(_linear_move_issue, issue_id, LINEAR_BACKLOG_STATE_ID)
+                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_BACKLOG_STATE_ID, "Backlog")
+                moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
                 return web.json_response({"success": True, "message": "Tapşırıq Backlog mərhələsinə keçirildi.", "issue": moved})
             if action == "priority":
                 try:
