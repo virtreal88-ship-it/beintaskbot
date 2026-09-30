@@ -117,6 +117,7 @@ LINEAR_TESDIQ_STATE_ID = str(os.environ.get("LINEAR_TESDIQ_STATE_ID") or "dd2213
 LINEAR_TRIAGE_STATE_ID = str(os.environ.get("LINEAR_TRIAGE_STATE_ID") or "f115d79d-a711-40a1-996a-cac9a5790ea4").strip()
 LINEAR_BACKLOG_STATE_ID = str(os.environ.get("LINEAR_BACKLOG_STATE_ID") or "e3bd0665-1e8c-4e94-afe8-dae7d7c531e8").strip()
 LINEAR_TODO_STATE_ID = str(os.environ.get("LINEAR_TODO_STATE_ID") or "").strip()
+LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or "").strip()
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 
@@ -19972,9 +19973,9 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
                 return web.json_response({"success": True, "message": "Tapşırıq Todo mərhələsinə keçirildi.", "issue": moved})
             if action == "discussion":
-                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_BACKLOG_STATE_ID, "Backlog")
+                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_DISCUSSION_STATE_ID or LINEAR_BACKLOG_STATE_ID, "Discussion")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
-                return web.json_response({"success": True, "message": "Tapşırıq Backlog mərhələsinə keçirildi.", "issue": moved})
+                return web.json_response({"success": True, "message": "Tapşırıq Discussion mərhələsinə keçirildi.", "issue": moved})
             if action == "status":
                 target_id = str(data.get("status_id") or data.get("state_id") or "").strip()
                 if not target_id:

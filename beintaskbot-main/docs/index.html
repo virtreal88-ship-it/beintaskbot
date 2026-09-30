@@ -3268,6 +3268,11 @@ function linearBoardTaskMatches(item, query) {
         .some(value => String(value || '').toLocaleLowerCase('az').includes(q));
 }
 
+function linearBoardHasAccount(item) {
+    const account = String(item?.client || '').trim();
+    return !!account && !['göstərilməyib', 'gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
+}
+
 function linearBoardCardHtml(item) {
     const sourceId = escapeHtml(String(item.source_id || ''));
     const issueId = escapeHtml(item.id || 'Linear');
@@ -3305,7 +3310,7 @@ function renderLinearBoard() {
     const unique = []; const seen = new Set();
     statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
     const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
-    const rowsFor = stateId => linearBoardRows.filter(row => String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query));
+    const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query));
     board.className = 'samil-kanban-board';
     board.innerHTML = visibleStatuses.map(state => {
         const rows = rowsFor(state.id);
@@ -3315,7 +3320,7 @@ function renderLinearBoard() {
     board.querySelectorAll('[data-linear-status-column]').forEach(bindLinearColumnDrop);
     linearBoardRows.forEach(row => bindLinearTaskCard(board.querySelector(`[data-linear-board-id="${CSS.escape(String(row.source_id || ''))}"]`), row));
     const meta = document.getElementById('linear-page-meta');
-    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardTaskMatches(row, query)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
+    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
 }
 
 function filterLinearBoard(value) { if(value !== undefined && document.getElementById('linear-board-search')) document.getElementById('linear-board-search').value = value; renderLinearBoard(); }
@@ -3385,7 +3390,7 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
     if(linearTesdiqActionPending || !issueId) return;
     const texts = {
         confirm: 'Bu tapşırıq Todo mərhələsinə keçirilsin?',
-        discussion: 'Bu tapşırıq Backlog mərhələsinə keçirilsin?',
+        discussion: 'Bu tapşırıq Discussion mərhələsinə keçirilsin?',
         delete: 'Bu tapşırıq Linear-dan həmişəlik silinsin? Bu əməliyyat geri qaytarılmır.',
         priority: 'Tapşırığın prioriteti dəyişdirilsin?'
     };
