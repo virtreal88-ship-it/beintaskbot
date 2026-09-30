@@ -16683,12 +16683,24 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         origin = _talk_channel_key(talk)
         messages, blocked, _more = _fetch_talk_messages(tid, pages=1, page_limit=80)
         for message in messages:
-            add(_format_chat_message(message, origin), entity_type="leads", entity_id=lid)
+            formatted = _format_chat_message(message, origin)
+            if formatted:
+                # Keep the exact Kommo conversation on every history row.  The
+                # frontend uses the newest incoming row as the reply target;
+                # without this id the send path has to guess between multiple
+                # WhatsApp talks (and may select the wrong connected number).
+                formatted["talk_id"] = tid
+                formatted["chat_id"] = _talk_chat_id(talk)
+                add(formatted, entity_type="leads", entity_id=lid)
         if not messages or blocked:
             history_id = str(talk.get("chat_id") or "").strip()
             if history_id:
                 for message in _fetch_chat_history_by_chat_id(history_id):
-                    add(_format_chat_message(message, origin), entity_type="leads", entity_id=lid)
+                    formatted = _format_chat_message(message, origin)
+                    if formatted:
+                        formatted["talk_id"] = tid
+                        formatted["chat_id"] = history_id
+                        add(formatted, entity_type="leads", entity_id=lid)
 
     # These sources preserve useful older dialogs that have disappeared from
     # the current Talk endpoint.
