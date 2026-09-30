@@ -528,10 +528,16 @@ def employee_access_profile(chat_id: int) -> dict:
         # hidden even though its menu remains visible.
         canonical_admin = cid == ADMIN_CHAT_ID
         role = "Admin" if canonical_admin or str(stored.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        permissions = _normalize_employee_permissions(stored.get("permissions"), role)
+        # The previous normalizer silently restored hot_orders whenever
+        # hot_orders_create was retained. Nizami already switched the page
+        # off, so migrate that legacy admin record once to the intended state.
+        if canonical_admin and stored.get("permissions_version") != 2:
+            permissions = [key for key in permissions if key != "hot_orders"]
         return {
             "active": True if canonical_admin else bool(stored.get("active", True)),
             "role": role,
-            "permissions": _normalize_employee_permissions(stored.get("permissions"), role),
+            "permissions": permissions,
             # AI is a capability, not a page. Legacy Nizami/Rufat profiles
             # keep the access they had before this switch was introduced.
             "ai_enabled": bool(stored.get("ai_enabled", cid in {ADMIN_CHAT_ID, RUFAT_CHAT_ID})),
@@ -19187,6 +19193,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Öz girişinizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
+            "permissions_version": 2,
             "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
@@ -19227,6 +19234,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         ai_enabled = bool(data.get("ai_enabled", False))
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
+            "permissions_version": 2,
             "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
@@ -19242,6 +19250,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             records[str(previous_employee_id)] = {
                 "role": old_record.get("role") or role,
                 "permissions": old_record.get("permissions") or permissions,
+                "permissions_version": 2,
                 "active": False,
                 "ai_enabled": bool(old_record.get("ai_enabled", ai_enabled)),
                 "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
