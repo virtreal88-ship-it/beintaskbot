@@ -8979,31 +8979,13 @@ def _talk_last_looks_outgoing(talk: dict) -> bool:
 
 
 def _cloud_last_outgoing_at(lead_id: int) -> int:
-    try:
-        lid = int(lead_id or 0)
-    except (TypeError, ValueError):
-        return 0
-    # Never pull the GitHub archive onto the event loop from the funnel build.
-    if not lid or _wa_sent_messages is None:
-        return 0
-    outgoing = [row for row in _sent_messages_for_lead(lid) if not row.get("incoming")]
-    if not outgoing:
-        return 0
-    try:
-        return max(int(row.get("created_at") or 0) for row in outgoing)
-    except (TypeError, ValueError):
-        return 0
+    # The Cloud/WABA outbox is retired for customer chats.  Kommo Talk is the
+    # only source of outgoing WhatsApp state now.
+    return 0
 
 
 def _cloud_outgoing_covers_talk(lead_id: int, updated: int) -> bool:
-    last_out = _cloud_last_outgoing_at(lead_id)
-    if not last_out:
-        return False
-    try:
-        stamp = int(updated or 0)
-    except (TypeError, ValueError):
-        stamp = 0
-    return stamp <= last_out + 20
+    return False
 
 
 _talk_unread_stamp: dict[int, tuple[int, int]] = {}
@@ -13229,16 +13211,8 @@ def _paint_cloud_inbox_deal(deal: dict) -> None:
 
 
 def _patch_cloud_inbox_into_rufat_cache() -> None:
-    """Put Cloud inbound on Rüfət's and Nizami's cached Çatlar without dropping the whole workspace."""
-    for pid in (int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID)):
-        overview = _personal_overview_cache.get(pid)
-        if not isinstance(overview, dict):
-            continue
-        deals = overview.get("deals")
-        if not isinstance(deals, list):
-            continue
-        _apply_cloud_inbox_to_deals(deals, pid)
-        _personal_overview_cache_at[pid] = _time_module.monotonic()
+    """Legacy WABA inbox bridge; intentionally disabled."""
+    return
 
 
 def _apply_cloud_inbox_to_deals(deals: list, pipeline_id: int = 0) -> None:
@@ -13814,8 +13788,9 @@ def _update_cloud_status(wamid: str, status: str) -> None:
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
-    if not isinstance(value, dict):
-        return
+    # WhatsApp Business webhooks are no longer a CRM chat source.  Incoming
+    # customer messages arrive through Kommo's grey integration instead.
+    return
     contacts = {
         str(row.get("wa_id") or ""): str(((row.get("profile") or {}) if isinstance(row.get("profile"), dict) else {}).get("name") or "")
         for row in (value.get("contacts") or [])
@@ -13925,8 +13900,7 @@ def _ingest_cloud_incoming(value: dict) -> None:
 
 def _ingest_cloud_echoes(value: dict) -> None:
     """Messages sent from WhatsApp Business App are echoes, not inbound `messages`."""
-    if not isinstance(value, dict):
-        return
+    return
     metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
     phone_number_id = str(metadata.get("phone_number_id") or "").strip()
     echoes = value.get("message_echoes") or value.get("messages") or []
