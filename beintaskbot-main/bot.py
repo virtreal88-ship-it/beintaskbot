@@ -8848,6 +8848,28 @@ async def _kommo_get_async(url: str, *, params: dict | None = None, timeout: int
     return await asyncio.to_thread(requests.get, url, headers=HEADERS, params=params, timeout=timeout)
 
 
+async def _kommo_get_async_retry(url: str, *, params: dict | None = None, timeout: int = 8, attempts: int = 3):
+    """Retry only transient Kommo/network failures with a short backoff."""
+    last_error = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            response = await _kommo_get_async(url, params=params, timeout=timeout)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max(1, int(attempts)) - 1:
+                raise
+            await asyncio.sleep(0.45 * (attempt + 1))
+            continue
+        if response.status_code not in {429, 500, 502, 503, 504}:
+            return response
+        last_error = RuntimeError(f"Kommo transient status {response.status_code}")
+        if attempt < max(1, int(attempts)) - 1:
+            await asyncio.sleep(0.45 * (attempt + 1))
+    if last_error:
+        raise last_error
+    raise RuntimeError("Kommo request failed")
+
+
 async def _rufat_load_all(url: str, embedded_key: str, params: dict | None = None) -> list[dict]:
     """Load all pages for Rüfət data without changing other API consumers."""
     rows: list[dict] = []
@@ -8892,36 +8914,50 @@ async def _load_rufat_contacts(contact_ids: set[int]) -> dict[int, dict]:
         if contact_id in _rufat_contact_sync_cache
     }
     ids = sorted(contact_ids)
-    for start in range(0, len(ids), 25):
-        chunk = ids[start:start + 25]
+    chunks = [(index, ids[start:start + 25]) for index, start in enumerate(range(0, len(ids), 25), 1)]
+    # Kommo contact reads used to run strictly one after another.  A large
+    # customer list therefore made one refresh take minutes.  Fetch a small
+    # bounded number of batches concurrently; retries remain per batch so a
+    # single 429/timeout does not cancel the successful batches.
+    semaphore = asyncio.Semaphore(4)
+
+    async def _fetch_contact_chunk(batch_no: int, chunk: list[int]) -> dict[int, dict]:
         params = {f"filter[id][{index}]": contact_id for index, contact_id in enumerate(chunk)}
         params["limit"] = 25
         response = None
-        for attempt in range(3):
-            try:
-                response = await _kommo_get_async(
-                    f"{KOMMO_BASE_URL}/api/v4/contacts",
-                    params=params,
-                    timeout=15,
-                )
-            except Exception as exc:
-                logger.warning("Contact sync batch %s attempt %s unavailable: %s", start // 25 + 1, attempt + 1, exc)
-                response = None
-            if response is not None and response.status_code == 200:
-                break
-            if response is not None and response.status_code not in {429, 500, 502, 503, 504}:
-                break
-            await asyncio.sleep(0.45 * (attempt + 1))
+        async with semaphore:
+            for attempt in range(3):
+                try:
+                    response = await _kommo_get_async(
+                        f"{KOMMO_BASE_URL}/api/v4/contacts",
+                        params=params,
+                        timeout=15,
+                    )
+                except Exception as exc:
+                    logger.warning("Contact sync batch %s attempt %s unavailable: %s", batch_no, attempt + 1, exc)
+                    response = None
+                if response is not None and response.status_code == 200:
+                    break
+                if response is not None and response.status_code not in {429, 500, 502, 503, 504}:
+                    break
+                await asyncio.sleep(0.45 * (attempt + 1))
         if response is None or response.status_code != 200:
-            logger.warning("Contact sync batch %s failed: %s", start // 25 + 1, getattr(response, "status_code", "network"))
-            continue
+            logger.warning("Contact sync batch %s failed: %s", batch_no, getattr(response, "status_code", "network"))
+            return {}
+        fetched: dict[int, dict] = {}
         for contact in response.json().get("_embedded", {}).get("contacts", []) or []:
             try:
                 contact_id = int(contact["id"])
-                result[contact_id] = contact
-                _rufat_contact_sync_cache[contact_id] = dict(contact)
+                fetched[contact_id] = contact
             except (KeyError, TypeError, ValueError):
                 continue
+        return fetched
+
+    fetched_batches = await asyncio.gather(*(_fetch_contact_chunk(batch_no, chunk) for batch_no, chunk in chunks))
+    for batch in fetched_batches:
+        for contact_id, contact in batch.items():
+            result[contact_id] = contact
+            _rufat_contact_sync_cache[contact_id] = dict(contact)
     return result
 
 
@@ -9379,7 +9415,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         all_leads: list[dict] = []
         page = 1
         while True:
-            response = await _kommo_get_async(
+            response = await _kommo_get_async_retry(
                 f"{KOMMO_BASE_URL}/api/v4/leads",
                 params={
                     "filter[pipeline_id]": pipeline_id,
@@ -9390,20 +9426,6 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
                 timeout=12,
             )
             # Kommo can respond with 204 when a page beyond the last one is requested.
-            if response.status_code == 204:
-                break
-            if response.status_code == 429:
-                await asyncio.sleep(1.5)
-                response = await _kommo_get_async(
-                    f"{KOMMO_BASE_URL}/api/v4/leads",
-                    params={
-                        "filter[pipeline_id]": pipeline_id,
-                        "with": "contacts",
-                        "limit": 250,
-                        "page": page,
-                    },
-                    timeout=12,
-                )
             if response.status_code == 204:
                 break
             if response.status_code != 200:
@@ -9775,6 +9797,7 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
 
 _admin_chat_deals_cache: list[dict] = []
 _admin_chat_deals_cache_at = 0.0
+_admin_chat_deals_cache_ready = False
 _admin_chat_deals_lock = asyncio.Lock()
 
 
@@ -9787,51 +9810,131 @@ async def get_admin_chat_deals(*, force: bool = False) -> list[dict]:
     short shared snapshot and refresh all owners concurrently only when the
     admin opens/refreshes the employee filter.
     """
-    global _admin_chat_deals_cache, _admin_chat_deals_cache_at
+    global _admin_chat_deals_cache, _admin_chat_deals_cache_at, _admin_chat_deals_cache_ready
     now = _time_module.monotonic()
     async with _admin_chat_deals_lock:
-        if _admin_chat_deals_cache and not force and now - _admin_chat_deals_cache_at < _RUFAT_OVERVIEW_CACHE_TTL:
+        if _admin_chat_deals_cache_ready and not force and now - _admin_chat_deals_cache_at < _RUFAT_OVERVIEW_CACHE_TTL:
             return list(_admin_chat_deals_cache)
-        owner_chat_ids = [ADMIN_CHAT_ID, RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID]
-        snapshots = await asyncio.gather(
-            *(get_rufat_overview(force=force, owner_chat_id=chat_id) for chat_id in owner_chat_ids),
-            return_exceptions=True,
-        )
-        rows: list[dict] = []
-        seen: set[int] = set()
-        for owner_chat_id, snapshot in zip(owner_chat_ids, snapshots):
-            if isinstance(snapshot, Exception) or not isinstance(snapshot, dict):
-                logger.warning("Admin chat snapshot unavailable for %s: %s", owner_chat_id, snapshot)
-                continue
-            owner = get_funnel_owner(owner_chat_id) or {}
-            owner_name = str(owner.get("name") or owner_name_for_pipeline(int(owner.get("pipeline_id") or 0)) or "").strip()
-            pipeline_id = int(owner.get("pipeline_id") or snapshot.get("pipeline_id") or 0)
-            for source in snapshot.get("deals") or []:
-                if not isinstance(source, dict):
-                    continue
+        owner_chat_ids = [RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID]
+        owners = [get_funnel_owner(chat_id) for chat_id in owner_chat_ids]
+        owners = [owner for owner in owners if isinstance(owner, dict) and owner.get("pipeline_id")]
+
+        async def _load_pipeline_leads(pipeline_id: int) -> list[dict]:
+            rows: list[dict] = []
+            page = 1
+            while True:
                 try:
-                    lead_id = int(source.get("id") or 0)
+                    response = await _kommo_get_async_retry(
+                        f"{KOMMO_BASE_URL}/api/v4/leads",
+                        params={"filter[pipeline_id]": int(pipeline_id), "with": "contacts", "limit": 250, "page": page},
+                        timeout=12,
+                    )
+                except Exception as exc:
+                    logger.warning("Admin chat pipeline %s page %s unavailable: %s", pipeline_id, page, exc)
+                    break
+                if response.status_code == 204:
+                    break
+                if response.status_code != 200:
+                    logger.warning("Admin chat pipeline %s page %s failed: %s", pipeline_id, page, response.status_code)
+                    break
+                payload = response.json()
+                batch = (payload.get("_embedded") or {}).get("leads") or []
+                rows.extend(row for row in batch if isinstance(row, dict))
+                if len(batch) < 250 and not payload.get("_links", {}).get("next"):
+                    break
+                page += 1
+            return rows
+
+        lead_batches = await asyncio.gather(*(_load_pipeline_leads(int(owner["pipeline_id"])) for owner in owners), return_exceptions=True)
+        leads_by_pipeline: list[tuple[dict, list[dict]]] = []
+        all_leads: list[dict] = []
+        for owner, batch in zip(owners, lead_batches):
+            if isinstance(batch, Exception):
+                logger.warning("Admin chat pipeline snapshot unavailable: %s", batch)
+                continue
+            leads_by_pipeline.append((owner, batch))
+            all_leads.extend(batch)
+        all_lead_ids = {int(row.get("id")) for row in all_leads if str(row.get("id", "")).isdigit()}
+        contact_ids = {
+            int(contact.get("id"))
+            for lead in all_leads
+            for contact in (lead.get("_embedded") or {}).get("contacts", []) or []
+            if str(contact.get("id", "")).isdigit()
+        }
+        contacts = await _load_rufat_contacts(contact_ids) if contact_ids else {}
+        contact_to_lead: dict[int, int] = {}
+        for lead in all_leads:
+            try:
+                lid = int(lead.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            for contact in (lead.get("_embedded") or {}).get("contacts", []) or []:
+                try:
+                    contact_to_lead.setdefault(int(contact.get("id")), lid)
                 except (TypeError, ValueError):
                     continue
-                if not lead_id or lead_id in seen or _is_successful_deal(source) or _is_declined_deal(source):
+        note_data = await _load_rufat_latest_notes(all_lead_ids, contact_to_lead) if all_lead_ids else ({}, {}, {}, {}, {}, {}, {})
+        note_by_lead, client_by_lead, channel_by_lead, talk_updated, avatar_by_lead, incoming_at_by_lead, _outside = note_data
+        rows: list[dict] = []
+        seen: set[int] = set()
+        for owner, batch in leads_by_pipeline:
+            pipeline_id = int(owner["pipeline_id"])
+            owner_name = str(owner.get("name") or owner_name_for_pipeline(pipeline_id) or "").strip()
+            stages, stage_names, _ui = load_pipeline_stage_maps(pipeline_id)
+            status_to_key = {status_id: key for key, status_id in stages.items()}
+            for lead in batch:
+                try:
+                    lead_id = int(lead.get("id") or 0)
+                    status_id = int(lead.get("status_id") or 0)
+                except (TypeError, ValueError):
                     continue
-                row = dict(source)
-                row["pipeline_id"] = int(row.get("pipeline_id") or pipeline_id)
-                row["funnel_owner_name"] = owner_name or owner_name_for_pipeline(row["pipeline_id"])
-                row["responsible_name"] = row.get("responsible_name") or row["funnel_owner_name"]
-                row["chat_owner_chat_id"] = int(owner_chat_id)
+                if not lead_id or lead_id in seen:
+                    continue
+                contact_rows = (lead.get("_embedded") or {}).get("contacts", []) or []
+                first_id = int(contact_rows[0].get("id")) if contact_rows and str(contact_rows[0].get("id", "")).isdigit() else 0
+                contact = contacts.get(first_id) or (contact_rows[0] if contact_rows else {})
+                phones = _contact_phones(contact) or _lead_phones_fast(lead)[1]
+                contact_name = str(contact.get("name") or lead.get("name") or (phones[0] if phones else "Müştəri")).strip()
+                talk_at = int(talk_updated.get(lead_id) or 0)
+                updated_at = max(int(lead.get("updated_at") or 0), talk_at)
+                row = {
+                    "id": lead_id, "pipeline_id": pipeline_id,
+                    "responsible_user_id": int(lead.get("responsible_user_id") or 0),
+                    "responsible_name": owner_name, "funnel_owner_name": owner_name,
+                    "status_id": status_id, "stage_key": status_to_key.get(status_id, ""),
+                    "stage_name": stage_names.get(status_id, "Naməlum mərhələ"),
+                    "contact_name": contact_name, "phone": phones[0] if phones else "", "phones": phones,
+                    "contacts": [{"id": first_id, "name": contact_name, "phones": phones}] if first_id else [],
+                    "source": extract_menbe(contact) or extract_menbe(lead),
+                    "menbe": extract_menbe(contact) or extract_menbe(lead),
+                    "created_at": int(lead.get("created_at") or 0), "updated_at": updated_at,
+                    "chat_at": updated_at, "last_note": note_by_lead.get(lead_id, ""),
+                    "last_client_message": client_by_lead.get(lead_id, ""),
+                    "last_incoming_at": int(incoming_at_by_lead.get(lead_id) or 0),
+                    "last_outgoing_at": _cloud_last_outgoing_at(lead_id),
+                    "chat_channel": channel_by_lead.get(lead_id, ""),
+                    "contact_avatar": avatar_by_lead.get(lead_id) or _first_avatar_url(contact),
+                    "task_desc": "", "deadline": "", "deadline_ts": 0, "tasks": [],
+                    "wa_line": _wa_line_for_pipeline(pipeline_id),
+                    "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
+                    "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+                }
+                if _is_successful_deal(row) or _is_declined_deal(row):
+                    continue
                 rows.append(row)
                 seen.add(lead_id)
         rows.sort(key=lambda item: int(item.get("chat_at") or item.get("updated_at") or item.get("created_at") or 0), reverse=True)
         _admin_chat_deals_cache = rows
         _admin_chat_deals_cache_at = now
+        _admin_chat_deals_cache_ready = True
         return list(rows)
 
 
 def invalidate_admin_chat_deals_cache() -> None:
-    global _admin_chat_deals_cache_at
+    global _admin_chat_deals_cache_at, _admin_chat_deals_cache_ready
     _admin_chat_deals_cache.clear()
     _admin_chat_deals_cache_at = 0.0
+    _admin_chat_deals_cache_ready = False
 
 
 def _overview_with_partners(overview: dict, owner: dict) -> dict:

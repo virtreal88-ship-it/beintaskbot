@@ -2206,6 +2206,7 @@ function applySamilWorkspace(payload) {
 
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
     if(!HAS_OWN_FUNNEL && !HAS_CHATS) return false;
+    const hadWorkspaceData = (Array.isArray(samilDeals) && samilDeals.length > 0) || (Array.isArray(mockTasks) && mockTasks.length > 0);
     if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
@@ -2244,10 +2245,15 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             if(showFeedback) toast('Məlumatlar yeniləndi', false);
             return true;
         } catch(error) {
-            // The first opening previously failed silently, leaving an empty
-            // CRM screen.  Always tell the employee what happened and offer
-            // the regular refresh control instead of looking like there are
-            // no clients at all.
+            // Keep the last known workspace visible when Kommo temporarily
+            // throttles or times out.  A transient sync failure must not turn
+            // a working CRM into an empty page; the next manual sync can try
+            // again without losing the current chat/task list.
+            if(hadWorkspaceData) {
+                if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList(true);
+                if(showFeedback) toast('Kommo gecikdi — əvvəlki məlumat göstərilir. Sonra yenidən yoxlayın.', true);
+                return true;
+            }
             toast(error.name === 'AbortError' ? 'Məlumatlar gecikir. Yeniləmə düyməsini yoxlayın.' : 'Məlumatlar yüklənmədi. Yeniləmə düyməsini yoxlayın.', true);
             return false;
         } finally {
@@ -9909,7 +9915,7 @@ function renderChatsAssigneeFilter() {
 }
 async function loadAdminChatDeals(force = false) {
     if(!isAdmin || !CURRENT_USER_ID) return false;
-    if(adminChatDealsRequest && !force) return adminChatDealsRequest;
+    if(adminChatDealsRequest) return adminChatDealsRequest;
     const request = (async () => {
         try {
             const url = API_BASE + '/api/samil/admin-chats?uid=' + encodeURIComponent(CURRENT_USER_ID) + (force ? '&refresh=1' : '');
@@ -11752,7 +11758,10 @@ async function syncCustomersList(button) {
     if(icon) icon.classList.add('animate-spin');
     try {
         await loadSamilWorkspace(true, null, true);
-        if(isAdmin) await loadAdminChatDeals(true);
+        // The main Kommo workspace is the critical path.  Employee chat
+        // snapshots are refreshed in the background so a slow secondary
+        // funnel cannot make the whole synchronization appear stuck.
+        if(isAdmin) loadAdminChatDeals(true);
         resetChatsLazyList();
         renderChatsList();
     } finally {
