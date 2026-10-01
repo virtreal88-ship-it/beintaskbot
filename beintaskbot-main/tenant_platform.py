@@ -946,7 +946,7 @@ def begin_kommo_oauth(*, tenant_id: str, owner_id: int, account_domain: str) -> 
     return f"{state_id}.{nonce}"
 
 
-def consume_kommo_oauth_state(state: str) -> str:
+def consume_kommo_oauth_state(state: str) -> dict:
     """Validate and consume a state before exchanging Kommo's one-time code."""
     try:
         state_id, nonce = str(state or "").split(".", 1)
