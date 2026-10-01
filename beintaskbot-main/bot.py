@@ -20683,28 +20683,48 @@ async def handle_platform_disconnect_integration(request: web.Request) -> web.Re
 
 
 def _kommo_oauth_settings() -> tuple[str, str, str]:
-    # Railway deployments created before the public integration was approved
-    # used the shorter KOMMO_CLIENT_* names.  Accept both spellings so a new
-    # tenant does not get the misleading "not active" message merely because
-    # the approved credentials were saved under the legacy names.
-    client_id = str(
-        os.environ.get("KOMMO_OAUTH_CLIENT_ID")
-        or os.environ.get("KOMMO_CLIENT_ID")
-        or ""
-    ).strip()
-    client_secret = str(
-        os.environ.get("KOMMO_OAUTH_CLIENT_SECRET")
-        or os.environ.get("KOMMO_CLIENT_SECRET")
-        or ""
-    ).strip()
-    redirect_uri = str(
-        os.environ.get("KOMMO_OAUTH_REDIRECT_URI")
-        or os.environ.get("KOMMO_REDIRECT_URI")
-        or os.environ.get("KOMMO_OAUTH_REDIRECT_URL")
-        or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback"
-    ).strip()
+    # Keep the canonical names first, but accept the names used by older
+    # Railway services and by Kommo's own terminology (integration ID/secret).
+    # This is deliberately server-side: the secret is never sent to the
+    # browser.  A deployment with a differently named variable must not make
+    # every new tenant see the generic "not active" error.
+    def _first_env(*names: str) -> str:
+        for name in names:
+            value = str(os.environ.get(name) or "").strip()
+            if value:
+                return value
+        return ""
+
+    client_id = _first_env(
+        "KOMMO_OAUTH_CLIENT_ID",
+        "KOMMO_CLIENT_ID",
+        "KOMMO_PUBLIC_CLIENT_ID",
+        "KOMMO_INTEGRATION_CLIENT_ID",
+        "KOMMO_INTEGRATION_ID",
+    )
+    client_secret = _first_env(
+        "KOMMO_OAUTH_CLIENT_SECRET",
+        "KOMMO_CLIENT_SECRET",
+        "KOMMO_PUBLIC_CLIENT_SECRET",
+        "KOMMO_INTEGRATION_CLIENT_SECRET",
+        "KOMMO_SECRET_KEY",
+    )
+    redirect_uri = _first_env(
+        "KOMMO_OAUTH_REDIRECT_URI",
+        "KOMMO_REDIRECT_URI",
+        "KOMMO_OAUTH_REDIRECT_URL",
+        "KOMMO_REDIRECT_URL",
+    ) or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback"
     if not client_id or not client_secret:
-        raise TenantPlatformError("Kommo bağlantısı hələ aktiv deyil. Dəstək komandası onu qısa müddətdə aktivləşdirəcək.")
+        missing = []
+        if not client_id:
+            missing.append("KOMMO_OAUTH_CLIENT_ID")
+        if not client_secret:
+            missing.append("KOMMO_OAUTH_CLIENT_SECRET")
+        raise TenantPlatformError(
+            "Kommo bağlantısı hələ aktiv deyil. Railway-də public Kommo inteqrasiyasının "
+            f"{', '.join(missing)} dəyişənini əlavə edin və deploy edin."
+        )
     return client_id, client_secret, redirect_uri
 
 

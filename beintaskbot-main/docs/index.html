@@ -3504,10 +3504,22 @@ function openLinearEditModal(issueId) {
 
 function linearAccountSuggestions() {
     const rows = Array.isArray(samilDeals) ? samilDeals : [];
-    const values = [...new Set(rows.map(row => {
-        try { return dealClientName(row) || row.contact_name || row.name || row.phone || ''; } catch(_) { return row.contact_name || row.name || row.phone || ''; }
-    }).map(value => String(value || '').trim()).filter(Boolean))].slice(0, 200);
-    return values.map(value => `<option value="${escapeHtml(value)}"></option>`).join('');
+    const seen = new Set();
+    const choices = [];
+    rows.forEach(row => {
+        let name = '';
+        try { name = dealClientName(row) || row.contact_name || row.name || row.phone || ''; }
+        catch(_) { name = row.contact_name || row.name || row.phone || ''; }
+        name = String(name || '').trim();
+        const phone = String(row?.phone || row?.contact_phone || '').trim();
+        const key = name.toLocaleLowerCase();
+        if(!name || seen.has(key)) return;
+        seen.add(key);
+        choices.push({value: name, label: phone && phone !== name ? `${name} · ${phone}` : name});
+    });
+    // Keep the create form intentionally small: these are the first six
+    // current Kommo clients (the source list is already ordered by recency).
+    return `<option value="">Hesab seçin…</option>` + choices.slice(0, 6).map(item => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join('');
 }
 
 function openLinearCreateModal() {
@@ -3519,7 +3531,7 @@ function openLinearCreateModal() {
     modal.innerHTML = `<div class="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
         <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığı yarat</div><div class="text-[11px] text-slate-400">Yeni tapşırıq avtomatik Triage mərhələsinə düşəcək</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-create-title" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Tapşırığın başlığı">
-        <label class="mb-1 block text-[11px] font-bold text-slate-500">Hesab *</label><input id="linear-create-account" list="linear-account-options" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Müştəri və ya hesab"><datalist id="linear-account-options">${linearAccountSuggestions()}</datalist>
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Hesab *</label><select id="linear-create-account" class="mb-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" required>${linearAccountSuggestions()}</select>
         <div class="grid grid-cols-2 gap-2 mb-3"><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Prioritet</label><select id="linear-create-priority" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none"><option value="0">Yoxdur</option><option value="1">Təcili</option><option value="2">Yüksək</option><option value="3" selected>Orta</option><option value="4">Aşağı</option></select></div><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Layihə</label><select id="linear-create-project" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none"><option value="">Layihə seçilməyib</option>${projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join('')}</select></div></div>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama *</label><div class="relative"><textarea id="linear-create-description" rows="7" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın məzmunu"></textarea><button id="linear-create-ai" type="button" onclick="rewriteLinearCreateWithAI()" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
         <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-create-save" type="button" onclick="saveLinearCreate()" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yarat</button></div>
