@@ -249,6 +249,9 @@
                 width:100%; max-width:none; border:0 !important; border-bottom:1px solid #e5e7eb !important;
                 border-radius:0 !important; box-shadow:none !important; padding:14px 16px; background:#fff;
             }
+            /* On Tapşırıqlar, completion actions are gesture-first. */
+            #screen-notifications .task-board-actions { display:none !important; }
+            #screen-notifications .crm-task-card { touch-action:pan-y; }
         }
         @media (min-width: 1024px) {
             #side-tab-settings { margin-top:auto; border-top:1px solid #e6e8eb; border-radius:0; padding-top:13px; }
@@ -1315,7 +1318,9 @@
             <div><div class="text-sm font-extrabold text-gray-800">Linear tapşırıqları</div><div id="linear-page-meta" class="text-[10px] text-gray-400 font-medium mt-0.5">İcazəli mərhələlər</div></div>
             <div class="flex items-center gap-2">
                 <select id="linear-status-filter" class="toolbar-select" aria-label="Mərhələ filtri" onchange="filterLinearBoard()"><option value="all">Bütün mərhələlər</option></select>
+                <select id="linear-operator-filter" class="toolbar-select max-w-[150px]" aria-label="Operator filtri" onchange="filterLinearBoard()"><option value="all">Bütün operatorlar</option></select>
                 <button id="linear-page-search-toggle" type="button" onclick="toggleLinearBoardSearch()" class="icon-action-btn" aria-label="Linear-da axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+                <button id="linear-page-create" type="button" onclick="openLinearCreateModal()" class="icon-action-btn primary labeled" aria-label="Linear tapşırığı yarat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Yeni</span></button>
                 <button id="linear-page-refresh" type="button" onclick="loadLinearBoard(true)" class="icon-action-btn" aria-label="Linear tapşırıqlarını yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
             </div>
         </div>
@@ -3104,6 +3109,7 @@ let linearSearchTimer = null;
 let linearSearchSequence = 0;
 let linearBoardRows = [];
 let linearBoardStatuses = [];
+let linearBoardProjects = [];
 let linearBoardLoaded = false;
 let linearBoardDragState = null;
 // System requests are the primary confirmation work. Linear is a separate
@@ -3277,6 +3283,13 @@ function linearBoardTaskMatches(item, query) {
         .some(value => String(value || '').toLocaleLowerCase('az').includes(q));
 }
 
+function linearBoardOperatorMatches(item, operator) {
+    const wanted = String(operator || '').trim().toLocaleLowerCase('az');
+    if(!wanted || wanted === 'all') return true;
+    return String(item?.operator || '').trim().toLocaleLowerCase('az') === wanted
+        || String(item?.assignee || '').trim().toLocaleLowerCase('az') === wanted;
+}
+
 function linearBoardHasAccount(item) {
     const account = String(item?.client || '').trim();
     return !!account && !['göstərilməyib', 'gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
@@ -3309,6 +3322,7 @@ function renderLinearBoard() {
     const wrap = document.getElementById('linear-tasks-container');
     const board = wrap?.querySelector('.samil-kanban-board');
     const filter = document.getElementById('linear-status-filter')?.value || 'all';
+    const operatorFilter = document.getElementById('linear-operator-filter')?.value || 'all';
     const query = document.getElementById('linear-board-search')?.value || '';
     if(!board) return;
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
@@ -3317,7 +3331,7 @@ function renderLinearBoard() {
     const unique = []; const seen = new Set();
     statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
     const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
-    const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query));
+    const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     board.className = 'samil-kanban-board';
     board.innerHTML = visibleStatuses.map(state => {
         const rows = rowsFor(state.id);
@@ -3327,7 +3341,7 @@ function renderLinearBoard() {
     board.querySelectorAll('[data-linear-status-column]').forEach(bindLinearColumnDrop);
     linearBoardRows.forEach(row => bindLinearTaskCard(board.querySelector(`[data-linear-board-id="${CSS.escape(String(row.source_id || ''))}"]`), row));
     const meta = document.getElementById('linear-page-meta');
-    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
+    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
 }
 
 function filterLinearBoard(value) { if(value !== undefined && document.getElementById('linear-board-search')) document.getElementById('linear-board-search').value = value; renderLinearBoard(); }
@@ -3380,9 +3394,17 @@ async function loadLinearBoard(forceRefresh = false) {
         if(!data.connected) throw new Error(data.error || 'Linear qoşulmayıb.');
         linearBoardRows = Array.isArray(data.issues) ? data.issues : [];
         linearBoardStatuses = Array.isArray(data.statuses) ? data.statuses : [];
+        linearBoardProjects = Array.isArray(data.projects) ? data.projects : [];
         linearBoardLoaded = true;
         const filter = document.getElementById('linear-status-filter');
         if(filter) { const current = filter.value; filter.innerHTML = '<option value="all">Bütün mərhələlər</option>' + linearBoardStatuses.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')}</option>`).join(''); if([...filter.options].some(option => option.value === current)) filter.value = current; }
+        const operatorFilter = document.getElementById('linear-operator-filter');
+        if(operatorFilter) {
+            const currentOperator = operatorFilter.value;
+            const operators = [...new Set(linearBoardRows.flatMap(row => [row.operator, row.assignee]).map(value => String(value || '').trim()).filter(value => value && value !== 'Göstərilməyib' && value !== 'Təyin olunmayıb'))].sort((a,b) => a.localeCompare(b, 'az'));
+            operatorFilter.innerHTML = '<option value="all">Bütün operatorlar</option>' + operators.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+            if([...operatorFilter.options].some(option => option.value === currentOperator)) operatorFilter.value = currentOperator;
+        }
         renderLinearBoard();
     } catch(error) { if(board) board.innerHTML = `<div class="samil-empty-column text-rose-500">${escapeHtml(error.message || 'Linear yüklənmədi.')}</div>`; toast(error.message || 'Linear yüklənmədi.', true); }
 }
@@ -3458,14 +3480,88 @@ function openLinearEditModal(issueId) {
     const modal = document.createElement('div');
     modal.id = 'linear-action-modal';
     modal.className = 'fixed inset-0 z-[10050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
-    modal.innerHTML = `<div class="w-full max-w-xl rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
+    const status = item.status || {};
+    const details = [
+        ['Hesab', item.client || 'Göstərilməyib'], ['Prioritet', linearBoardPriorityLabel(item.priority)],
+        ['Status', status.name || '—'], ['Mühit', item.environment || 'Göstərilməyib'],
+        ['Layihə', item.project || 'Göstərilməyib'], ['Operator', item.operator || 'Göstərilməyib'],
+        ['İcraçı', item.assignee || 'Təyin olunmayıb'],
+        ['Yaradılıb', item.created_at ? new Date(item.created_at).toLocaleString('az-AZ') : '—']
+    ].map(([label, value]) => `<div class="rounded-lg bg-slate-50 px-2.5 py-2"><div class="text-[10px] font-bold text-slate-400">${escapeHtml(label)}</div><div class="mt-0.5 truncate text-[11px] font-bold text-slate-700">${escapeHtml(value)}</div></div>`).join('');
+    modal.innerHTML = `<div class="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
         <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığını redaktə et</div><div class="text-[11px] text-slate-400">${escapeHtml(item.id || '')}</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
+        <div class="mb-3 grid grid-cols-2 gap-2">${details}</div>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-edit-title" value="${escapeHtml(item.title || '')}" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300">
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama</label><div class="relative"><textarea id="linear-edit-description" rows="8" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın açıqlaması">${escapeHtml(item.description || '')}</textarea><button id="linear-ai-edit-button" type="button" onclick="rewriteLinearEditWithAI('${escapeHtml(issueId)}')" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
         <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-edit-save" type="button" onclick="saveLinearEdit('${escapeHtml(issueId)}')" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yadda saxla</button></div>
     </div>`;
     modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
     document.body.appendChild(modal);
+}
+
+function linearAccountSuggestions() {
+    const rows = Array.isArray(samilDeals) ? samilDeals : [];
+    const values = [...new Set(rows.map(row => {
+        try { return dealClientName(row) || row.contact_name || row.name || row.phone || ''; } catch(_) { return row.contact_name || row.name || row.phone || ''; }
+    }).map(value => String(value || '').trim()).filter(Boolean))].slice(0, 200);
+    return values.map(value => `<option value="${escapeHtml(value)}"></option>`).join('');
+}
+
+function openLinearCreateModal() {
+    closeLinearModal();
+    const modal = document.createElement('div');
+    modal.id = 'linear-action-modal';
+    modal.className = 'fixed inset-0 z-[10050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
+    const projects = Array.isArray(linearBoardProjects) ? linearBoardProjects : [];
+    modal.innerHTML = `<div class="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
+        <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığı yarat</div><div class="text-[11px] text-slate-400">Yeni tapşırıq avtomatik Triage mərhələsinə düşəcək</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-create-title" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Tapşırığın başlığı">
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Hesab *</label><input id="linear-create-account" list="linear-account-options" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Müştəri və ya hesab"><datalist id="linear-account-options">${linearAccountSuggestions()}</datalist>
+        <div class="grid grid-cols-2 gap-2 mb-3"><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Prioritet</label><select id="linear-create-priority" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none"><option value="0">Yoxdur</option><option value="1">Təcili</option><option value="2">Yüksək</option><option value="3" selected>Orta</option><option value="4">Aşağı</option></select></div><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Layihə</label><select id="linear-create-project" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none"><option value="">Layihə seçilməyib</option>${projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join('')}</select></div></div>
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama *</label><div class="relative"><textarea id="linear-create-description" rows="7" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın məzmunu"></textarea><button id="linear-create-ai" type="button" onclick="rewriteLinearCreateWithAI()" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
+        <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-create-save" type="button" onclick="saveLinearCreate()" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yarat</button></div>
+    </div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
+    document.body.appendChild(modal);
+    window.setTimeout(() => document.getElementById('linear-create-title')?.focus(), 30);
+}
+
+async function rewriteLinearCreateWithAI() {
+    const text = document.getElementById('linear-create-description')?.value.trim() || '';
+    const title = document.getElementById('linear-create-title')?.value.trim() || '';
+    const button = document.getElementById('linear-create-ai');
+    if(!text) { toast('Əvvəlcə açıqlama yazın.', true); return; }
+    if(linearTesdiqActionPending) return;
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Düzəldilir…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'ai_rewrite', title, text})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'AI mətni düzəltmədi.');
+        document.getElementById('linear-create-description').value = data.text || text;
+    } catch(error) { toast(error.message || 'AI mətni düzəltmədi.', true); }
+    finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = '✦ AI ilə düzəlt'; } }
+}
+
+async function saveLinearCreate() {
+    if(linearTesdiqActionPending) return;
+    const title = document.getElementById('linear-create-title')?.value.trim() || '';
+    const account = document.getElementById('linear-create-account')?.value.trim() || '';
+    const description = document.getElementById('linear-create-description')?.value.trim() || '';
+    const priority = Number(document.getElementById('linear-create-priority')?.value || 0);
+    const project_id = document.getElementById('linear-create-project')?.value || '';
+    if(!title || !account || !description) { toast('Başlıq, hesab və açıqlama vacibdir.', true); return; }
+    const button = document.getElementById('linear-create-save');
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Yaradılır…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'create', title, account, priority, project_id, description})});
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırığı yaradılmadı.');
+        closeLinearModal(); toast(data.message || 'Linear tapşırığı yaradıldı.');
+        await loadLinearBoard(true);
+    } catch(error) { toast(error.message || 'Linear tapşırığı yaradılmadı.', true); }
+    finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = 'Yarat'; } }
 }
 
 async function rewriteLinearEditWithAI(issueId) {
@@ -4186,9 +4282,38 @@ function bindCrmTaskCard(card, t, displayDesc, assigneeName) {
     });
     card.addEventListener('click', event => {
         if(event.target.closest('a,button,audio')) return;
+        if(card.dataset.swipeHandled === '1') { delete card.dataset.swipeHandled; return; }
         selectedTaskId = t.id;
         handleBarAction('edit');
     });
+    // Mobile task completion uses the same deliberate actions as the desktop
+    // buttons: swipe right for Uğurlu, left for İmtina. Keep vertical scroll
+    // natural and ignore interactive controls/audio.
+    let swipeStartX = 0, swipeStartY = 0, swipeMoved = false;
+    card.addEventListener('touchstart', event => {
+        if(!document.getElementById('screen-notifications')?.classList.contains('active')) return;
+        const target = event.target;
+        if(target.closest('button,a,select,textarea,input,audio')) return;
+        const touch = event.changedTouches[0];
+        swipeStartX = touch.clientX; swipeStartY = touch.clientY; swipeMoved = false;
+    }, {passive: true});
+    card.addEventListener('touchmove', event => {
+        if(!swipeStartX) return;
+        const touch = event.changedTouches[0];
+        swipeMoved = Math.abs(touch.clientX - swipeStartX) > 18;
+    }, {passive: true});
+    card.addEventListener('touchend', event => {
+        if(!swipeStartX || !document.getElementById('screen-notifications')?.classList.contains('active')) { swipeStartX = 0; return; }
+        const touch = event.changedTouches[0];
+        const dx = touch.clientX - swipeStartX;
+        const dy = Math.abs(touch.clientY - swipeStartY);
+        swipeStartX = 0;
+        if(!swipeMoved || Math.abs(dx) < 65 || dy > Math.abs(dx) * 0.8) return;
+        event.preventDefault();
+        card.dataset.swipeHandled = '1';
+        if(dx > 0) desktopCompleteTask(t.id);
+        else desktopCloseDealStage(t.id, 'imtina');
+    }, {passive: false});
         let longPressTimer = null;
         card.addEventListener('touchstart', (e) => {
             longPressTimer = setTimeout(() => {
@@ -12649,7 +12774,8 @@ async function loadAdminBalances() {
         const html = adminBalanceEmployees.map(e => {
             const balance = Number(e.balance) || 0;
             const pending = Number(e.pending_balance) || 0;
-            return `<button type="button" onclick="openAdminBalanceEmployee(${Number(e.tg_id) || 0})" class="w-full flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm text-left active:scale-[.99] hover:border-slate-300"><strong class="text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><div class="flex items-center gap-3"><div class="text-right"><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${balance.toFixed(2)} AZN</div>${pending > 0 ? `<div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div>` : ''}</div><span class="text-slate-400">›</span></div></button>`;
+            const historyCount = Number(e.transaction_count) || 0;
+            return `<button type="button" onclick="openAdminBalanceEmployee(${Number(e.tg_id) || 0})" class="w-full flex justify-between items-center p-3 bg-white border border-gray-100 rounded-xl shadow-sm text-left active:scale-[.99] hover:border-slate-300"><div class="min-w-0"><strong class="block truncate text-xs text-gray-800">${escapeBalanceText(e.name)}</strong><span class="text-[10px] text-slate-400">${historyCount} əməliyyat</span></div><div class="flex items-center gap-3"><div class="text-right"><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${balance.toFixed(2)} AZN</div>${pending > 0 ? `<div class="text-[10px] font-bold text-amber-600 mt-0.5">Gözləmədə: ${pending.toFixed(2)} AZN</div>` : ''}</div><span class="text-slate-400">›</span></div></button>`;
         }).join('');
         container.innerHTML = html || '<div class="text-center py-10 text-gray-400 text-xs">Məlumat yoxdur</div>';
     } catch(e) {
@@ -12665,7 +12791,7 @@ async function openAdminBalanceEmployee(employeeId) {
     const employee = adminBalanceEmployees.find(row => Number(row.tg_id) === id) || {};
     container.innerHTML = '<div class="text-center py-10"><span class="yt-spin" aria-label="Yüklənir"></span></div>';
     try {
-        const r = await fetch(API_BASE + '/api/admin_balances?employee_id=' + encodeURIComponent(String(id)), { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
+        const r = await fetch(API_BASE + '/api/admin_balances?employee_id=' + encodeURIComponent(String(id)) + '&limit=500', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
         if(!r.ok || !j.success) throw new Error(j.error || 'Əməliyyatlar yüklənmədi');
         const balance = Number(employee.balance) || 0;
@@ -12673,7 +12799,7 @@ async function openAdminBalanceEmployee(employeeId) {
         const title = escapeBalanceText(employee.name || 'Əməkdaş');
         const head = `<div class="flex items-center justify-between gap-3"><button type="button" onclick="loadAdminBalances()" class="text-xs font-bold text-slate-600">← Siyahı</button><div class="text-right"><div class="text-xs font-bold text-gray-800">${title}</div><div class="text-xs font-black ${balance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${balance.toFixed(2)} AZN</div></div></div>`;
         container.innerHTML = head + (rows.length
-            ? `<div class="mt-3 space-y-3">${rows.map(t => renderBalanceTransaction(t, true)).join('')}</div>`
+            ? `<div class="mt-2 text-[10px] text-slate-400">${Number(j.transaction_count) || rows.length} əməliyyat${j.has_more ? ' · son 500 göstərilir' : ''}</div><div class="mt-3 space-y-3">${rows.map(t => renderBalanceTransaction(t, true)).join('')}</div>`
             : '<div class="text-center py-10 text-gray-400 text-xs">Bu əməkdaş üçün əməliyyat yoxdur.</div>');
     } catch(e) {
         container.innerHTML = `<div class="flex items-center justify-between gap-3"><button type="button" onclick="loadAdminBalances()" class="text-xs font-bold text-slate-600">← Siyahı</button></div><div class="text-center py-10 text-red-500 text-xs">${escapeBalanceText(e.message || 'Xəta')}</div>`;

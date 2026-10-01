@@ -447,6 +447,15 @@ def get_balance_transactions(telegram_id: int, limit: int = 50) -> list:
         return [dict(item) for item in reversed(transactions[-limit:])]
 
 
+def get_balance_transaction_count(telegram_id: int) -> int:
+    """Return the ledger size without copying or serializing every row."""
+    filename = "balance.json"
+    _load_file(filename)
+    with _lock:
+        data = _cache.get(filename, {})
+        return len(_ensure_balance_account(data, str(telegram_id))["transactions"])
+
+
 def get_all_balances() -> dict:
     """Get confirmed balances for all employees."""
     filename = "balance.json"

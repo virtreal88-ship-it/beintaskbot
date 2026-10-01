@@ -121,6 +121,7 @@ LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
+_LINEAR_PROJECTS_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
@@ -19604,6 +19605,80 @@ def _linear_allowed_state_options() -> list[dict]:
     return options
 
 
+def _linear_projects(*, force: bool = False) -> list[dict]:
+    """Return projects in the configured team for the create-task dialog."""
+    now = _time_module.monotonic()
+    if not force and now - float(_LINEAR_PROJECTS_CACHE.get("at") or 0) < _LINEAR_TESDIQ_CACHE_TTL:
+        cached = _LINEAR_PROJECTS_CACHE.get("items")
+        if isinstance(cached, list):
+            return list(cached)
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    payload = _linear_graphql("""
+    query LinearTeamProjects($id: String!) {
+      team(id: $id) { projects { nodes { id name } } }
+    }
+    """, {"id": team_id})
+    rows = [
+        {"id": str(row.get("id") or ""), "name": str(row.get("name") or "").strip()}
+        for row in ((((payload.get("team") or {}).get("projects") or {}).get("nodes") or []))
+        if isinstance(row, dict) and row.get("id") and row.get("name")
+    ]
+    rows.sort(key=lambda row: row["name"].casefold())
+    _LINEAR_PROJECTS_CACHE.update({"at": now, "items": rows})
+    return rows
+
+
+def _linear_create_issue(*, title: str, account: str, priority: int, project_id: str, description: str) -> dict:
+    """Create a CRM-linked issue and put it in Triage by default."""
+    title = str(title or "").strip()[:255]
+    account = str(account or "").strip()[:255]
+    description = str(description or "").strip()[:10000]
+    if not title:
+        raise RuntimeError("Başlıq boş ola bilməz.")
+    if not account or account.casefold() in {"göstərilməyib", "gosterilmeyib", "—", "-"}:
+        raise RuntimeError("Hesab seçin və ya yazın.")
+    if not description:
+        raise RuntimeError("Açıqlama boş ola bilməz.")
+    if priority not in {0, 1, 2, 3, 4}:
+        raise RuntimeError("Linear prioriteti düzgün deyil.")
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    project_id = str(project_id or "").strip()
+    if project_id:
+        project_id = _linear_uuid(project_id, "layihə")
+        allowed = {str(row.get("id")) for row in _linear_projects()}
+        if project_id not in allowed:
+            raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
+    # Keep CRM fields in a stable machine-readable prefix. The existing board
+    # parser removes these lines and displays the account/operator cleanly.
+    saved_description = f"Hesab: {account}\n\n{description}"
+    variables = {
+        "teamId": team_id,
+        "title": title,
+        "description": saved_description,
+        "priority": priority,
+    }
+    if project_id:
+        variables["projectId"] = project_id
+    payload = _linear_graphql("""
+    mutation CreateLinearIssue($teamId: String!, $title: String!, $description: String!, $priority: Int!, $projectId: String) {
+      issueCreate(input: { teamId: $teamId, title: $title, description: $description, priority: $priority, projectId: $projectId }) {
+        success
+        issue { id identifier title description priority createdAt updatedAt url state { id name color type } project { id name } }
+      }
+    }
+    """, variables)
+    result = payload.get("issueCreate") or {}
+    if not result.get("success") or not result.get("issue"):
+        raise RuntimeError("Linear tapşırığı yaradılmadı.")
+    issue = result.get("issue") or {}
+    triage_id = _linear_resolve_workflow_state_id(LINEAR_TRIAGE_STATE_ID, "Triage")
+    current_state = str((issue.get("state") or {}).get("id") or "")
+    if current_state != triage_id:
+        issue = {**issue, **_linear_move_any_issue(str(issue.get("id") or ""), triage_id)}
+    _invalidate_linear_tesdiq_cache()
+    return issue
+
+
 def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tasks: bool = False) -> list[dict]:
     """Fetch the confirmation queue, allowed Linear work, or direct search."""
     search = str(search or "").strip()[:120]
@@ -20029,10 +20104,24 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
-        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status"}
-        if not issue_id or action not in allowed_actions:
+        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create"}
+        if action not in allowed_actions or (action != "create" and not issue_id):
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
+            if action == "create":
+                try:
+                    priority = int(data.get("priority") or 0)
+                except (TypeError, ValueError):
+                    return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
+                created = await asyncio.to_thread(
+                    _linear_create_issue,
+                    title=str(data.get("title") or ""),
+                    account=str(data.get("account") or data.get("client") or ""),
+                    priority=priority,
+                    project_id=str(data.get("project_id") or ""),
+                    description=str(data.get("description") or ""),
+                )
+                return web.json_response({"success": True, "message": "Linear tapşırığı Triage mərhələsində yaradıldı.", "issue": created})
             if action == "confirm":
                 target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TODO_STATE_ID, "Todo")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
@@ -20101,7 +20190,8 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         if all_tasks and not search:
             await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
-        return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "search": search, "scope": "all" if all_tasks else "tesdiq"})
+        projects = await asyncio.to_thread(_linear_projects) if all_tasks else []
+        return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "projects": projects, "search": search, "scope": "all" if all_tasks else "tesdiq"})
     except RuntimeError as exc:
         return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
     except Exception:
@@ -20551,7 +20641,11 @@ async def handle_platform_request_kommo(request: web.Request) -> web.Response:
         integration = await asyncio.to_thread(request_kommo_connection, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]), account_domain=str((data or {}).get("account_domain") or ""))
     except TenantPlatformError as exc:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
-    oauth_ready = bool(str(os.environ.get("KOMMO_OAUTH_CLIENT_ID") or "").strip() and str(os.environ.get("KOMMO_OAUTH_CLIENT_SECRET") or "").strip())
+    try:
+        _kommo_oauth_settings()
+        oauth_ready = True
+    except TenantPlatformError:
+        oauth_ready = False
     return web.json_response({"success": True, "integration": integration, "oauth_ready": oauth_ready})
 
 
@@ -20578,9 +20672,26 @@ async def handle_platform_disconnect_integration(request: web.Request) -> web.Re
 
 
 def _kommo_oauth_settings() -> tuple[str, str, str]:
-    client_id = str(os.environ.get("KOMMO_OAUTH_CLIENT_ID") or "").strip()
-    client_secret = str(os.environ.get("KOMMO_OAUTH_CLIENT_SECRET") or "").strip()
-    redirect_uri = str(os.environ.get("KOMMO_OAUTH_REDIRECT_URI") or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback").strip()
+    # Railway deployments created before the public integration was approved
+    # used the shorter KOMMO_CLIENT_* names.  Accept both spellings so a new
+    # tenant does not get the misleading "not active" message merely because
+    # the approved credentials were saved under the legacy names.
+    client_id = str(
+        os.environ.get("KOMMO_OAUTH_CLIENT_ID")
+        or os.environ.get("KOMMO_CLIENT_ID")
+        or ""
+    ).strip()
+    client_secret = str(
+        os.environ.get("KOMMO_OAUTH_CLIENT_SECRET")
+        or os.environ.get("KOMMO_CLIENT_SECRET")
+        or ""
+    ).strip()
+    redirect_uri = str(
+        os.environ.get("KOMMO_OAUTH_REDIRECT_URI")
+        or os.environ.get("KOMMO_REDIRECT_URI")
+        or os.environ.get("KOMMO_OAUTH_REDIRECT_URL")
+        or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback"
+    ).strip()
     if not client_id or not client_secret:
         raise TenantPlatformError("Kommo bağlantısı hələ aktiv deyil. Dəstək komandası onu qısa müddətdə aktivləşdirəcək.")
     return client_id, client_secret, redirect_uri
@@ -22776,6 +22887,7 @@ from gh_storage import (
     init_storage as _init_gh_storage,
     add_balance_transaction, confirm_balance_transaction,
     get_balance, get_pending_balance, get_balance_transactions,
+    get_balance_transaction_count,
     get_all_balances, get_all_pending_balances, get_all_recent_transactions,
     has_active_session, start_task_session, pause_task_session,
     finish_task_session, get_kpi_summary, set_kpi_score,
@@ -22937,6 +23049,9 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         'balance': all_bals.get(tg_id, 0),
         'pending_balance': all_pending.get(tg_id, 0),
         'type': get_employee_type(tg_id),
+        # The count lets the UI show that history exists without loading a
+        # potentially large ledger for every employee on the first request.
+        'transaction_count': get_balance_transaction_count(tg_id),
     } for tg_id in employee_ids]
     employees.sort(key=lambda row: str(row["name"]).casefold())
 
@@ -22970,7 +23085,12 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         # to have no history after an ID/card migration. If the current
         # Telegram key has no rows, recover legacy rows by the stored executor
         # name without exposing retired employee cards in the directory.
-        rows = get_balance_transactions(selected_id, limit=1000)
+        try:
+            requested_limit = int(request.rel_url.query.get("limit") or 100)
+        except (TypeError, ValueError):
+            requested_limit = 100
+        requested_limit = max(1, min(requested_limit, 500))
+        rows = get_balance_transactions(selected_id, limit=requested_limit)
         if not rows:
             wanted_name = str(directory.get(selected_id) or "").strip().casefold()
             if wanted_name:
@@ -22979,6 +23099,8 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
         return web.json_response({
             "success": True, "employees": employees, "selected_employee_id": selected_id,
             "transactions": [format_transaction({**row, "telegram_id": selected_id}) for row in rows],
+            "transaction_count": get_balance_transaction_count(selected_id) or len(rows),
+            "has_more": len(rows) < get_balance_transaction_count(selected_id),
         })
     # The initial screen deliberately contains no transaction history. It is
     # opened only for the selected employee so Maliyyə stays fast.
