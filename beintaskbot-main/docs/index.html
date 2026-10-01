@@ -2374,6 +2374,8 @@ function applyEmployeePermissionUi() {
     visible(['tab-chats','side-tab-chats'], HAS_CHATS);
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
     visible(['tab-linear','side-tab-linear'], hasEmployeePermission('linear'));
+    const linearCreate = document.getElementById('linear-page-create');
+    if(linearCreate) linearCreate.hidden = !(isAdmin || hasEmployeePermission('linear_edit'));
     setPendingTabVisible();
     // A saved tab or a restored mobile DOM can leave the old chat screen
     // active after an administrator removes Müştərilər permission.  Close
@@ -3309,11 +3311,12 @@ function linearBoardCardHtml(item) {
     const priorityStyle = linearBoardPriorityStyle(item.priority);
     const description = escapeHtml([String(item.title || '').trim(), String(item.description || '').trim()].filter(Boolean).join('\n\n'));
     const link = /^https:\/\/linear\.app\//i.test(String(item.url || '')) ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-700">Linear ↗</a>` : '';
-    const actionButtons = item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
-    const menu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
-    return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="true" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
+    const canEditLinear = isAdmin || hasEmployeePermission('linear_edit');
+    const actionButtons = canEditLinear && item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
+    const menu = canEditLinear && sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
+    return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="${canEditLinear ? 'true' : 'false'}" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
         <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950 truncate" title="${client}">${client}</div></div>${menu}</div>
-        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">⭐ <b>Prioritet:</b> <select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
+        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
         ${actionButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
 }
@@ -3362,9 +3365,9 @@ function bindLinearTaskCard(card, item) {
 function bindLinearColumnDrop(column) {
     if(!column || column.dataset.bound === '1') return;
     column.dataset.bound = '1';
-    column.addEventListener('dragover', event => { event.preventDefault(); column.classList.add('drag-over'); });
+    column.addEventListener('dragover', event => { if(!isAdmin && !hasEmployeePermission('linear_edit')) return; event.preventDefault(); column.classList.add('drag-over'); });
     column.addEventListener('dragleave', event => { if(!column.contains(event.relatedTarget)) column.classList.remove('drag-over'); });
-    column.addEventListener('drop', event => { event.preventDefault(); column.classList.remove('drag-over'); const state = linearBoardDragState || {issueId:event.dataTransfer.getData('text/plain'),fromState:''}; if(state.issueId) moveLinearBoardTask(state.issueId, column.dataset.linearStatusColumn, state.fromState); });
+    column.addEventListener('drop', event => { if(!isAdmin && !hasEmployeePermission('linear_edit')) return; event.preventDefault(); column.classList.remove('drag-over'); const state = linearBoardDragState || {issueId:event.dataTransfer.getData('text/plain'),fromState:''}; if(state.issueId) moveLinearBoardTask(state.issueId, column.dataset.linearStatusColumn, state.fromState); });
 }
 
 async function moveLinearBoardTask(issueId, targetStateId, fromStateId) {
@@ -3384,7 +3387,7 @@ async function moveLinearBoardTask(issueId, targetStateId, fromStateId) {
 }
 
 async function loadLinearBoard(forceRefresh = false) {
-    if(!isAdmin) return;
+    if(!hasEmployeePermission('linear')) return;
     const board = document.querySelector('#linear-tasks-container .samil-kanban-board');
     if(board && !linearBoardLoaded) board.innerHTML = '<div class="samil-empty-column"><span class="yt-spin"></span> Linear yüklənir…</div>';
     try {
