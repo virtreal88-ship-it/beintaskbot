@@ -198,6 +198,9 @@
         .search-icon-btn { width:36px; height:36px; border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; padding:0; flex:none; }
         .search-icon-btn svg { width:18px; height:18px; display:block; }
         .search-icon-btn.on { background:#e8f5e9; color:#128c7e; border-color:#bbf7d0; }
+        .task-type-tab { border:1px solid #e2e8f0; background:#fff; color:#64748b; border-radius:999px; padding:8px 14px; font-size:11px; font-weight:800; white-space:nowrap; transition:all .15s ease; }
+        .task-type-tab.active { background:#2481cc; border-color:#2481cc; color:#fff; box-shadow:0 4px 10px rgba(36,129,204,.18); }
+        .task-type-tab-count { opacity:.75; margin-left:3px; }
         .search-expand { display:none; align-items:center; gap:8px; position:relative; }
         .search-expand.on { display:flex; }
         .search-expand input { flex:1; min-width:0; }
@@ -878,9 +881,6 @@
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
-        <button id="side-tab-gozleme" class="sidebar-item" onclick="switchTab('tab-gozleme')">
-            <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="sidebar-item-label">Passiv tapşırıqlar</span>
-        </button>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Gözləyən sorğular</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
@@ -929,6 +929,11 @@
                 <button type="button" onclick="switchTab('tab-create')" class="icon-action-btn primary labeled" aria-label="Yeni tapşırıq"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq</span></button>
                 </div>
             </div>
+        <div id="task-type-tabs" class="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Tapşırıq növü">
+            <button type="button" id="task-type-tab-tasks" class="task-type-tab active" role="tab" aria-selected="true" onclick="setTaskTypeTab('tasks')">Tapşırıqlar</button>
+            <button type="button" id="task-type-tab-gozleme" class="task-type-tab" role="tab" aria-selected="false" onclick="setTaskTypeTab('gozleme')">Gözləmə <span id="gozleme-tab-count" class="task-type-tab-count"></span></button>
+        </div>
+        <div id="tasks-normal-view">
         <div id="task-search-wrap" class="search-expand">
             <input id="task-list-search" type="search" placeholder="Ad, telefon və ya partner..." class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" oninput="taskListSearch=this.value; renderNotifications();">
             <button type="button" class="search-close" aria-label="Bağla">×</button>
@@ -953,6 +958,31 @@
         </div>
         <div class="samil-kanban-wrap custom-scroll">
             <div id="notifications-container" class="samil-kanban-board"></div>
+        </div>
+        </div>
+
+        <div id="tasks-gozleme-view" class="hidden">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="gozleme-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="gozleme-overdue-count"></span></span>
+                <select id="gozleme-date-select" class="toolbar-select" aria-label="Tarix"></select>
+            </div>
+            <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
+                <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
+                    <option value="all">Hamısı</option>
+                    <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
+                    <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
+                    <option value="Nizami Qasımov">Nizami Qasımov</option>
+                    <option value="Rasim Əsgərov">Rasim Əsgərov</option>
+                    <option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option>
+                    <option value="Asya Agayeva">Asya Agayeva</option>
+                    <option value="Nuranə Şirinova">Nuranə Şirinova</option>
+                </select>
+                <button onclick="pinGozlemeFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
+            </div>
+            <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
+            <div class="samil-kanban-wrap custom-scroll">
+                <div id="gozleme-container" class="samil-kanban-board"></div>
+            </div>
         </div>
     </div>
 
@@ -1200,40 +1230,6 @@
         <div id="employees-list" class="space-y-2"></div>
     </div>
 
-    <!-- SCREEN: GÖZLƏMƏ -->
-    <div id="screen-gozleme" class="screen space-y-3">
-        <div class="flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-            <div>
-                <div class="text-sm font-extrabold text-gray-800">Passiv tapşırıqlar</div>
-                <div class="page-user-name text-[11px] font-bold text-emerald-400 mt-0.5"></div>
-            </div>
-            <div class="flex items-center gap-2">
-                <button type="button" onclick="loadGozleme(true)" class="icon-action-btn" aria-label="Yenilə"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3"/><path d="M21 3v6h-6"/></svg></button>
-        </div>
-        </div>
-        <select id="gozleme-date-select" class="w-full p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none" aria-label="Tarix"></select>
-        <div class="flex justify-between items-center">
-            <span class="text-sm font-bold text-gray-800">Aktiv tapşırıqlar <span class="text-gray-400 font-medium" id="gozleme-total-count"></span> <span class="text-red-500 font-semibold text-xs ml-1" id="gozleme-overdue-count"></span></span>
-        </div>
-        <div id="gozleme-filter-row" style="display:none;" class="flex gap-2">
-            <select id="gozleme-filter-assignee" onchange="filterGozleme()" class="flex-1 p-2.5 text-xs font-bold text-gray-800 bg-white border border-gray-200 rounded-xl outline-none">
-                <option value="all">Hamısı</option>
-                <option value="Rüfət Həsənzadə">Rüfət Həsənzadə</option>
-                <option value="Soltan Abbasov">Soltan Abbasov</option>
-                <option value="Hüseyn Səfərov">Hüseyn Səfərov</option>
-                <option value="Nizami Qasımov">Nizami Qasımov</option>
-                <option value="Rasim Əsgərov">Rasim Əsgərov</option>
-                <option value="Sərmayə Əhmədsoy">Sərmayə Əhmədsoy</option>
-                <option value="Asya Agayeva">Asya Agayeva</option>
-                <option value="Nuranə Şirinova">Nuranə Şirinova</option>
-            </select>
-            <button onclick="pinGozlemeFilter()" class="bg-white border border-gray-200 p-2.5 rounded-xl text-sm text-red-500">📌</button>
-        </div>
-        <div id="gozleme-count" class="text-xs font-bold text-gray-600"></div>
-        <div class="samil-kanban-wrap custom-scroll">
-            <div id="gozleme-container" class="samil-kanban-board"></div>
-        </div>
-    </div>
 </div>
 
 <!-- BOTTOM SHEET (for completing task) -->
@@ -1312,9 +1308,6 @@
     </button>
     <button id="tab-history" onclick="switchTab('tab-history')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg><span id="tab-history-label" class="mt-0.5">Maliyyə</span>
-    </button>
-    <button id="tab-gozleme" onclick="switchTab('tab-gozleme')" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
-        <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg><span class="mt-0.5">Gözləmə</span>
     </button>
     <button id="tab-pending" onclick="switchTab('tab-pending')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400 relative">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><span class="mt-0.5">Gözləyən sorğular</span><span id="pending-badge" style="display:none;position:absolute;top:2px;right:12px;background:#ef4444;color:#fff;font-size:9px;font-weight:600;min-width:16px;height:16px;border-radius:8px;display:none;align-items:center;justify-content:center;padding:0 4px;"></span>
@@ -2007,7 +2000,7 @@ async function loadSamilWorkspace(showFeedback = false, requestedStage = null, f
             persistLocalSamilWorkspace();
             samilWorkspaceLoadedAt = Date.now();
             if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
-            if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
+            if(isTasksGozlemeActive()) renderGozleme();
             if(document.getElementById('screen-samil-deals')) renderSamilDeals();
             if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
             if(showFeedback) toast('Məlumatlar yeniləndi', false);
@@ -2124,7 +2117,11 @@ async function loadEmployeeSession() {
 }
 function applyEmployeePermissionUi() {
     const visible = (ids, allowed) => ids.forEach(id => { const el=document.getElementById(id); if(el) el.style.display=allowed?'':'none'; });
-    visible(['tab-tasks','side-tab-tasks'],hasEmployeePermission('tasks')); visible(['tab-history','side-tab-history'],hasEmployeePermission('finance')); visible(['tab-gozleme','side-tab-gozleme'],hasEmployeePermission('waiting')); visible(['tab-chats','side-tab-chats'],HAS_CHATS); setPendingTabVisible();
+    visible(['tab-tasks','side-tab-tasks'],hasEmployeePermission('tasks')); visible(['tab-history','side-tab-history'],hasEmployeePermission('finance')); visible(['tab-chats','side-tab-chats'],HAS_CHATS); setPendingTabVisible();
+    const waitingTab = document.getElementById('task-type-tab-gozleme');
+    const canViewWaiting = hasEmployeePermission('waiting');
+    if(waitingTab) { waitingTab.style.display = canViewWaiting ? '' : 'none'; waitingTab.hidden = !canViewWaiting; }
+    setTaskTypeTab(canViewWaiting ? taskTypeTab : 'tasks', false);
 }
 
 function setPendingTabVisible() {
@@ -2140,10 +2137,10 @@ function setPendingTabVisible() {
     const sideEmployees = document.getElementById('side-tab-employees'); if(sideEmployees) sideEmployees.style.display = hasEmployeePermission('employees') ? 'flex' : 'none';
     paintMobileTabBar();
 }
-const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-employees'];
+const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-create','tab-history','tab-hesabat','tab-pending','tab-employees'];
 const MOBILE_TAB_ORDERS = {
-    default: ['tab-samil-deals','tab-tasks','tab-history','tab-gozleme','tab-hesabat','tab-create','tab-pending','tab-chats'],
-    nizami: ['tab-tasks','tab-pending','tab-chats','tab-employees','tab-samil-deals','tab-gozleme','tab-history','tab-hesabat','tab-create']
+    default: ['tab-samil-deals','tab-tasks','tab-history','tab-hesabat','tab-create','tab-pending','tab-chats'],
+    nizami: ['tab-tasks','tab-pending','tab-chats','tab-employees','tab-samil-deals','tab-history','tab-hesabat','tab-create']
 };
 function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
@@ -2151,7 +2148,7 @@ function mobileTabOrder() {
 function mobileTabWanted(id) {
     if(id === 'tab-chats') return HAS_NOTICES;
     if(id === 'tab-samil-deals') return HAS_OWN_FUNNEL;
-    if(id === 'tab-tasks' || id === 'tab-history' || id === 'tab-gozleme') return true;
+    if(id === 'tab-tasks' || id === 'tab-history') return true;
     if(id === 'tab-hesabat') return !isAdmin;
     if(id === 'tab-pending') return isAdmin;
     if(id === 'tab-employees') return hasEmployeePermission('employees');
@@ -2269,7 +2266,7 @@ document.addEventListener('visibilitychange', () => {
         } else {
             syncNotifications();
             if(document.getElementById('screen-pending')?.classList.contains('active')) loadPendingActions();
-            if(document.getElementById('screen-gozleme')?.classList.contains('active')) loadGozleme();
+            if(isTasksGozlemeActive()) loadGozleme();
         }
     }
 });
@@ -2797,6 +2794,10 @@ function submitClose() {
 /* ================= NOTIFICATIONS & SWR ================= */
 async function openNotifications(forceRefresh = false) {
     nav('screen-notifications');
+    if(taskTypeTab === 'gozleme') {
+        await openGozleme(forceRefresh);
+        return;
+    }
     if(HAS_OWN_FUNNEL && !isAdmin) {
         const restored = restoreSamilWorkspaceFromCache();
         if(restored || mockTasks.length) renderNotifications();
@@ -3301,6 +3302,30 @@ const DATE_KANBAN_COLS = [
     {key:'future', label:'Gələcək', color:'#94a3b8'}
 ];
 let taskDateFilter = localStorage.getItem('task_date_bucket') || 'all';
+let taskTypeTab = localStorage.getItem('task_type_tab') === 'gozleme' ? 'gozleme' : 'tasks';
+function isTasksGozlemeActive() {
+    return taskTypeTab === 'gozleme' && document.getElementById('screen-notifications')?.classList.contains('active');
+}
+function setTaskTypeTab(kind, refresh = true) {
+    const next = kind === 'gozleme' ? 'gozleme' : 'tasks';
+    if(next === 'gozleme' && !hasEmployeePermission('waiting')) {
+        toast('Bu bölmə üçün icazə yoxdur.', true);
+        return;
+    }
+    taskTypeTab = next;
+    localStorage.setItem('task_type_tab', taskTypeTab);
+    const normal = document.getElementById('tasks-normal-view');
+    const waiting = document.getElementById('tasks-gozleme-view');
+    if(normal) normal.classList.toggle('hidden', taskTypeTab !== 'tasks');
+    if(waiting) waiting.classList.toggle('hidden', taskTypeTab !== 'gozleme');
+    const normalTab = document.getElementById('task-type-tab-tasks');
+    const waitingTab = document.getElementById('task-type-tab-gozleme');
+    if(normalTab) { normalTab.classList.toggle('active', taskTypeTab === 'tasks'); normalTab.setAttribute('aria-selected', taskTypeTab === 'tasks' ? 'true' : 'false'); }
+    if(waitingTab) { waitingTab.classList.toggle('active', taskTypeTab === 'gozleme'); waitingTab.setAttribute('aria-selected', taskTypeTab === 'gozleme' ? 'true' : 'false'); }
+    if(!refresh) return;
+    if(taskTypeTab === 'gozleme') openGozleme();
+    else openNotifications();
+}
 let gozlemeKanbanFilter = localStorage.getItem('gozleme_date_bucket') || 'all';
 let pendingKanbanFilter = localStorage.getItem('pending_type_bucket') || 'all';
 const PENDING_KANBAN_COLS = [
@@ -3629,7 +3654,7 @@ function renderNotifications() {
 }
 window.addEventListener('resize', () => {
     if(document.getElementById('screen-notifications')?.classList.contains('active')) renderNotifications();
-    if(document.getElementById('screen-gozleme')?.classList.contains('active')) renderGozleme();
+    if(isTasksGozlemeActive()) renderGozleme();
     if(document.getElementById('screen-pending')?.classList.contains('active')) renderPendingActions();
 });
 
@@ -10002,7 +10027,7 @@ async function syncSingleDealIncremental(leadId, eventInfo) {
         if(document.getElementById('screen-notifications')?.classList.contains('active')) {
             renderNotifications();
         }
-        if(document.getElementById('screen-gozleme')?.classList.contains('active')) {
+        if(isTasksGozlemeActive()) {
             renderGozleme();
         }
         if(document.getElementById('screen-chats')?.classList.contains('active')) {
@@ -10750,6 +10775,11 @@ function switchTab(tabId, updateHash = true) {
         openCreateTaskModal();
         return;
     }
+    if(tabId === 'tab-gozleme') {
+        taskTypeTab = 'gozleme';
+        localStorage.setItem('task_type_tab', 'gozleme');
+        tabId = 'tab-tasks';
+    }
     const inactiveClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400';
     const activeClass = 'flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-[#2481cc]';
     ALL_TAB_IDS.forEach(id => {
@@ -10781,9 +10811,6 @@ function switchTab(tabId, updateHash = true) {
         if(hesabatTab) hesabatTab.className = activeClass;
         nav('screen-hesabatlar');
         loadHesabatlar();
-    } else if(tabId === 'tab-gozleme') {
-        document.getElementById('tab-gozleme').className = activeClass;
-        openGozleme();
     } else if(tabId === 'tab-pending') {
         if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
         const pendingTab = document.getElementById('tab-pending');
@@ -10920,14 +10947,14 @@ async function loadGozleme(showFeedback = false) {
     try {
         const r = await fetch(API_BASE + '/api/gozleme', { headers: {'X-TG-User-ID': CURRENT_USER_ID} });
         const j = await r.json();
-        if(!r.ok || !j.success) throw new Error(j.error || 'Passiv tapşırıqlar yükləndi');
+        if(!r.ok || !j.success) throw new Error(j.error || 'Gözləmə tapşırıqları yüklənmədi');
         gozlemeItems = j.items || j.tasks || [];
         setCachedGozleme(gozlemeItems);
         renderGozleme();
-        if(showFeedback) toast('Passiv tapşırıqlar yeniləndi', false);
+        if(showFeedback) toast('Gözləmə yeniləndi', false);
     } catch(e) {
         renderGozleme();
-        if(showFeedback) toast('Passiv tapşırıqlar yükləndi', true);
+        if(showFeedback) toast('Gözləmə yüklənmədi', true);
     }
 }
 
@@ -10974,7 +11001,9 @@ function renderGozleme() {
     const tc = document.getElementById('gozleme-total-count');
     if(tc) tc.textContent = `(${filtered.length})`;
     const countEl = document.getElementById('gozleme-count');
-    if(countEl) countEl.textContent = `Passiv tapşırıqlar (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    if(countEl) countEl.textContent = `Gözləmə (${filtered.length})${overdueCount > 0 ? ' • ⚠️ ' + overdueCount + ' gecikmiş' : ''}`;
+    const tabCount = document.getElementById('gozleme-tab-count');
+    if(tabCount) tabCount.textContent = filtered.length ? `(${filtered.length})` : '';
     const dateSelect = document.getElementById('gozleme-date-select');
     if(dateSelect) {
         if(gozlemeKanbanFilter !== 'all' && !DATE_KANBAN_COLS.some(col => col.key === gozlemeKanbanFilter)) gozlemeKanbanFilter = 'all';
@@ -10991,8 +11020,8 @@ function renderGozleme() {
     renderDateKanban(container, filtered, 'gozleme');
 }
 
-async function openGozleme() {
-    nav('screen-gozleme');
+async function openGozleme(showFeedback = false) {
+    setTaskTypeTab('gozleme', false);
     if(HAS_OWN_FUNNEL && !isAdmin) {
         const restored = gozlemeItems.length > 0 || restoreSamilWorkspaceFromCache();
         if(restored) renderGozleme(); else showLoader();
@@ -11010,7 +11039,7 @@ async function openGozleme() {
         showLoader();
     }
     showSyncIndicator();
-    await loadGozleme(!cached);
+    await loadGozleme(!cached || showFeedback);
     hideLoader();
     hideSyncIndicator();
 }
@@ -11289,7 +11318,7 @@ async function submitMexaric() {
         if(ptrActive && ptrDist > 80) {
             showSyncIndicator();
             if(document.getElementById('screen-pending')?.classList.contains('active')) await loadPendingActions();
-            else if(document.getElementById('screen-gozleme')?.classList.contains('active')) await loadGozleme();
+            else if(isTasksGozlemeActive()) await loadGozleme();
             else await syncNotifications();
             hideSyncIndicator();
         }
