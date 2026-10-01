@@ -674,6 +674,9 @@
         .chats-filter-count { font-size:13px; font-weight:600; }
         .chats-toolbar .search-icon-btn { background:#ffffff22; border-color:transparent; color:#fff; }
         .chats-toolbar .search-icon-btn.on { background:#fff; color:#1f3a34; border-color:#fff; }
+        .chats-assignee-select { max-width:132px; min-width:0; height:30px; border:1px solid #ffffff55; border-radius:9px; padding:0 7px; background:#ffffff22; color:#fff; font-family:inherit; font-size:11px; font-weight:700; outline:none; }
+        .chats-assignee-select option { color:#0f172a; background:#fff; }
+        .chats-assignee-select[hidden] { display:none; }
         .chats-toolbar .search-expand { margin-top:8px; }
         .chats-search-results { position:absolute; left:12px; right:12px; top:calc(100% - 6px); background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; z-index:8; max-height:260px; overflow:auto; }
         .chats-stage-filter { position:absolute; left:12px; right:12px; top:calc(100% - 6px); z-index:9; background:#fff; border:1px solid #e2e8f0; border-radius:12px; box-shadow:0 10px 28px #0f172a22; padding:10px; max-height:280px; overflow:auto; }
@@ -1124,6 +1127,7 @@
                             <button type="button" id="chats-new-msg" class="chats-new-btn" title="Yeni mesaj" aria-label="Yeni mesaj" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.6 8.6 0 0 1-3.9-.9L3 21l1.9-5A8.4 8.4 0 1 1 21 11.5z"/><path d="M12 8v7M8.5 11.5h7"/></svg></button>
                             <button type="button" id="chats-sync-btn" onclick="syncCustomersList(this)" class="search-icon-btn" aria-label="Müştəriləri sinxronla" title="Müştəriləri sinxronla"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.8-2.6L20 11M4 13l2.1 4.6A7 7 0 0 0 17.9 15"/></svg></button>
                             <button type="button" id="chats-stage-toggle" class="search-icon-btn" aria-label="Mərhələlər" title="Mərhələlər"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12m-9 7h6"/></svg></button>
+                            <select id="chats-assignee-select" class="chats-assignee-select" aria-label="Əməkdaş üzrə filtr" hidden><option value="all">Hamısı</option></select>
                             <button type="button" id="chats-search-toggle" class="search-icon-btn" aria-label="Axtar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg></button>
                         </span>
         </div>
@@ -1684,6 +1688,10 @@ const samilPendingStageMoves = new Map();
 const samilPendingTaskMoves = new Map();
 let samilDealDragState = null;
 let employeePartners = [];
+let adminChatDeals = [];
+let adminChatDealsLoaded = false;
+let adminChatDealsRequest = null;
+let _chatsAssigneeFilter = localStorage.getItem('chats_assignee_filter') || 'all';
 const SAMIL_STAGE_COLORS = {
     nerazobrannoye:'#94a3b8', sorgular:'#2481cc', danisiqlar:'#14b8a6', telimat:'#f59e0b', yeni_sifaris:'#8b5cf6',
     geri_donusler:'#f59e0b', soyuq_zeng:'#06b6d4', cavab_gozlenilir:'#64748b', gorusler:'#f97316',
@@ -9727,7 +9735,7 @@ function isChatRowHidden(deal, hidden) {
         return true;
     }
     if(!digits) return false;
-    return (samilDeals || []).some(other => {
+    return chatInboxSourceDeals().some(other => {
         if(!other || String(other.id) === String(deal.id)) return false;
         const stored = bag[String(other.id)];
         if(!stored) return false;
@@ -9747,7 +9755,7 @@ function unhideInboxChat(leadId) {
 function hideInboxChat(leadId) {
     const id = String(leadId || '');
     if(!id) return;
-    const deal = (samilDeals || []).find(item => String(item.id) === id);
+    const deal = chatInboxSourceDeals().find(item => String(item.id) === id);
     const hidden = getChatsHidden();
     const digits = waPhoneDigits((deal && Array.isArray(deal.phones) && deal.phones[0]) || (deal && deal.phone) || '');
     hidden[id] = {at: chatsIncomingAt(deal), text: chatsHideText(deal), phone: digits};
@@ -9780,7 +9788,7 @@ function seedChatsSeen(deals) {
 function markChatsSeen(leadId) {
     const seen = getChatsSeen();
     seen[String(leadId)] = Math.floor(Date.now() / 1000);
-    const deal = (samilDeals || []).find(item => String(item.id) === String(leadId));
+    const deal = chatInboxSourceDeals().find(item => String(item.id) === String(leadId));
     seen['p_' + String(leadId)] = dealLastClientMessage(deal) || '';
     delete seen['unread_' + String(leadId)];
     saveChatsSeen(seen);
@@ -9796,7 +9804,7 @@ function markChatsSeen(leadId) {
 function markChatsUnread(leadId) {
     const id = String(leadId || '');
     if(!id) return;
-    const deal = (samilDeals || []).find(item => String(item.id) === id);
+    const deal = chatInboxSourceDeals().find(item => String(item.id) === id);
     const incoming = chatsIncomingAt(deal) || Math.floor(Date.now() / 1000);
     const seen = getChatsSeen();
     seen[id] = Math.max(0, incoming - 1);
@@ -9870,6 +9878,66 @@ function chatsIsUnanswered(deal) {
 }
 const CHAT_FOLLOWUP_AFTER_SECONDS = 24 * 60 * 60;
 let _chatsStageFilters = new Set();
+function chatEmployeeName(deal) {
+    const raw = String((deal && (deal.responsible_name || deal.funnel_owner_name || deal.owner_name)) || '').trim();
+    if(raw && !/^(admin|user|naməlum|unknown)$/i.test(raw)) return raw;
+    return '';
+}
+function chatInboxSourceDeals() {
+    if(!isAdmin || !adminChatDealsLoaded) return samilDeals || [];
+    const rows = [];
+    const seen = new Set();
+    [...(samilDeals || []), ...(adminChatDeals || [])].forEach(deal => {
+        if(!deal || !deal.id || seen.has(String(deal.id))) return;
+        seen.add(String(deal.id));
+        rows.push(deal);
+    });
+    return rows;
+}
+function renderChatsAssigneeFilter() {
+    const select = document.getElementById('chats-assignee-select');
+    if(!select) return;
+    select.hidden = !isAdmin;
+    if(!isAdmin) return;
+    const names = new Set();
+    chatInboxSourceDeals().forEach(deal => { const name = chatEmployeeName(deal); if(name) names.add(name); });
+    const options = ['<option value="all">Hamısı</option>'].concat(
+        [...names].sort((a, b) => a.localeCompare(b, 'az')).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+    );
+    select.innerHTML = options.join('');
+    select.value = [...names].some(name => name === _chatsAssigneeFilter) ? _chatsAssigneeFilter : 'all';
+}
+async function loadAdminChatDeals(force = false) {
+    if(!isAdmin || !CURRENT_USER_ID) return false;
+    if(adminChatDealsRequest && !force) return adminChatDealsRequest;
+    const request = (async () => {
+        try {
+            const url = API_BASE + '/api/samil/admin-chats?uid=' + encodeURIComponent(CURRENT_USER_ID) + (force ? '&refresh=1' : '');
+            const response = await fetch(url, {cache:'no-store', headers:{'X-TG-User-ID': CURRENT_USER_ID}});
+            const payload = await response.json().catch(() => ({}));
+            if(!response.ok || !payload.success) throw new Error(payload.error || 'Müştərilər yüklənmədi');
+            adminChatDeals = Array.isArray(payload.deals) ? payload.deals : [];
+            adminChatDealsLoaded = true;
+            renderChatsAssigneeFilter();
+            if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList(true);
+            return true;
+        } catch(error) {
+            console.warn('Admin chat filter data failed:', error);
+            return false;
+        } finally {
+            if(adminChatDealsRequest === request) adminChatDealsRequest = null;
+        }
+    })();
+    adminChatDealsRequest = request;
+    return request;
+}
+function setChatsAssigneeFilter(value) {
+    _chatsAssigneeFilter = isAdmin ? String(value || 'all') : 'all';
+    try { localStorage.setItem('chats_assignee_filter', _chatsAssigneeFilter); } catch(_e) {}
+    _chatsVisibleLimit = 60;
+    if(isAdmin && !adminChatDealsLoaded) loadAdminChatDeals(false);
+    renderChatsList(true);
+}
 function chatStageFilterKey(deal) {
     const pipeline = String((deal && (deal.pipeline_id || deal.pipeline)) || '');
     // Personal funnels have stable stage keys from Kommo. Prefer them so the
@@ -9897,7 +9965,7 @@ function renderChatsStageFilter() {
             options.set(String(NIZAMI_PIPELINE_ID) + ':' + key, label);
         });
     }
-    (samilDeals || []).forEach(deal => {
+    chatInboxSourceDeals().forEach(deal => {
         if(!deal || !deal.id || !chatBelongsToViewer(deal) || isTerminalChatDeal(deal)) return;
         const key = chatStageFilterKey(deal);
         if(!options.has(key)) options.set(key, chatStageFilterLabel(deal));
@@ -10301,7 +10369,7 @@ function viewerWaLine() {
     return '';
 }
 function chatBelongsToViewer(deal) {
-    if(isAdmin && !isNizamiQueueDeal(deal)) return false;
+    if(isAdmin && !adminChatDealsLoaded && !isNizamiQueueDeal(deal)) return false;
     if(!isAdmin && CURRENT_PIPELINE_ID && Number(deal && deal.pipeline_id || 0) && Number(deal.pipeline_id) !== Number(CURRENT_PIPELINE_ID)) return false;
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
     if(['instagram','tiktok','facebook','telegram'].includes(channel)) return !!isAdmin;
@@ -10394,9 +10462,10 @@ function isTerminalChatDeal(deal) {
 function chatsInboxDeals(requestedFilter) {
     const filter = requestedFilter || _chatsListFilter || 'all';
     const q = String(document.getElementById('chats-search')?.value || '').trim().toLowerCase();
-    const deals = (samilDeals || []).filter(deal => {
+    const deals = chatInboxSourceDeals().filter(deal => {
         const preview = dealLastClientMessage(deal);
         if(!deal || !deal.id || !chatBelongsToViewer(deal)) return false;
+        if(isAdmin && _chatsAssigneeFilter !== 'all' && chatEmployeeName(deal) !== _chatsAssigneeFilter) return false;
         if(isSuccessfulChatDeal(deal)) return false;
         const declined = isDeclinedChatDeal(deal);
         const terminalReturn = declined && !!deal.needs_reply;
@@ -10729,7 +10798,7 @@ function noticeClientHeaderHtml(deal) {
     return `<div class="deal-chat-head"><button type="button" class="chats-back" onclick="closeNoticeClient()" aria-label="Geri">${backLabel}</button>${dealHeadAvatarHtml(deal, '')}<div class="deal-person"><div class="deal-person-name">${escapeHtml(name)}</div><div class="deal-person-row">${phone ? `<span class="deal-person-phone">${escapeHtml(phone)}</span>` : ''}${source ? `<span class="deal-source-label">${escapeHtml(source)}</span>` : ''}<span class="notice-readonly">Tarixçə · Kommo ilə cavab</span></div></div><div class="notice-history-actions">${aiSummaryButton}<button type="button" onclick="refreshNoticeHistory()" title="Tarixçəni yenilə" aria-label="Tarixçəni yenilə">↻</button><button type="button" onclick="openNoticeDealInfo()" title="Müştəri məlumatı" aria-label="Müştəri məlumatı">ⓘ</button></div></div>`;
 }
 function openNoticeDealInfo() {
-    const deal = (_dealViewState && _dealViewState.deal) || (samilDeals || []).find(item => String(item.id) === String(_noticeHistoryLeadId));
+    const deal = (_dealViewState && _dealViewState.deal) || chatInboxSourceDeals().find(item => String(item.id) === String(_noticeHistoryLeadId));
     if(deal) openDealInfoDrawer(deal, false);
 }
 function refreshNoticeHistory() {
@@ -10873,7 +10942,7 @@ async function openNoticeClient(leadId) {
     bindNoticeSwipeBack(pane);
     renderChatsList();
     pane.innerHTML = '<div class="deal-shell"><div class="history-loading">Yüklənir...</div></div>';
-    let deal = (samilDeals || []).find(item => String(item.id) === id);
+    let deal = chatInboxSourceDeals().find(item => String(item.id) === id);
     // The inbox list already has the name, stage and phone required for the
     // chat header. Rendering it immediately avoids an expensive full deal
     // snapshot before the history can start loading. The full notes/tasks
@@ -10958,6 +11027,13 @@ function renderChatsList(preserveScroll) {
     if(!box) return;
     bindChatsStageFilter();
     renderChatsStageFilter();
+    renderChatsAssigneeFilter();
+    const assigneeSelect = document.getElementById('chats-assignee-select');
+    if(assigneeSelect && !assigneeSelect.dataset.bound) {
+        assigneeSelect.dataset.bound = '1';
+        assigneeSelect.addEventListener('change', event => setChatsAssigneeFilter(event.target.value));
+    }
+    if(isAdmin && !adminChatDealsLoaded && !adminChatDealsRequest) loadAdminChatDeals(false);
     fillChatsLineSelect();
     const allDeals = chatsInboxDeals();
     _chatsVisibleTotal = allDeals.length;
@@ -11676,6 +11752,7 @@ async function syncCustomersList(button) {
     if(icon) icon.classList.add('animate-spin');
     try {
         await loadSamilWorkspace(true, null, true);
+        if(isAdmin) await loadAdminChatDeals(true);
         resetChatsLazyList();
         renderChatsList();
     } finally {

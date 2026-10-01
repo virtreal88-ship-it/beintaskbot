@@ -9499,6 +9499,9 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         deals.append({
             "id": lead_id,
             "pipeline_id": pipeline_id,
+            "responsible_user_id": int(lead.get("responsible_user_id") or 0),
+            "responsible_name": owner_name or employee_name_for_lead(lead),
+            "funnel_owner_name": owner_name,
             "nizami_funnel": pipeline_id == int(NIZAMI_PIPELINE_ID),
             "status_id": status_id,
             "stage_key": status_to_key.get(status_id, ""),
@@ -9768,6 +9771,67 @@ async def get_rufat_overview(*, force: bool = False, owner_chat_id: int | None =
             if cached is not None:
                 return _overview_with_partners(cached, owner)
             raise
+
+
+_admin_chat_deals_cache: list[dict] = []
+_admin_chat_deals_cache_at = 0.0
+_admin_chat_deals_lock = asyncio.Lock()
+
+
+async def get_admin_chat_deals(*, force: bool = False) -> list[dict]:
+    """Return active chat rows from every personal funnel for the admin inbox.
+
+    The normal workspace endpoint intentionally loads only the current owner's
+    funnel.  The admin's Müştərilər filter needs the other employee funnels too,
+    but loading them on every page render would make the whole CRM slow.  Keep a
+    short shared snapshot and refresh all owners concurrently only when the
+    admin opens/refreshes the employee filter.
+    """
+    global _admin_chat_deals_cache, _admin_chat_deals_cache_at
+    now = _time_module.monotonic()
+    async with _admin_chat_deals_lock:
+        if _admin_chat_deals_cache and not force and now - _admin_chat_deals_cache_at < _RUFAT_OVERVIEW_CACHE_TTL:
+            return list(_admin_chat_deals_cache)
+        owner_chat_ids = [ADMIN_CHAT_ID, RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID]
+        snapshots = await asyncio.gather(
+            *(get_rufat_overview(force=force, owner_chat_id=chat_id) for chat_id in owner_chat_ids),
+            return_exceptions=True,
+        )
+        rows: list[dict] = []
+        seen: set[int] = set()
+        for owner_chat_id, snapshot in zip(owner_chat_ids, snapshots):
+            if isinstance(snapshot, Exception) or not isinstance(snapshot, dict):
+                logger.warning("Admin chat snapshot unavailable for %s: %s", owner_chat_id, snapshot)
+                continue
+            owner = get_funnel_owner(owner_chat_id) or {}
+            owner_name = str(owner.get("name") or owner_name_for_pipeline(int(owner.get("pipeline_id") or 0)) or "").strip()
+            pipeline_id = int(owner.get("pipeline_id") or snapshot.get("pipeline_id") or 0)
+            for source in snapshot.get("deals") or []:
+                if not isinstance(source, dict):
+                    continue
+                try:
+                    lead_id = int(source.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not lead_id or lead_id in seen or _is_successful_deal(source) or _is_declined_deal(source):
+                    continue
+                row = dict(source)
+                row["pipeline_id"] = int(row.get("pipeline_id") or pipeline_id)
+                row["funnel_owner_name"] = owner_name or owner_name_for_pipeline(row["pipeline_id"])
+                row["responsible_name"] = row.get("responsible_name") or row["funnel_owner_name"]
+                row["chat_owner_chat_id"] = int(owner_chat_id)
+                rows.append(row)
+                seen.add(lead_id)
+        rows.sort(key=lambda item: int(item.get("chat_at") or item.get("updated_at") or item.get("created_at") or 0), reverse=True)
+        _admin_chat_deals_cache = rows
+        _admin_chat_deals_cache_at = now
+        return list(rows)
+
+
+def invalidate_admin_chat_deals_cache() -> None:
+    global _admin_chat_deals_cache_at
+    _admin_chat_deals_cache.clear()
+    _admin_chat_deals_cache_at = 0.0
 
 
 def _overview_with_partners(overview: dict, owner: dict) -> dict:
@@ -12974,6 +13038,9 @@ def _overview_nizami_stage_deal(
     return {
         "id": lead_id,
         "pipeline_id": int(SOVDELESMELER_PIPELINE_ID),
+        "responsible_user_id": int(lead.get("responsible_user_id") or 0),
+        "responsible_name": owner_name_for_pipeline(int(NIZAMI_PIPELINE_ID)) or employee_name_for_lead(lead),
+        "funnel_owner_name": owner_name_for_pipeline(int(NIZAMI_PIPELINE_ID)),
         "status_id": status_id,
         "stage_key": "",
         "stage_name": names.get(status_id, ""),
@@ -18438,6 +18505,24 @@ async def handle_api_rufat_overview(request: web.Request) -> web.Response:
         return web.json_response(payload, status=502)
 
 
+async def handle_api_admin_chat_deals(request: web.Request) -> web.Response:
+    """Load the active chat rows from all employee funnels for an admin filter."""
+    raw_chat_id = request.headers.get("X-TG-User-ID") or request.rel_url.query.get("uid") or ""
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return web.json_response({"success": False, "error": "User not identified"}, status=401)
+    if not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    force = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
+    try:
+        deals = await get_admin_chat_deals(force=force)
+        return web.json_response({"success": True, "deals": deals, "updated_at": int(_time_module.time())})
+    except Exception as exc:
+        logger.error("Admin chat deals error: %s", exc)
+        return web.json_response({"success": False, "error": "Müştərilər yüklənmədi."}, status=502)
+
+
 async def handle_api_notifications(request: web.Request) -> web.Response:
     """Return active tasks for the requesting user."""
     try:
@@ -22155,6 +22240,7 @@ async def start_webhook_server():
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())
+    app_web.router.add_route('OPTIONS', '/api/samil/admin-chats', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/resolve', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/pending_actions/delete', lambda r: web.Response())
@@ -22173,6 +22259,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/action", handle_api_action)
     app_web.router.add_get("/api/notifications", handle_api_notifications)
     app_web.router.add_get("/api/samil/overview", handle_api_rufat_overview)
+    app_web.router.add_get("/api/samil/admin-chats", handle_api_admin_chat_deals)
     app_web.router.add_route('OPTIONS', '/api/deal/view', lambda r: web.Response())
     app_web.router.add_get("/api/deal/view", handle_api_deal_view)
     app_web.router.add_route('OPTIONS', '/api/deal/chat', lambda r: web.Response())
