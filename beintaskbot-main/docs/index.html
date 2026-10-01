@@ -2326,7 +2326,7 @@ function toggleSidebarPin() {
 }
 applyDesktopSidebar();
 
-function hasEmployeePermission(permission) { return isAdmin || employeePermissions.has(permission); }
+function hasEmployeePermission(permission) { return employeePermissions.has(permission); }
 async function loadEmployeeSession() {
     // In browser mode the signed cookie, not an old pwa_uid, is the identity.
     const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
@@ -2368,7 +2368,7 @@ function applyEmployeePermissionUi() {
     visible(['tab-hesabat','side-tab-hesabat'], false);
     visible(['tab-chats','side-tab-chats'], HAS_CHATS);
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
-    visible(['tab-linear','side-tab-linear'], isAdmin);
+    visible(['tab-linear','side-tab-linear'], hasEmployeePermission('linear'));
     setPendingTabVisible();
     // A saved tab or a restored mobile DOM can leave the old chat screen
     // active after an administrator removes Müştərilər permission.  Close
@@ -2398,9 +2398,9 @@ function setPendingTabVisible() {
     const sideSettings = document.getElementById('side-tab-settings');
     if(sideSettings) sideSettings.style.display = settingsAllowed ? 'flex' : 'none';
     const linearTab = document.getElementById('tab-linear');
-    if(linearTab) linearTab.style.display = isAdmin ? 'flex' : 'none';
+    if(linearTab) linearTab.style.display = hasEmployeePermission('linear') ? 'flex' : 'none';
     const sideLinear = document.getElementById('side-tab-linear');
-    if(sideLinear) sideLinear.style.display = isAdmin ? 'flex' : 'none';
+    if(sideLinear) sideLinear.style.display = hasEmployeePermission('linear') ? 'flex' : 'none';
     paintMobileTabBar();
 }
 const ALL_TAB_IDS = ['tab-tasks','tab-samil-deals','tab-chats','tab-hot-orders','tab-create','tab-history','tab-hesabat','tab-gozleme','tab-pending','tab-linear','tab-employees','tab-settings'];
@@ -2432,7 +2432,7 @@ function mobileTabWanted(id) {
     if(id === 'tab-gozleme') return hasEmployeePermission('passive_tasks');
     if(id === 'tab-hesabat') return false;
     if(id === 'tab-pending') return hasEmployeePermission('waiting');
-    if(id === 'tab-linear') return isAdmin;
+    if(id === 'tab-linear') return hasEmployeePermission('linear');
     if(id === 'tab-employees') return false;
     if(id === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
     if(id === 'tab-hot-orders') return hasEmployeePermission('hot_orders');
@@ -2493,7 +2493,7 @@ function setSidebarActive(tabId) {
 
 function applyHashRoute(opts) {
     if(window.location.hash === '#pending' && hasEmployeePermission('waiting')) switchTab('tab-pending', false);
-    if(window.location.hash === '#linear' && isAdmin) switchTab('tab-linear', false);
+    if(window.location.hash === '#linear' && hasEmployeePermission('linear')) switchTab('tab-linear', false);
     const dealMatch = String(window.location.hash || '').match(/^#deal-(\d+)/);
     if(dealMatch) {
         openDealViewById(dealMatch[1]);
@@ -11859,7 +11859,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const EMPLOYEE_PERMISSION_LABELS = {
     deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Gözləmə',
-    waiting: 'Təsdiq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', hot_orders_create: 'İsti sifariş yaratmaq', employees: 'Əməkdaşlar'
+    waiting: 'Təsdiq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', hot_orders_create: 'İsti sifariş yaratmaq', employees: 'Əməkdaşlar', linear: 'Linear tapşırıqlar', linear_edit: 'Linear redaktə'
 };
 function employeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
@@ -11896,7 +11896,7 @@ function openEmployeeEditor(chatId = null) {
         <label class="block text-[11px] font-bold text-slate-500 mb-1">Ad və soyad</label><input id="employee-editor-name" value="${escapeHtml(employee?.name || '')}" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ad və soyad">
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">Telegram ID <span class="text-rose-500">— giriş üçün yeganə kod</span></label><input id="employee-editor-chat-id" value="${employee?.chat_id || ''}" inputmode="numeric" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Məsələn: 123456789">
         <p class="text-[10px] leading-4 text-slate-400 mt-1.5">Telegram ID yalnız bu əməkdaşa girişi bağlamaq üçündür. Yadda saxladıqdan sonra ona dəvət linkini göndərin.</p>
-        <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' ? '' : 'selected'}>Əməkdaş</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
+        <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' || employee?.role === 'Usta' ? '' : 'selected'}>Əməkdaş</option><option value="master" ${employee?.role === 'Usta' ? 'selected' : ''}>Usta</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
         <label class="mt-3 flex items-start gap-2 rounded-xl border border-violet-100 bg-violet-50 p-3 text-xs font-bold text-violet-900"><input id="employee-editor-ai" type="checkbox" class="mt-0.5" ${employee?.ai_enabled ? 'checked' : ''}><span>AI funksiyalarını aktiv et<span class="mt-1 block text-[10px] font-normal leading-4 text-violet-700">AI cavab, xülasə və transkripsiya düymələri yalnız bu seçim aktiv olan əməkdaşa göstərilir.</span></span></label>
@@ -12189,18 +12189,18 @@ function firstAllowedTab() {
     if(hasEmployeePermission('waiting')) return 'tab-pending';
     if(hasEmployeePermission('finance')) return 'tab-history';
     if(hasEmployeePermission('passive_tasks')) return 'tab-gozleme';
-    if(isAdmin) return 'tab-linear';
+    if(hasEmployeePermission('linear')) return 'tab-linear';
     if(isAdmin || hasEmployeePermission('employees')) return 'tab-settings';
     return 'tab-tasks';
 }
 function tabAllowed(tabId) {
     const permissions = {
         'tab-tasks':'tasks', 'tab-samil-deals':'deals', 'tab-chats':'customers',
-        'tab-hot-orders':'hot_orders', 'tab-history':'finance',
+        'tab-hot-orders':'hot_orders', 'tab-history':'finance', 'tab-linear':'linear',
         'tab-gozleme':'passive_tasks', 'tab-pending':'waiting', 'tab-employees':'employees'
     };
     if(tabId === 'tab-settings') return isAdmin || hasEmployeePermission('employees');
-    if(tabId === 'tab-linear') return isAdmin;
+    if(tabId === 'tab-linear') return hasEmployeePermission('linear');
     return !permissions[tabId] || hasEmployeePermission(permissions[tabId]);
 }
 
@@ -12256,7 +12256,7 @@ function switchTab(tabId, updateHash = true) {
         if(pendingTab) pendingTab.className = activeClass;
         openPendingActions();
     } else if(tabId === 'tab-linear') {
-        if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+        if(!hasEmployeePermission('linear')) { toast('Bu bölmə üçün icazə yoxdur.', true); switchTab('tab-tasks'); return; }
         const linearTab = document.getElementById('tab-linear');
         if(linearTab) linearTab.className = activeClass;
         nav('screen-linear');

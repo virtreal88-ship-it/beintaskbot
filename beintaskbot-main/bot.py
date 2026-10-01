@@ -120,6 +120,7 @@ LINEAR_TODO_STATE_ID = str(os.environ.get("LINEAR_TODO_STATE_ID") or "").strip()
 LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or "").strip()
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
+_LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
@@ -449,8 +450,9 @@ _ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees", "linear", "linear_edit")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
+_MASTER_PERMISSIONS = frozenset({"hot_orders", "hot_orders_create"})
 _HOT_ORDER_SKILLS = ("all", "montaj", "temir", "catdirilma", "servis", "digər")
 _employee_access_cache: dict[str, dict] | None = None
 _employee_access_cache_at = 0.0
@@ -464,6 +466,13 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
     # Hot orders is an independent menu.  It used to follow task access,
     # which made the switch ineffective: removing the hot-order checkbox and
     # retaining tasks silently brought it back on every save.
+    role_key = str(role or "").strip().casefold()
+    if role_key in {"master", "usta"}:
+        values &= _MASTER_PERMISSIONS
+        if not values:
+            values = {"hot_orders"}
+        elif "hot_orders_create" in values:
+            values.add("hot_orders")
     return [key for key in _EMPLOYEE_PERMISSIONS if key in values]
 
 
@@ -529,13 +538,24 @@ def employee_access_profile(chat_id: int) -> dict:
         # finance becomes a personal zero balance and the Təsdiq queue is
         # hidden even though its menu remains visible.
         canonical_admin = cid == ADMIN_CHAT_ID
-        role = "Admin" if canonical_admin or str(stored.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        stored_role = str(stored.get("role") or "").strip().casefold()
+        if canonical_admin or stored_role == "admin":
+            role = "Admin"
+        elif stored_role in {"master", "usta"}:
+            role = "Usta"
+        else:
+            role = "Əməkdaş"
         permissions = _normalize_employee_permissions(stored.get("permissions"), role)
         # The previous normalizer silently restored hot_orders whenever
         # hot_orders_create was retained. Nizami already switched the page
         # off, so migrate that legacy admin record once to the intended state.
         if canonical_admin and stored.get("permissions_version") != 2:
             permissions = [key for key in permissions if key != "hot_orders"]
+        if canonical_admin:
+            # New capabilities are added to the canonical administrator during
+            # migration, while an explicitly closed hot-order page remains
+            # closed in the saved matrix.
+            permissions = [key for key in _EMPLOYEE_PERMISSIONS if key in set(permissions) | {"linear", "linear_edit"}]
         return {
             "active": True if canonical_admin else bool(stored.get("active", True)),
             "role": role,
@@ -711,9 +731,11 @@ def remove_retired_employee_access() -> None:
 
 def employee_has_permission(chat_id: int, permission: str) -> bool:
     profile = employee_access_profile(chat_id)
-    return bool(profile.get("active")) and (
-        str(profile.get("role") or "").casefold() == "admin" or permission in set(profile.get("permissions") or [])
-    )
+    # Admin is still a privileged identity for API operations (`is_admin`),
+    # but menu/module visibility follows the saved permission matrix. This
+    # makes an explicitly closed module (for example İsti sifarişlər) stay
+    # closed instead of being re-enabled by a frontend `isAdmin ||` shortcut.
+    return bool(profile.get("active")) and permission in set(profile.get("permissions") or [])
 
 
 def can_receive_staff_notification(chat_id) -> bool:
@@ -19231,7 +19253,13 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             name = str(current.get("name") or "").strip()[:120]
         if not name:
             return web.json_response({"success": False, "error": "Əməkdaşın adını yazın."}, status=400)
-        role = "Admin" if str(data.get("role") or "").strip().casefold() == "admin" else "Əməkdaş"
+        requested_role = str(data.get("role") or "").strip().casefold()
+        if requested_role == "admin":
+            role = "Admin"
+        elif requested_role in {"master", "usta"}:
+            role = "Usta"
+        else:
+            role = "Əməkdaş"
         active = bool(data.get("active", True))
         if employee_id == manager_id and (not active or role != "Admin"):
             return web.json_response({"success": False, "error": "Öz admin girişinizi dəyişə bilməzsiniz."}, status=400)
@@ -19834,6 +19862,29 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
             logger.exception("Linear status Telegram notification failed")
 
 
+async def _notify_linear_status_transitions(issues: list[dict]) -> None:
+    """Notify once when a refreshed Linear issue enters a key status.
+
+    Linear changes can happen outside this CRM. The board refresh is therefore
+    the synchronization point: remember the last observed state per issue and
+    notify only on a real transition, avoiding Telegram duplicates on every
+    page reload.
+    """
+    important = {"testiq", "təsdiq", "tesdiq", "triage", "done"}
+    for issue in issues or []:
+        key = str(issue.get("source_id") or issue.get("id") or "").strip()
+        state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
+        name = str(state.get("name") or "").strip()
+        folded = name.casefold()
+        if not key or folded not in important:
+            continue
+        previous = _LINEAR_LAST_NOTIFIED_STATES.get(key)
+        _LINEAR_LAST_NOTIFIED_STATES[key] = folded
+        if previous is None or previous == folded:
+            continue
+        await _notify_linear_status_change(issue, {"name": name})
+
+
 def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
     """Update priority for any issue belonging to the configured team."""
     if priority not in {0, 1, 2, 3, 4}:
@@ -19964,11 +20015,13 @@ def _linear_delete_issue(issue_id: str) -> None:
 
 
 async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
-    """Owner-only Linear confirmation queue and explicit routing actions."""
+    """Linear board with a separate view and edit permission."""
     chat_id = int(request.get("authenticated_chat_id") or 0)
-    if not chat_id or not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Bu siyahı yalnız Admin üçündür."}, status=403)
+    if not chat_id or not employee_has_permission(chat_id, "linear"):
+        return web.json_response({"success": False, "error": "Linear bölməsi üçün icazə yoxdur."}, status=403)
     if request.method == "POST":
+        if not (is_admin(chat_id) or employee_has_permission(chat_id, "linear_edit")):
+            return web.json_response({"success": False, "error": "Linear tapşırıqlarını dəyişmək üçün ayrıca icazə lazımdır."}, status=403)
         try:
             data = await request.json()
         except Exception:
@@ -20002,6 +20055,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 issue_for_notice = dict(before)
                 issue_for_notice.update(moved if isinstance(moved, dict) else {})
                 if old_id != target_id:
+                    _LINEAR_LAST_NOTIFIED_STATES[str(issue_id)] = str(target.get("name") or "").strip().casefold()
                     await _notify_linear_status_change(issue_for_notice, target)
                 return web.json_response({"success": True, "message": f"Tapşırıq {target.get('name') or 'status'} mərhələsinə keçirildi.", "issue": moved, "status": target})
             if action == "priority":
@@ -20044,6 +20098,8 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     search = str(request.query.get("q") or "").strip()[:120]
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search, all_tasks=all_tasks)
+        if all_tasks and not search:
+            await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
         return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "search": search, "scope": "all" if all_tasks else "tesdiq"})
     except RuntimeError as exc:
@@ -20576,11 +20632,26 @@ async def handle_platform_kommo_callback(request: web.Request) -> web.Response:
     if not state:
         raise web.HTTPFound("/setup?kommo=invalid")
     try:
-        tenant_id = await asyncio.to_thread(consume_kommo_oauth_state, state)
+        oauth_context = await asyncio.to_thread(consume_kommo_oauth_state, state)
+        # ``consume_kommo_oauth_state`` returns the tenant-bound account
+        # domain saved before redirect. Kommo normally omits Referer from the
+        # callback, so relying on it made verified public integrations fail
+        # for new customers.
+        if isinstance(oauth_context, dict):
+            tenant_id = str(oauth_context.get("tenant_id") or "")
+            saved_domain = str(oauth_context.get("account_domain") or "")
+        else:  # backwards-compatible with an older helper during rolling deploy
+            tenant_id = str(oauth_context or "")
+            saved_domain = ""
         if str(query.get("error") or ""):
             raise TenantPlatformError("Kommo bağlantısına icazə verilmədi.")
         code = str(query.get("code") or "").strip()
-        domain = _kommo_callback_domain(str(query.get("referer") or query.get("referrer") or ""))
+        domain_hint = str(
+            query.get("account_domain") or query.get("referer") or query.get("referrer")
+            or query.get("account") or query.get("subdomain") or query.get("domain")
+            or saved_domain or ""
+        )
+        domain = _kommo_callback_domain(domain_hint)
         client_id, client_secret, redirect_uri = _kommo_oauth_settings()
         if not code:
             raise TenantPlatformError("Kommo təsdiq kodunu göndərmədi.")
@@ -21430,6 +21501,8 @@ def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
         return "finance"
     if path.startswith("/api/pending_actions"):
         return "waiting"
+    if path.startswith("/api/linear/"):
+        return "linear"
     if path.startswith("/api/gozleme"):
         return "passive_tasks"
     if path.startswith(("/api/samil/overview", "/api/pipelines", "/api/stages")):
@@ -22892,7 +22965,17 @@ async def handle_api_admin_balances(request: web.Request) -> web.Response:
     if selected_id:
         if selected_id not in employee_ids:
             return web.json_response({"success": False, "error": "Əməkdaş tapılmadı."}, status=404)
-        rows = get_balance_transactions(selected_id, limit=200)
+        # Keep the complete historical ledger available. Older builds used a
+        # 200-row slice and some employees (notably piecework staff) appeared
+        # to have no history after an ID/card migration. If the current
+        # Telegram key has no rows, recover legacy rows by the stored executor
+        # name without exposing retired employee cards in the directory.
+        rows = get_balance_transactions(selected_id, limit=1000)
+        if not rows:
+            wanted_name = str(directory.get(selected_id) or "").strip().casefold()
+            if wanted_name:
+                rows = [row for row in get_all_recent_transactions(limit=10000)
+                        if str(row.get("executor") or "").strip().casefold() == wanted_name]
         return web.json_response({
             "success": True, "employees": employees, "selected_employee_id": selected_id,
             "transactions": [format_transaction({**row, "telegram_id": selected_id}) for row in rows],

@@ -32,6 +32,7 @@
 <script>
 (()=>{
   const state={me:null,deals:[],tasks:[],view:'tasks'}; const $=id=>document.getElementById(id);
+  const inviteRole=$('inviteRole'); if(inviteRole && ![...inviteRole.options].some(o=>o.value==='master')) inviteRole.insertAdjacentHTML('beforeend','<option value="master">Usta</option>');
   const api=async(url,opt)=>{const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt&&opt.headers||{})},...opt});const d=await r.json().catch(()=>({success:false,error:'Server cavabı oxunmadı.'}));if(!r.ok||!d.success)throw new Error(d.error||'Sorğu alınmadı.');return d};
   const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
   const notice=(id,text)=>{const n=$(id);n.textContent=text||'';n.classList.toggle('show',!!text)}; const date=v=>{if(!v)return 'Tarix göstərilməyib';const d=new Date(v);return Number.isNaN(d)?'Tarix göstərilməyib':d.toLocaleString('az-AZ',{dateStyle:'medium',timeStyle:'short'})};

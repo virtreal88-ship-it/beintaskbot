@@ -27,9 +27,10 @@ class TenantPlatformError(RuntimeError):
 _schema_ready = False
 _schema_lock = Lock()
 _ROLE_PERMISSIONS = {
-    "owner": ["deals", "tasks", "customers", "employees", "integrations", "finance", "settings"],
+    "owner": ["deals", "tasks", "customers", "employees", "integrations", "finance", "settings", "hot_orders", "linear"],
     "manager": ["deals", "tasks", "customers"],
     "worker": ["tasks", "hot_orders"],
+    "master": ["hot_orders"],
 }
 _DEFAULT_MODULES = {"deals": True, "tasks": True, "customers": True, "hot_orders": False, "finance": False}
 _DEFAULT_NOTIFICATIONS = {"new_lead": True, "incoming_message": True, "task_assigned": True, "task_overdue": True}
@@ -74,7 +75,7 @@ def _ensure_schema(conn) -> None:
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
                     telegram_id BIGINT NOT NULL,
                     display_name TEXT NOT NULL DEFAULT '',
-                    role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'worker')),
+                    role TEXT NOT NULL CHECK (role IN ('owner', 'manager', 'worker', 'master')),
                     permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
                     active BOOLEAN NOT NULL DEFAULT TRUE,
                     invited_by BIGINT NULL,
@@ -89,7 +90,7 @@ def _ensure_schema(conn) -> None:
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
                     token_hash TEXT NOT NULL UNIQUE,
                     display_name TEXT NOT NULL DEFAULT '',
-                    role TEXT NOT NULL CHECK (role IN ('manager', 'worker')),
+                    role TEXT NOT NULL CHECK (role IN ('manager', 'worker', 'master')),
                     permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
                     created_by BIGINT NOT NULL,
                     expires_at TIMESTAMPTZ NOT NULL,
@@ -98,6 +99,13 @@ def _ensure_schema(conn) -> None:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            # Existing SaaS databases were created before the master role was
+            # introduced. Replace only the generated role constraints; data is
+            # preserved and the migration is safe to run on every startup.
+            cur.execute("ALTER TABLE saas_tenant_members DROP CONSTRAINT IF EXISTS saas_tenant_members_role_check")
+            cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'manager', 'worker', 'master'))")
+            cur.execute("ALTER TABLE saas_tenant_invites DROP CONSTRAINT IF EXISTS saas_tenant_invites_role_check")
+            cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('manager', 'worker', 'master'))")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_integrations (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -264,7 +272,7 @@ def _kommo_domain(value: str) -> str:
 def _role(value: str, *, owner: bool = False) -> str:
     if owner:
         return "owner"
-    return value if value in {"manager", "worker"} else "worker"
+    return value if value in {"manager", "worker", "master"} else "worker"
 
 
 def _permissions(value, role: str) -> list[str]:
@@ -950,9 +958,12 @@ def consume_kommo_oauth_state(state: str) -> str:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT * FROM saas_tenant_oauth_states
-                WHERE id = %s AND provider = 'kommo' AND used_at IS NULL AND expires_at > now()
-                FOR UPDATE
+                SELECT s.*, i.account_domain
+                FROM saas_tenant_oauth_states s
+                LEFT JOIN saas_tenant_integrations i
+                  ON i.tenant_id = s.tenant_id AND i.provider = 'kommo'
+                WHERE s.id = %s AND s.provider = 'kommo' AND s.used_at IS NULL AND s.expires_at > now()
+                FOR UPDATE OF s
             """, (state_id,))
             row = cur.fetchone()
             expected = str((row or {}).get("nonce_hash") or "")
@@ -961,7 +972,14 @@ def consume_kommo_oauth_state(state: str) -> str:
                 raise TenantPlatformError("Kommo quraşdırma keçidi etibarsızdır və ya müddəti bitib.")
             cur.execute("UPDATE saas_tenant_oauth_states SET used_at = now() WHERE id = %s", (state_id,))
         conn.commit()
-    return str(row["tenant_id"])
+    # The OAuth callback does not reliably include an HTTP Referer. Return the
+    # domain saved when the owner clicked “Kommo ilə qoşul”, so a tenant can
+    # complete the public OAuth flow without typing its technical subdomain
+    # again.
+    return {
+        "tenant_id": str(row["tenant_id"]),
+        "account_domain": str(row.get("account_domain") or ""),
+    }
 
 
 def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payload: dict) -> dict:
