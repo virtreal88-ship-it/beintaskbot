@@ -284,6 +284,9 @@ def _permissions(value, role: str) -> list[str]:
     if not isinstance(value, list):
         return list(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["worker"]))
     requested = [str(item) for item in value if str(item) in allowed]
+    if role == "master":
+        requested = [item for item in requested if item == "hot_orders"]
+        return requested or list(_ROLE_PERMISSIONS["master"])
     return requested or list(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["worker"]))
 
 
