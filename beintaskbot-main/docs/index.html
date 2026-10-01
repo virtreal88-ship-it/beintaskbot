@@ -2464,9 +2464,9 @@ function saveActiveTab(tabId) {
     try { localStorage.setItem(activeTabStorageKey(), tabId); } catch(_error) {}
 }
 const MOBILE_TAB_ORDERS = {
-    default: ['tab-samil-deals','tab-tasks','tab-hot-orders','tab-history','tab-hesabat','tab-create','tab-pending','tab-chats'],
+    default: ['tab-samil-deals','tab-tasks','tab-hot-orders','tab-linear','tab-history','tab-hesabat','tab-create','tab-pending','tab-chats','tab-settings'],
     // Nizami works first from tasks, then immediately from the client queue.
-    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-pending','tab-linear','tab-settings','tab-samil-deals','tab-history','tab-hesabat','tab-create']
+    nizami: ['tab-tasks','tab-chats','tab-hot-orders','tab-linear','tab-pending','tab-settings','tab-samil-deals','tab-history','tab-hesabat','tab-create']
 };
 function mobileTabOrder() {
     return isAdmin ? MOBILE_TAB_ORDERS.nizami : MOBILE_TAB_ORDERS.default;
@@ -2512,8 +2512,8 @@ function paintMobileTabBar(activeId) {
     const sheet = document.getElementById('tab-more-sheet');
     const list = document.getElementById('tab-more-list');
     const wanted = mobileTabOrder().filter(id => mobileTabWanted(id) && document.getElementById(id));
-    const primary = wanted.slice(0, 3);
-    const extra = wanted.slice(3);
+    const primary = wanted.slice(0, 4);
+    const extra = wanted.slice(4);
     wanted.forEach(id => {
         const el = document.getElementById(id);
         if(el) el.style.display = primary.includes(id) ? 'flex' : 'none';
