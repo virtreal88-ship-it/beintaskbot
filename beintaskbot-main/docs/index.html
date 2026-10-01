@@ -851,14 +851,30 @@
         #deal-view-modal .chats-back { display:inline-flex !important; align-items:center; justify-content:center; }
         @media (max-width: 1023px) {
             #screen-linear { min-width:0; overflow-x:hidden !important; }
-            #screen-linear .page-toolbar { min-height:48px; padding:8px 10px !important; gap:8px; }
-            #screen-linear .page-toolbar > div:first-child { min-width:0; }
-            #screen-linear .page-toolbar > div:first-child > div:first-child { font-size:12px; line-height:1.2; }
-            #screen-linear .page-toolbar > div:last-child { min-width:0; max-width:66%; justify-content:flex-end; flex-wrap:wrap; gap:4px !important; }
-            #screen-linear .page-toolbar .toolbar-select { min-width:0; max-width:116px; height:32px; padding:0 7px; font-size:10px; }
-            #screen-linear .page-toolbar .icon-action-btn, #screen-linear .page-toolbar .search-icon-btn { width:32px; height:32px; }
-            #screen-linear #linear-tasks-container, #screen-linear #linear-tasks-container .samil-kanban-board { width:100%; max-width:100%; overflow-x:hidden !important; }
-            #screen-linear #linear-tasks-container .samil-kanban-column { width:100%; max-width:100%; min-width:0; }
+            #screen-linear .page-toolbar {
+                display:grid !important; grid-template-columns:minmax(0,1fr); align-items:stretch; gap:9px;
+                width:100%; min-height:0; margin:0 !important; padding:12px !important;
+                background:#fff !important; color:#0f172a !important; border:1px solid #e2e8f0 !important;
+                border-radius:16px !important; box-shadow:0 2px 8px rgba(15,23,42,.05) !important;
+            }
+            #screen-linear .page-toolbar > div:first-child { min-width:0; width:100%; }
+            #screen-linear .page-toolbar > div:first-child > div:first-child { color:#0f172a !important; font-size:13px; line-height:1.25; }
+            #screen-linear .page-toolbar > div:first-child > div:last-child { color:#64748b !important; }
+            #screen-linear .page-toolbar > div:last-child {
+                min-width:0; width:100%; max-width:none; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) repeat(3,34px);
+                align-items:center; gap:5px !important;
+            }
+            #screen-linear .page-toolbar .toolbar-select { display:block !important; width:100%; min-width:0; max-width:none; height:34px; padding:0 24px 0 8px; font-size:10px; color:#334155; background:#f8fafc; border-color:#e2e8f0; }
+            #screen-linear .page-toolbar .icon-action-btn, #screen-linear .page-toolbar .search-icon-btn { width:34px; height:34px; color:#64748b; background:#fff; border:1px solid #e2e8f0; }
+            #screen-linear .page-toolbar .icon-action-btn.primary { color:#fff; background:#2563eb; border-color:#2563eb; }
+            #screen-linear .page-toolbar .icon-action-btn.labeled { width:34px; padding:0; }
+            #screen-linear .page-toolbar .icon-action-btn.labeled span { display:none; }
+            #screen-linear #linear-tasks-container { width:100%; max-width:100%; margin:0 !important; padding:0 0 16px !important; overflow-x:hidden !important; }
+            #screen-linear #linear-tasks-container .samil-kanban-board { width:100%; max-width:100%; overflow-x:hidden !important; }
+            #screen-linear #linear-tasks-container .samil-kanban-column { width:100%; max-width:100%; min-width:0; background:#f8fafc; }
+            #screen-linear #linear-tasks-container .samil-kanban-header { padding:10px 12px 8px; background:#fff; border-bottom:2px solid #dbe4ee; }
+            #screen-linear #linear-tasks-container .samil-kanban-list { display:flex; flex-direction:column; gap:8px; padding:8px 0 12px; background:#f8fafc; }
+            #screen-linear #linear-tasks-container .crm-task-card { width:calc(100% - 16px); max-width:none; margin:0 8px; padding:12px !important; border:1px solid #e2e8f0 !important; border-radius:14px !important; box-shadow:0 2px 7px rgba(15,23,42,.06) !important; }
             #linear-action-modal { z-index:15050 !important; padding-bottom:calc(74px + env(safe-area-inset-bottom, 0px)) !important; }
             #linear-action-modal > div { max-height:calc(100dvh - 88px); }
             #deal-view-modal .deal-shell-body { grid-template-columns:1fr; }
