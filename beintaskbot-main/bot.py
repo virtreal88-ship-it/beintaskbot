@@ -19645,8 +19645,11 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
     project_id = str(project_id or "").strip()
     if project_id:
         project_id = _linear_uuid(project_id, "layihə")
-        allowed = {str(row.get("id")) for row in _linear_projects()}
-        if project_id not in allowed:
+        try:
+            allowed = {str(row.get("id")) for row in _linear_projects()}
+        except Exception:
+            allowed = set()
+        if allowed and project_id not in allowed:
             raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
@@ -20190,7 +20193,15 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         if all_tasks and not search:
             await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
-        projects = await asyncio.to_thread(_linear_projects) if all_tasks else []
+        projects = []
+        if all_tasks:
+            # Projects are a convenience for the create dialog. A Linear
+            # workspace can disable the projects connection, so never let a
+            # project-list query take down the whole task board.
+            try:
+                projects = await asyncio.to_thread(_linear_projects)
+            except Exception as exc:
+                logger.warning("Linear projects could not be loaded: %s", exc)
         return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "projects": projects, "search": search, "scope": "all" if all_tasks else "tesdiq"})
     except RuntimeError as exc:
         return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
