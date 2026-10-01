@@ -20049,6 +20049,44 @@ def _linear_resolve_workflow_state_id(configured_id: str, wanted_name: str) -> s
     return _linear_uuid(configured_id, f"{wanted_name} statusu")
 
 
+def _linear_resolve_named_state_id(*names: str) -> str:
+    """Resolve a custom Linear workflow state by one of its visible names."""
+    wanted = {str(name or "").strip().casefold() for name in names if str(name or "").strip()}
+    if not wanted:
+        raise RuntimeError("Linear statusu seçilməyib.")
+    states = _linear_workflow_states()
+    for state in states:
+        name = str(state.get("name") or "").strip().casefold()
+        if name in wanted:
+            return _linear_uuid(str(state.get("id") or ""), "nəticə statusu")
+    raise RuntimeError(f"Linear-da bu status tapılmadı: {', '.join(sorted(wanted))}.")
+
+
+def _linear_save_test_result(issue_id: str, result: str, reason: str = "") -> dict:
+    """Move a completed task to accept/reject and keep the rejection reason."""
+    issue = _linear_issue_context(issue_id)
+    result = str(result or "").strip().casefold()
+    if result not in {"accept", "reject"}:
+        raise RuntimeError("Test nəticəsi düzgün deyil.")
+    reason = str(reason or "").strip()[:3000]
+    if result == "reject" and not reason:
+        raise RuntimeError("İmtina səbəbini yazın.")
+    if result == "reject":
+        comment_payload = _linear_graphql("""
+        mutation AddLinearTestFailureReason($issueId: String!, $body: String!) {
+          commentCreate(input: { issueId: $issueId, body: $body }) {
+            success
+            comment { id }
+          }
+        }
+        """, {"issueId": issue_id, "body": f"Testdən keçmədi səbəbi:\n\n{reason}"})
+        if not (comment_payload.get("commentCreate") or {}).get("success"):
+            raise RuntimeError("Test səbəbi Linear-da yadda saxlanmadı.")
+    state_id = _linear_resolve_named_state_id(result)
+    moved = _linear_move_any_issue(issue_id, state_id)
+    return moved or issue
+
+
 def _linear_resolve_cancelled_state_id() -> str:
     """Resolve Linear's native cancelled workflow state without extra config."""
     team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
@@ -20305,7 +20343,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
-        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create"}
+        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create", "test_accept", "test_reject"}
         if action not in allowed_actions or (action != "create" and not issue_id):
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
@@ -20348,6 +20386,11 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     _LINEAR_LAST_NOTIFIED_STATES[str(issue_id)] = str(target.get("name") or "").strip().casefold()
                     await _notify_linear_status_change(issue_for_notice, target)
                 return web.json_response({"success": True, "message": f"Tapşırıq {target.get('name') or 'status'} mərhələsinə keçirildi.", "issue": moved, "status": target})
+            if action in {"test_accept", "test_reject"}:
+                result = "accept" if action == "test_accept" else "reject"
+                moved = await asyncio.to_thread(_linear_save_test_result, issue_id, result, str(data.get("reason") or ""))
+                label = "qəbul edildi" if result == "accept" else "reject mərhələsinə keçirildi"
+                return web.json_response({"success": True, "message": f"Test nəticəsi: tapşırıq {label}.", "issue": moved})
             if action == "priority":
                 try:
                     priority = int(data.get("priority"))

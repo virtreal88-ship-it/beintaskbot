@@ -763,6 +763,9 @@
             min-width:16px; height:16px; border-radius:8px; display:none; align-items:center; justify-content:center; padding:0 4px;
         }
         #tab-more.on { color:#2481cc; }
+        #mobile-more-button { display:none; width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; align-items:center; justify-content:center; flex:none; }
+        #mobile-more-button.on { background:rgba(219,234,254,.22); color:#bfdbfe; }
+        #mobile-more-button svg { width:19px; height:19px; }
         #tab-more-sheet { position:fixed; inset:0; z-index:11070; }
         #tab-more-sheet[hidden] { display:none !important; }
         #tab-more-sheet .tab-more-dim { position:absolute; inset:0; background:rgba(15,23,42,.35); }
@@ -847,6 +850,17 @@
         #deal-view-modal .deal-side { border-right:0; border-left:1px solid #e8ecf0; background:#fff; padding:16px 16px 20px; }
         #deal-view-modal .chats-back { display:inline-flex !important; align-items:center; justify-content:center; }
         @media (max-width: 1023px) {
+            #screen-linear { min-width:0; overflow-x:hidden !important; }
+            #screen-linear .page-toolbar { min-height:48px; padding:8px 10px !important; gap:8px; }
+            #screen-linear .page-toolbar > div:first-child { min-width:0; }
+            #screen-linear .page-toolbar > div:first-child > div:first-child { font-size:12px; line-height:1.2; }
+            #screen-linear .page-toolbar > div:last-child { min-width:0; max-width:66%; justify-content:flex-end; flex-wrap:wrap; gap:4px !important; }
+            #screen-linear .page-toolbar .toolbar-select { min-width:0; max-width:116px; height:32px; padding:0 7px; font-size:10px; }
+            #screen-linear .page-toolbar .icon-action-btn, #screen-linear .page-toolbar .search-icon-btn { width:32px; height:32px; }
+            #screen-linear #linear-tasks-container, #screen-linear #linear-tasks-container .samil-kanban-board { width:100%; max-width:100%; overflow-x:hidden !important; }
+            #screen-linear #linear-tasks-container .samil-kanban-column { width:100%; max-width:100%; min-width:0; }
+            #linear-action-modal { z-index:15050 !important; padding-bottom:calc(74px + env(safe-area-inset-bottom, 0px)) !important; }
+            #linear-action-modal > div { max-height:calc(100dvh - 88px); }
             #deal-view-modal .deal-shell-body { grid-template-columns:1fr; }
             #deal-view-modal .deal-tabs { display:flex; }
             #deal-view-modal .deal-shell-body.show-chat .deal-side { display:none !important; }
@@ -1011,7 +1025,10 @@
             <span class="text-[10px] text-gray-300">BeinSystems</span>
         </div>
     </div>
-    <div class="text-right flex flex-col items-end">
+    <div class="text-right flex flex-col items-end gap-1">
+        <button id="mobile-more-button" type="button" onclick="toggleMobileMoreMenu()" aria-label="Daha">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </button>
         <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
         <div id="sync-indicator" style="display:none;" class="flex items-center justify-center mt-1">
             <span class="sync-meter"><span class="sync-spinner"></span><span class="sync-pct">0%</span></span>
@@ -1493,7 +1510,7 @@
     <button id="tab-settings" onclick="switchTab('tab-settings')" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span class="mt-0.5">Ayarlar</span>
     </button>
-    <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" class="flex flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
+    <button id="tab-more" type="button" onclick="toggleMobileMoreMenu()" style="display:none;" aria-hidden="true" class="hidden flex-col items-center justify-center flex-1 text-[11px] font-bold text-gray-400">
         <svg class="nav-svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
         <span class="mt-0.5">Daha</span>
     </button>
@@ -1860,7 +1877,7 @@ function syncSamilStagesFromPayload(payload) {
     const active = all.filter(([key]) => !['nerazobrannoye','ugurlu','imtina'].includes(key));
     SAMIL_ALL_STAGES.splice(0, SAMIL_ALL_STAGES.length, ...all);
     SAMIL_UI_STAGES.splice(0, SAMIL_UI_STAGES.length, ...active);
-    if(!SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter)) samilStageFilter = SAMIL_UI_STAGES[0]?.[0] || 'sorgular';
+    if(samilStageFilter !== 'all' && !SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter)) samilStageFilter = SAMIL_UI_STAGES[0]?.[0] || 'sorgular';
     renderSamilCompletionStages();
     applySamilUi();
 }
@@ -2207,7 +2224,7 @@ function applySamilWorkspace(payload) {
 async function loadSamilWorkspace(showFeedback = false, requestedStage = null, forceRefresh = false) {
     if(!HAS_OWN_FUNNEL && !HAS_CHATS) return false;
     const hadWorkspaceData = (Array.isArray(samilDeals) && samilDeals.length > 0) || (Array.isArray(mockTasks) && mockTasks.length > 0);
-    if(requestedStage && SAMIL_UI_STAGES.some(([key]) => key === requestedStage)) samilStageFilter = requestedStage;
+    if(requestedStage && (requestedStage === 'all' || SAMIL_UI_STAGES.some(([key]) => key === requestedStage))) samilStageFilter = requestedStage;
     // Hər yenilənmədə bütün mərhələlər bir dəfə yüklənir. Sonrakı keçidlər yalnız lokal məlumatdan açılır.
     const stageParam = 'all';
     const shouldRefresh = Boolean(showFeedback || forceRefresh);
@@ -2481,14 +2498,17 @@ function mobileTabIcon(id) {
 function closeMobileMoreMenu() {
     const sheet = document.getElementById('tab-more-sheet');
     if(sheet) sheet.hidden = true;
+    document.getElementById('mobile-more-button')?.setAttribute('aria-expanded', 'false');
 }
 function toggleMobileMoreMenu() {
     const sheet = document.getElementById('tab-more-sheet');
     if(!sheet) return;
     sheet.hidden = !sheet.hidden;
+    document.getElementById('mobile-more-button')?.setAttribute('aria-expanded', String(!sheet.hidden));
 }
 function paintMobileTabBar(activeId) {
     const moreBtn = document.getElementById('tab-more');
+    const mobileMoreButton = document.getElementById('mobile-more-button');
     const sheet = document.getElementById('tab-more-sheet');
     const list = document.getElementById('tab-more-list');
     const wanted = mobileTabOrder().filter(id => mobileTabWanted(id) && document.getElementById(id));
@@ -2499,9 +2519,14 @@ function paintMobileTabBar(activeId) {
         if(el) el.style.display = primary.includes(id) ? 'flex' : 'none';
     });
     if(moreBtn) {
-        moreBtn.style.display = extra.length ? 'flex' : 'none';
+        moreBtn.style.display = 'none';
         moreBtn.classList.toggle('on', extra.includes(activeId));
         moreBtn.style.color = extra.includes(activeId) ? '#2481cc' : '';
+    }
+    if(mobileMoreButton) {
+        mobileMoreButton.style.display = extra.length ? 'inline-flex' : 'none';
+        mobileMoreButton.classList.toggle('on', extra.includes(activeId));
+        mobileMoreButton.setAttribute('aria-expanded', String(!document.getElementById('tab-more-sheet')?.hidden));
     }
     if(list) {
         list.innerHTML = `<div class="tab-more-title">Daha</div>` + extra.map(id => `<button type="button" class="${id === activeId ? 'on' : ''}" data-more-tab="${id}"><span class="tab-more-icon">${mobileTabIcon(id)}</span><span class="tab-more-label">${escapeHtml(mobileTabLabel(id))}</span><span class="tab-more-arrow">›</span></button>`).join('');
@@ -3300,6 +3325,17 @@ function linearBoardPriorityStyle(value) {
     })[Number(value)] || 'background:#f8fafc;color:#64748b;border-color:#cbd5e1';
 }
 
+function linearBoardStatusStyle(status) {
+    const color = String(status?.color || '').trim();
+    if(/^#[0-9a-f]{3,8}$/i.test(color)) return `background:${color}18;color:${color};border-color:${color}66`;
+    return 'background:#f1f5f9;color:#475569;border-color:#cbd5e1';
+}
+
+function isLinearDoneStatus(status) {
+    const name = String(status?.name || '').trim().toLocaleLowerCase('az');
+    return name === 'done' || name === 'tamamlandı' || String(status?.type || '').trim().toLocaleLowerCase('az') === 'completed';
+}
+
 function linearBoardTaskMatches(item, query) {
     const q = String(query || '').trim().toLocaleLowerCase('az');
     if(!q) return true;
@@ -3331,15 +3367,17 @@ function linearBoardCardHtml(item) {
     const created = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
     const priorityOptions = [[0,'Yoxdur'],[1,'Təcili'],[2,'Yüksək'],[3,'Orta'],[4,'Aşağı']].map(([value,label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
     const priorityStyle = linearBoardPriorityStyle(item.priority);
+    const statusStyle = linearBoardStatusStyle(status);
     const description = escapeHtml([String(item.title || '').trim(), String(item.description || '').trim()].filter(Boolean).join('\n\n'));
     const link = /^https:\/\/linear\.app\//i.test(String(item.url || '')) ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-700">Linear ↗</a>` : '';
     const canEditLinear = isAdmin || hasEmployeePermission('linear_edit');
     const actionButtons = canEditLinear && item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
+    const testButtons = canEditLinear && isLinearDoneStatus(status) ? `<div class="mt-2 flex flex-wrap gap-1.5"><button type="button" onclick="runLinearTestAction('accept','${sourceId}')" class="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[10px] font-extrabold text-white">Test olundu</button><button type="button" onclick="openLinearTestFailModal('${sourceId}')" class="rounded-lg bg-rose-100 px-2.5 py-1.5 text-[10px] font-extrabold text-rose-700">Testdən keçmədi</button></div>` : '';
     const menu = canEditLinear && sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
     return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="${canEditLinear ? 'true' : 'false'}" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
         <div class="flex items-start gap-2 mb-2"><span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span><div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950 truncate" title="${client}">${client}</div></div>${menu}</div>
-        <div class="space-y-1 text-[11px] text-gray-600"><div class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
-        ${actionButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
+        <div class="space-y-1 text-[11px] text-gray-600"><div class="flex items-center justify-between gap-2"><span class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</span><span class="inline-flex max-w-[48%] truncate rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold" style="${statusStyle}" title="${escapeHtml(status.name || '')}">● ${escapeHtml(status.name || 'Status')}</span></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
+        ${actionButtons}${testButtons}<div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-end"><span class="text-[10px] text-gray-400 font-semibold">Sürüşdürərək mərhələni dəyişin</span></div>${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
 }
 
@@ -3355,6 +3393,18 @@ function renderLinearBoard() {
     if(!statuses.length) statuses = linearBoardRows.map(row => row.status || {}).filter(row => row.id);
     const unique = []; const seen = new Set();
     statuses.forEach(row => { if(row?.id && !seen.has(row.id)) { seen.add(row.id); unique.push(row); } });
+    const countRows = linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
+    const statusCounts = countRows.reduce((counts, row) => {
+        const key = String((row.status || {}).id || '');
+        counts.set(key, (counts.get(key) || 0) + 1);
+        return counts;
+    }, new Map());
+    const statusFilter = document.getElementById('linear-status-filter');
+    if(statusFilter) {
+        const current = filter;
+        statusFilter.innerHTML = `<option value="all">Bütün mərhələlər (${countRows.length})</option>` + unique.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')} (${statusCounts.get(String(row.id)) || 0})</option>`).join('');
+        if([...statusFilter.options].some(option => option.value === current)) statusFilter.value = current;
+    }
     const visibleStatuses = (isDesktop ? unique : unique.filter(row => filter === 'all' || row.id === filter));
     const rowsFor = stateId => linearBoardRows.filter(row => linearBoardHasAccount(row) && String((row.status || {}).id || '') === String(stateId) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter));
     board.className = 'samil-kanban-board';
@@ -3366,7 +3416,7 @@ function renderLinearBoard() {
     board.querySelectorAll('[data-linear-status-column]').forEach(bindLinearColumnDrop);
     linearBoardRows.forEach(row => bindLinearTaskCard(board.querySelector(`[data-linear-board-id="${CSS.escape(String(row.source_id || ''))}"]`), row));
     const meta = document.getElementById('linear-page-meta');
-    if(meta) meta.textContent = `${linearBoardRows.filter(row => linearBoardHasAccount(row) && linearBoardTaskMatches(row, query) && linearBoardOperatorMatches(row, operatorFilter)).length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
+    if(meta) meta.textContent = `${countRows.length} tapşırıq · mərhələni seçmək üçün sürüşdürün`;
 }
 
 function filterLinearBoard(value) { if(value !== undefined && document.getElementById('linear-board-search')) document.getElementById('linear-board-search').value = value; renderLinearBoard(); }
@@ -3483,6 +3533,48 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
     } catch(error) {
         toast(error.message || 'Linear tapşırığı dəyişdirilmədi.', true);
         if(select && previousPriority !== null) select.value = String(previousPriority);
+    } finally {
+        linearTesdiqActionPending = false;
+    }
+}
+
+function openLinearTestFailModal(issueId) {
+    const item = findLinearIssue(issueId);
+    if(!item) { toast('Tapşırıq tapılmadı.', true); return; }
+    closeLinearModal();
+    const modal = document.createElement('div');
+    modal.id = 'linear-action-modal';
+    modal.className = 'fixed inset-0 z-[15050] flex items-end justify-center bg-slate-950/45 p-3 pb-[calc(74px+env(safe-area-inset-bottom))] sm:items-center sm:p-4';
+    modal.innerHTML = `<div class="w-full max-w-md max-h-[calc(100dvh-88px)] overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl"><div class="mb-3 flex items-start justify-between gap-3"><div><div class="text-base font-extrabold text-slate-900">Testdən keçmədi</div><div class="mt-1 text-[11px] text-slate-500">${escapeHtml(item.id || '')} üçün səbəb yazın. Bu şərh Linear-da saxlanacaq.</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div><textarea id="linear-test-fail-reason" rows="5" class="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none focus:border-rose-300" placeholder="Test zamanı aşkar olunan problem *"></textarea><div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-test-fail-submit" type="button" onclick="runLinearTestAction('reject','${escapeHtml(issueId)}')" class="rounded-xl bg-rose-600 py-3 text-xs font-extrabold text-white">Təsdiqlə</button></div></div>`;
+    modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
+    document.body.appendChild(modal);
+    window.setTimeout(() => document.getElementById('linear-test-fail-reason')?.focus(), 30);
+}
+
+async function runLinearTestAction(action, issueId) {
+    if(linearTesdiqActionPending || !issueId || !['accept','reject'].includes(action)) return;
+    const reason = action === 'reject' ? String(document.getElementById('linear-test-fail-reason')?.value || '').trim() : '';
+    if(action === 'reject' && !reason) { toast('İmtina səbəbini yazın.', true); return; }
+    const button = document.getElementById('linear-test-fail-submit');
+    linearTesdiqActionPending = true;
+    if(button) { button.disabled = true; button.textContent = 'Göndərilir…'; }
+    try {
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},
+            body:JSON.stringify({action:'test_' + action, issue_id:issueId, reason})
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok || !data.success) throw new Error(data.error || 'Test nəticəsi yadda saxlanmadı.');
+        linearBoardRows = linearBoardRows.filter(row => String(row.source_id) !== String(issueId));
+        linearQueueRows = linearQueueRows.filter(row => String(row.source_id) !== String(issueId));
+        linearTesdiqRows = linearTesdiqRows.filter(row => String(row.source_id) !== String(issueId));
+        closeLinearModal();
+        renderLinearBoard();
+        toast(data.message || (action === 'accept' ? 'Test qəbul edildi.' : 'Testdən keçmədi olaraq işarələndi.'));
+    } catch(error) {
+        if(button) { button.disabled = false; button.textContent = 'Təsdiqlə'; }
+        toast(error.message || 'Test nəticəsi yadda saxlanmadı.', true);
     } finally {
         linearTesdiqActionPending = false;
     }
@@ -4617,7 +4709,7 @@ function linkifyText(value) {
 }
 
 function setSamilStageFilter(stageKey) {
-    if(!SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
+    if(stageKey !== 'all' && !SAMIL_UI_STAGES.some(([key]) => key === stageKey)) return;
     samilStageFilter = stageKey;
     localStorage.setItem('samil_stage_filter', stageKey);
     // Mərhələlərarası keçid şəbəkəyə sorğu göndərmir: bütün siyahı əvvəlcədən yüklənib.
@@ -9407,25 +9499,26 @@ function renderSamilDeals() {
     if(!container || !count) return;
     const localCount = key => (Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key].length : 0);
     const stageTotal = key => Number.isFinite(Number(samilStageCounts[key])) ? Number(samilStageCounts[key]) : localCount(key);
-    if(!SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) && SAMIL_UI_STAGES.length) {
+    if(samilStageFilter !== 'all' && !SAMIL_UI_STAGES.some(([key]) => key === samilStageFilter) && SAMIL_UI_STAGES.length) {
         samilStageFilter = SAMIL_UI_STAGES[0][0];
     }
+    const allStageTotal = SAMIL_UI_STAGES.reduce((sum, [key]) => sum + stageTotal(key), 0);
     if(nav) {
         const stageButton = (key, label, total) => `<button type="button" onclick="setSamilStageFilter('${key}')" class="filter-pill ${samilStageFilter === key ? 'active' : ''} shrink-0 px-3 py-2 text-[11px] font-bold rounded-xl whitespace-nowrap">${escapeHtml(label)} <span class="opacity-70">${total}</span></button>`;
-    nav.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
+    nav.innerHTML = stageButton('all', 'Hamısı', allStageTotal) + SAMIL_UI_STAGES.map(([key, label]) => stageButton(key, label, stageTotal(key))).join('');
     }
     if(stageSelect) {
-        stageSelect.innerHTML = SAMIL_UI_STAGES.map(([key, label]) => `<option value="${key}" ${key === samilStageFilter ? 'selected' : ''}>${escapeHtml(label)} (${stageTotal(key)})</option>`).join('');
+        stageSelect.innerHTML = `<option value="all" ${samilStageFilter === 'all' ? 'selected' : ''}>Hamısı (${allStageTotal})</option>` + SAMIL_UI_STAGES.map(([key, label]) => `<option value="${key}" ${key === samilStageFilter ? 'selected' : ''}>${escapeHtml(label)} (${stageTotal(key)})</option>`).join('');
         stageSelect.onchange = () => setSamilStageFilter(stageSelect.value);
     }
-    const totalDeals = SAMIL_UI_STAGES.reduce((sum, [key]) => sum + stageTotal(key), 0);
+    const totalDeals = allStageTotal;
     count.textContent = `${totalDeals} aktiv sövdələşmə · Kartı başqa mərhələyə sürüşdürün`;
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
     const dealsForStage = key => {
         const deals = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key] : samilDeals.filter(deal => deal.stage_key === key);
         return dealListSearch ? deals.filter(deal => crmRecordMatchesSearch(deal, dealListSearch)) : deals;
     };
-    let stagesToRender = isDesktop ? SAMIL_UI_STAGES : SAMIL_UI_STAGES.filter(([key]) => key === samilStageFilter);
+    let stagesToRender = isDesktop || samilStageFilter === 'all' ? SAMIL_UI_STAGES : SAMIL_UI_STAGES.filter(([key]) => key === samilStageFilter);
     if(dealListSearch && !isDesktop) {
         const matched = SAMIL_UI_STAGES.filter(([key]) => dealsForStage(key).length);
         if(matched.length) stagesToRender = matched;
