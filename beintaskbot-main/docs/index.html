@@ -957,6 +957,45 @@
             body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0 !important; height:100vh !important; }
             body.chat-open,
             body.chats-screen:has(.chats-app.chat-open) { overflow:hidden; }
+            /* Müştərilər follows the same card-and-gutter language as the
+               other mobile pages while keeping the chat view full-screen. */
+            body.chats-screen:not(:has(.chats-app.chat-open)) #content-area {
+                padding:10px 16px 74px !important; background:#f4f6f8; overflow:hidden;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) #screen-chats.screen.active {
+                height:100%; margin:0; min-height:0;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-app {
+                margin:0; min-height:0; border:1px solid #e2e8f0; border-radius:16px;
+                box-shadow:0 2px 8px rgba(15,23,42,.05); background:#f8fafc;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-list {
+                background:#f8fafc; border-radius:16px; overflow:hidden;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-toolbar {
+                padding:10px 12px; background:#fff; border-bottom:1px solid #e2e8f0;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-toolbar .search-icon-btn,
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-toolbar .chats-new-btn {
+                color:#64748b; background:#fff; border:1px solid #e2e8f0;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-assignee-select {
+                color:#334155; background:#f8fafc; border-color:#e2e8f0;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-filter-tabs {
+                padding:8px 10px; background:#fff; border-bottom:1px solid #e2e8f0;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-rows {
+                padding:8px 0 12px; background:#f8fafc;
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-row {
+                width:calc(100% - 16px); margin:0 8px 8px; padding:11px 12px;
+                border:1px solid #e2e8f0; border-radius:14px; background:#fff;
+                box-shadow:0 2px 7px rgba(15,23,42,.05);
+            }
+            body.chats-screen:not(:has(.chats-app.chat-open)) .chats-row.on { background:#eef5ff; border-color:#bfdbfe; }
+            body.chats-screen:has(.chats-app.chat-open) #content-area { padding:0 !important; }
+            body.chats-screen:has(.chats-app.chat-open) .chats-app { margin:0; border:0; border-radius:0; box-shadow:none; }
         }
     </style>
 </head>
