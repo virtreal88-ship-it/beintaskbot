@@ -850,6 +850,40 @@
         #deal-view-modal .deal-side { border-right:0; border-left:1px solid #e8ecf0; background:#fff; padding:16px 16px 20px; }
         #deal-view-modal .chats-back { display:inline-flex !important; align-items:center; justify-content:center; }
         @media (max-width: 1023px) {
+            /* Unified mobile page treatment: every screen keeps the same
+               white toolbar, side gutters and separated content sections. */
+            .page-toolbar {
+                margin:0 !important; padding:12px !important; min-height:0;
+                background:#fff !important; color:#0f172a !important;
+                border:1px solid #e2e8f0 !important; border-radius:16px !important;
+                box-shadow:0 2px 8px rgba(15,23,42,.05) !important;
+            }
+            .page-toolbar .text-gray-800, .page-toolbar .text-gray-600, .page-toolbar .page-toolbar-title { color:#0f172a !important; }
+            .page-toolbar .text-gray-400, .page-toolbar .page-user-name, .page-toolbar .page-toolbar-subtitle { color:#64748b !important; }
+            .page-toolbar .icon-action-btn, .page-toolbar .search-icon-btn { color:#64748b; background:#fff; border:1px solid #e2e8f0; }
+            .page-toolbar .icon-action-btn.primary { color:#fff; background:#2563eb; border-color:#2563eb; }
+            .page-toolbar .toolbar-select { color:#334155; background:#f8fafc; border-color:#e2e8f0; }
+            #screen-samil-deals .samil-kanban-wrap, #screen-notifications .samil-kanban-wrap,
+            #screen-gozleme .samil-kanban-wrap, #screen-pending .samil-kanban-wrap, #screen-linear .samil-kanban-wrap {
+                margin:10px 0 0 !important; padding:0 !important; border-radius:16px; overflow-x:hidden; overflow-y:visible;
+            }
+            #screen-samil-deals .samil-kanban-column, #screen-notifications .samil-kanban-column,
+            #screen-gozleme .samil-kanban-column, #screen-pending .samil-kanban-column, #screen-linear .samil-kanban-column {
+                border-radius:16px; overflow:hidden; background:#f8fafc;
+            }
+            #screen-samil-deals .samil-kanban-header, #screen-notifications .samil-kanban-header,
+            #screen-gozleme .samil-kanban-header, #screen-pending .samil-kanban-header, #screen-linear .samil-kanban-header {
+                border-bottom:1px solid #e2e8f0;
+            }
+            #screen-samil-deals .samil-kanban-list, #screen-notifications .samil-kanban-list,
+            #screen-gozleme .samil-kanban-list, #screen-pending .samil-kanban-list, #screen-linear .samil-kanban-list {
+                display:flex; flex-direction:column; gap:8px; padding:8px 0 12px; background:#f8fafc;
+            }
+            #screen-samil-deals .samil-deal-card, #screen-notifications .crm-task-card,
+            #screen-gozleme .crm-task-card, #screen-pending .crm-task-card, #screen-linear .crm-task-card {
+                width:calc(100% - 16px); max-width:none; margin:0 8px; border:1px solid #e2e8f0 !important;
+                border-radius:14px !important; box-shadow:0 2px 7px rgba(15,23,42,.06) !important;
+            }
             #screen-linear { min-width:0; overflow-x:hidden !important; }
             #screen-linear .page-toolbar {
                 display:grid !important; grid-template-columns:minmax(0,1fr); align-items:stretch; gap:9px;
@@ -869,7 +903,7 @@
             #screen-linear .page-toolbar .icon-action-btn.primary { color:#fff; background:#2563eb; border-color:#2563eb; }
             #screen-linear .page-toolbar .icon-action-btn.labeled { width:34px; padding:0; }
             #screen-linear .page-toolbar .icon-action-btn.labeled span { display:none; }
-            #screen-linear #linear-tasks-container { width:100%; max-width:100%; margin:0 !important; padding:0 0 16px !important; overflow-x:hidden !important; }
+            #screen-linear #linear-tasks-container { width:100%; max-width:100%; margin:10px 0 0 !important; padding:0 0 16px !important; overflow-x:hidden !important; }
             #screen-linear #linear-tasks-container .samil-kanban-board { width:100%; max-width:100%; overflow-x:hidden !important; }
             #screen-linear #linear-tasks-container .samil-kanban-column { width:100%; max-width:100%; min-width:0; background:#f8fafc; }
             #screen-linear #linear-tasks-container .samil-kanban-header { padding:10px 12px 8px; background:#fff; border-bottom:2px solid #dbe4ee; }
