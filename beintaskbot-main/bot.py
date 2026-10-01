@@ -87,7 +87,10 @@ BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
-WEB_APP_URL = str(os.environ.get("WEBAPP_PUBLIC_URL") or f"{CANONICAL_WEB_ORIGIN}/webapp").rstrip("/")
+# Telegram buttons must never point at a deployment-specific Railway URL.
+# Keep one stable public address even if an old WEBAPP_PUBLIC_URL variable is
+# still present in Railway.
+WEB_APP_URL = f"{CANONICAL_WEB_ORIGIN}/webapp"
 LEGACY_RAILWAY_HOST = "worker-production-3e3e.up.railway.app"
 # The HTTP server has its own event loop. Keep this public value as state
 # populated by the Telegram polling loop; never call Bot methods from aiohttp.
@@ -4774,7 +4777,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         if not _approve_web_login_request(nonce, chat_id):
-            await update.message.reply_text("⚠️ Giriş linkinin vaxtı bitib. Saytdan yenisini yaradın.")
+            # A deployment can clear the in-memory one-time nonce.  Do not
+            # strand a user on an old Telegram message: issue the stable
+            # signed account link instead.
+            permanent_token = _make_permanent_web_login_token(chat_id)
+            permanent_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(permanent_token)}"
+            await update.message.reply_text(
+                "✅ Giriş linki yeniləndi. Aşağıdakı düymə ilə veb versiyaya daxil olun:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Veb versiyanı aç", url=permanent_url)]])
+            )
             return
         login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(nonce)}"
         await update.message.reply_text(
@@ -4785,9 +4796,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users = load_users()
     if str(chat_id) in users:
         info = users[str(chat_id)]
-        nonce = _create_web_login_request()
-        _approve_web_login_request(nonce, chat_id)
-        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(nonce)}"
+        permanent_token = _make_permanent_web_login_token(chat_id)
+        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(permanent_token)}"
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
             f"🌐 Aşağıdakı düymə ilə veb versiyaya daxil olun:",
@@ -21493,7 +21503,8 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
 
 
 async def handle_web_login_complete(request: web.Request) -> web.Response:
-    chat_id = _consume_web_login_request(request.rel_url.query.get("token") or "")
+    token = request.rel_url.query.get("token") or ""
+    chat_id = _consume_web_login_request(token) or _consume_permanent_web_login_token(token)
     if not chat_id or not employee_access_profile(chat_id).get("active"):
         return web.Response(status=403, text="Login link is invalid or access is disabled.")
     response = web.HTTPFound(WEB_APP_URL)
@@ -21646,11 +21657,15 @@ async def serve_web_asset(request: web.Request) -> web.Response:
     return response
 
 _WEB_SESSION_COOKIE = "bein_tg_session"
-_WEB_SESSION_TTL_SEC = 8 * 60 * 60
+# Keep the browser session through Railway restarts/deploys.  The cookie is
+# still signed and access is checked against the active employee record on
+# every API request, so deactivating an employee immediately revokes access.
+_WEB_SESSION_TTL_SEC = 30 * 24 * 60 * 60
 _TENANT_SESSION_COOKIE = "csa_tenant_session"
 _TENANT_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
 _WEB_LOGIN_TTL_SEC = 10 * 60
+_PERMANENT_WEB_LOGIN_TTL_SEC = 365 * 24 * 60 * 60
 _PUBLIC_API_PATHS = {"/api/deal/public"}
 _ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
 _web_login_requests: dict[str, dict] = {}
@@ -21717,6 +21732,33 @@ def _consume_web_login_request(nonce: str) -> int | None:
         return int(request_data.get("chat_id") or 0) or None
     except (TypeError, ValueError):
         return None
+
+
+def _make_permanent_web_login_token(chat_id: int) -> str:
+    """Create a long-lived signed Telegram account link for the bot menu."""
+    expires_at = int(_time_module.time()) + _PERMANENT_WEB_LOGIN_TTL_SEC
+    payload = f"v1.{int(chat_id)}.{expires_at}"
+    signature = hmac.new(TELEGRAM_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _consume_permanent_web_login_token(token: str) -> int | None:
+    """Validate a stable account link without relying on process memory."""
+    raw = str(token or "").strip()
+    parts = raw.split(".")
+    if len(parts) != 4 or parts[0] != "v1":
+        return None
+    _version, chat_raw, expires_raw, received_signature = parts
+    try:
+        chat_id = int(chat_raw)
+        expires_at = int(expires_raw)
+    except (TypeError, ValueError):
+        return None
+    if not chat_id or expires_at < int(_time_module.time()):
+        return None
+    payload = f"v1.{chat_id}.{expires_at}"
+    expected_signature = hmac.new(TELEGRAM_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return chat_id if hmac.compare_digest(expected_signature, received_signature) else None
 
 
 def _telegram_webapp_user_id(init_data: str) -> int | None:
@@ -21907,7 +21949,7 @@ async def telegram_auth_middleware(request, handler):
     request["authenticated_chat_id"] = int(chat_id)
     request["employee_access"] = profile
     response = await handler(request)
-    if set_session:
+    if set_session or request.cookies.get(_WEB_SESSION_COOKIE):
         response.set_cookie(
             _WEB_SESSION_COOKIE,
             _make_web_session(int(chat_id)),
