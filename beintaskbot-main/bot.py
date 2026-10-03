@@ -19787,9 +19787,22 @@ _LINEAR_OPERATOR_BY_CHAT = {
     int(ADMIN_CHAT_ID): "admin@nizam",
 }
 
+_LINEAR_CREATE_ACCOUNT_BY_CHAT = {
+    int(RUFAT_CHAT_ID): "rufet",
+    int(HUSEYN_CHAT_ID): "huseyn",
+    int(RASIM_CHAT_ID): "rasim",
+    int(ADMIN_CHAT_ID): "nizam",
+}
+
 
 def _linear_operator_for_chat(chat_id: int) -> str:
     return str(_LINEAR_OPERATOR_BY_CHAT.get(int(chat_id)) or "").strip()
+
+
+def _linear_create_identity_for_chat(chat_id: int) -> tuple[str, str]:
+    """Resolve creation metadata from the authenticated employee, not input."""
+    account = str(_LINEAR_CREATE_ACCOUNT_BY_CHAT.get(int(chat_id)) or "").strip()
+    return account, _linear_operator_for_chat(chat_id)
 
 
 def _linear_account_key(value: str) -> str:
@@ -20510,16 +20523,9 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     priority = int(data.get("priority") or 0)
                 except (TypeError, ValueError):
                     return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
-                account = str(data.get("account") or data.get("client") or "").strip()
-                operator = str(data.get("operator") or "").strip()
-                expected_operator = _linear_operator_for_chat(chat_id)
-                if not expected_operator:
-                    return web.json_response({"success": False, "error": "Bu əməkdaş üçün Linear operatoru təyin edilməyib."}, status=403)
-                if operator != expected_operator:
-                    return web.json_response({"success": False, "error": "Yalnız öz operatorunuzla tapşırıq yarada bilərsiniz."}, status=403)
-                account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
-                if account_scope is not None and not _linear_account_matches(account, account_scope):
-                    return web.json_response({"success": False, "error": "Bu hesab üçün tapşırıq yaratmaq icazəniz yoxdur."}, status=403)
+                account, operator = _linear_create_identity_for_chat(chat_id)
+                if not account or not operator:
+                    return web.json_response({"success": False, "error": "Bu əməkdaş üçün Linear hesabı və operatoru təyin edilməyib. Administratorla əlaqə saxlayın."}, status=403)
                 created = await asyncio.to_thread(
                     _linear_create_issue,
                     title=str(data.get("title") or ""),

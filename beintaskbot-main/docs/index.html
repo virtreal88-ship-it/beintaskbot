@@ -3778,19 +3778,6 @@ function openLinearAccountAddPopup() {
     window.setTimeout(() => document.getElementById('linear-account-new')?.focus(), 30);
 }
 
-function linearCreateOperatorOptions() {
-    const operators = {
-        '1628569350': 'admin@nizam',
-        '6824377548': 'rufet@beinsystems',
-        '7329891614': 'huseyn@beinsystems',
-        '7920785774': 'rasim@beinsystems'
-    };
-    const value = operators[String(CURRENT_USER_ID || '')] || '';
-    return value
-        ? `<option value="${escapeHtml(value)}" selected>${escapeHtml(value)}</option>`
-        : '<option value="">Operator təyin edilməyib</option>';
-}
-
 async function saveLinearAccount() {
     if(!isAdmin || linearTesdiqActionPending) return;
     const input = document.getElementById('linear-account-new');
@@ -3816,16 +3803,13 @@ async function saveLinearAccount() {
 
 async function openLinearCreateModal() {
     closeLinearModal();
-    await loadLinearAccounts();
     const modal = document.createElement('div');
     modal.id = 'linear-action-modal';
     modal.className = 'fixed inset-0 z-[15050] flex items-end justify-center bg-slate-950/45 p-2 sm:items-center sm:p-4';
     const projects = Array.isArray(linearBoardProjects) ? linearBoardProjects : [];
     modal.innerHTML = `<div class="w-full max-w-sm max-h-[82vh] overflow-y-auto rounded-2xl bg-white p-3 shadow-2xl sm:rounded-2xl">
         <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığı yarat</div><div class="text-[11px] text-slate-400">Yeni tapşırıq avtomatik Triage mərhələsinə düşəcək</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
-        <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-create-title" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Tapşırığın başlığı">
-        <div class="mb-1 flex items-center justify-between"><label class="text-[11px] font-bold text-slate-500">Hesab *</label>${isAdmin ? '<button type="button" onclick="openLinearAccountAddPopup()" class="flex h-6 w-6 items-center justify-center rounded-md bg-violet-100 text-sm font-extrabold text-violet-700" aria-label="Hesab əlavə et">+</button>' : ''}</div><select id="linear-create-account" class="mb-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" required>${linearAccountSuggestions()}</select>
-        <label class="mb-1 block text-[11px] font-bold text-slate-500">Operator *</label><select id="linear-create-operator" class="mb-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none" required>${linearCreateOperatorOptions()}</select>
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq *</label><input id="linear-create-title" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300" placeholder="Tapşırığın başlığı" required>
         <div class="grid grid-cols-2 gap-2 mb-3"><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Prioritet</label><select id="linear-create-priority" class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none"><option value="0">Yoxdur</option><option value="1">Təcili</option><option value="2">Yüksək</option><option value="3" selected>Orta</option><option value="4">Aşağı</option></select></div><div><label class="mb-1 block text-[11px] font-bold text-slate-500">Layihə *</label><select id="linear-create-project" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none" required><option value="">Layihə seçin…</option>${projects.map(project => `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}</option>`).join('')}</select></div></div>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama *</label><div class="relative"><textarea id="linear-create-description" rows="4" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 pb-11 text-sm leading-5 outline-none focus:border-violet-300" placeholder="Tapşırığın məzmunu"></textarea><button id="linear-create-ai" type="button" onclick="rewriteLinearCreateWithAI()" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-1.5 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
         <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-create-save" type="button" onclick="saveLinearCreate()" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yarat</button></div>
@@ -3855,17 +3839,22 @@ async function rewriteLinearCreateWithAI() {
 async function saveLinearCreate() {
     if(linearTesdiqActionPending) return;
     const title = document.getElementById('linear-create-title')?.value.trim() || '';
-    const account = document.getElementById('linear-create-account')?.value.trim() || '';
-    const operator = document.getElementById('linear-create-operator')?.value.trim() || '';
     const description = document.getElementById('linear-create-description')?.value.trim() || '';
     const priority = Number(document.getElementById('linear-create-priority')?.value || 0);
     const project_id = document.getElementById('linear-create-project')?.value || '';
-    if(!title || !account || !operator || !project_id || !description) { toast('Başlıq, hesab, operator, layihə və açıqlama vacibdir.', true); return; }
+    const requiredFields = [
+        [title, 'linear-create-title', 'Başlığı yazın.'],
+        [project_id, 'linear-create-project', 'Layihə seçin.'],
+        [description, 'linear-create-description', 'Açıqlamanı yazın.']
+    ];
+    for(const [value, fieldId, message] of requiredFields) {
+        if(!value) { toast(message, true); document.getElementById(fieldId)?.focus(); return; }
+    }
     const button = document.getElementById('linear-create-save');
     linearTesdiqActionPending = true;
     if(button) { button.disabled = true; button.textContent = 'Yaradılır…'; }
     try {
-        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'create', title, account, operator, priority, project_id, description})});
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'create', title, priority, project_id, description})});
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırığı yaradılmadı.');
         closeLinearModal(); toast(data.message || 'Linear tapşırığı yaradıldı.');
