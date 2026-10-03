@@ -19750,6 +19750,7 @@ def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]
     metadata: dict[str, str] = {}
     visible_lines: list[str] = []
     key_map = {
+        "başlıq": "title", "basliq": "title", "title": "title",
         "layihə": "project", "project": "project",
         "operator": "operator", "icraçı": "operator", "assignee": "operator",
         "müştəri": "client", "client": "client", "account": "client", "hesab": "client",
@@ -19876,7 +19877,7 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
             raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Hesab: {account}\n\n{description}"
+    saved_description = f"Başlıq: {title}\nHesab: {account}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -19988,7 +19989,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
         items.append({
             "id": str(row.get("identifier") or ""),
             "source_id": str(row.get("id") or ""),
-            "title": str(row.get("title") or "Tapşırıq"),
+            "title": description_meta.get("title") or str(row.get("title") or "Tapşırıq"),
             "description": clean_description[:1200],
             "client": description_meta.get("client") or _linear_client_hint(raw_description),
             "priority": int(row.get("priority") or 0),
@@ -20260,12 +20261,14 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str, assig
             raise RuntimeError("Seçilmiş icraçı bu Linear komandasına aid deyil.")
     raw_description = str(issue.get("description") or "")
     metadata_lines: list[str] = []
-    metadata_keys = {"layihə", "project", "operator", "icraçı", "assignee", "mühit", "muhit", "environment", "müştəri", "client", "account", "hesab"}
+    metadata_keys = {"başlıq", "basliq", "title", "layihə", "project", "operator", "icraçı", "assignee", "mühit", "muhit", "environment", "müştəri", "client", "account", "hesab"}
     for raw_line in raw_description.splitlines():
         match = re.match(r"^([^:]{1,40}):\s*(.+)$", raw_line.strip())
-        if match and match.group(1).strip().casefold() in metadata_keys:
-            metadata_lines.append(raw_line.strip())
-    saved_description = "\n".join(metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
+        if match:
+            key = match.group(1).strip().casefold()
+            if key in metadata_keys and key not in {"başlıq", "basliq", "title"}:
+                metadata_lines.append(raw_line.strip())
+    saved_description = "\n".join([f"Başlıq: {title}"] + metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
     payload = _linear_graphql("""
     mutation EditLinearIssue($id: String!, $title: String!, $description: String!, $assigneeId: String) {
       issueUpdate(id: $id, input: { title: $title, description: $description, assigneeId: $assigneeId }) {

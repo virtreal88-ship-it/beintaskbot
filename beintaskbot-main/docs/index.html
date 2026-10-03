@@ -3264,7 +3264,14 @@ function linearIssueCardHtml(item) {
     const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
     const operator = escapeHtml(item.operator || 'Göstərilməyib');
     const client = escapeHtml(item.client || 'Göstərilməyib');
-    const description = escapeHtml([String(item.title || '').trim(), String(item.description || '').trim()].filter(Boolean).join('\n\n'));
+    const taskTitle = String(item.title || '').trim() || 'Tapşırıq';
+    let bodyText = String(item.description || '').trim();
+    const firstLine = bodyText.split(/\r?\n/)[0]?.trim() || '';
+    if(firstLine && (firstLine.localeCompare(taskTitle, undefined, {sensitivity:'base'}) === 0 || /^başlıq\s*:/i.test(firstLine))) {
+        bodyText = bodyText.split(/\r?\n/).slice(1).join('\n').trim();
+    }
+    const cardTitle = escapeHtml(taskTitle);
+    const description = escapeHtml(bodyText);
     const labels = Array.isArray(item.labels) && item.labels.length
         ? item.labels.map(label => `<span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">${escapeHtml(label)}</span>`).join('')
         : '<span class="text-[10px] text-slate-400">Etiket yoxdur</span>';
@@ -3292,7 +3299,8 @@ function linearIssueCardHtml(item) {
     const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${deleteButton}</div></details>` : '';
     return `<article data-linear-issue-id="${sourceId}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
         <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div></div>${priorityBadge}</div>
-        <div class="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5"><span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span></div>
+        <div class="mt-2 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5"><div class="text-[10px] font-extrabold uppercase tracking-wide text-violet-700">Başlıq</div><div class="mt-0.5 text-sm font-extrabold text-violet-950">${cardTitle}</div></div>
+        <div class="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5"><span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span></div>
         <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
             <div><dt class="text-slate-400">Layihə</dt><dd class="font-semibold text-slate-700">${project}</dd></div><div><dt class="text-slate-400">İcraçı</dt><dd class="font-semibold text-slate-700">${assignee}</dd></div><div><dt class="text-slate-400">Operator</dt><dd class="font-semibold text-slate-700">${operator}</dd></div>
             <div><dt class="text-slate-400">Son tarix</dt><dd class="font-semibold text-slate-700">${dueDate}</dd></div><div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
