@@ -19829,7 +19829,7 @@ def _linear_uuid(value: str, label: str) -> str:
 
 
 LINEAR_ALLOWED_STATUS_NAMES = {
-    "testiq", "təsdiq", "tesdiq", "triage", "todo", "in progress", "in review", "done",
+    "testiq", "təstiq", "təsdiq", "tesdiq", "triage", "todo", "in progress", "in review", "done",
 }
 
 
@@ -19929,7 +19929,7 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
         raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Başlıq: {title}\nHesab: {account}\n\n{description}"
+    saved_description = f"Başlıq: {title}\nAccount: {account}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -20057,7 +20057,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
             },
             "in_confirmation": (
                 str(state.get("id") or "") in {str(LINEAR_TESDIQ_STATE_ID), str(LINEAR_TRIAGE_STATE_ID)}
-                or str(state_name).strip().casefold() in {"testiq", "təsdiq", "tesdiq", "triage"}
+                or str(state_name).strip().casefold() in {"testiq", "təstiq", "təsdiq", "tesdiq", "triage"}
             ),
             "assignee_id": str((row.get("assignee") or {}).get("id") or ""),
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
@@ -20099,7 +20099,7 @@ def _linear_assert_confirmation_issue(issue_id: str) -> dict:
     state_id = str(state.get("id") or "")
     state_name = str(state.get("name") or "").strip().casefold()
     allowed_ids = {str(LINEAR_TESDIQ_STATE_ID or ""), str(LINEAR_TRIAGE_STATE_ID or "")}
-    allowed_names = {"testiq", "təsdiq", "tesdiq", "triage"}
+    allowed_names = {"testiq", "təstiq", "təsdiq", "tesdiq", "triage"}
     if state_id not in allowed_ids and state_name not in allowed_names:
         raise RuntimeError("Bu tapşırıq artıq Təsdiq/Triage siyahısında deyil.")
     return issue
@@ -20225,7 +20225,7 @@ def _linear_move_any_issue(issue_id: str, state_id: str) -> dict:
 async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     """Notify the administrator when an important Linear state is reached."""
     state_name = str(target_state.get("name") or "").strip()
-    if state_name.casefold() not in {"testiq", "təsdiq", "tesdiq", "triage", "done"}:
+    if state_name.casefold() not in {"testiq", "təstiq", "təsdiq", "tesdiq", "triage", "done"}:
         return
     identifier = str(issue.get("identifier") or issue.get("id") or "Linear")
     title = str(issue.get("title") or "Tapşırıq")
@@ -20234,7 +20234,7 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     details = [
         f"#{identifier} — {title}",
         f"Status: {state_name}",
-        f"Hesab: {metadata.get('client') or _linear_client_hint(raw_description)}",
+        f"Account: {metadata.get('client') or _linear_client_hint(raw_description)}",
     ]
     for label, key in (("Layihə", "project"), ("Operator", "operator"), ("Mühit", "environment")):
         if metadata.get(key):
@@ -20263,7 +20263,7 @@ async def _notify_linear_status_transitions(issues: list[dict]) -> None:
     notify only on a real transition, avoiding Telegram duplicates on every
     page reload.
     """
-    important = {"testiq", "təsdiq", "tesdiq", "triage", "done"}
+    important = {"testiq", "təstiq", "təsdiq", "tesdiq", "triage", "done"}
     for issue in issues or []:
         key = str(issue.get("source_id") or issue.get("id") or "").strip()
         state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
@@ -20320,7 +20320,7 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str, assig
             key = match.group(1).strip().casefold()
             if key in metadata_keys and key not in {"başlıq", "basliq", "title"}:
                 if key in {"hesab", "account"}:
-                    metadata_lines.append(f"Hesab: {match.group(2).strip()}")
+                    metadata_lines.append(f"Account: {match.group(2).strip()}")
                 else:
                     metadata_lines.append(raw_line.strip())
     saved_description = "\n".join([f"Başlıq: {title}"] + metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))

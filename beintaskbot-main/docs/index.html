@@ -3558,7 +3558,7 @@ async function moveLinearBoardTask(issueId, targetStateId, fromStateId) {
     const previous = item.status;
     const next = linearBoardStatuses.find(row => String(row.id) === String(targetStateId));
     if(!next) return;
-    item.status = {...next}; item.in_confirmation = ['testiq','təsdiq','tesdiq','triage'].includes(String(next.name || '').trim().toLocaleLowerCase('az')); renderLinearBoard();
+    item.status = {...next}; item.in_confirmation = ['testiq','təstiq','təsdiq','tesdiq','triage'].includes(String(next.name || '').trim().toLocaleLowerCase('az')); renderLinearBoard();
     try {
         const response = await fetch(API_BASE + '/api/linear/tasks', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'status', issue_id:issueId, status_id:targetStateId})});
         const data = await response.json().catch(() => ({}));
