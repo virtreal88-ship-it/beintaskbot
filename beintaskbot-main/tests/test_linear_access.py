@@ -24,7 +24,7 @@ def load_linear_functions():
         "_LINEAR_ACCOUNT_ALIASES", "_LINEAR_OPERATOR_BY_CHAT", "_LINEAR_CREATE_ACCOUNT_BY_CHAT",
         "get_rufat_compat_chat_ids", "is_rufat_chat", "_linear_identity_chat_id",
         "_linear_operator_for_chat", "_linear_create_identity_for_chat", "_linear_can_create_for_chat",
-        "_linear_account_key", "_linear_account_matches", "_linear_account_scope",
+        "_linear_account_key", "_linear_account_matches", "_linear_account_scope", "_linear_issue_matches_scope", "_linear_save_test_result",
         "_linear_client_hint", "_linear_description_metadata", "_load_linear_tesdiq_issues",
         "handle_api_linear_tesdiq", "handle_api_session",
     }
@@ -93,7 +93,7 @@ class LinearAccessTests(unittest.TestCase):
                 result = self.call(Request(RUFAT, query=query))
                 self.assertEqual(result["status"], 200)
                 self.assertTrue(result["data"]["connected"])
-                self.assertEqual([row["id"] for row in result["data"]["issues"]], ["own-other-operator", "own-done"])
+                self.assertEqual([row["id"] for row in result["data"]["issues"]], ["own-other-operator", "own-done", "other-own-operator"])
         self.ns["list_linear_accounts"].assert_not_called()
 
     def test_huseyn_and_admin_keep_their_account_scope(self):
@@ -105,7 +105,7 @@ class LinearAccessTests(unittest.TestCase):
 
     def test_rufat_moved_telegram_account_keeps_visibility_and_creation(self):
         result = self.call(Request(MOVED_RUFAT, query={"scope": "all"}))
-        self.assertEqual([row["id"] for row in result["data"]["issues"]], ["own-other-operator", "own-done"])
+        self.assertEqual([row["id"] for row in result["data"]["issues"]], ["own-other-operator", "own-done", "other-own-operator"])
         self.assertTrue(self.ns["_linear_can_create_for_chat"](MOVED_RUFAT))
         self.assertEqual(self.ns["_linear_create_identity_for_chat"](MOVED_RUFAT), ("rufet", "rufet@beinsystems"))
         self.ns["_load_employee_access_records"] = lambda: {}
@@ -138,6 +138,29 @@ class LinearAccessTests(unittest.TestCase):
             self.assertEqual(self.call(Request(chat_id, "POST", {"action": "create"}))["status"], 403)
         self.assertEqual(self.call(Request(RASIM, "POST", {"action": "create"}))["status"], 403)
         create.assert_not_called()
+
+    def test_operator_scope_for_huseyn(self):
+        matches = self.ns["_linear_issue_matches_scope"]
+        self.assertTrue(matches(issue("a", "other", "huseyn@beinsystems"), {"huseyn"}, "huseyn@beinsystems"))
+        self.assertFalse(matches(issue("a", "other", "huseyn@beinsystems.fake"), {"huseyn"}, "huseyn@beinsystems"))
+
+    def test_staff_legacy_edit_permission_cannot_change_status(self):
+        self.permissions[RUFAT].add("linear_edit")
+        for action in ("status", "priority", "confirm", "discussion", "cancel", "delete", "edit"):
+            self.assertEqual(self.call(Request(RUFAT, "POST", {"action": action, "issue_id": "a"}))["status"], 403)
+
+    def test_done_buttons_are_scoped_and_require_done(self):
+        self.ns["_linear_resolve_named_state_id"] = Mock(return_value="accept")
+        move = self.ns["_linear_move_any_issue"] = Mock(return_value={"id": "a"})
+        for account, operator in (("rufet", "other"), ("other", "rufet@beinsystems")):
+            self.ns["_linear_issue_context"] = Mock(return_value=issue("a", account, operator, "Done"))
+            self.assertEqual(self.call(Request(RUFAT, "POST", {"action": "test_accept", "issue_id": "a"}))["status"], 200)
+        move.reset_mock()
+        self.ns["_linear_issue_context"] = Mock(return_value=issue("a", "huseyn", "other", "Done"))
+        self.assertEqual(self.call(Request(RUFAT, "POST", {"action": "test_accept", "issue_id": "a"}))["status"], 403)
+        self.ns["_linear_issue_context"] = Mock(return_value=issue("a", "rufet", state="Triage"))
+        self.assertNotEqual(self.call(Request(RUFAT, "POST", {"action": "test_accept", "issue_id": "a"}))["status"], 200)
+        move.assert_not_called()
 
     def test_session_advertises_creation_separately_from_editing(self):
         self.ns["employee_access_profile"] = lambda chat_id: {"active": True, "role": "Əməkdaş", "permissions": list(self.permissions[chat_id])}

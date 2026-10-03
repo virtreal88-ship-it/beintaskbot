@@ -78,4 +78,30 @@ async function test() {
     console.log('PASS: session grants create-only access; button and form open; desktop/mobile ignore a hidden stale operator filter; closed access stays hidden.');
 }
 
+function testStaffCardActions() {
+    const context = {isAdmin: false, hasEmployeePermission: () => true,
+        escapeHtml: value => String(value || ''), Date};
+    vm.createContext(context);
+    for(const name of ['isLinearDoneStatus', 'linearBoardPriorityStyle', 'linearBoardStatusStyle', 'linearBoardPriorityLabel', 'linearBoardCardHtml', 'bindLinearTaskCard', 'bindLinearColumnDrop']) {
+        vm.runInContext(source(name), context);
+    }
+    const task = {source_id: 'id', title: 'Task', client: 'rufet', priority: 2, in_confirmation: true, status: {name: 'Triage'}};
+    let card = context.linearBoardCardHtml(task);
+    assert(card.includes('draggable="false"'));
+    assert(!card.includes('deal-drag-handle'));
+    assert(!card.includes('<button') && !card.includes('<select'));
+    task.status = {name: 'Done', type: 'completed'};
+    card = context.linearBoardCardHtml(task);
+    assert(card.includes('Test olundu') && card.includes('Testdən keçmədi'));
+    assert(!card.includes('Diskussiya') && !card.includes('Təsdiq edirəm'));
+    assert.equal(context.isLinearDoneStatus({name: 'Accept', type: 'completed'}), false);
+    const element = {dataset: {}, addEventListener() {throw Error('Staff must not have drag handlers');}};
+    context.bindLinearTaskCard(element, task);
+    context.bindLinearColumnDrop(element);
+    context.isAdmin = true;
+    assert(context.linearBoardCardHtml(task).includes('draggable="true"'));
+    console.log('PASS: staff cards are read-only except Done testing; legacy edit rights cannot enable drag/drop.');
+}
+
+testStaffCardActions();
 test().catch(error => {console.error(error); process.exitCode = 1;});

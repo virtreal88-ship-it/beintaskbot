@@ -19848,6 +19848,18 @@ def _linear_account_matches(account: str, allowed_names: set[str]) -> bool:
     return False
 
 
+def _linear_issue_matches_scope(issue: dict, accounts: set[str] | None, operator: str) -> bool:
+    """Staff can see their Account OR their Operator, never another identity."""
+    if accounts is None:
+        return True
+    metadata, _ = _linear_description_metadata(str(issue.get("description") or ""))
+    account = str(issue.get("client") or metadata.get("client") or "")
+    actual_operator = str(issue.get("operator") or metadata.get("operator") or "").strip().casefold()
+    return _linear_account_matches(account, accounts) or bool(
+        operator and actual_operator == operator.strip().casefold()
+    )
+
+
 def _linear_account_scope(chat_id: int) -> set[str] | None:
     """Return visible account names for a staff member; None means all."""
     if is_admin(chat_id):
@@ -20202,6 +20214,8 @@ def _linear_resolve_named_state_id(*names: str) -> str:
 def _linear_save_test_result(issue_id: str, result: str, reason: str = "") -> dict:
     """Move a completed task to accept/reject and keep the rejection reason."""
     issue = _linear_issue_context(issue_id)
+    if str((issue.get("state") or {}).get("name") or "").strip().casefold() not in {"done", "tamamlandı"}:
+        raise RuntimeError("Test yalnız Done mərhələsindəki tapşırıq üçün mümkündür.")
     result = str(result or "").strip().casefold()
     if result not in {"accept", "reject"}:
         raise RuntimeError("Test nəticəsi düzgün deyil.")
@@ -20526,7 +20540,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
         can_write = _linear_can_create_for_chat(chat_id) if action == "create" else (
-            is_admin(chat_id) or employee_has_permission(chat_id, "linear_edit")
+            is_admin(chat_id) or action in {"test_accept", "test_reject"}
         )
         if not can_write:
             return web.json_response({"success": False, "error": "Linear əməliyyatı üçün ayrıca icazə lazımdır."}, status=403)
@@ -20578,6 +20592,10 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     await _notify_linear_status_change(issue_for_notice, target)
                 return web.json_response({"success": True, "message": f"Tapşırıq {target.get('name') or 'status'} mərhələsinə keçirildi.", "issue": moved, "status": target})
             if action in {"test_accept", "test_reject"}:
+                if not is_admin(chat_id):
+                    issue = await asyncio.to_thread(_linear_issue_context, issue_id)
+                    if not _linear_issue_matches_scope(issue, _linear_account_scope(chat_id), _linear_operator_for_chat(chat_id)):
+                        return web.json_response({"success": False, "error": "Bu tapşırıq üçün icazəniz yoxdur."}, status=403)
                 result = "accept" if action == "test_accept" else "reject"
                 moved = await asyncio.to_thread(_linear_save_test_result, issue_id, result, str(data.get("reason") or ""))
                 label = "qəbul edildi" if result == "accept" else "reject mərhələsinə keçirildi"
@@ -20626,10 +20644,11 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search, all_tasks=all_tasks)
         account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
+        operator = _linear_operator_for_chat(chat_id)
         if account_scope is not None:
             issues = [
                 row for row in issues
-                if isinstance(row, dict) and _linear_account_matches(str(row.get("client") or ""), account_scope)
+                if isinstance(row, dict) and _linear_issue_matches_scope(row, account_scope, operator)
             ]
         if all_tasks and not search:
             await _notify_linear_status_transitions(issues)
