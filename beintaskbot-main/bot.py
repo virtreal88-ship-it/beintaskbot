@@ -31,6 +31,7 @@ import collections
 import random
 import secrets
 import time as _time_module
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote, unquote, urlencode, parse_qsl
 import urllib.request
@@ -19769,6 +19770,56 @@ def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]
     return metadata, "\n".join(visible_lines).strip()
 
 
+_LINEAR_ACCOUNT_ALIASES = {
+    # Account names are created by the administrator and may contain either
+    # Latin or Azerbaijani spellings.  Keep the mapping here so the access
+    # rule does not depend on the exact display spelling in the dictionary.
+    int(RUFAT_CHAT_ID): {"rufet", "rufat", "ryufat"},
+    int(RASIM_CHAT_ID): {"rasim"},
+    int(HUSEYN_CHAT_ID): {"huseyn", "husein", "hussein"},
+    int(ADMIN_CHAT_ID): set(),
+}
+
+
+def _linear_account_key(value: str) -> str:
+    """Normalize an account label for matching across Linear and CRM."""
+    text = str(value or "").strip().casefold()
+    text = text.translate(str.maketrans({"ə": "e", "ı": "i", "ö": "o", "ü": "u", "ş": "s", "ç": "c", "ğ": "g"}))
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _linear_account_matches(account: str, allowed_names: set[str]) -> bool:
+    """Match a task account to a dictionary account without exact spelling."""
+    candidate = _linear_account_key(account)
+    if not candidate:
+        return False
+    for name in allowed_names:
+        normalized = _linear_account_key(name)
+        if normalized and (candidate == normalized or candidate.startswith(normalized) or normalized.startswith(candidate)):
+            return True
+    return False
+
+
+def _linear_account_scope(chat_id: int) -> set[str] | None:
+    """Return visible account names for a staff member; None means all."""
+    if is_admin(chat_id):
+        return None
+    aliases = _LINEAR_ACCOUNT_ALIASES.get(int(chat_id), set())
+    if not aliases:
+        return set()
+    try:
+        rows = list_linear_accounts()
+    except Exception:
+        logger.exception("Could not load Linear account scope")
+        return set()
+    return {
+        str(row.get("name") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and row.get("name") and _linear_account_matches(str(row.get("name") or ""), aliases)
+    }
+
+
 def _linear_uuid(value: str, label: str) -> str:
     """Return a GraphQL-safe Linear UUID from trusted integration settings."""
     candidate = str(value or "").strip()
@@ -19867,17 +19918,18 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
         raise RuntimeError("Linear prioriteti düzgün deyil.")
     team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
     project_id = str(project_id or "").strip()
-    if project_id:
-        project_id = _linear_uuid(project_id, "layihə")
-        try:
-            allowed = {str(row.get("id")) for row in _linear_projects()}
-        except Exception:
-            allowed = set()
-        if allowed and project_id not in allowed:
-            raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
+    if not project_id:
+        raise RuntimeError("Layihə seçin.")
+    project_id = _linear_uuid(project_id, "layihə")
+    try:
+        allowed = {str(row.get("id")) for row in _linear_projects()}
+    except Exception:
+        allowed = set()
+    if allowed and project_id not in allowed:
+        raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Başlıq: {title}\nAccount: {account}\n\n{description}"
+    saved_description = f"Başlıq: {title}\nHesab: {account}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -20182,7 +20234,7 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     details = [
         f"#{identifier} — {title}",
         f"Status: {state_name}",
-        f"Account: {metadata.get('client') or _linear_client_hint(raw_description)}",
+        f"Hesab: {metadata.get('client') or _linear_client_hint(raw_description)}",
     ]
     for label, key in (("Layihə", "project"), ("Operator", "operator"), ("Mühit", "environment")):
         if metadata.get(key):
@@ -20268,7 +20320,7 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str, assig
             key = match.group(1).strip().casefold()
             if key in metadata_keys and key not in {"başlıq", "basliq", "title"}:
                 if key in {"hesab", "account"}:
-                    metadata_lines.append(f"Account: {match.group(2).strip()}")
+                    metadata_lines.append(f"Hesab: {match.group(2).strip()}")
                 else:
                     metadata_lines.append(raw_line.strip())
     saved_description = "\n".join([f"Başlıq: {title}"] + metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
@@ -20390,6 +20442,12 @@ async def handle_api_linear_accounts(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "Hesab əlavə edilmədi."}, status=500)
     try:
         accounts = await asyncio.to_thread(list_linear_accounts)
+        account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
+        if account_scope is not None:
+            accounts = [
+                row for row in accounts
+                if isinstance(row, dict) and _linear_account_matches(str(row.get("name") or ""), account_scope)
+            ]
         return web.json_response({"success": True, "accounts": accounts})
     except Exception:
         logger.exception("Could not load Linear account dictionary")
@@ -20420,10 +20478,14 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     priority = int(data.get("priority") or 0)
                 except (TypeError, ValueError):
                     return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
+                account = str(data.get("account") or data.get("client") or "").strip()
+                account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
+                if account_scope is not None and not _linear_account_matches(account, account_scope):
+                    return web.json_response({"success": False, "error": "Bu hesab üçün tapşırıq yaratmaq icazəniz yoxdur."}, status=403)
                 created = await asyncio.to_thread(
                     _linear_create_issue,
                     title=str(data.get("title") or ""),
-                    account=str(data.get("account") or data.get("client") or ""),
+                    account=account,
                     priority=priority,
                     project_id=str(data.get("project_id") or ""),
                     description=str(data.get("description") or ""),
@@ -20502,6 +20564,12 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     search = str(request.query.get("q") or "").strip()[:120]
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search, all_tasks=all_tasks)
+        account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
+        if account_scope is not None:
+            issues = [
+                row for row in issues
+                if isinstance(row, dict) and _linear_account_matches(str(row.get("client") or ""), account_scope)
+            ]
         if all_tasks and not search:
             await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
