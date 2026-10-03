@@ -19799,13 +19799,21 @@ _LINEAR_CREATE_ACCOUNT_BY_CHAT = {
 }
 
 
+def _linear_identity_chat_id(chat_id: int) -> int:
+    """Follow the admin-approved account migration used by the sales funnel."""
+    cid = int(chat_id)
+    if cid not in _LINEAR_ACCOUNT_ALIASES and is_rufat_chat(cid):
+        return int(RUFAT_CHAT_ID)
+    return cid
+
+
 def _linear_operator_for_chat(chat_id: int) -> str:
-    return str(_LINEAR_OPERATOR_BY_CHAT.get(int(chat_id)) or "").strip()
+    return str(_LINEAR_OPERATOR_BY_CHAT.get(_linear_identity_chat_id(chat_id)) or "").strip()
 
 
 def _linear_create_identity_for_chat(chat_id: int) -> tuple[str, str]:
     """Resolve creation metadata from the authenticated employee, not input."""
-    account = str(_LINEAR_CREATE_ACCOUNT_BY_CHAT.get(int(chat_id)) or "").strip()
+    account = str(_LINEAR_CREATE_ACCOUNT_BY_CHAT.get(_linear_identity_chat_id(chat_id)) or "").strip()
     return account, _linear_operator_for_chat(chat_id)
 
 
@@ -19816,7 +19824,7 @@ def _linear_can_create_for_chat(chat_id: int) -> bool:
     return (
         is_admin(chat_id)
         or employee_has_permission(chat_id, "linear_edit")
-        or int(chat_id) in {int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID)}
+        or _linear_identity_chat_id(chat_id) in {int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID)}
     )
 
 
@@ -19846,7 +19854,7 @@ def _linear_account_scope(chat_id: int) -> set[str] | None:
         return None
     # Linear's existing Account metadata is the source of visibility. A missing
     # local dictionary entry must not hide the employee's own issues.
-    return set(_LINEAR_ACCOUNT_ALIASES.get(int(chat_id), set()))
+    return set(_LINEAR_ACCOUNT_ALIASES.get(_linear_identity_chat_id(chat_id), set()))
 
 
 def _linear_uuid(value: str, label: str) -> str:

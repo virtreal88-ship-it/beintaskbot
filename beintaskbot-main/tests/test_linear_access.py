@@ -15,12 +15,14 @@ ADMIN = 1628569350
 RUFAT = 6824377548
 HUSEYN = 7329891614
 RASIM = 7920785774
+MOVED_RUFAT = 8835096199
 
 
 def load_linear_functions():
     source = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
     names = {
         "_LINEAR_ACCOUNT_ALIASES", "_LINEAR_OPERATOR_BY_CHAT", "_LINEAR_CREATE_ACCOUNT_BY_CHAT",
+        "get_rufat_compat_chat_ids", "is_rufat_chat", "_linear_identity_chat_id",
         "_linear_operator_for_chat", "_linear_create_identity_for_chat", "_linear_can_create_for_chat",
         "_linear_account_key", "_linear_account_matches", "_linear_account_scope",
         "_linear_client_hint", "_linear_description_metadata", "_load_linear_tesdiq_issues",
@@ -31,13 +33,15 @@ def load_linear_functions():
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names)
         or (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in names for target in node.targets))
     ]
-    permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear"}, HUSEYN: {"linear"}, RASIM: {"linear"}}
+    permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear"}, HUSEYN: {"linear"}, RASIM: {"linear"}, MOVED_RUFAT: {"linear"}}
     web = types.SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {"status": status, "data": data})
     namespace = {
         "ADMIN_CHAT_ID": ADMIN, "RUFAT_CHAT_ID": RUFAT, "HUSEYN_CHAT_ID": HUSEYN, "RASIM_CHAT_ID": RASIM,
         "asyncio": asyncio, "re": re, "unicodedata": unicodedata, "_time_module": time, "web": web,
         "is_admin": lambda chat_id: chat_id == ADMIN,
         "employee_has_permission": lambda chat_id, permission: permission in permissions.get(chat_id, set()),
+        "_load_employee_access_records": lambda: {str(RUFAT): {"migrated_to": MOVED_RUFAT}},
+        "employee_access_profile": lambda chat_id: {"active": bool(permissions.get(chat_id)), "role": "Əməkdaş", "permissions": list(permissions.get(chat_id, set()))},
         "logger": Mock(), "list_linear_accounts": Mock(side_effect=AssertionError("Local dictionary must not control access")),
         "LINEAR_TEAM_ID": "team", "LINEAR_TESDIQ_STATE_ID": "testiq", "LINEAR_TRIAGE_STATE_ID": "triage",
         "LINEAR_ALLOWED_STATUS_NAMES": {"testiq", "triage", "todo", "in progress", "in review", "done"},
@@ -99,10 +103,19 @@ class LinearAccessTests(unittest.TestCase):
         self.assertEqual(len(result["data"]["issues"]), len(self.rows))
         self.assertEqual(self.ns["_linear_account_scope"](999), set())
 
+    def test_rufat_moved_telegram_account_keeps_visibility_and_creation(self):
+        result = self.call(Request(MOVED_RUFAT, query={"scope": "all"}))
+        self.assertEqual([row["id"] for row in result["data"]["issues"]], ["own-other-operator", "own-done"])
+        self.assertTrue(self.ns["_linear_can_create_for_chat"](MOVED_RUFAT))
+        self.assertEqual(self.ns["_linear_create_identity_for_chat"](MOVED_RUFAT), ("rufet", "rufet@beinsystems"))
+        self.ns["_load_employee_access_records"] = lambda: {}
+        self.assertEqual(self.ns["_linear_account_scope"](MOVED_RUFAT), set())
+        self.assertFalse(self.ns["_linear_can_create_for_chat"](MOVED_RUFAT))
+
     def test_rufat_and_huseyn_can_create_without_edit_permission(self):
         create = Mock(return_value={"id": "new"})
         self.ns["_linear_create_issue"] = create
-        for chat_id, account, operator in ((RUFAT, "rufet", "rufet@beinsystems"), (HUSEYN, "huseyn", "huseyn@beinsystems")):
+        for chat_id, account, operator in ((RUFAT, "rufet", "rufet@beinsystems"), (MOVED_RUFAT, "rufet", "rufet@beinsystems"), (HUSEYN, "huseyn", "huseyn@beinsystems")):
             with self.subTest(chat_id=chat_id):
                 result = self.call(Request(chat_id, "POST", {
                     "action": "create", "title": "Task", "description": "Text", "project_id": "project",
@@ -116,7 +129,7 @@ class LinearAccessTests(unittest.TestCase):
     def test_creation_does_not_open_editing_or_disabled_page(self):
         create = Mock()
         self.ns["_linear_create_issue"] = create
-        for chat_id in (RUFAT, HUSEYN):
+        for chat_id in (RUFAT, MOVED_RUFAT, HUSEYN):
             for action in ("edit", "delete", "status", "priority"):
                 result = self.call(Request(chat_id, "POST", {"action": action, "issue_id": "issue"}))
                 self.assertEqual(result["status"], 403)
@@ -129,10 +142,10 @@ class LinearAccessTests(unittest.TestCase):
     def test_session_advertises_creation_separately_from_editing(self):
         self.ns["employee_access_profile"] = lambda chat_id: {"active": True, "role": "Əməkdaş", "permissions": list(self.permissions[chat_id])}
         self.ns["get_employee_whatsapp_number"] = lambda chat_id: ""
-        for chat_id, allowed in ((RUFAT, True), (HUSEYN, True), (RASIM, False), (ADMIN, True)):
+        for chat_id, allowed in ((RUFAT, True), (MOVED_RUFAT, True), (HUSEYN, True), (RASIM, False), (ADMIN, True)):
             result = asyncio.run(self.ns["handle_api_session"](Request(chat_id)))
             self.assertEqual(result["data"]["linear_can_create"], allowed)
-            if chat_id in (RUFAT, HUSEYN):
+            if chat_id in (RUFAT, MOVED_RUFAT, HUSEYN):
                 self.assertNotIn("linear_edit", result["data"]["permissions"])
 
 
