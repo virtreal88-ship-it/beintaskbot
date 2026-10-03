@@ -19877,7 +19877,7 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
             raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Başlıq: {title}\nHesab: {account}\n\n{description}"
+    saved_description = f"Başlıq: {title}\nAccount: {account}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -20182,7 +20182,7 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     details = [
         f"#{identifier} — {title}",
         f"Status: {state_name}",
-        f"Hesab: {metadata.get('client') or _linear_client_hint(raw_description)}",
+        f"Account: {metadata.get('client') or _linear_client_hint(raw_description)}",
     ]
     for label, key in (("Layihə", "project"), ("Operator", "operator"), ("Mühit", "environment")):
         if metadata.get(key):
@@ -20267,7 +20267,10 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str, assig
         if match:
             key = match.group(1).strip().casefold()
             if key in metadata_keys and key not in {"başlıq", "basliq", "title"}:
-                metadata_lines.append(raw_line.strip())
+                if key in {"hesab", "account"}:
+                    metadata_lines.append(f"Account: {match.group(2).strip()}")
+                else:
+                    metadata_lines.append(raw_line.strip())
     saved_description = "\n".join([f"Başlıq: {title}"] + metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
     payload = _linear_graphql("""
     mutation EditLinearIssue($id: String!, $title: String!, $description: String!, $assigneeId: String) {
@@ -20464,6 +20467,8 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 updated = await asyncio.to_thread(_linear_update_issue_priority, issue_id, priority)
                 return web.json_response({"success": True, "message": "Tapşırığın prioriteti dəyişdirildi.", "issue": updated})
             if action == "edit":
+                if not is_admin(chat_id):
+                    return web.json_response({"success": False, "error": "Linear tapşırıqlarını redaktə etmək yalnız Admin üçündür."}, status=403)
                 updated = await asyncio.to_thread(
                     _linear_update_issue_text,
                     issue_id,
