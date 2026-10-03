@@ -125,6 +125,7 @@ _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
 _LINEAR_PROJECTS_CACHE: dict[str, object] = {"at": 0.0, "items": []}
+_LINEAR_MEMBERS_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 
 # ─── Pipeline & Users Configuration ─────────────────────────────────────────
 PIPELINE_ID = 8329347
@@ -19826,6 +19827,29 @@ def _linear_projects(*, force: bool = False) -> list[dict]:
     return rows
 
 
+def _linear_team_members(*, force: bool = False) -> list[dict]:
+    """Return assignable users from the configured Linear team."""
+    now = _time_module.monotonic()
+    if not force and now - float(_LINEAR_MEMBERS_CACHE.get("at") or 0) < _LINEAR_TESDIQ_CACHE_TTL:
+        cached = _LINEAR_MEMBERS_CACHE.get("items")
+        if isinstance(cached, list):
+            return list(cached)
+    team_id = _linear_uuid(LINEAR_TEAM_ID, "komanda")
+    payload = _linear_graphql("""
+    query LinearTeamMembers($id: String!) {
+      team(id: $id) { members { nodes { id name email } } }
+    }
+    """, {"id": team_id})
+    rows = [
+        {"id": str(row.get("id") or ""), "name": str(row.get("name") or "").strip(), "email": str(row.get("email") or "").strip()}
+        for row in ((((payload.get("team") or {}).get("members") or {}).get("nodes") or []))
+        if isinstance(row, dict) and row.get("id") and row.get("name")
+    ]
+    rows.sort(key=lambda row: row["name"].casefold())
+    _LINEAR_MEMBERS_CACHE.update({"at": now, "items": rows})
+    return rows
+
+
 def _linear_create_issue(*, title: str, account: str, priority: int, project_id: str, description: str) -> dict:
     """Create a CRM-linked issue and put it in Triage by default."""
     title = str(title or "").strip()[:255]
@@ -19905,7 +19929,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
             nodes {
               id identifier title description priority dueDate createdAt updatedAt url
               state { id name color }
-              assignee { name }
+              assignee { id name }
               creator { name }
               project { name }
               labels { nodes { name } }
@@ -19920,7 +19944,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
             nodes {{
               id identifier title description priority dueDate createdAt updatedAt url
               state {{ id name color type }}
-              assignee {{ name }}
+              assignee {{ id name }}
               creator {{ name }}
               project {{ name }}
               labels {{ nodes {{ name }} }}
@@ -19938,7 +19962,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
             nodes {{
               id identifier title description priority dueDate createdAt updatedAt url
               state {{ id name color }}
-              assignee {{ name }}
+              assignee {{ id name }}
               creator {{ name }}
               project {{ name }}
               labels {{ nodes {{ name }} }}
@@ -19981,6 +20005,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
                 str(state.get("id") or "") in {str(LINEAR_TESDIQ_STATE_ID), str(LINEAR_TRIAGE_STATE_ID)}
                 or str(state_name).strip().casefold() in {"testiq", "təsdiq", "tesdiq", "triage"}
             ),
+            "assignee_id": str((row.get("assignee") or {}).get("id") or ""),
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
             "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
@@ -20003,7 +20028,7 @@ def _linear_issue_context(issue_id: str) -> dict:
     """Load a Linear issue and refuse cross-team mutations."""
     payload = _linear_graphql("""
     query ConfirmationIssue($id: String!) {
-      issue(id: $id) { id identifier title description url team { id } state { id name type } }
+      issue(id: $id) { id identifier title description url team { id } state { id name type } assignee { id name } }
     }
     """, {"id": issue_id})
     issue = payload.get("issue") or {}
@@ -20219,13 +20244,19 @@ def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
     return result.get("issue") or {}
 
 
-def _linear_update_issue_text(issue_id: str, title: str, description: str) -> dict:
+def _linear_update_issue_text(issue_id: str, title: str, description: str, assignee_id: str | None = None) -> dict:
     """Edit a task while preserving structured CRM metadata in its description."""
     issue = _linear_issue_context(issue_id)
     title = str(title or "").strip()[:255]
     description = str(description or "").strip()[:10000]
     if not title:
         raise RuntimeError("Tapşırığın adı boş ola bilməz.")
+    current_assignee_id = str((issue.get("assignee") or {}).get("id") or "").strip()
+    selected_assignee_id = current_assignee_id if assignee_id is None else str(assignee_id or "").strip()
+    if selected_assignee_id:
+        members = _linear_team_members()
+        if selected_assignee_id not in {str(row.get("id") or "") for row in members}:
+            raise RuntimeError("Seçilmiş icraçı bu Linear komandasına aid deyil.")
     raw_description = str(issue.get("description") or "")
     metadata_lines: list[str] = []
     metadata_keys = {"layihə", "project", "operator", "icraçı", "assignee", "mühit", "muhit", "environment", "müştəri", "client", "account", "hesab"}
@@ -20235,13 +20266,13 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str) -> di
             metadata_lines.append(raw_line.strip())
     saved_description = "\n".join(metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
     payload = _linear_graphql("""
-    mutation EditLinearIssue($id: String!, $title: String!, $description: String!) {
-      issueUpdate(id: $id, input: { title: $title, description: $description }) {
+    mutation EditLinearIssue($id: String!, $title: String!, $description: String!, $assigneeId: String) {
+      issueUpdate(id: $id, input: { title: $title, description: $description, assigneeId: $assigneeId }) {
         success
-        issue { id identifier title description updatedAt }
+        issue { id identifier title description updatedAt assignee { id name } }
       }
     }
-    """, {"id": issue_id, "title": title, "description": saved_description})
+    """, {"id": issue_id, "title": title, "description": saved_description, "assigneeId": selected_assignee_id or None})
     result = payload.get("issueUpdate") or {}
     if not result.get("success"):
         raise RuntimeError("Linear tapşırığı redaktə edilmədi.")
@@ -20404,6 +20435,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     issue_id,
                     str(data.get("title") or ""),
                     str(data.get("description") or ""),
+                    str(data.get("assignee_id")) if "assignee_id" in data else None,
                 )
                 return web.json_response({"success": True, "message": "Tapşırıq Linear-da yeniləndi.", "issue": updated})
             if action == "cancel":
@@ -20435,6 +20467,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
             await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
         projects = []
+        assignees = []
         if all_tasks:
             # Projects are a convenience for the create dialog. A Linear
             # workspace can disable the projects connection, so never let a
@@ -20443,7 +20476,11 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 projects = await asyncio.to_thread(_linear_projects)
             except Exception as exc:
                 logger.warning("Linear projects could not be loaded: %s", exc)
-        return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "projects": projects, "search": search, "scope": "all" if all_tasks else "tesdiq"})
+        try:
+            assignees = await asyncio.to_thread(_linear_team_members)
+        except Exception as exc:
+            logger.warning("Linear team members could not be loaded: %s", exc)
+        return web.json_response({"success": True, "connected": True, "issues": issues, "statuses": statuses, "projects": projects, "assignees": assignees, "search": search, "scope": "all" if all_tasks else "tesdiq"})
     except RuntimeError as exc:
         return web.json_response({"success": True, "connected": False, "issues": [], "error": str(exc)})
     except Exception:
@@ -22559,6 +22596,9 @@ async def start_webhook_server():
     app_web.router.add_get("/register", serve_platform_onboarding)
     app_web.router.add_get("/login", serve_platform_onboarding)
     app_web.router.add_get("/setup", serve_platform_onboarding)
+    # Also accept /invite?token=…; some mobile Telegram clients rewrite a
+    # path-only link when opening it in the in-app browser.
+    app_web.router.add_get("/invite", serve_platform_onboarding)
     app_web.router.add_get("/invite/{token}", serve_platform_onboarding)
     app_web.router.add_get("/app", redirect_platform_app)
     app_web.router.add_get("/webapp", serve_webapp)

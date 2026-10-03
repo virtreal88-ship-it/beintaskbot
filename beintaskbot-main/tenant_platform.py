@@ -12,6 +12,7 @@ import re
 import secrets
 import hashlib
 import uuid
+from urllib.parse import unquote
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
@@ -22,6 +23,19 @@ from cryptography.fernet import Fernet, InvalidToken
 
 class TenantPlatformError(RuntimeError):
     pass
+
+
+def _invite_token(value: object) -> str:
+    """Normalize a token copied from Telegram/WhatsApp/browser URL.
+
+    Mobile clients sometimes URL-decode the path or append punctuation when a
+    link is copied from a message.  The stored digest is calculated from the
+    original URL-safe token, so normalizing here prevents a valid invite from
+    being rejected just because of that transport formatting.
+    """
+    token = unquote(str(value or "")).strip()
+    token = token.rstrip(".,;:!?)]}>\"'")
+    return token
 
 
 _schema_ready = False
@@ -729,14 +743,10 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            # A newly generated personal link replaces a still-open link for
-            # the same employee card.  The old URL can no longer be used.
-            cur.execute("""
-                UPDATE saas_tenant_invites
-                SET accepted_at = now()
-                WHERE tenant_id = %s::uuid AND display_name = %s
-                    AND accepted_at IS NULL AND expires_at > now()
-            """, (tenant_id, name))
+            # Keep previously sent links valid until they are used or expire.
+            # This matters when an administrator opens the settings page again
+            # and creates a replacement link before the employee taps the first
+            # one in Telegram.  Each token is still one-use and time-limited.
             cur.execute("""
                 INSERT INTO saas_tenant_invites (id, tenant_id, token_hash, display_name, role, permissions, created_by, expires_at)
                 VALUES (%s, %s::uuid, %s, %s, %s, %s::jsonb, %s, %s)
@@ -747,7 +757,8 @@ def create_invite(*, tenant_id: str, owner_id: int, display_name: str, role: str
 
 def request_invite_acceptance(*, token: str, telegram_id: int, display_name: str) -> dict:
     """Bind a Telegram identity to an invite, awaiting owner approval."""
-    token_hash = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+    normalized_token = _invite_token(token)
+    token_hash = hashlib.sha256(normalized_token.encode("utf-8")).hexdigest()
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:

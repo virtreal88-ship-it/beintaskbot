@@ -3248,6 +3248,7 @@ let linearSearchSequence = 0;
 let linearBoardRows = [];
 let linearBoardStatuses = [];
 let linearBoardProjects = [];
+let linearBoardAssignees = [];
 let linearBoardLoaded = false;
 let linearBoardDragState = null;
 // System requests are the primary confirmation work. Linear is a separate
@@ -3335,6 +3336,7 @@ async function loadLinearTesdiq(forceRefresh = false) {
             list.innerHTML = `<div class="px-3 py-3 text-xs text-slate-500">${escapeHtml(data.error || 'Linear qoşulmayıb.')}</div>`;
             return;
         }
+        if(Array.isArray(data.assignees)) linearBoardAssignees = data.assignees;
         const rows = Array.isArray(data.issues) ? data.issues : [];
         linearQueueRows = rows;
         linearTesdiqLoaded = true;
@@ -3559,6 +3561,7 @@ async function loadLinearBoard(forceRefresh = false) {
         linearBoardRows = Array.isArray(data.issues) ? data.issues : [];
         linearBoardStatuses = Array.isArray(data.statuses) ? data.statuses : [];
         linearBoardProjects = Array.isArray(data.projects) ? data.projects : [];
+        if(Array.isArray(data.assignees)) linearBoardAssignees = data.assignees;
         linearBoardLoaded = true;
         const filter = document.getElementById('linear-status-filter');
         if(filter) { const current = filter.value; filter.innerHTML = '<option value="all">Bütün mərhələlər</option>' + linearBoardStatuses.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name || 'Status')}</option>`).join(''); if([...filter.options].some(option => option.value === current)) filter.value = current; }
@@ -3679,13 +3682,28 @@ function closeLinearModal() {
     document.getElementById('linear-action-modal')?.remove();
 }
 
+function linearAssigneeOptions(item) {
+    const options = Array.isArray(linearBoardAssignees) ? linearBoardAssignees.slice() : [];
+    const currentId = String(item?.assignee_id || '').trim();
+    const currentName = String(item?.assignee || '').trim();
+    if(currentId && !options.some(row => String(row?.id || '') === currentId)) {
+        options.push({id: currentId, name: currentName || 'Təyin olunmayıb'});
+    }
+    options.sort((a, b) => String(a?.name || a?.email || '').localeCompare(String(b?.name || b?.email || ''), 'az'));
+    return '<option value="">Təyin olunmayıb</option>' + options.map(row => {
+        const id = String(row?.id || '');
+        const label = String(row?.name || row?.email || id || 'Təyin olunmayıb');
+        return `<option value="${escapeHtml(id)}" ${id === currentId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    }).join('');
+}
+
 function openLinearEditModal(issueId) {
     const item = findLinearIssue(issueId);
     if(!item) { toast('Tapşırıq tapılmadı.', true); return; }
     closeLinearModal();
     const modal = document.createElement('div');
     modal.id = 'linear-action-modal';
-    modal.className = 'fixed inset-0 z-[10050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
+    modal.className = 'fixed inset-0 z-[15050] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4';
     const status = item.status || {};
     const details = [
         ['Hesab', item.client || 'Göstərilməyib'], ['Prioritet', linearBoardPriorityLabel(item.priority)],
@@ -3698,6 +3716,7 @@ function openLinearEditModal(issueId) {
         <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığını redaktə et</div><div class="text-[11px] text-slate-400">${escapeHtml(item.id || '')}</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
         <div class="mb-3 grid grid-cols-2 gap-2">${details}</div>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Başlıq</label><input id="linear-edit-title" value="${escapeHtml(item.title || '')}" class="mb-3 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300">
+        <label class="mb-1 block text-[11px] font-bold text-slate-500">İcraçı</label><select id="linear-edit-assignee" class="mb-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-violet-300">${linearAssigneeOptions(item)}</select>
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama</label><div class="relative"><textarea id="linear-edit-description" rows="8" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın açıqlaması">${escapeHtml(item.description || '')}</textarea><button id="linear-ai-edit-button" type="button" onclick="rewriteLinearEditWithAI('${escapeHtml(issueId)}')" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
         <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-edit-save" type="button" onclick="saveLinearEdit('${escapeHtml(issueId)}')" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yadda saxla</button></div>
     </div>`;
@@ -3804,18 +3823,23 @@ async function saveLinearEdit(issueId) {
     if(linearTesdiqActionPending) return;
     const title = document.getElementById('linear-edit-title')?.value.trim() || '';
     const description = document.getElementById('linear-edit-description')?.value.trim() || '';
+    const assigneeId = document.getElementById('linear-edit-assignee')?.value || '';
     if(!title) { toast('Başlığı yazın.', true); return; }
     const button = document.getElementById('linear-edit-save');
     linearTesdiqActionPending = true;
     if(button) { button.disabled = true; button.textContent = 'Yadda saxlanır…'; }
     try {
-        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'edit', issue_id:issueId, title, description})});
+        const response = await fetch(API_BASE + '/api/linear/tesdiq', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify({action:'edit', issue_id:issueId, title, description, assignee_id: assigneeId})});
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Tapşırıq yenilənmədi.');
-        const patchRow = row => String(row.source_id) === String(issueId) ? {...row, title, description, updated_at:new Date().toISOString()} : row;
+        const selectedAssignee = (linearBoardAssignees || []).find(row => String(row?.id || '') === String(assigneeId));
+        const assigneeName = selectedAssignee?.name || 'Təyin olunmayıb';
+        const patchRow = row => String(row.source_id) === String(issueId) ? {...row, title, description, assignee_id: assigneeId, assignee: assigneeName, updated_at:new Date().toISOString()} : row;
         linearTesdiqRows = linearTesdiqRows.map(patchRow); linearQueueRows = linearQueueRows.map(patchRow);
+        linearBoardRows = linearBoardRows.map(patchRow);
         const query = document.getElementById('linear-client-search')?.value.trim() || '';
         renderLinearIssues(linearTesdiqRows, query.length >= 2 ? query : '');
+        if(linearBoardLoaded) renderLinearBoard();
         closeLinearModal(); toast(data.message || 'Tapşırıq yeniləndi.');
     } catch(error) { toast(error.message || 'Tapşırıq yenilənmədi.', true); }
     finally { linearTesdiqActionPending = false; if(button) { button.disabled = false; button.textContent = 'Yadda saxla'; } }
