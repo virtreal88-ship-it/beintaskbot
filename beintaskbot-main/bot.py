@@ -253,14 +253,18 @@ NIZAMI_STAGE_NAMES = {
 }
 # Canonical task assignees.  Old account names deliberately do not appear here:
 # they may remain in historical Kommo task text, but can no longer receive work.
+KOMMO_TASK_RESPONSIBLE_USER_ID = 10932455
 ACTIVE_ASSIGNEES = {
-    "rufat": ("Rüfət Həsənzadə", "Rüfət", 15532668),
-    "huseyn": ("Hüseyn Səfərov", "Hüseyn", 15532668),
-    "rasim": ("Rasim Əsgərov", "Rasim", 15532668),
-    "sermaye": ("Sərmayə Əhmədsoy", "Sərmayə", 15532668),
-    "asya": ("Asya Agayeva", "Asya", 15532668),
-    "nurane": ("Nuranə Şirinova", "Nuranə", 15532668),
-    "admin": ("Nizami Qasımov", "Özüm", 10932455),
+    # Employees work through personal funnels; Kommo stores the task under
+    # the active shared administrator. The legacy 15532668 is read-only
+    # historical metadata and is rejected by Kommo for new assignments.
+    "rufat": ("Rüfət Həsənzadə", "Rüfət", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "huseyn": ("Hüseyn Səfərov", "Hüseyn", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "rasim": ("Rasim Əsgərov", "Rasim", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "sermaye": ("Sərmayə Əhmədsoy", "Sərmayə", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "asya": ("Asya Agayeva", "Asya", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "nurane": ("Nuranə Şirinova", "Nuranə", KOMMO_TASK_RESPONSIBLE_USER_ID),
+    "admin": ("Nizami Qasımov", "Özüm", KOMMO_TASK_RESPONSIBLE_USER_ID),
 }
 _UPD_MARKER = {short: (name, user_id) for name, short, user_id in ACTIVE_ASSIGNEES.values()}
 
@@ -2275,7 +2279,7 @@ def employee_personal_pipeline_ids() -> set[int]:
 
 def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
     if int(pipeline_id) in employee_personal_pipeline_ids():
-        return 15532668
+        return KOMMO_TASK_RESPONSIBLE_USER_ID
     return None
 
 

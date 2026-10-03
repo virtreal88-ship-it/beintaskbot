@@ -2497,8 +2497,7 @@ function applyEmployeePermissionUi() {
     visible(['tab-chats','side-tab-chats'], HAS_CHATS);
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
     visible(['tab-linear','side-tab-linear'], hasEmployeePermission('linear'));
-    const linearCreate = document.getElementById('linear-page-create');
-    if(linearCreate) linearCreate.hidden = !employeeLinearCanCreate;
+    visible(['linear-page-create'], employeeLinearCanCreate);
     const waitingTab = document.getElementById('task-type-tab-gozleme');
     const canViewWaiting = hasEmployeePermission('passive_tasks');
     if(waitingTab) { waitingTab.style.display = canViewWaiting ? '' : 'none'; waitingTab.hidden = !canViewWaiting; }
@@ -3495,8 +3494,8 @@ function renderLinearBoard() {
     const board = wrap?.querySelector('.samil-kanban-board');
     const filter = document.getElementById('linear-status-filter')?.value || 'all';
     const operatorFilterElement = document.getElementById('linear-operator-filter');
-    if(operatorFilterElement) operatorFilterElement.hidden = !isAdmin;
-    const operatorFilter = document.getElementById('linear-operator-filter')?.value || 'all';
+    if(operatorFilterElement) { operatorFilterElement.hidden = !isAdmin; operatorFilterElement.style.display = isAdmin ? '' : 'none'; }
+    const operatorFilter = isAdmin ? (operatorFilterElement?.value || 'all') : 'all';
     const query = document.getElementById('linear-board-search')?.value || '';
     if(!board) return;
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
