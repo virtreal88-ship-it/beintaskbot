@@ -19943,7 +19943,7 @@ def _linear_create_issue(*, title: str, account: str, operator: str, priority: i
         raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Başlıq: {title}\nAccount: {account}\nOperator: {operator}\n\n{description}"
+    saved_description = f"Account: {account}\nOperator: {operator}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -20073,7 +20073,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
         items.append({
             "id": str(row.get("identifier") or ""),
             "source_id": str(row.get("id") or ""),
-            "title": description_meta.get("title") or str(row.get("title") or "Tapşırıq"),
+            "title": str(row.get("title") or description_meta.get("title") or "Tapşırıq"),
             "description": clean_description[:1200],
             "client": description_meta.get("client") or _linear_client_hint(raw_description),
             "priority": int(row.get("priority") or 0),
@@ -20355,7 +20355,7 @@ def _linear_update_issue_text(issue_id: str, title: str, description: str, assig
                     metadata_lines.append(f"Account: {match.group(2).strip()}")
                 else:
                     metadata_lines.append(raw_line.strip())
-    saved_description = "\n".join([f"Başlıq: {title}"] + metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
+    saved_description = "\n".join(metadata_lines + ([""] if metadata_lines and description else []) + ([description] if description else []))
     payload = _linear_graphql("""
     mutation EditLinearIssue($id: String!, $title: String!, $description: String!, $assigneeId: String) {
       issueUpdate(id: $id, input: { title: $title, description: $description, assigneeId: $assigneeId }) {
