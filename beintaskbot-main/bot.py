@@ -66,6 +66,7 @@ from tenant_platform import (
     list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
     list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
+    list_linear_accounts, create_linear_account,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -20359,6 +20360,36 @@ def _linear_delete_issue(issue_id: str) -> None:
     _invalidate_linear_tesdiq_cache()
 
 
+async def handle_api_linear_accounts(request: web.Request) -> web.Response:
+    """Shared account dictionary for Linear task creation."""
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    if not chat_id or not employee_has_permission(chat_id, "linear"):
+        return web.json_response({"success": False, "error": "Linear bölməsi üçün icazə yoxdur."}, status=403)
+    if request.method == "POST":
+        if not is_admin(chat_id):
+            return web.json_response({"success": False, "error": "Hesab əlavə etmək yalnız Admin üçündür."}, status=403)
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        data = data if isinstance(data, dict) else {}
+        try:
+            account = await asyncio.to_thread(create_linear_account, name=str(data.get("name") or ""), created_by=chat_id)
+            accounts = await asyncio.to_thread(list_linear_accounts)
+            return web.json_response({"success": True, "account": account, "accounts": accounts})
+        except TenantPlatformError as exc:
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
+        except Exception:
+            logger.exception("Could not create Linear account dictionary entry")
+            return web.json_response({"success": False, "error": "Hesab əlavə edilmədi."}, status=500)
+    try:
+        accounts = await asyncio.to_thread(list_linear_accounts)
+        return web.json_response({"success": True, "accounts": accounts})
+    except Exception:
+        logger.exception("Could not load Linear account dictionary")
+        return web.json_response({"success": False, "error": "Hesab siyahısı yüklənmədi."}, status=500)
+
+
 async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     """Linear board with a separate view and edit permission."""
     chat_id = int(request.get("authenticated_chat_id") or 0)
@@ -22560,6 +22591,9 @@ async def start_webhook_server():
     app_web.router.add_post("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_get("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_post("/api/linear/tasks", handle_api_linear_tesdiq)
+    app_web.router.add_route('OPTIONS', '/api/linear/accounts', lambda r: web.Response())
+    app_web.router.add_get("/api/linear/accounts", handle_api_linear_accounts)
+    app_web.router.add_post("/api/linear/accounts", handle_api_linear_accounts)
     app_web.router.add_route('OPTIONS', '/api/gozleme', lambda r: web.Response())
     app_web.router.add_get("/api/gozleme", handle_api_gozleme)
     app_web.router.add_post("/auth/web-login/start", handle_web_login_start)
