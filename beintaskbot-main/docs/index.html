@@ -1732,6 +1732,7 @@ let CURRENT_USER_ID = getUserId();
 const IS_SAMIL = CURRENT_USER_ID === '6824377548';
 const IS_RUFAT = CURRENT_USER_ID === '6824377548';
 let employeeAiEnabled = false;
+let employeeLinearCanCreate = false;
 function canUseAi() { return !!employeeAiEnabled; }
 let HAS_OWN_FUNNEL = ['6824377548','1628569350','7329891614','7920785774'].includes(CURRENT_USER_ID);
 let HAS_CHATS = ['6824377548','1628569350'].includes(CURRENT_USER_ID);
@@ -2478,6 +2479,7 @@ async function loadEmployeeSession() {
     isAdmin = !!data.is_admin;
     employeePermissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
     employeeAiEnabled = !!data.ai_enabled;
+    employeeLinearCanCreate = !!data.linear_can_create;
     employeeWhatsAppNumber = String(data.whatsapp_number || '').replace(/\D/g, '');
     HAS_OWN_FUNNEL = hasEmployeePermission('deals');
     HAS_NOTICES = hasEmployeePermission('tasks');
@@ -2496,7 +2498,7 @@ function applyEmployeePermissionUi() {
     visible(['tab-hot-orders','side-tab-hot-orders'], hasEmployeePermission('hot_orders'));
     visible(['tab-linear','side-tab-linear'], hasEmployeePermission('linear'));
     const linearCreate = document.getElementById('linear-page-create');
-    if(linearCreate) linearCreate.hidden = !(isAdmin || hasEmployeePermission('linear_edit'));
+    if(linearCreate) linearCreate.hidden = !employeeLinearCanCreate;
     const waitingTab = document.getElementById('task-type-tab-gozleme');
     const canViewWaiting = hasEmployeePermission('passive_tasks');
     if(waitingTab) { waitingTab.style.display = canViewWaiting ? '' : 'none'; waitingTab.hidden = !canViewWaiting; }
@@ -3802,6 +3804,7 @@ async function saveLinearAccount() {
 }
 
 async function openLinearCreateModal() {
+    if(!employeeLinearCanCreate) { toast('Linear tapşırığı yaratmaq üçün icazə yoxdur.', true); return; }
     closeLinearModal();
     const modal = document.createElement('div');
     modal.id = 'linear-action-modal';

@@ -19805,6 +19805,17 @@ def _linear_create_identity_for_chat(chat_id: int) -> tuple[str, str]:
     return account, _linear_operator_for_chat(chat_id)
 
 
+def _linear_can_create_for_chat(chat_id: int) -> bool:
+    """Allow task creation without granting the staff general edit access."""
+    if not employee_has_permission(chat_id, "linear"):
+        return False
+    return (
+        is_admin(chat_id)
+        or employee_has_permission(chat_id, "linear_edit")
+        or int(chat_id) in {int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID)}
+    )
+
+
 def _linear_account_key(value: str) -> str:
     """Normalize an account label for matching across Linear and CRM."""
     text = str(value or "").strip().casefold()
@@ -19820,7 +19831,7 @@ def _linear_account_matches(account: str, allowed_names: set[str]) -> bool:
         return False
     for name in allowed_names:
         normalized = _linear_account_key(name)
-        if normalized and (candidate == normalized or candidate.startswith(normalized) or normalized.startswith(candidate)):
+        if normalized and candidate == normalized:
             return True
     return False
 
@@ -19829,19 +19840,9 @@ def _linear_account_scope(chat_id: int) -> set[str] | None:
     """Return visible account names for a staff member; None means all."""
     if is_admin(chat_id):
         return None
-    aliases = _LINEAR_ACCOUNT_ALIASES.get(int(chat_id), set())
-    if not aliases:
-        return set()
-    try:
-        rows = list_linear_accounts()
-    except Exception:
-        logger.exception("Could not load Linear account scope")
-        return set()
-    return {
-        str(row.get("name") or "").strip()
-        for row in rows
-        if isinstance(row, dict) and row.get("name") and _linear_account_matches(str(row.get("name") or ""), aliases)
-    }
+    # Linear's existing Account metadata is the source of visibility. A missing
+    # local dictionary entry must not hide the employee's own issues.
+    return set(_LINEAR_ACCOUNT_ALIASES.get(int(chat_id), set()))
 
 
 def _linear_uuid(value: str, label: str) -> str:
@@ -20068,7 +20069,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
           }}
         }}
         """)
-    if not all_tasks:
+    if search or not all_tasks:
         nodes = ((payload.get("issues") or {}).get("nodes") or [])
     items = []
     for row in nodes:
@@ -20505,8 +20506,6 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     if not chat_id or not employee_has_permission(chat_id, "linear"):
         return web.json_response({"success": False, "error": "Linear bölməsi üçün icazə yoxdur."}, status=403)
     if request.method == "POST":
-        if not (is_admin(chat_id) or employee_has_permission(chat_id, "linear_edit")):
-            return web.json_response({"success": False, "error": "Linear tapşırıqlarını dəyişmək üçün ayrıca icazə lazımdır."}, status=403)
         try:
             data = await request.json()
         except Exception:
@@ -20514,6 +20513,11 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         data = data if isinstance(data, dict) else {}
         action = str(data.get("action") or "").strip().lower()
         issue_id = str(data.get("issue_id") or "").strip()
+        can_write = _linear_can_create_for_chat(chat_id) if action == "create" else (
+            is_admin(chat_id) or employee_has_permission(chat_id, "linear_edit")
+        )
+        if not can_write:
+            return web.json_response({"success": False, "error": "Linear əməliyyatı üçün ayrıca icazə lazımdır."}, status=403)
         allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create", "test_accept", "test_reject"}
         if action not in allowed_actions or (action != "create" and not issue_id):
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
@@ -20673,6 +20677,7 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "role": profile["role"],
         "is_admin": is_admin(chat_id),
         "permissions": profile["permissions"],
+        "linear_can_create": _linear_can_create_for_chat(chat_id),
         "ai_enabled": bool(profile.get("ai_enabled")),
         "whatsapp_number": get_employee_whatsapp_number(chat_id),
     })
