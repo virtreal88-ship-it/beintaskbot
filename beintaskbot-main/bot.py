@@ -19780,6 +19780,17 @@ _LINEAR_ACCOUNT_ALIASES = {
     int(ADMIN_CHAT_ID): set(),
 }
 
+_LINEAR_OPERATOR_BY_CHAT = {
+    int(RUFAT_CHAT_ID): "rufet@beinsystems",
+    int(HUSEYN_CHAT_ID): "huseyn@beinsystems",
+    int(RASIM_CHAT_ID): "rasim@beinsystems",
+    int(ADMIN_CHAT_ID): "admin@nizam",
+}
+
+
+def _linear_operator_for_chat(chat_id: int) -> str:
+    return str(_LINEAR_OPERATOR_BY_CHAT.get(int(chat_id)) or "").strip()
+
 
 def _linear_account_key(value: str) -> str:
     """Normalize an account label for matching across Linear and CRM."""
@@ -19903,7 +19914,7 @@ def _linear_team_members(*, force: bool = False) -> list[dict]:
     return rows
 
 
-def _linear_create_issue(*, title: str, account: str, priority: int, project_id: str, description: str) -> dict:
+def _linear_create_issue(*, title: str, account: str, operator: str, priority: int, project_id: str, description: str) -> dict:
     """Create a CRM-linked issue and put it in Triage by default."""
     title = str(title or "").strip()[:255]
     account = str(account or "").strip()[:255]
@@ -19912,6 +19923,9 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
         raise RuntimeError("Başlıq boş ola bilməz.")
     if not account or account.casefold() in {"göstərilməyib", "gosterilmeyib", "—", "-"}:
         raise RuntimeError("Hesab seçin və ya yazın.")
+    operator = str(operator or "").strip()[:255]
+    if not operator:
+        raise RuntimeError("Operator seçin.")
     if not description:
         raise RuntimeError("Açıqlama boş ola bilməz.")
     if priority not in {0, 1, 2, 3, 4}:
@@ -19929,7 +19943,7 @@ def _linear_create_issue(*, title: str, account: str, priority: int, project_id:
         raise RuntimeError("Bu layihə Linear komandasına aid deyil.")
     # Keep CRM fields in a stable machine-readable prefix. The existing board
     # parser removes these lines and displays the account/operator cleanly.
-    saved_description = f"Başlıq: {title}\nAccount: {account}\n\n{description}"
+    saved_description = f"Başlıq: {title}\nAccount: {account}\nOperator: {operator}\n\n{description}"
     variables = {
         "teamId": team_id,
         "title": title,
@@ -20497,6 +20511,12 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 except (TypeError, ValueError):
                     return web.json_response({"success": False, "error": "Prioriteti seçin."}, status=400)
                 account = str(data.get("account") or data.get("client") or "").strip()
+                operator = str(data.get("operator") or "").strip()
+                expected_operator = _linear_operator_for_chat(chat_id)
+                if not expected_operator:
+                    return web.json_response({"success": False, "error": "Bu əməkdaş üçün Linear operatoru təyin edilməyib."}, status=403)
+                if operator != expected_operator:
+                    return web.json_response({"success": False, "error": "Yalnız öz operatorunuzla tapşırıq yarada bilərsiniz."}, status=403)
                 account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
                 if account_scope is not None and not _linear_account_matches(account, account_scope):
                     return web.json_response({"success": False, "error": "Bu hesab üçün tapşırıq yaratmaq icazəniz yoxdur."}, status=403)
@@ -20504,6 +20524,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                     _linear_create_issue,
                     title=str(data.get("title") or ""),
                     account=account,
+                    operator=operator,
                     priority=priority,
                     project_id=str(data.get("project_id") or ""),
                     description=str(data.get("description") or ""),
