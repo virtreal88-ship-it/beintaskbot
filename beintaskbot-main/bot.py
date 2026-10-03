@@ -19992,20 +19992,37 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
         }
         """, {"teamId": team_id, "search": search})
     elif all_tasks:
-        payload = _linear_graphql(f"""
-        query LinearWorkItems {{
-          issues(first: 100, orderBy: createdAt, filter: {{ team: {{ id: {{ eq: \"{team_id}\" }} }} }}) {{
-            nodes {{
+        # A single first:100 request can hide older Testiq items when the
+        # workspace contains more than 100 issues.  Walk the Linear cursor so
+        # every allowed board status is considered before the account filter.
+        query = """
+        query LinearWorkItems($teamId: ID!, $after: String) {
+          issues(first: 100, after: $after, orderBy: createdAt, filter: { team: { id: { eq: $teamId } } }) {
+            nodes {
               id identifier title description priority dueDate createdAt updatedAt url
-              state {{ id name color type }}
-              assignee {{ id name }}
-              creator {{ name }}
-              project {{ name }}
-              labels {{ nodes {{ name }} }}
-            }}
-          }}
-        }}
-        """)
+              state { id name color type }
+              assignee { id name }
+              creator { name }
+              project { name }
+              labels { nodes { name } }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        """
+        nodes = []
+        cursor = None
+        for _ in range(10):
+            page = _linear_graphql(query, {"teamId": team_id, "after": cursor})
+            connection = (page.get("issues") or {})
+            nodes.extend(row for row in (connection.get("nodes") or []) if isinstance(row, dict))
+            page_info = connection.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            next_cursor = str(page_info.get("endCursor") or "").strip()
+            if not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
     else:
         payload = _linear_graphql(f"""
         query ConfirmationIssues {{
@@ -20024,7 +20041,8 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
           }}
         }}
         """)
-    nodes = ((payload.get("issues") or {}).get("nodes") or [])
+    if not all_tasks:
+        nodes = ((payload.get("issues") or {}).get("nodes") or [])
     items = []
     for row in nodes:
         if not isinstance(row, dict):
