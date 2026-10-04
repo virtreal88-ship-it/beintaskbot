@@ -1670,6 +1670,23 @@ def normalize_assignee_name(name: str) -> str:
         return TECHNICAL_SUPPORT_NAME
     return cleaned
 
+
+def task_assignee_is_self(chat_id: int, assignee_name: str) -> bool:
+    """Resolve the selected employee identity, including corrected Telegram IDs."""
+    selected = normalize_assignee_name(assignee_name).casefold()
+    if not selected:
+        return False
+    for employee in _employee_directory_rows():
+        if int(employee.get("chat_id") or 0) == int(chat_id):
+            if selected == normalize_assignee_name(employee.get("name") or "").casefold():
+                return True
+    selected_chat = get_chat_id_by_name(normalize_assignee_name(assignee_name))
+    if selected_chat is None:
+        return False
+    return int(selected_chat) == int(chat_id) or (
+        int(selected_chat) == int(RUFAT_CHAT_ID) and is_rufat_chat(chat_id)
+    )
+
 # ─── Message Maps (reply context) ───────────────────────────────────────────
 MESSAGE_MAPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "message_maps.json")
 _message_task_map: dict = {}
@@ -8006,7 +8023,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             # If creating for themselves, no confirmation needed
             is_admin_user = is_admin(chat_id)
             creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
-            creates_for_self = (assignee_name_raw == creator_name) if (assignee_name_raw and creator_name) else False
+            creates_for_self = task_assignee_is_self(chat_id, assignee_name_raw)
             if not is_admin_user and not creates_for_self and _bot_app:
                 # Store pending task in bot_data
                 conf_key = str(uuid.uuid4())[:8]
@@ -20295,7 +20312,7 @@ def _linear_move_any_issue(issue_id: str, state_id: str) -> dict:
 
 
 async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
-    """Notify the administrator when an important Linear state is reached."""
+    """Done goes to active staff; other important states remain admin-only."""
     state_name = str(target_state.get("name") or "").strip()
     if state_name.casefold() not in {"testiq", "təstiq", "təsdiq", "tesdiq", "triage", "done"}:
         return
@@ -20315,16 +20332,24 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
         details.append(visible[:500])
     body = "\n".join(details)
     url = str(issue.get("url") or "").strip() or "#linear"
-    send_push_notification(str(ADMIN_CHAT_ID), f"Linear: {state_name}", body, url=url)
-    if _bot_app:
+    recipients = {int(ADMIN_CHAT_ID)}
+    if state_name.casefold() == "done":
+        employees = await asyncio.to_thread(_employee_directory_rows)
+        recipients.update(int(row["chat_id"]) for row in employees if row.get("active") and int(row.get("chat_id") or 0) > 0)
+    for recipient in sorted(recipients):
         try:
-            await _bot_app.bot.send_message(
-                chat_id=int(ADMIN_CHAT_ID),
-                text=f"🔔 Linear: {state_name}\n\n{body}\n\n🔗 {url}",
-                disable_web_page_preview=True,
-            )
+            await asyncio.to_thread(send_push_notification, str(recipient), f"Linear: {state_name}", body, url=url)
         except Exception:
-            logger.exception("Linear status Telegram notification failed")
+            logger.exception("Linear status push notification failed for %s", recipient)
+        if _bot_app:
+            try:
+                await _bot_app.bot.send_message(
+                    chat_id=recipient,
+                    text=f"🔔 Linear: {state_name}\n\n{body}\n\n🔗 {url}",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                logger.exception("Linear status Telegram notification failed for %s", recipient)
 
 
 async def _notify_linear_status_transitions(issues: list[dict]) -> None:
@@ -20341,13 +20366,22 @@ async def _notify_linear_status_transitions(issues: list[dict]) -> None:
         state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
         name = str(state.get("name") or "").strip()
         folded = name.casefold()
-        if not key or folded not in important:
+        if not key:
             continue
         previous = _LINEAR_LAST_NOTIFIED_STATES.get(key)
         _LINEAR_LAST_NOTIFIED_STATES[key] = folded
-        if previous is None or previous == folded:
+        if previous is None or previous == folded or folded not in important:
             continue
         await _notify_linear_status_change(issue, {"name": name})
+
+
+async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Observe external Linear transitions even while nobody opens the board."""
+    try:
+        issues = await asyncio.to_thread(_load_linear_tesdiq_issues, all_tasks=True)
+        await _notify_linear_status_transitions(issues)
+    except Exception:
+        logger.exception("Linear status notification synchronization failed")
 
 
 def _linear_update_issue_priority(issue_id: str, priority: int) -> dict:
@@ -20643,6 +20677,8 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
     search = str(request.query.get("q") or "").strip()[:120]
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, force=force, search=search, all_tasks=all_tasks)
+        if all_tasks and not search:
+            await _notify_linear_status_transitions(issues)
         account_scope = await asyncio.to_thread(_linear_account_scope, chat_id)
         operator = _linear_operator_for_chat(chat_id)
         if account_scope is not None:
@@ -20650,8 +20686,6 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 row for row in issues
                 if isinstance(row, dict) and _linear_issue_matches_scope(row, account_scope, operator)
             ]
-        if all_tasks and not search:
-            await _notify_linear_status_transitions(issues)
         statuses = await asyncio.to_thread(_linear_allowed_state_options) if all_tasks else []
         projects = []
         assignees = []
@@ -23723,6 +23757,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
     # Background jobs
     job_queue = app.job_queue
+    job_queue.run_repeating(check_linear_status_notifications, interval=60, first=20)
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
     job_queue.run_repeating(tecili_alarm_check, interval=900, first=120)
     job_queue.run_daily(morning_digest, time=datetime.strptime("05:00", "%H:%M").time())
