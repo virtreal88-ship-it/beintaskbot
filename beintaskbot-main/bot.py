@@ -461,7 +461,7 @@ _ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees", "linear", "linear_edit")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees", "linear", "linear_create", "linear_edit")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
 _MASTER_PERMISSIONS = frozenset({"hot_orders", "hot_orders_create"})
 _HOT_ORDER_SKILLS = ("all", "montaj", "temir", "catdirilma", "servis", "digər")
@@ -557,6 +557,24 @@ def employee_access_profile(chat_id: int) -> dict:
         else:
             role = "Əməkdaş"
         permissions = _normalize_employee_permissions(stored.get("permissions"), role)
+        if not stored.get("linear_create_permission_version") and role != "Usta":
+            # One-time compatibility default; explicit subsequent saves win.
+            defaults = {int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID), int(RASIM_CHAT_ID)}
+            records = _load_employee_access_records()
+            cursor = int(RUFAT_CHAT_ID)
+            seen = set()
+            while cursor not in seen:
+                seen.add(cursor)
+                target = (records.get(str(cursor)) or {}).get("migrated_to")
+                if not target:
+                    break
+                try:
+                    cursor = int(target)
+                except (TypeError, ValueError):
+                    break
+                defaults.add(cursor)
+            if cid in defaults and "linear" in permissions:
+                permissions.append("linear_create")
         # The previous normalizer silently restored hot_orders whenever
         # hot_orders_create was retained. Nizami already switched the page
         # off, so migrate that legacy admin record once to the intended state.
@@ -19446,6 +19464,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "permissions_version": 2,
+            "linear_create_permission_version": 1,
             "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
@@ -19493,6 +19512,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
             "permissions_version": 2,
+            "linear_create_permission_version": 1,
             "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
@@ -19509,6 +19529,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "role": old_record.get("role") or role,
                 "permissions": old_record.get("permissions") or permissions,
                 "permissions_version": 2,
+                "linear_create_permission_version": 1,
                 "active": False,
                 "ai_enabled": bool(old_record.get("ai_enabled", ai_enabled)),
                 "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
@@ -19838,10 +19859,12 @@ def _linear_can_create_for_chat(chat_id: int) -> bool:
     """Allow task creation without granting the staff general edit access."""
     if not employee_has_permission(chat_id, "linear"):
         return False
+    account, operator = _linear_create_identity_for_chat(chat_id)
+    if not account or not operator:
+        return False
     return (
         is_admin(chat_id)
-        or employee_has_permission(chat_id, "linear_edit")
-        or _linear_identity_chat_id(chat_id) in {int(RUFAT_CHAT_ID), int(HUSEYN_CHAT_ID)}
+        or employee_has_permission(chat_id, "linear_create")
     )
 
 

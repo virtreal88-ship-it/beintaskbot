@@ -33,7 +33,7 @@ def load_linear_functions():
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names)
         or (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in names for target in node.targets))
     ]
-    permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear"}, HUSEYN: {"linear"}, RASIM: {"linear"}, MOVED_RUFAT: {"linear"}}
+    permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear", "linear_create"}, HUSEYN: {"linear", "linear_create"}, RASIM: {"linear", "linear_create"}, MOVED_RUFAT: {"linear", "linear_create"}}
     web = types.SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {"status": status, "data": data})
     namespace = {
         "ADMIN_CHAT_ID": ADMIN, "RUFAT_CHAT_ID": RUFAT, "HUSEYN_CHAT_ID": HUSEYN, "RASIM_CHAT_ID": RASIM,
@@ -136,6 +136,7 @@ class LinearAccessTests(unittest.TestCase):
             self.permissions[chat_id] = set()
             self.assertFalse(self.ns["_linear_can_create_for_chat"](chat_id))
             self.assertEqual(self.call(Request(chat_id, "POST", {"action": "create"}))["status"], 403)
+        self.permissions[RASIM] = {"linear"}
         self.assertEqual(self.call(Request(RASIM, "POST", {"action": "create"}))["status"], 403)
         create.assert_not_called()
 
@@ -173,17 +174,40 @@ class LinearAccessTests(unittest.TestCase):
         self.ns["can_use_deal_ai"] = lambda chat: False
         self.ns["_deal_ai_access_denied"] = lambda: {"status": 403}
         self.assertEqual(self.call(Request(MOVED_RUFAT, "POST", {"action": "ai_rewrite", "text": "Draft"}))["status"], 403)
+        self.permissions[RASIM] = {"linear"}
         self.assertEqual(self.call(Request(RASIM, "POST", {"action": "ai_rewrite", "text": "Draft"}))["status"], 403)
         rewrite.assert_not_called()
 
     def test_session_advertises_creation_separately_from_editing(self):
         self.ns["employee_access_profile"] = lambda chat_id: {"active": True, "role": "Əməkdaş", "permissions": list(self.permissions[chat_id])}
         self.ns["get_employee_whatsapp_number"] = lambda chat_id: ""
-        for chat_id, allowed in ((RUFAT, True), (MOVED_RUFAT, True), (HUSEYN, True), (RASIM, False), (ADMIN, True)):
+        for chat_id, allowed in ((RUFAT, True), (MOVED_RUFAT, True), (HUSEYN, True), (RASIM, True), (ADMIN, True)):
             result = asyncio.run(self.ns["handle_api_session"](Request(chat_id)))
             self.assertEqual(result["data"]["linear_can_create"], allowed)
             if chat_id in (RUFAT, MOVED_RUFAT, HUSEYN):
                 self.assertNotIn("linear_edit", result["data"]["permissions"])
+
+    def test_rasim_creation_and_explicit_permission_revocation(self):
+        create = self.ns["_linear_create_issue"] = Mock(return_value={"id": "new"})
+        result = self.call(Request(RASIM, "POST", {"action": "create", "title": "Task", "description": "Text", "project_id": "p"}))
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(create.call_args.kwargs["account"], "rasim")
+        self.assertEqual(create.call_args.kwargs["operator"], "rasim@beinsystems")
+        self.permissions[RASIM] = {"linear", "linear_edit"}
+        self.assertFalse(self.ns["_linear_can_create_for_chat"](RASIM))
+        self.assertEqual(self.call(Request(RASIM, "POST", {"action": "create"}))["status"], 403)
+
+    def test_saved_create_switch_is_not_restored_by_migration(self):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "employee_access_profile")
+        record = {"role": "Əməkdaş", "active": True, "permissions": ["linear"]}
+        ns = dict(self.ns, _load_employee_access_records=lambda: {str(RASIM): record},
+                  _RETIRED_EMPLOYEE_CHAT_IDS=set(), _normalize_employee_permissions=lambda value, role: list(value),
+                  _normalize_hot_order_skills=lambda value: [], _EMPLOYEE_PERMISSIONS=("linear", "linear_create"))
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "<profile>", "exec"), ns)
+        self.assertIn("linear_create", ns["employee_access_profile"](RASIM)["permissions"])
+        record["linear_create_permission_version"] = 1
+        self.assertNotIn("linear_create", ns["employee_access_profile"](RASIM)["permissions"])
 
 
 if __name__ == "__main__":
