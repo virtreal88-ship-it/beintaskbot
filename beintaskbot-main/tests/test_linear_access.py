@@ -162,6 +162,20 @@ class LinearAccessTests(unittest.TestCase):
         self.assertNotEqual(self.call(Request(RUFAT, "POST", {"action": "test_accept", "issue_id": "a"}))["status"], 200)
         move.assert_not_called()
 
+    def test_creation_rewrite_needs_no_issue_and_respects_ai_access(self):
+        rewrite = self.ns["_linear_ai_rewrite"] = Mock(return_value="Edited text")
+        self.ns["can_use_deal_ai"] = lambda chat: True
+        for chat in (ADMIN, MOVED_RUFAT, HUSEYN):
+            response = self.call(Request(chat, "POST", {"action": "ai_rewrite", "text": "Draft"}))
+            self.assertEqual(response["status"], 200)
+            self.assertEqual(response["data"]["text"], "Edited text")
+        rewrite.reset_mock()
+        self.ns["can_use_deal_ai"] = lambda chat: False
+        self.ns["_deal_ai_access_denied"] = lambda: {"status": 403}
+        self.assertEqual(self.call(Request(MOVED_RUFAT, "POST", {"action": "ai_rewrite", "text": "Draft"}))["status"], 403)
+        self.assertEqual(self.call(Request(RASIM, "POST", {"action": "ai_rewrite", "text": "Draft"}))["status"], 403)
+        rewrite.assert_not_called()
+
     def test_session_advertises_creation_separately_from_editing(self):
         self.ns["employee_access_profile"] = lambda chat_id: {"active": True, "role": "Əməkdaş", "permissions": list(self.permissions[chat_id])}
         self.ns["get_employee_whatsapp_number"] = lambda chat_id: ""
