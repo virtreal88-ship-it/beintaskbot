@@ -457,6 +457,20 @@ def mark_linear_news_published(*, source_issue_id: str, telegram_message_id: int
         conn.commit()
 
 
+def delete_linear_news(*, source_issue_id: str) -> bool:
+    """Remove one archived release note by its source Linear issue id."""
+    issue_id = str(source_issue_id or "").strip()
+    if not issue_id:
+        return False
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM crm_linear_news WHERE source_issue_id = %s", (issue_id,))
+            deleted = cur.rowcount
+        conn.commit()
+    return bool(deleted)
+
+
 def prune_linear_news() -> int:
     """Delete release notes after their 90-day public retention window."""
     with _connect() as conn:

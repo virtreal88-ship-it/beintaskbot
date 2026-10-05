@@ -67,8 +67,9 @@ from tenant_platform import (
     list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
     list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
-    list_linear_accounts, create_linear_account, upsert_linear_news,
-    list_linear_news, mark_linear_news_published, prune_linear_news,
+    list_linear_accounts, create_linear_account, delete_linear_news,
+    upsert_linear_news, list_linear_news, mark_linear_news_published,
+    prune_linear_news,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -1163,6 +1164,39 @@ def _publish_linear_news_to_telegram(item: dict) -> int | None:
     except Exception as exc:
         logger.warning("Linear news channel publish failed: %s", exc)
         return None
+
+
+def _delete_linear_news_from_telegram(item: dict) -> None:
+    """Remove a previously published release when it is reclassified as a bug."""
+    message_id = item.get("telegram_message_id") if isinstance(item, dict) else None
+    if not message_id or not LINEAR_NEWS_TELEGRAM_CHANNEL:
+        return
+    try:
+        response = _http.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
+            json={"chat_id": LINEAR_NEWS_TELEGRAM_CHANNEL, "message_id": int(message_id)},
+            timeout=10,
+        )
+        if not response.ok:
+            logger.warning("Linear news channel removal rejected: status=%s body=%s", response.status_code, (response.text or "")[:180])
+    except Exception as exc:
+        logger.warning("Linear news channel removal failed: %s", exc)
+
+
+def _stored_linear_news_is_bug_fix(row: dict) -> bool:
+    """Classify both the original Linear payload and generated copy."""
+    if not isinstance(row, dict):
+        return False
+    raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+    issue = raw.get("linear") if isinstance(raw.get("linear"), dict) else {}
+    combined = dict(issue)
+    combined["title"] = " ".join(str(value or "") for value in (
+        issue.get("title"), row.get("title"), row.get("summary"), row.get("body")
+    ))
+    combined["description"] = " ".join(str(value or "") for value in (
+        issue.get("description"), row.get("summary"), row.get("body")
+    ))
+    return _linear_issue_is_bug_fix(combined)
 
 
 def _close_pending_telegram_message(action: dict, result_text: str):
@@ -20523,6 +20557,20 @@ async def _sync_linear_news(issues: list[dict]) -> None:
     """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
     try:
         existing = await asyncio.to_thread(list_linear_news, limit=200)
+        # Clean the current feed as well as filtering future releases. This
+        # catches bugfixes that were archived before the stricter classifier
+        # was deployed; the original Linear issue is retained in ``raw`` so
+        # the decision remains auditable.
+        for row in existing:
+            if not isinstance(row, dict):
+                continue
+            if _stored_linear_news_is_bug_fix(row):
+                await asyncio.to_thread(_delete_linear_news_from_telegram, row)
+                await asyncio.to_thread(delete_linear_news, source_issue_id=str(row.get("source_issue_id") or ""))
+        existing = [
+            row for row in existing
+            if not (isinstance(row, dict) and _stored_linear_news_is_bug_fix(row))
+        ]
         known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
         # Backfill the channel once for releases already archived before the
         # channel integration was enabled. The persisted message id prevents
@@ -20533,8 +20581,9 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 break
             if not isinstance(row, dict) or row.get("telegram_published_at") or row.get("telegram_message_id"):
                 continue
-            stored_issue = (row.get("raw") or {}).get("linear") if isinstance(row.get("raw"), dict) else None
-            if isinstance(stored_issue, dict) and _linear_issue_is_bug_fix(stored_issue):
+            if _stored_linear_news_is_bug_fix(row):
+                await asyncio.to_thread(_delete_linear_news_from_telegram, row)
+                await asyncio.to_thread(delete_linear_news, source_issue_id=str(row.get("source_issue_id") or ""))
                 continue
             message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, row)
             if message_id:
