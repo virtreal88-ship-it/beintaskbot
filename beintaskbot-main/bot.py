@@ -68,7 +68,7 @@ from tenant_platform import (
     list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, upsert_linear_news,
-    list_linear_news, prune_linear_news,
+    list_linear_news, mark_linear_news_published, prune_linear_news,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -124,6 +124,9 @@ LINEAR_TRIAGE_STATE_ID = str(os.environ.get("LINEAR_TRIAGE_STATE_ID") or "f115d7
 LINEAR_BACKLOG_STATE_ID = str(os.environ.get("LINEAR_BACKLOG_STATE_ID") or "e3bd0665-1e8c-4e94-afe8-dae7d7c531e8").strip()
 LINEAR_TODO_STATE_ID = str(os.environ.get("LINEAR_TODO_STATE_ID") or "").strip()
 LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or "").strip()
+# Public release channel. The bot must be an administrator there with the
+# permission to post messages. Keep it configurable for future tenants.
+LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL") or "@beinecosystems").strip()
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
@@ -1127,6 +1130,39 @@ def _send_telegram_text(chat_id, text: str):
             logger.warning("Telegram notification rejected: chat=%s status=%s body=%s", chat_id, response.status_code, (response.text or "")[:180])
     except Exception as exc:
         logger.warning("Pending action Telegram notification failed: %s", exc)
+
+
+def _publish_linear_news_to_telegram(item: dict) -> int | None:
+    """Publish one customer-facing release note to the configured channel."""
+    channel = LINEAR_NEWS_TELEGRAM_CHANNEL
+    if not channel or not isinstance(item, dict):
+        return None
+    project = str(item.get("project_key") or "").strip().upper()
+    identifier = str(item.get("identifier") or "").strip()
+    title = str(item.get("title") or "Yenilik").strip()
+    summary = str(item.get("summary") or "").strip()
+    project_url = {"AKUL": "https://akul.az", "DINE": "https://dine.az"}.get(project)
+    lines = [f"🆕 {project or 'BeinSystems'} — {identifier}".strip(), "", title]
+    if summary:
+        lines.extend(["", summary])
+    if project_url:
+        lines.extend(["", f"🔗 {project_url}"])
+    text = "\n".join(lines)[:3900]
+    try:
+        response = _http.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": channel, "text": text, "disable_web_page_preview": False},
+            timeout=10,
+        )
+        if not response.ok:
+            logger.warning("Linear news channel publish rejected: status=%s body=%s", response.status_code, (response.text or "")[:240])
+            return None
+        payload = response.json() if response.content else {}
+        message_id = (payload.get("result") or {}).get("message_id")
+        return int(message_id) if message_id else None
+    except Exception as exc:
+        logger.warning("Linear news channel publish failed: %s", exc)
+        return None
 
 
 def _close_pending_telegram_message(action: dict, result_text: str):
@@ -19832,7 +19868,8 @@ def _linear_issue_is_bug_fix(issue: dict) -> bool:
     return bool(re.search(
         r"(?:\bbug\s*fix\b|\bbugfix\b|\bhotfix\b|\bdefect\b|\bregression\b|"
         r"\bbug\b|\bошибк\w*\b|\bисправлен\w*\b|\bбаг\w*\b|"
-        r"\bxəta\b|\bsəhv\w*\b|\bисправление\b)",
+        r"\bxəta\b|\bsəhv\w*\b|\bproblem\w*\b|\bprobleml\w*\b|"
+        r"\bdüzəldil\w*\b|\btəmir\w*\b|\bисправление\b)",
         text,
     ))
 
@@ -20487,6 +20524,26 @@ async def _sync_linear_news(issues: list[dict]) -> None:
     try:
         existing = await asyncio.to_thread(list_linear_news, limit=200)
         known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
+        # Backfill the channel once for releases already archived before the
+        # channel integration was enabled. The persisted message id prevents
+        # duplicates on every 60-second synchronization cycle.
+        published = 0
+        for row in existing:
+            if published >= 30:
+                break
+            if not isinstance(row, dict) or row.get("telegram_published_at") or row.get("telegram_message_id"):
+                continue
+            stored_issue = (row.get("raw") or {}).get("linear") if isinstance(row.get("raw"), dict) else None
+            if isinstance(stored_issue, dict) and _linear_issue_is_bug_fix(stored_issue):
+                continue
+            message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, row)
+            if message_id:
+                await asyncio.to_thread(
+                    mark_linear_news_published,
+                    source_issue_id=str(row.get("source_issue_id") or ""),
+                    telegram_message_id=message_id,
+                )
+                published += 1
         for issue in issues or []:
             state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
             if str(state.get("name") or "").strip().casefold() != "done":
@@ -20498,7 +20555,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             if not source_id or source_id in known:
                 continue
             generated = await asyncio.to_thread(_linear_news_ai_content, issue)
-            await asyncio.to_thread(
+            saved = await asyncio.to_thread(
                 upsert_linear_news,
                 source_issue_id=source_id,
                 identifier=str(issue.get("id") or ""),
@@ -20513,6 +20570,13 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 source_url=str(issue.get("url") or ""),
                 raw={"linear": issue, "generated_by": "openai"},
             )
+            message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, saved)
+            if message_id:
+                await asyncio.to_thread(
+                    mark_linear_news_published,
+                    source_issue_id=source_id,
+                    telegram_message_id=message_id,
+                )
             known.add(source_id)
         await asyncio.to_thread(prune_linear_news)
     except Exception:

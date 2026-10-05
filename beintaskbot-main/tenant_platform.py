@@ -272,10 +272,16 @@ def _ensure_schema(conn) -> None:
                     expires_at TIMESTAMPTZ NOT NULL,
                     source_url TEXT NOT NULL DEFAULT '',
                     raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    telegram_message_id BIGINT NULL,
+                    telegram_published_at TIMESTAMPTZ NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            # Keep existing installations compatible with the Telegram news
+            # publisher without requiring a destructive migration.
+            cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT NULL")
+            cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS telegram_published_at TIMESTAMPTZ NULL")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_webhook_events (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -391,7 +397,7 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
     for key in ("id",):
         if item.get(key):
             item[key] = str(item[key])
-    for key in ("source_created_at", "done_at", "expires_at", "created_at", "updated_at"):
+    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "created_at", "updated_at"):
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
@@ -431,6 +437,24 @@ def list_linear_news(*, project_key: str = "", limit: int = 60) -> list[dict]:
                 item[key] = item[key].isoformat()
         result.append(item)
     return result
+
+
+def mark_linear_news_published(*, source_issue_id: str, telegram_message_id: int | None = None) -> None:
+    """Record the channel message so each release is published only once."""
+    issue_id = str(source_issue_id or "").strip()
+    if not issue_id:
+        return
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crm_linear_news
+                SET telegram_message_id = %s,
+                    telegram_published_at = now(),
+                    updated_at = now()
+                WHERE source_issue_id = %s
+            """, (telegram_message_id, issue_id))
+        conn.commit()
 
 
 def prune_linear_news() -> int:
