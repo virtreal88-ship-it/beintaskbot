@@ -21324,6 +21324,12 @@ async def handle_platform_kommo_callback(request: web.Request) -> web.Response:
             or query.get("account") or query.get("subdomain") or query.get("domain")
             or saved_domain or ""
         )
+        logger.info(
+            "Kommo OAuth callback received: query_keys=%s domain_source=%s saved_domain=%s",
+            sorted(str(key) for key in query.keys()),
+            "query" if domain_hint and domain_hint != saved_domain else "saved",
+            bool(saved_domain),
+        )
         domain = _kommo_callback_domain(domain_hint)
         client_id, client_secret, redirect_uri = _kommo_oauth_settings()
         if not code:
@@ -21351,10 +21357,12 @@ async def handle_platform_kommo_callback(request: web.Request) -> web.Response:
         await asyncio.to_thread(save_kommo_oauth_tokens, tenant_id=tenant_id, account_domain=domain, token_payload=tokens)
     except TenantPlatformError as exc:
         logger.info("Kommo OAuth callback rejected: %s", exc)
-        raise web.HTTPFound("/setup?kommo=error")
-    except Exception:
+        reason = quote(str(exc)[:220], safe="")
+        raise web.HTTPFound(f"/setup?kommo=error&reason={reason}")
+    except Exception as exc:
         logger.exception("Kommo OAuth callback failed")
-        raise web.HTTPFound("/setup?kommo=error")
+        reason = quote(str(exc)[:220] or "Naməlum xəta", safe="")
+        raise web.HTTPFound(f"/setup?kommo=error&reason={reason}")
     raise web.HTTPFound("/setup?kommo=connected")
 
 
