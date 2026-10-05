@@ -19912,7 +19912,8 @@ def _linear_issue_is_bug_fix(issue: dict) -> bool:
         r"\bxəta\b|\bsəhv\w*\b|\bproblem\w*\b|\bprobleml\w*\b|"
         r"\bdüzəldil\w*\b|\btəmir\w*\b|\bисправление\b|"
         r"\boptim\w*\b|\boptimallaşdır\w*\b|\bperformans\w*\b|"
-        r"\bsürətlən\w*\b|\bускорен\w*\b|\bоптимизац\w*\b)",
+        r"\bsürətlən\w*\b|\bускорен\w*\b|\bоптимизац\w*\b|"
+        r"\bdüzgün\s+əks(?:\s+\w+)?\b|\bdaha\s+dəqiq\b|\bşəffaf\w*\b)",
         text,
     ))
 
