@@ -128,6 +128,9 @@ LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or
 # Public release channel. The bot must be an administrator there with the
 # permission to post messages. Keep it configurable for future tenants.
 LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL") or "@beinecosystems").strip()
+# News publishing is opt-in while the release feed is being reviewed.
+# Set LINEAR_NEWS_TELEGRAM_ENABLED=true in Railway to resume it deliberately.
+LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "false").strip().casefold() in {"1", "true", "yes", "on"}
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
@@ -20556,6 +20559,8 @@ async def _notify_linear_status_transitions(issues: list[dict]) -> None:
 async def _sync_linear_news(issues: list[dict]) -> None:
     """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
     try:
+        if not LINEAR_NEWS_TELEGRAM_ENABLED:
+            return
         existing = await asyncio.to_thread(list_linear_news, limit=200)
         # Clean the current feed as well as filtering future releases. This
         # catches bugfixes that were archived before the stricter classifier
