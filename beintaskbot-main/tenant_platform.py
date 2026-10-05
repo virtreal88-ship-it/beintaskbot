@@ -252,6 +252,30 @@ def _ensure_schema(conn) -> None:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """)
+            # Public product news is a durable snapshot of selected Linear
+            # issues.  Linear issues may later be deleted or moved out of
+            # Done, so the site keeps its own copy for a short, predictable
+            # retention window.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS crm_linear_news (
+                    id UUID PRIMARY KEY,
+                    source_issue_id TEXT NOT NULL UNIQUE,
+                    identifier TEXT NOT NULL DEFAULT '',
+                    project_key TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    body TEXT NOT NULL DEFAULT '',
+                    account TEXT NOT NULL DEFAULT '',
+                    environment TEXT NOT NULL DEFAULT '',
+                    source_created_at TIMESTAMPTZ NULL,
+                    done_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    source_url TEXT NOT NULL DEFAULT '',
+                    raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_webhook_events (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -264,6 +288,8 @@ def _ensure_schema(conn) -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_tasks_list_idx ON saas_crm_tasks(tenant_id, responsible_id, completed, due_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_messages_list_idx ON saas_crm_messages(tenant_id, kommo_lead_id, happened_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS saas_notifications_list_idx ON saas_tenant_notifications(tenant_id, telegram_id, read_at, created_at DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_project_idx ON crm_linear_news(project_key, done_at DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_expiry_idx ON crm_linear_news(expires_at)")
         conn.commit()
         _schema_ready = True
 
@@ -314,6 +340,108 @@ def create_linear_account(*, name: str, created_by: int) -> dict:
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
+
+
+def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: str,
+                       title: str, summary: str, body: str, account: str,
+                       environment: str, source_created_at: str | None,
+                       done_at: str | None, source_url: str, raw: dict | None = None) -> dict:
+    """Persist one customer-facing Linear release note for 90 days."""
+    issue_id = str(source_issue_id or "").strip()
+    project = str(project_key or "").strip().upper()
+    if not issue_id or project not in {"AKUL", "DINE"}:
+        raise TenantPlatformError("Linear xəbəri üçün mənbə və layihə tələb olunur.")
+    expires_at = datetime.now(timezone.utc) + timedelta(days=90)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO crm_linear_news
+                (id, source_issue_id, identifier, project_key, title, summary, body,
+                 account, environment, source_created_at, done_at, expires_at,
+                 source_url, raw)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s::timestamptz, COALESCE(%s::timestamptz, now()), %s,
+                        %s, %s::jsonb)
+                ON CONFLICT (source_issue_id) DO UPDATE SET
+                    identifier = EXCLUDED.identifier,
+                    project_key = EXCLUDED.project_key,
+                    title = EXCLUDED.title,
+                    summary = EXCLUDED.summary,
+                    body = EXCLUDED.body,
+                    account = EXCLUDED.account,
+                    environment = EXCLUDED.environment,
+                    source_created_at = EXCLUDED.source_created_at,
+                    source_url = EXCLUDED.source_url,
+                    raw = EXCLUDED.raw,
+                    updated_at = now()
+                RETURNING id, source_issue_id, identifier, project_key, title,
+                          summary, body, account, environment, source_created_at,
+                          done_at, expires_at, source_url, created_at, updated_at
+            """, (
+                uuid.uuid4(), issue_id, str(identifier or ""), project,
+                str(title or "")[:500], str(summary or "")[:1200], str(body or "")[:12000],
+                str(account or "")[:255], str(environment or "")[:255],
+                source_created_at or None, done_at or None, expires_at,
+                str(source_url or "")[:1000], _json(raw or {}),
+            ))
+            row = cur.fetchone()
+        conn.commit()
+    item = dict(row)
+    for key in ("id",):
+        if item.get(key):
+            item[key] = str(item[key])
+    for key in ("source_created_at", "done_at", "expires_at", "created_at", "updated_at"):
+        if item.get(key):
+            item[key] = item[key].isoformat()
+    return item
+
+
+def list_linear_news(*, project_key: str = "", limit: int = 60) -> list[dict]:
+    """Return non-expired release notes, newest first."""
+    project = str(project_key or "").strip().upper()
+    try:
+        size = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        size = 60
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            if project in {"AKUL", "DINE"}:
+                cur.execute("""
+                    SELECT * FROM crm_linear_news
+                    WHERE project_key = %s AND expires_at > now()
+                    ORDER BY done_at DESC, created_at DESC LIMIT %s
+                """, (project, size))
+            else:
+                cur.execute("""
+                    SELECT * FROM crm_linear_news
+                    WHERE expires_at > now()
+                    ORDER BY done_at DESC, created_at DESC LIMIT %s
+                """, (size,))
+            rows = cur.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["id"] = str(item.get("id") or "")
+        if not isinstance(item.get("raw"), dict):
+            item["raw"] = {}
+        for key in ("source_created_at", "done_at", "expires_at", "created_at", "updated_at"):
+            if item.get(key):
+                item[key] = item[key].isoformat()
+        result.append(item)
+    return result
+
+
+def prune_linear_news() -> int:
+    """Delete release notes after their 90-day public retention window."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM crm_linear_news WHERE expires_at <= now()")
+            deleted = cur.rowcount
+        conn.commit()
+    return int(deleted or 0)
 
 
 def _json(value) -> str:

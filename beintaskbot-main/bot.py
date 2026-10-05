@@ -67,7 +67,8 @@ from tenant_platform import (
     list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
     list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
-    list_linear_accounts, create_linear_account,
+    list_linear_accounts, create_linear_account, upsert_linear_news,
+    list_linear_news, prune_linear_news,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -19812,6 +19813,79 @@ def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]
     return metadata, "\n".join(visible_lines).strip()
 
 
+def _linear_news_project_key(issue: dict) -> str:
+    """Map a Linear project name to the two public product streams."""
+    value = str(issue.get("project") or "").strip().upper()
+    for key in ("AKUL", "DINE"):
+        if re.search(rf"\b{key}\b", value) or value.startswith(key):
+            return key
+    return ""
+
+
+def _linear_issue_is_bug_fix(issue: dict) -> bool:
+    """Keep implementation bugs out of the customer-facing release feed."""
+    labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
+    label_text = " ".join(str(value or "") for value in labels)
+    text = " ".join((str(issue.get("title") or ""), str(issue.get("description") or ""), label_text)).casefold()
+    # Deliberately avoid matching a bare word like "fix": product work can
+    # legitimately contain phrases such as "fix the workflow" in its copy.
+    return bool(re.search(
+        r"(?:\bbug\s*fix\b|\bbugfix\b|\bhotfix\b|\bdefect\b|\bregression\b|"
+        r"\bbug\b|\bошибк\w*\b|\bисправлен\w*\b|\bбаг\w*\b|"
+        r"\bxəta\b|\bsəhv\w*\b|\bисправление\b)",
+        text,
+    ))
+
+
+def _linear_news_ai_content(issue: dict) -> dict[str, str]:
+    """Turn an internal Done task into a detailed, fact-preserving news item."""
+    title = str(issue.get("title") or "Yenilik").strip()
+    description = str(issue.get("description") or "").strip()
+    account = str(issue.get("client") or "").strip()
+    project = str(issue.get("project") or "").strip()
+    environment = str(issue.get("environment") or "").strip()
+    source = (
+        f"Layihə: {project}\nHesab: {account}\nMühit: {environment}\n"
+        f"Başlıq: {title}\nTapşırıq mətni:\n{description[:12000]}"
+    )
+    try:
+        response = llm_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sən CRM məhsulunun release-note redaktorusan. Yalnız verilmiş Linear tapşırığına əsaslanaraq "
+                        "müştərinin başa düşəcəyi çox aydın və ətraflı xəbər hazırlayırsan. Yeni fakt, funksiya, "
+                        "rəqəm və vəd uydurma; texniki daxili detalları istifadəçi faydasına çevir. "
+                        "Cavabı yalnız JSON qaytar: {\"title\":\"...\",\"summary\":\"...\",\"body\":\"...\"}. "
+                        "title qısa xəbər başlığı, summary 1-2 cümləlik nəticə, body isə bölmələr və maddələrlə "
+                        "maksimum dərəcədə izahlı mətn olsun. Mətnin əsas dilini saxla."
+                    ),
+                },
+                {"role": "user", "content": source},
+            ],
+            temperature=0.15,
+            max_tokens=1800,
+        )
+        content = str((response.choices[0].message.content if response.choices else "") or "").strip()
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            generated = {
+                "title": str(parsed.get("title") or title).strip()[:500],
+                "summary": str(parsed.get("summary") or description).strip()[:1200],
+                "body": str(parsed.get("body") or description).strip()[:12000],
+            }
+            if generated["title"] and generated["summary"] and generated["body"]:
+                return generated
+    except Exception:
+        logger.exception("Linear news AI generation failed for %s", issue.get("identifier") or issue.get("id"))
+    # AI is an enhancement, not a reason to lose a valid release note.
+    fallback = description or "Bu yenilik haqqında ətraflı məlumat hazırlanır."
+    return {"title": title[:500], "summary": fallback[:1200], "body": fallback[:12000]}
+
+
 _LINEAR_ACCOUNT_ALIASES = {
     # Account names are created by the administrator and may contain either
     # Latin or Azerbaijani spellings.  Keep the mapping here so the access
@@ -20408,11 +20482,62 @@ async def _notify_linear_status_transitions(issues: list[dict]) -> None:
         await _notify_linear_status_change(issue, {"name": name})
 
 
+async def _sync_linear_news(issues: list[dict]) -> None:
+    """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
+    try:
+        existing = await asyncio.to_thread(list_linear_news, limit=200)
+        known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
+        for issue in issues or []:
+            state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
+            if str(state.get("name") or "").strip().casefold() != "done":
+                continue
+            project_key = _linear_news_project_key(issue)
+            if not project_key or _linear_issue_is_bug_fix(issue):
+                continue
+            source_id = str(issue.get("source_id") or issue.get("id") or "").strip()
+            if not source_id or source_id in known:
+                continue
+            generated = await asyncio.to_thread(_linear_news_ai_content, issue)
+            await asyncio.to_thread(
+                upsert_linear_news,
+                source_issue_id=source_id,
+                identifier=str(issue.get("id") or ""),
+                project_key=project_key,
+                title=generated["title"],
+                summary=generated["summary"],
+                body=generated["body"],
+                account=str(issue.get("client") or ""),
+                environment=str(issue.get("environment") or ""),
+                source_created_at=issue.get("created_at"),
+                done_at=issue.get("updated_at") or issue.get("created_at"),
+                source_url=str(issue.get("url") or ""),
+                raw={"linear": issue, "generated_by": "openai"},
+            )
+            known.add(source_id)
+        await asyncio.to_thread(prune_linear_news)
+    except Exception:
+        logger.exception("Linear customer news synchronization failed")
+
+
+async def handle_api_linear_news(request: web.Request) -> web.Response:
+    """Public release feed; only AI-prepared, non-bug Done items are exposed."""
+    project = str(request.rel_url.query.get("project") or "").strip().upper()
+    if project not in {"", "AKUL", "DINE"}:
+        return web.json_response({"success": False, "error": "Layihə düzgün deyil."}, status=400)
+    try:
+        rows = await asyncio.to_thread(list_linear_news, project_key=project, limit=60)
+        return web.json_response({"success": True, "project": project or "ALL", "items": rows})
+    except Exception:
+        logger.exception("Linear news feed failed")
+        return web.json_response({"success": False, "error": "Yeniliklər yüklənmədi."}, status=500)
+
+
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Observe external Linear transitions even while nobody opens the board."""
     try:
         issues = await asyncio.to_thread(_load_linear_tesdiq_issues, all_tasks=True)
         await _notify_linear_status_transitions(issues)
+        await _sync_linear_news(issues)
     except Exception:
         logger.exception("Linear status notification synchronization failed")
 
@@ -21919,6 +22044,22 @@ async def serve_getting_started_page(request: web.Request) -> web.Response:
     return response
 
 
+async def serve_news_page(request: web.Request) -> web.Response:
+    """Serve the public AKUL/DINE product news feed."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", "news.html"),
+        os.path.join(base_dir, "news.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        logger.error("News page not found; checked: %s", ", ".join(candidates))
+        return web.Response(status=404, text="News page not found")
+    response = web.FileResponse(html_path)
+    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
+
+
 async def serve_platform_onboarding(request: web.Request) -> web.Response:
     """Serve public tenant registration, setup, and invitation pages.
 
@@ -22017,7 +22158,7 @@ _TENANT_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
 _WEB_LOGIN_TTL_SEC = 10 * 60
 _PERMANENT_WEB_LOGIN_TTL_SEC = 365 * 24 * 60 * 60
-_PUBLIC_API_PATHS = {"/api/deal/public"}
+_PUBLIC_API_PATHS = {"/api/deal/public", "/api/linear/news"}
 _ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
 _web_login_requests: dict[str, dict] = {}
 _web_login_lock = threading.Lock()
@@ -22831,6 +22972,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_get("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_post("/api/linear/tasks", handle_api_linear_tesdiq)
+    app_web.router.add_get("/api/linear/news", handle_api_linear_news)
     app_web.router.add_route('OPTIONS', '/api/linear/accounts', lambda r: web.Response())
     app_web.router.add_get("/api/linear/accounts", handle_api_linear_accounts)
     app_web.router.add_post("/api/linear/accounts", handle_api_linear_accounts)
@@ -22881,6 +23023,7 @@ async def start_webhook_server():
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
     app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)
     app_web.router.add_get("/nece-baslamaq", serve_getting_started_page)
+    app_web.router.add_get("/news", serve_news_page)
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
