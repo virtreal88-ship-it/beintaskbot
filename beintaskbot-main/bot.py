@@ -20343,16 +20343,26 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     title = str(issue.get("title") or "Tapşırıq")
     raw_description = str(issue.get("description") or "")
     metadata, visible = _linear_description_metadata(raw_description)
+    # Board refreshes pass the normalized issue returned by
+    # ``_load_linear_tesdiq_issues``.  In that shape the structured fields are
+    # already exposed on the issue and the description no longer contains the
+    # Account/Project/Environment prefixes.  Prefer those fields, then fall
+    # back to the prefixes for webhook/manual status changes.
+    client = str(issue.get("client") or metadata.get("client") or _linear_client_hint(raw_description) or "Göstərilməyib").strip()
+    project = str(issue.get("project") or metadata.get("project") or "Göstərilməyib").strip()
+    environment = str(issue.get("environment") or metadata.get("environment") or "Göstərilməyib").strip()
+    operator = str(issue.get("operator") or metadata.get("operator") or "Göstərilməyib").strip()
+    task_text = visible.strip() or "Göstərilməyib"
     details = [
-        f"#{identifier} — {title}",
         f"Status: {state_name}",
-        f"Account: {metadata.get('client') or _linear_client_hint(raw_description)}",
+        f"Kod: #{identifier}",
+        f"Başlıq: {title}",
+        f"Mətn: {task_text[:1200]}",
+        f"Hesab / Account: {client}",
+        f"Layihə: {project}",
+        f"Mühit: {environment}",
+        f"Operator: {operator}",
     ]
-    for label, key in (("Layihə", "project"), ("Operator", "operator"), ("Mühit", "environment")):
-        if metadata.get(key):
-            details.append(f"{label}: {metadata[key]}")
-    if visible:
-        details.append(visible[:500])
     body = "\n".join(details)
     url = str(issue.get("url") or "").strip() or "#linear"
     recipients = {int(ADMIN_CHAT_ID)}
