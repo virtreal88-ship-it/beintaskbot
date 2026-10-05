@@ -290,6 +290,12 @@ def _ensure_schema(conn) -> None:
                     PRIMARY KEY (tenant_id, fingerprint)
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS crm_linear_news_migrations (
+                    migration_key TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
             cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_deals_list_idx ON saas_crm_deals(tenant_id, pipeline_id, status_id, last_message_at DESC NULLS LAST, synced_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_tasks_list_idx ON saas_crm_tasks(tenant_id, responsible_id, completed, due_at)")
             cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_messages_list_idx ON saas_crm_messages(tenant_id, kommo_lead_id, happened_at DESC)")
@@ -469,6 +475,32 @@ def delete_linear_news(*, source_issue_id: str) -> bool:
             deleted = cur.rowcount
         conn.commit()
     return bool(deleted)
+
+
+def reset_linear_news_publishing_once(*, migration_key: str) -> bool:
+    """Clear channel delivery marks once for an intentional feed reseed."""
+    key = str(migration_key or "").strip()
+    if not key:
+        return False
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO crm_linear_news_migrations (migration_key)
+                VALUES (%s)
+                ON CONFLICT (migration_key) DO NOTHING
+                RETURNING migration_key
+            """, (key,))
+            applied = bool(cur.fetchone())
+            if applied:
+                cur.execute("""
+                    UPDATE crm_linear_news
+                    SET telegram_message_id = NULL,
+                        telegram_published_at = NULL,
+                        updated_at = now()
+                """)
+        conn.commit()
+    return applied
 
 
 def prune_linear_news() -> int:

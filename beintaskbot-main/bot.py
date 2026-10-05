@@ -69,7 +69,7 @@ from tenant_platform import (
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published,
-    prune_linear_news,
+    prune_linear_news, reset_linear_news_publishing_once,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -128,9 +128,10 @@ LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or
 # Public release channel. The bot must be an administrator there with the
 # permission to post messages. Keep it configurable for future tenants.
 LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL") or "@beinecosystems").strip()
-# News publishing is opt-in while the release feed is being reviewed.
-# Set LINEAR_NEWS_TELEGRAM_ENABLED=true in Railway to resume it deliberately.
-LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "false").strip().casefold() in {"1", "true", "yes", "on"}
+# Publishing is enabled again by explicit product-owner request. Delivery is
+# still throttled to one item per synchronization cycle and deduplicated in DB.
+LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "true").strip().casefold() in {"1", "true", "yes", "on"}
+LINEAR_NEWS_RESEED_KEY = "telegram-feed-curated-v2"
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
@@ -19906,7 +19907,9 @@ def _linear_issue_is_bug_fix(issue: dict) -> bool:
         r"(?:\bbug\s*fix\b|\bbugfix\b|\bhotfix\b|\bdefect\b|\bregression\b|"
         r"\bbug\b|\bошибк\w*\b|\bисправлен\w*\b|\bбаг\w*\b|"
         r"\bxəta\b|\bsəhv\w*\b|\bproblem\w*\b|\bprobleml\w*\b|"
-        r"\bdüzəldil\w*\b|\btəmir\w*\b|\bисправление\b)",
+        r"\bdüzəldil\w*\b|\btəmir\w*\b|\bисправление\b|"
+        r"\boptim\w*\b|\boptimallaşdır\w*\b|\bperformans\w*\b|"
+        r"\bsürətlən\w*\b|\bускорен\w*\b|\bоптимизац\w*\b)",
         text,
     ))
 
@@ -20561,6 +20564,10 @@ async def _sync_linear_news(issues: list[dict]) -> None:
     try:
         if not LINEAR_NEWS_TELEGRAM_ENABLED:
             return
+        await asyncio.to_thread(
+            reset_linear_news_publishing_once,
+            migration_key=LINEAR_NEWS_RESEED_KEY,
+        )
         existing = await asyncio.to_thread(list_linear_news, limit=200)
         # Clean the current feed as well as filtering future releases. This
         # catches bugfixes that were archived before the stricter classifier
@@ -20582,7 +20589,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
         # duplicates on every 60-second synchronization cycle.
         published = 0
         for row in existing:
-            if published >= 30:
+            if published >= 1:
                 break
             if not isinstance(row, dict) or row.get("telegram_published_at") or row.get("telegram_message_id"):
                 continue
@@ -20598,6 +20605,9 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                     telegram_message_id=message_id,
                 )
                 published += 1
+        if published >= 1:
+            await asyncio.to_thread(prune_linear_news)
+            return
         for issue in issues or []:
             state = issue.get("status") if isinstance(issue.get("status"), dict) else {}
             if str(state.get("name") or "").strip().casefold() != "done":
@@ -20631,6 +20641,10 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                     source_issue_id=source_id,
                     telegram_message_id=message_id,
                 )
+                # Deliberately publish only one release per cycle so the
+                # owner can review the channel sequentially.
+                await asyncio.to_thread(prune_linear_news)
+                return
             known.add(source_id)
         await asyncio.to_thread(prune_linear_news)
     except Exception:
