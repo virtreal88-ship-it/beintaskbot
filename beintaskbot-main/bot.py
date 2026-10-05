@@ -70,6 +70,7 @@ from tenant_platform import (
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published,
     prune_linear_news, reset_linear_news_publishing_once,
+    claim_linear_news_publish_slot,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -132,6 +133,8 @@ LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL"
 # still throttled to one item per synchronization cycle and deduplicated in DB.
 LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "true").strip().casefold() in {"1", "true", "yes", "on"}
 LINEAR_NEWS_RESEED_KEY = "telegram-feed-curated-v2"
+LINEAR_NEWS_START_HOUR = 9
+LINEAR_NEWS_END_HOUR = 19
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
@@ -20559,6 +20562,14 @@ async def _notify_linear_status_transitions(issues: list[dict]) -> None:
         await _notify_linear_status_change(issue, {"name": name})
 
 
+def _linear_news_current_publish_slot() -> str:
+    """Return the Baku-time hourly slot, or empty outside the publish window."""
+    now = datetime.now(BAKU_TZ)
+    if not (LINEAR_NEWS_START_HOUR <= now.hour <= LINEAR_NEWS_END_HOUR):
+        return ""
+    return f"telegram-news-{now:%Y%m%d}-{now.hour:02d}"
+
+
 async def _sync_linear_news(issues: list[dict]) -> None:
     """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
     try:
@@ -20597,6 +20608,9 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 await asyncio.to_thread(_delete_linear_news_from_telegram, row)
                 await asyncio.to_thread(delete_linear_news, source_issue_id=str(row.get("source_issue_id") or ""))
                 continue
+            slot_key = _linear_news_current_publish_slot()
+            if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
+                return
             message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, row)
             if message_id:
                 await asyncio.to_thread(
@@ -20618,6 +20632,9 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             source_id = str(issue.get("source_id") or issue.get("id") or "").strip()
             if not source_id or source_id in known:
                 continue
+            slot_key = _linear_news_current_publish_slot()
+            if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
+                return
             generated = await asyncio.to_thread(_linear_news_ai_content, issue)
             saved = await asyncio.to_thread(
                 upsert_linear_news,

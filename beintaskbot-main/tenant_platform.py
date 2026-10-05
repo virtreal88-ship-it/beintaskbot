@@ -503,6 +503,25 @@ def reset_linear_news_publishing_once(*, migration_key: str) -> bool:
     return applied
 
 
+def claim_linear_news_publish_slot(*, slot_key: str) -> bool:
+    """Atomically reserve one scheduled Telegram publication slot."""
+    key = str(slot_key or "").strip()
+    if not key:
+        return False
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO crm_linear_news_migrations (migration_key)
+                VALUES (%s)
+                ON CONFLICT (migration_key) DO NOTHING
+                RETURNING migration_key
+            """, (key,))
+            claimed = bool(cur.fetchone())
+        conn.commit()
+    return claimed
+
+
 def prune_linear_news() -> int:
     """Delete release notes after their 90-day public retention window."""
     with _connect() as conn:
