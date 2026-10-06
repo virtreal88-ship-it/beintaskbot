@@ -19933,7 +19933,7 @@ def _linear_issue_is_bug_fix(issue: dict) -> bool:
 
 
 def _linear_news_ai_content(issue: dict) -> dict[str, str]:
-    """Turn an internal Done task into a detailed, fact-preserving news item."""
+    """Turn an internal Done task into a concise title and summary."""
     title = str(issue.get("title") or "Yenilik").strip()
     description = str(issue.get("description") or "").strip()
     account = str(issue.get("client") or "").strip()
@@ -19953,9 +19953,9 @@ def _linear_news_ai_content(issue: dict) -> dict[str, str]:
                         "Sən CRM məhsulunun release-note redaktorusan. Yalnız verilmiş Linear tapşırığına əsaslanaraq "
                         "müştərinin başa düşəcəyi çox aydın və ətraflı xəbər hazırlayırsan. Yeni fakt, funksiya, "
                         "rəqəm və vəd uydurma; texniki daxili detalları istifadəçi faydasına çevir. "
-                        "Cavabı yalnız JSON qaytar: {\"title\":\"...\",\"summary\":\"...\",\"body\":\"...\"}. "
-                        "title qısa xəbər başlığı, summary 1-2 cümləlik nəticə, body isə bölmələr və maddələrlə "
-                        "maksimum dərəcədə izahlı mətn olsun. Mətnin əsas dilini saxla."
+                        "Cavabı yalnız JSON qaytar: {\"title\":\"...\",\"summary\":\"...\"}. "
+                        "title qısa xəbər başlığı, summary isə 1-2 cümləlik aydın nəticə olsun. "
+                        "Əlavə uzun mətn yaratma. Mətnin əsas dilini saxla."
                     ),
                 },
                 {"role": "user", "content": source},
@@ -19970,15 +19970,15 @@ def _linear_news_ai_content(issue: dict) -> dict[str, str]:
             generated = {
                 "title": str(parsed.get("title") or title).strip()[:500],
                 "summary": str(parsed.get("summary") or description).strip()[:1200],
-                "body": str(parsed.get("body") or description).strip()[:12000],
+                "body": "",
             }
-            if generated["title"] and generated["summary"] and generated["body"]:
+            if generated["title"] and generated["summary"]:
                 return generated
     except Exception:
         logger.exception("Linear news AI generation failed for %s", issue.get("identifier") or issue.get("id"))
     # AI is an enhancement, not a reason to lose a valid release note.
     fallback = description or "Bu yenilik haqqında ətraflı məlumat hazırlanır."
-    return {"title": title[:500], "summary": fallback[:1200], "body": fallback[:12000]}
+    return {"title": title[:500], "summary": fallback[:1200], "body": ""}
 
 
 _LINEAR_ACCOUNT_ALIASES = {
@@ -20595,20 +20595,6 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             migration_key=LINEAR_NEWS_RESEED_KEY,
         )
         existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
-        # Clean the current feed as well as filtering future releases. This
-        # catches bugfixes that were archived before the stricter classifier
-        # was deployed; the original Linear issue is retained in ``raw`` so
-        # the decision remains auditable.
-        for row in existing:
-            if not isinstance(row, dict):
-                continue
-            if _stored_linear_news_is_bug_fix(row):
-                await asyncio.to_thread(_delete_linear_news_from_telegram, row)
-                await asyncio.to_thread(delete_linear_news, source_issue_id=str(row.get("source_issue_id") or ""))
-        existing = [
-            row for row in existing
-            if not (isinstance(row, dict) and _stored_linear_news_is_bug_fix(row))
-        ]
         # Leave one real current release in the administrator's review queue
         # so the new confirmation flow can be tested before wider publishing.
         await asyncio.to_thread(seed_linear_news_review_once, migration_key=LINEAR_NEWS_REVIEW_TEST_KEY)
@@ -20623,10 +20609,6 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 break
             if (not isinstance(row, dict) or row.get("approval_status") != "approved"
                     or row.get("telegram_published_at") or row.get("telegram_message_id")):
-                continue
-            if _stored_linear_news_is_bug_fix(row):
-                await asyncio.to_thread(_delete_linear_news_from_telegram, row)
-                await asyncio.to_thread(delete_linear_news, source_issue_id=str(row.get("source_issue_id") or ""))
                 continue
             slot_key = _linear_news_current_publish_slot()
             if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
@@ -20647,7 +20629,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             if str(state.get("name") or "").strip().casefold() != "done":
                 continue
             project_key = _linear_news_project_key(issue)
-            if not project_key or _linear_issue_is_bug_fix(issue):
+            if not project_key:
                 continue
             source_id = str(issue.get("source_id") or issue.get("id") or "").strip()
             if not source_id or source_id in known:
@@ -20709,6 +20691,39 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
     data = data if isinstance(data, dict) else {}
     source_id = str(data.get("source_issue_id") or "").strip()
     action = str(data.get("action") or "save").strip().lower()
+    if action == "create":
+        title = str(data.get("title") or "").strip()
+        summary = str(data.get("summary") or "").strip()
+        project = str(data.get("project_key") or "").strip().upper()
+        if not title or not summary or project not in {"AKUL", "DINE"}:
+            return web.json_response({"success": False, "error": "Layihə, başlıq və qısa mətn tələb olunur."}, status=400)
+        try:
+            source_id = f"manual-news-{uuid.uuid4()}"
+            created = await asyncio.to_thread(
+                upsert_linear_news,
+                source_issue_id=source_id,
+                identifier="MANUAL",
+                project_key=project,
+                title=title,
+                summary=summary,
+                body="",
+                account="",
+                environment="",
+                source_created_at=datetime.now(timezone.utc).isoformat(),
+                done_at=datetime.now(timezone.utc).isoformat(),
+                source_url=str(data.get("media_url") or ""),
+                raw={"manual": True, "generated_by": "administrator"},
+            )
+            await asyncio.to_thread(
+                update_linear_news_review,
+                source_issue_id=source_id, title=title, summary=summary,
+                body="", media_url=str(data.get("media_url") or ""),
+                media_type="link", approval_status="pending",
+            )
+            return web.json_response({"success": True, "item": created})
+        except Exception:
+            logger.exception("Manual Linear news creation failed")
+            return web.json_response({"success": False, "error": "Xəbər yaradılmadı."}, status=500)
     if not source_id or action not in {"save", "approve", "reject"}:
         return web.json_response({"success": False, "error": "Xəbər və əməliyyat seçin."}, status=400)
     try:

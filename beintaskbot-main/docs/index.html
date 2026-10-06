@@ -1459,7 +1459,7 @@
             <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
         <section id="linear-news-review-section" class="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden" hidden>
-            <div class="flex items-center justify-between px-3 py-2.5 bg-emerald-50/70 border-b border-emerald-100"><div><div class="text-xs font-extrabold text-emerald-900">Xəbər təsdiqi</div><div id="linear-news-review-meta" class="text-[10px] text-emerald-600 mt-0.5">Yoxlanılmamış yeniliklər</div></div></div>
+            <div class="flex items-center justify-between px-3 py-2.5 bg-emerald-50/70 border-b border-emerald-100"><div><div class="text-xs font-extrabold text-emerald-900">Xəbər təsdiqi</div><div id="linear-news-review-meta" class="text-[10px] text-emerald-600 mt-0.5">Yoxlanılmamış yeniliklər</div></div><button type="button" onclick="openLinearNewsCreateModal()" class="rounded-lg bg-emerald-600 px-2.5 py-2 text-[10px] font-extrabold text-white">+ Yeni xəbər</button></div>
             <div id="linear-news-review-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
     </div>
@@ -4375,10 +4375,9 @@ function linearNewsReviewCard(item) {
     const mediaType = String(item.media_type || '').toLowerCase();
     return `<article class="rounded-xl border border-emerald-100 bg-white p-3 shadow-sm" data-news-review-id="${id}">
       <div class="flex items-center justify-between gap-2"><div class="text-[10px] font-extrabold text-emerald-700">${project} · ${escapeHtml(item.identifier || '')}</div><a href="${escapeHtml(item.source_url || '#')}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-600">Linear ↗</a></div>
-      <label class="mt-2 block text-[10px] font-bold text-slate-500">Başlıq<input data-news-title class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold outline-none" value="${escapeHtml(item.title || '')}"></label>
+      <label class="mt-2 block text-[10px] font-bold text-slate-500">Başlıq<textarea data-news-title rows="1" class="mt-1 w-full resize-none overflow-hidden rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold outline-none">${escapeHtml(item.title || '')}</textarea></label>
       <label class="mt-2 block text-[10px] font-bold text-slate-500">Qısa mətn<textarea data-news-summary rows="3" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.summary || '')}</textarea></label>
-      <label class="mt-2 block text-[10px] font-bold text-slate-500">Ətraflı mətn<textarea data-news-body rows="4" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.body || '')}</textarea></label>
-      <div class="mt-2 grid grid-cols-[1fr_100px] gap-2"><input data-news-media-url class="rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] outline-none" value="${escapeHtml(item.media_url || '')}" placeholder="Foto/video URL (istəyə görə)"><select data-news-media-type class="rounded-lg border border-slate-200 px-2 py-2 text-[11px] outline-none"><option value="">Yoxdur</option><option value="photo" ${mediaType === 'photo' ? 'selected' : ''}>Foto</option><option value="video" ${mediaType === 'video' ? 'selected' : ''}>Video</option><option value="link" ${mediaType === 'link' ? 'selected' : ''}>Link</option></select></div>
+      <div class="mt-2"><input data-news-media-url class="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] outline-none" value="${escapeHtml(item.media_url || (project === 'AKUL' ? 'https://akul.az' : project === 'DINE' ? 'https://dine.az' : ''))}" placeholder="Xəbər linki (akul.az və ya dine.az)"></div>
       <div class="mt-3 flex flex-wrap gap-1.5"><button type="button" onclick="reviewLinearNews('${id}','save',this)" class="rounded-lg bg-slate-100 px-2.5 py-2 text-[10px] font-extrabold text-slate-700">Yadda saxla</button><button type="button" onclick="reviewLinearNews('${id}','approve',this)" class="rounded-lg bg-emerald-600 px-2.5 py-2 text-[10px] font-extrabold text-white">Təsdiqlə və yayımla</button><button type="button" onclick="reviewLinearNews('${id}','reject',this)" class="rounded-lg bg-rose-50 px-2.5 py-2 text-[10px] font-extrabold text-rose-700">Rədd et</button></div>
     </article>`;
 }
@@ -4401,14 +4400,25 @@ async function showNewsReview(forceRefresh = false) {
         const rows = Array.isArray(d.items) ? d.items : [];
         meta.textContent = `${rows.length} xəbər təsdiq gözləyir`;
         list.innerHTML = rows.length ? rows.map(linearNewsReviewCard).join('') : '<div class="px-3 py-4 text-center text-xs text-slate-500">Təsdiq gözləyən xəbər yoxdur.</div>';
+        list.querySelectorAll('textarea[data-news-title],textarea[data-news-summary]').forEach(el => { const resize=()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';}; el.addEventListener('input',resize); resize(); });
         linearNewsReviewLoaded = true;
     } catch(e) { meta.textContent = 'Yüklənmədi'; list.innerHTML = `<div class="px-3 py-4 text-xs text-red-500">${escapeHtml(e.message || 'Xəta')}</div>`; }
 }
 async function reviewLinearNews(sourceId, action, button) {
     const card = document.querySelector(`[data-news-review-id="${CSS.escape(sourceId)}"]`); if(!card) return;
-    const payload = {source_issue_id:sourceId, action, title:card.querySelector('[data-news-title]')?.value || '', summary:card.querySelector('[data-news-summary]')?.value || '', body:card.querySelector('[data-news-body]')?.value || '', media_url:card.querySelector('[data-news-media-url]')?.value || '', media_type:card.querySelector('[data-news-media-type]')?.value || ''};
+    const payload = {source_issue_id:sourceId, action, title:card.querySelector('[data-news-title]')?.value || '', summary:card.querySelector('[data-news-summary]')?.value || '', body:'', media_url:card.querySelector('[data-news-media-url]')?.value || '', media_type:'link'};
     if(button) { button.disabled = true; button.textContent = '…'; }
     try { const r=await fetch(API_BASE+'/api/linear/news/review',{method:'POST',headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},body:JSON.stringify(payload)}); const d=await r.json(); if(!r.ok||!d.success) throw new Error(d.error||'Əməliyyat alınmadı'); toast(action==='approve'?'Xəbər yayımlandı':action==='reject'?'Xəbər rədd edildi':'Xəbər saxlanıldı',false); if(action!=='save') showNewsReview(true); } catch(e) { toast(e.message||'Xəta',true); if(button){button.disabled=false;button.textContent=action==='approve'?'Təsdiqlə və yayımla':action==='reject'?'Rədd et':'Yadda saxla';} }
+}
+function openLinearNewsCreateModal() {
+    if(document.getElementById('linear-news-create-modal')) return;
+    document.body.insertAdjacentHTML('beforeend', `<div id="linear-news-create-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/50 p-4"><div class="w-full max-w-md rounded-2xl bg-white p-4 shadow-2xl"><div class="flex items-center justify-between"><b class="text-sm">Yeni xəbər yarat</b><button onclick="document.getElementById('linear-news-create-modal').remove()" class="text-xl text-slate-400">×</button></div><select id="news-create-project" class="mt-3 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs"><option>AKUL</option><option>DINE</option></select><textarea id="news-create-title" rows="1" class="mt-2 w-full resize-none overflow-hidden rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold" placeholder="Başlıq"></textarea><textarea id="news-create-summary" rows="3" class="mt-2 w-full resize-none overflow-hidden rounded-lg border border-slate-200 px-2.5 py-2 text-xs" placeholder="Qısa mətn"></textarea><input id="news-create-url" class="mt-2 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs" placeholder="Xəbər linki (akul.az və ya dine.az)"><div class="mt-3 flex gap-2"><button onclick="createLinearNews()" class="flex-1 rounded-lg bg-emerald-600 py-2.5 text-xs font-bold text-white">Yarat və təsdiqə göndər</button><button onclick="document.getElementById('linear-news-create-modal').remove()" class="rounded-lg bg-slate-100 px-3 py-2.5 text-xs font-bold">Bağla</button></div></div></div>`);
+    ['news-create-title','news-create-summary'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});});
+}
+async function createLinearNews() {
+    const title=document.getElementById('news-create-title')?.value.trim()||'', summary=document.getElementById('news-create-summary')?.value.trim()||'', project=document.getElementById('news-create-project')?.value||'AKUL', url=document.getElementById('news-create-url')?.value.trim()||'';
+    if(!title||!summary){toast('Başlıq və qısa mətn tələb olunur',true);return;}
+    try{const r=await fetch(API_BASE+'/api/linear/news/review',{method:'POST',headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},body:JSON.stringify({action:'create',project_key:project,title,summary,media_url:url})});const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'Xəbər yaradılmadı');document.getElementById('linear-news-create-modal')?.remove();toast('Xəbər təsdiqə göndərildi',false);showNewsReview(true);}catch(e){toast(e.message||'Xəta',true);}
 }
 
 async function showPendingQueue(queue, forceRefresh = false) {
