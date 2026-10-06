@@ -5,7 +5,7 @@ from pathlib import Path
 from aiohttp import web
 
 SLUG = re.compile(r'^/[a-z0-9][a-z0-9/-]{0,159}$')
-FIELDS = ('slug', 'title', 'body', 'category')
+FIELDS = ('slug', 'title', 'body', 'category', 'body_format')
 
 def validate_images(images):
     if not isinstance(images, list) or len(images) > 5: raise ValueError('Maksimum 5 şəkil əlavə edin')
@@ -33,6 +33,7 @@ def validate_article(data):
     if not 1 <= len(item['title']) <= 180: raise ValueError('Başlıq tələb olunur (maksimum 180 simvol)')
     if not 1 <= len(item['body']) <= 60000: raise ValueError('Məqalənin mətni tələb olunur (maksimum 60000 simvol)')
     if len(item['category']) > 100: raise ValueError('Bölmə adı çox uzundur')
+    item['body_format']='html' if data.get('body_format')=='html' else 'text'
     item['images']=validate_images(data.get('images',[]))
     return item
 

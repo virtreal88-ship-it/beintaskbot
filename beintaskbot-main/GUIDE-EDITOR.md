@@ -11,3 +11,5 @@ support-redesign-upload.zip bir dəfə support.akul.az kökünə yüklənir; mö
 Sayt yalnız səhifə açıldıqda və ya yenidən yükləndikdə yenilikləri yoxlayır. Taymer və görünürlük yoxlaması yoxdur. Son uğurlu mətnlər brauzerin localStorage yaddaşında saxlanılır. Şəkillərin əsli botun yaddaşındadır. API əlçatan olmadıqda ilkin təlimatlar və mövcud mətn nüsxəsi qalır; şəkillərin yüklənməsi API-nin əlçatanlığından asılıdır.
 
 Redaktə və yeni məqalə ayrıca modal pəncərədə açılır. Maksimum 5 şəkil: JPEG, PNG, WEBP və AVIF brauzerdə JPEG kimi optimallaşdırılır. Hər optimallaşdırılmış şəkil maksimum 120 KB-dir. SVG və başqa aktiv formatlar qəbul edilmir. Yeni məqalənin bölməsi və ünvanı cari bölməyə görə avtomatik hazırlanır.
+
+Mətn redaktoru: H2, qalın və kursiv, siyahılar, keçid, cədvəl və YouTube. Yeni versiyalar body_format=html ilə saxlanılır; ilkin mətnlər text kimi qalır. Açıq saytda yalnız icazəli HTML elementləri göstərilir; video ünvanları youtube-nocookie.com ilə məhdudlaşdırılır.

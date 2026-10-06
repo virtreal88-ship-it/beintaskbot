@@ -1,4 +1,13 @@
 (()=>{
+function safeRich(source){
+ const parsed=new DOMParser().parseFromString(source,'text/html'),out=document.createDocumentFragment();
+ const tags=new Set(['P','DIV','BR','H2','STRONG','B','EM','I','UL','OL','LI','A','TABLE','THEAD','TBODY','TR','TH','TD','BLOCKQUOTE']);
+ function copy(node,parent){if(node.nodeType===3){parent.append(document.createTextNode(node.textContent));return}if(node.nodeType!==1)return;if(['SCRIPT','STYLE','OBJECT','SVG','MATH','LINK','META'].includes(node.tagName))return;
+ if(node.tagName==='IFRAME'){const match=(node.getAttribute('src')||'').match(/^https:\/\/www\.youtube-nocookie\.com\/embed\/([A-Za-z0-9_-]{11})$/);if(match){const frame=document.createElement('iframe');frame.src=match[0];frame.title='YouTube video';frame.loading='lazy';frame.setAttribute('allowfullscreen','');frame.setAttribute('referrerpolicy','strict-origin-when-cross-origin');frame.style.cssText='width:100%;aspect-ratio:16/9;border:0;display:block;margin:18px 0';parent.append(frame)}return}
+ if(!tags.has(node.tagName)){for(const child of node.childNodes)copy(child,parent);return}const clean=document.createElement(node.tagName.toLowerCase());if(node.tagName==='A'){try{const url=new URL(node.getAttribute('href')||'',location.href);if(['http:','https:','mailto:','tel:'].includes(url.protocol)){clean.href=url.href;clean.rel='noopener noreferrer'}}catch{}}for(const child of node.childNodes)copy(child,clean);parent.append(clean)}
+ for(const child of parsed.body.childNodes)copy(child,out);return out;
+}
+function richHTML(source){const box=document.createElement('div');box.append(safeRich(source));return box.innerHTML}
  const root=document.getElementById('root'),host=document.getElementById('guide-content');if(!root||!host)return;
  const api=document.querySelector('meta[name="guide-api"]')?.content||'https://crm.pro.az/api/guides/public';
  const origin=new URL(api,location.href).origin;let articles=[],catalog=[],busy=false,pending=false;
@@ -17,7 +26,7 @@
     const legacy=[...article.querySelectorAll('img:not([data-cms-photo])')].map(image=>image.cloneNode(true));article.replaceChildren();article.dataset.cmsSignature=signature;
     const back=document.createElement('a');back.href=parentOf(route)==='/articles'?'/':parentOf(route)||'/';back.textContent='← Bölməyə qayıt';back.style.fontSize='14px';
     const title=document.createElement('h2');title.textContent=row.title;
-    const text=document.createElement('p');text.textContent=row.body;text.style.whiteSpace='pre-wrap';article.append(back,title,text,...legacy);document.title=row.title;
+    const text=document.createElement('div');text.className='cms-rich';if(row.body_format==='html')text.append(safeRich(row.body));else{text.textContent=row.body;text.style.whiteSpace='pre-wrap'}article.append(back,title,text,...legacy);document.title=row.title;
     for(const photo of row.images||[]){const url=imageUrl(photo.src);if(!url)continue;const figure=document.createElement('figure'),image=document.createElement('img');image.src=url;image.alt=photo.alt||row.title;image.loading='lazy';image.dataset.cmsPhoto='true';figure.append(image);if(photo.alt){const caption=document.createElement('figcaption');caption.textContent=photo.alt;caption.style.cssText='font-size:13px;color:#59748c;margin-bottom:20px';figure.append(caption)}article.append(figure)}
    }
   }else if(article?.dataset.cmsSignature&&original.has(route)){const saved=original.get(route);article.innerHTML=saved.html;delete article.dataset.cmsSignature;document.title=saved.title}
