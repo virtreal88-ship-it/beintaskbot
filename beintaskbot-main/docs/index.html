@@ -3474,6 +3474,17 @@ function linearBoardHasAccount(item) {
     return !!account && !['göstərilməyib', 'gosterilmeyib', '—', '-'].includes(account.toLocaleLowerCase('az'));
 }
 
+function formatLinearTimestamp(value) {
+    if(!value) return '—';
+    const parsed = new Date(value);
+    if(Number.isNaN(parsed.getTime())) return '—';
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+        timeZone:'Asia/Baku', year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'
+    }).formatToParts(parsed).map(part => [part.type, part.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
 function linearBoardCardHtml(item) {
     const sourceId = escapeHtml(String(item.source_id || ''));
     const issueId = escapeHtml(item.id || 'Linear');
@@ -3482,8 +3493,7 @@ function linearBoardCardHtml(item) {
     const project = escapeHtml(item.project || 'Göstərilməyib');
     const operator = escapeHtml(item.operator || 'Göstərilməyib');
     const assignee = escapeHtml(item.assignee || 'Təyin olunmayıb');
-    const environment = escapeHtml(item.environment || 'Göstərilməyib');
-    const created = item.created_at ? new Date(item.created_at).toLocaleString('az-AZ', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    const created = formatLinearTimestamp(item.created_at);
     const priorityOptions = [[0,'Yoxdur'],[1,'Təcili'],[2,'Yüksək'],[3,'Orta'],[4,'Aşağı']].map(([value,label]) => `<option value="${value}" ${Number(item.priority) === value ? 'selected' : ''}>${label}</option>`).join('');
     const priorityStyle = linearBoardPriorityStyle(item.priority);
     const statusStyle = linearBoardStatusStyle(status);
@@ -3501,7 +3511,7 @@ const testButtons = (isAdmin || hasEmployeePermission('linear')) && isLinearDone
     const menu = canEditIssue && sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
     return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="${canEditLinear ? 'true' : 'false'}" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
 <div class="flex items-start gap-2 mb-2">${isAdmin ? '<span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>' : ''}<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950" title="${titleHtml}">${titleHtml}</div><div class="mt-1 inline-flex max-w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-extrabold text-emerald-800">Hesab: <span class="ml-1 truncate">${client}</span></div></div>${menu}</div>
-        <div class="space-y-1 text-[11px] text-gray-600"><div class="flex items-center justify-between gap-2"><span class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</span><span class="inline-flex max-w-[48%] truncate rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold" style="${statusStyle}" title="${escapeHtml(status.name || '')}">● ${escapeHtml(status.name || 'Status')}</span></div><div class="truncate">🧭 <b>Mühit:</b> ${environment}</div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
+        <div class="space-y-1 text-[11px] text-gray-600"><div class="flex items-center justify-between gap-2"><span class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</span><span class="inline-flex max-w-[48%] truncate rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold" style="${statusStyle}" title="${escapeHtml(status.name || '')}">● ${escapeHtml(status.name || 'Status')}</span></div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
         ${actionButtons}${testButtons}${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
 }
@@ -3749,7 +3759,7 @@ function openLinearEditModal(issueId) {
         ['Status', status.name || '—'], ['Mühit', item.environment || 'Göstərilməyib'],
         ['Layihə', item.project || 'Göstərilməyib'], ['Operator', item.operator || 'Göstərilməyib'],
         ['İcraçı', item.assignee || 'Təyin olunmayıb'],
-        ['Yaradılıb', item.created_at ? new Date(item.created_at).toLocaleString('az-AZ') : '—']
+        ['Yaradılıb', formatLinearTimestamp(item.created_at)]
     ].map(([label, value]) => `<div class="rounded-lg bg-slate-50 px-2.5 py-2"><div class="text-[10px] font-bold text-slate-400">${escapeHtml(label)}</div><div class="mt-0.5 truncate text-[11px] font-bold text-slate-700">${escapeHtml(value)}</div></div>`).join('');
     modal.innerHTML = `<div class="w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-t-3xl bg-white p-4 shadow-2xl sm:rounded-3xl">
         <div class="mb-3 flex items-center justify-between"><div><div class="text-base font-extrabold text-slate-900">Linear tapşırığını redaktə et</div><div class="text-[11px] text-slate-400">${escapeHtml(item.id || '')}</div></div><button type="button" onclick="closeLinearModal()" class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-500">×</button></div>
@@ -4392,6 +4402,7 @@ function linearNewsReviewCard(item) {
     return `<article class="rounded-xl border border-emerald-100 bg-white p-3 shadow-sm" data-news-review-id="${id}">
       <div class="flex items-center justify-between gap-2"><div class="text-[10px] font-extrabold text-emerald-700">${project}${identifier}</div>${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-600">Linear ↗</a>` : ''}</div>
       <div class="mt-2 text-xs text-slate-600"><b>Mühit:</b> ${escapeHtml(item.environment || 'Göstərilməyib')}</div>
+      <div class="mt-1 text-xs text-slate-500">${escapeHtml(formatLinearTimestamp(item.done_at || item.created_at))}</div>
       <label class="mt-2 block text-[10px] font-bold text-slate-500">Başlıq<textarea data-news-title rows="1" class="mt-1 w-full resize-none overflow-hidden rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold outline-none">${escapeHtml(item.title || '')}</textarea></label>
       <label class="mt-2 block text-[10px] font-bold text-slate-500">Qısa mətn<textarea data-news-summary rows="3" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.summary || '')}</textarea></label>
       <div class="mt-2"><input data-news-media-url class="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] outline-none" value="${escapeHtml(item.media_url || '')}" placeholder="Xəbər linki (istəyə görə)"></div>

@@ -8,6 +8,7 @@ const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', 
 const start = html.indexOf('function linearNewsReviewCard(');
 const end = html.indexOf('\nasync function ', start);
 const ctx = {escapeHtml};
+vm.runInNewContext(html.slice(html.indexOf('function formatLinearTimestamp('), html.indexOf('function linearBoardCardHtml(')), ctx);
 vm.runInNewContext(html.slice(start, end), ctx);
 assert.match(ctx.linearNewsReviewCard({environment:'BETA'}), /Mühit:<\/b> BETA/);
 assert.match(ctx.linearNewsReviewCard({environment:'<script>'}), /&lt;script&gt;/);
