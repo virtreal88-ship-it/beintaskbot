@@ -70,6 +70,7 @@ from tenant_platform import (
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published,
     prune_linear_news, reset_linear_news_publishing_once,
+    require_linear_news_review_once,
     claim_linear_news_publish_slot,
     update_linear_news_review,
     seed_linear_news_review_once,
@@ -20595,6 +20596,10 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             reset_linear_news_publishing_once,
             migration_key=LINEAR_NEWS_RESEED_KEY,
         )
+        await asyncio.to_thread(
+            require_linear_news_review_once,
+            migration_key="telegram-news-explicit-review-v1",
+        )
         existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
         # Leave one real current release in the administrator's review queue
         # so the new confirmation flow can be tested before wider publishing.
@@ -20609,6 +20614,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             if published >= 1:
                 break
             if (not isinstance(row, dict) or row.get("approval_status") != "approved"
+                    or not row.get("reviewed_at")
                     or row.get("telegram_published_at") or row.get("telegram_message_id")):
                 continue
             slot_key = _linear_news_current_publish_slot()

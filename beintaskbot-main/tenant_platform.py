@@ -319,6 +319,7 @@ def _ensure_schema(conn) -> None:
                     approval_status TEXT NOT NULL DEFAULT 'approved',
                     media_url TEXT NOT NULL DEFAULT '',
                     media_type TEXT NOT NULL DEFAULT '',
+                    reviewed_at TIMESTAMPTZ NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
@@ -330,6 +331,7 @@ def _ensure_schema(conn) -> None:
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS approval_status TEXT NOT NULL DEFAULT 'approved'")
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS media_url TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_webhook_events (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -452,7 +454,7 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
     for key in ("id",):
         if item.get(key):
             item[key] = str(item[key])
-    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "created_at", "updated_at"):
+    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "reviewed_at", "created_at", "updated_at"):
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
@@ -490,7 +492,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
         item["id"] = str(item.get("id") or "")
         if not isinstance(item.get("raw"), dict):
             item["raw"] = {}
-        for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "created_at", "updated_at"):
+        for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "reviewed_at", "created_at", "updated_at"):
             if item.get(key):
                 item[key] = item[key].isoformat()
         result.append(item)
@@ -511,19 +513,21 @@ def update_linear_news_review(*, source_issue_id: str, title: str, summary: str,
             cur.execute("""
                 UPDATE crm_linear_news
                 SET title=%s, summary=%s, body=%s, media_url=%s, media_type=%s,
-                    approval_status=%s, updated_at=now()
+                    approval_status=%s,
+                    reviewed_at=CASE WHEN %s IN ('approved','rejected') THEN now() ELSE NULL END,
+                    updated_at=now()
                 WHERE source_issue_id=%s
                 RETURNING *
             """, (str(title or "")[:500], str(summary or "")[:1200],
                    str(body or "")[:12000], str(media_url or "")[:1000],
-                   str(media_type or "")[:20], status, issue_id))
+                   str(media_type or "")[:20], status, status, issue_id))
             row = cur.fetchone()
         conn.commit()
     if not row:
         return None
     item = dict(row)
     item["id"] = str(item.get("id") or "")
-    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "created_at", "updated_at"):
+    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "reviewed_at", "created_at", "updated_at"):
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
@@ -582,6 +586,35 @@ def reset_linear_news_publishing_once(*, migration_key: str) -> bool:
                     SET telegram_message_id = NULL,
                         telegram_published_at = NULL,
                         updated_at = now()
+                """)
+        conn.commit()
+    return applied
+
+
+def require_linear_news_review_once(*, migration_key: str) -> bool:
+    """Move legacy unreviewed releases into the explicit admin review queue."""
+    key = str(migration_key or "").strip()
+    if not key:
+        return False
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO crm_linear_news_migrations (migration_key)
+                VALUES (%s)
+                ON CONFLICT (migration_key) DO NOTHING
+                RETURNING migration_key
+            """, (key,))
+            applied = bool(cur.fetchone())
+            if applied:
+                cur.execute("""
+                    UPDATE crm_linear_news
+                    SET approval_status='pending',
+                        reviewed_at=NULL,
+                        telegram_message_id=NULL,
+                        telegram_published_at=NULL,
+                        updated_at=now()
+                    WHERE approval_status='approved' AND reviewed_at IS NULL
                 """)
         conn.commit()
     return applied
