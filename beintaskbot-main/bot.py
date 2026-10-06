@@ -22279,6 +22279,22 @@ async def serve_news_page(request: web.Request) -> web.Response:
     return response
 
 
+async def serve_documentation_page(request: web.Request) -> web.Response:
+    """Serve the public SaaS architecture and configuration documentation."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = (
+        os.path.join(base_dir, "docs", "documentation.html"),
+        os.path.join(base_dir, "documentation.html"),
+    )
+    html_path = next((path for path in candidates if os.path.isfile(path)), None)
+    if not html_path:
+        logger.error("Documentation page not found; checked: %s", ", ".join(candidates))
+        return web.Response(status=404, text="Documentation page not found")
+    response = web.FileResponse(html_path)
+    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
+
+
 async def serve_platform_onboarding(request: web.Request) -> web.Response:
     """Serve public tenant registration, setup, and invitation pages.
 
@@ -23245,6 +23261,7 @@ async def start_webhook_server():
     app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)
     app_web.router.add_get("/nece-baslamaq", serve_getting_started_page)
     app_web.router.add_get("/news", serve_news_page)
+    app_web.router.add_get("/documentation", serve_documentation_page)
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
