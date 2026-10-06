@@ -1090,7 +1090,6 @@
         <button id="side-tab-history" class="sidebar-item" onclick="switchTab('tab-history')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M8 6V4h8v2"/></svg></span><span class="sidebar-item-label" id="side-tab-history-label">Maliyyə</span>
         </button>
-        <a id="side-guide-editor" class="sidebar-item" href="/guide-editor" style="display:none" title="İstifadə qaydası redaktoru"><span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 3h10l6 6v12H4zM14 3v6h6M8 13h8M8 17h6"/></svg></span><span class="sidebar-item-label">Təlimatlar</span></a>
         <button id="side-tab-pending" class="sidebar-item" style="display:none;" onclick="switchTab('tab-pending')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span><span class="sidebar-item-label">Təsdiq</span><span id="sidebar-pending-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
@@ -2506,7 +2505,7 @@ async function loadEmployeeSession() {
 }
 function applyEmployeePermissionUi() {
     const visible = (ids, allowed) => ids.forEach(id => { const el = document.getElementById(id); if(el) { el.style.display = allowed ? '' : 'none'; el.hidden = !allowed; } });
-    visible(['side-guide-editor','guide-editor-entry'], canReviewNews());
+    visible(['guide-editor-entry'], canReviewNews());
     const canViewTasks = hasEmployeePermission('tasks') || hasEmployeePermission('passive_tasks');
     visible(['tab-tasks','side-tab-tasks'], canViewTasks);
     visible(['tab-history','side-tab-history'], hasEmployeePermission('finance'));
@@ -2638,7 +2637,6 @@ function paintMobileTabBar(activeId) {
     }
     if(list) {
         list.innerHTML = `<div class="tab-more-title">Daha</div>` + extra.map(id => `<button type="button" class="${id === activeId ? 'on' : ''}" data-more-tab="${id}"><span class="tab-more-icon">${mobileTabIcon(id)}</span><span class="tab-more-label">${escapeHtml(mobileTabLabel(id))}</span><span class="tab-more-arrow">›</span></button>`).join('');
-        if(canReviewNews()) { const guideLink=document.createElement('a'); guideLink.href='/guide-editor'; guideLink.className='tab-more-guide'; guideLink.style.cssText='display:flex;align-items:center;gap:12px;padding:16px;color:#155b88'; guideLink.textContent='Təlimatlar · İstifadə qaydası ↗'; list.append(guideLink); }
         list.onclick = event => {
             const btn = event.target.closest('[data-more-tab]');
             if(!btn) return;
