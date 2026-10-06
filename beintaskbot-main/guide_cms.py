@@ -1,11 +1,29 @@
 """Authenticated guide editor and static site export. Never deploys files."""
-import asyncio, copy, io, json, re, threading, zipfile
+import asyncio, base64, binascii, copy, hashlib, io, json, re, threading, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from aiohttp import web
 
 SLUG = re.compile(r'^/[a-z0-9][a-z0-9/-]{0,159}$')
 FIELDS = ('slug', 'title', 'body', 'category')
+
+def validate_images(images):
+    if not isinstance(images, list) or len(images) > 5: raise ValueError('Maksimum 5 şəkil əlavə edin')
+    result=[]
+    for image in images:
+        if not isinstance(image, dict): raise ValueError('Şəkil məlumatı düzgün deyil')
+        value=image.get('data', '')
+        if not isinstance(value, str) or len(value)>160000: raise ValueError('Şəkil çox böyükdür')
+        try: raw=base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error): raise ValueError('Şəkil məlumatı düzgün deyil')
+        if not 16 <= len(raw) <= 120000: raise ValueError('Şəkil ölçüsü düzgün deyil')
+        if raw.startswith(b'\xff\xd8\xff') and raw.endswith(b'\xff\xd9'): mime='image/jpeg'
+        elif raw.startswith(b'\x89PNG\r\n\x1a\n') and raw.endswith(b'IEND\xaeB`\x82'): mime='image/png'
+        else: raise ValueError('Yalnız JPEG və PNG şəkilləri qəbul edilir')
+        alt=str(image.get('alt') or '').strip()
+        if len(alt)>180: raise ValueError('Şəkil təsviri maksimum 180 simvol olmalıdır')
+        result.append({'data':value,'mime':mime,'alt':alt})
+    return result
 
 def validate_article(data):
     if not isinstance(data, dict): raise ValueError('Məqalə məlumatları düzgün deyil')
@@ -15,13 +33,23 @@ def validate_article(data):
     if not 1 <= len(item['title']) <= 180: raise ValueError('Başlıq tələb olunur (maksimum 180 simvol)')
     if not 1 <= len(item['body']) <= 60000: raise ValueError('Məqalənin mətni tələb olunur (maksimum 60000 simvol)')
     if len(item['category']) > 100: raise ValueError('Bölmə adı çox uzundur')
+    item['images']=validate_images(data.get('images',[]))
     return item
 
 def export_zip(base_dir, published):
     base = Path(base_dir) / 'guide_site'
-    payload = {'items': [{k: row.get(k, '') for k in FIELDS} for row in published]}
+    payload = {'items': []}
     output = io.BytesIO()
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+        written=set()
+        for row in published:
+            item={k:row.get(k,'') for k in FIELDS};item['images']=[]
+            for image in validate_images(row.get('images',[])):
+                raw=base64.b64decode(image['data']);extension='jpg' if image['mime']=='image/jpeg' else 'png'
+                name='images/articles/'+hashlib.sha256(raw).hexdigest()+'.'+extension
+                if name not in written: archive.writestr(name,raw);written.add(name)
+                item['images'].append({'src':'/'+name,'alt':image['alt']})
+            payload['items'].append(item)
         archive.writestr('guide-articles.json', json.dumps(payload, ensure_ascii=False))
         archive.write(base / 'guide-articles.js', 'guide-articles.js')
         archive.write(base / 'index.html', 'index.html')
@@ -77,6 +105,7 @@ class GuideCMS:
             else: doc = await asyncio.to_thread(self.save, await request.json(), actor)
             return web.json_response({'success': True, **doc}, headers={'Cache-Control': 'no-store'})
         except FileExistsError as exc: return web.json_response({'success': False, 'error': str(exc)}, status=409)
+        except web.HTTPRequestEntityTooLarge: return web.json_response({'success': False, 'error':'Şəkillərin ümumi ölçüsü çox böyükdür'},status=413)
         except (ValueError, json.JSONDecodeError) as exc: return web.json_response({'success': False, 'error': str(exc)}, status=400)
         except Exception: return web.json_response({'success': False, 'error': 'Təlimat yaddaşı hazırda əlçatan deyil'}, status=503)
 

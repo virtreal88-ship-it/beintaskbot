@@ -9,3 +9,5 @@
 Скачать ZIP: скачать index.html, guide-articles.js, guide-articles.json. Передайте архив человеку с доступом к support.akul.az. Ему нужно загрузить эти файлы в корень сайта, сохранив static, images, guide.css, guide.js и .htaccess. Для нового дизайна отдельно применяется support-redesign-upload.zip. Новые статьи доступны по ссылкам и через поиск, статьи /articles/* появляются на главной.
 
 Редактор не имеет доступа к серверу support.akul.az и не может обновить рабочий сайт без загрузки ZIP. Автоматическое обновление потребовало бы отдельного подключения сайта к публичному API и однократного обновления файлов на хостинге; такой механизм здесь не включён.
+
+Redaktə və yeni məqalə ayrıca modal pəncərədə açılır. Maksimum 5 şəkil əlavə etmək olar; JPEG, PNG, WEBP və AVIF brauzerdə optimallaşdırılaraq JPEG kimi saxlanılır. Hər optimallaşdırılmış şəkil maksimum 120 KB-dir. Şəkillər qaralama/ixrac versiyası ilə birlikdə yaddaşa yazılır, ZIP-də images/articles qovluğuna daxil edilir. Fayl adları məzmun hashindən yaradılır; SVG və başqa aktiv formatlar serverdə qəbul edilmir.
