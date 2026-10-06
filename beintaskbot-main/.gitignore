@@ -19,4 +19,5 @@ ENV/
 !users.json
 !message_maps.json
 !docs/manifest.json
+!guide_site/seed.json
 .DS_Store

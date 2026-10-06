@@ -1,11 +1,12 @@
 """Authenticated guide editor and static site export. Never deploys files."""
-import asyncio, base64, binascii, copy, hashlib, io, json, re, threading, zipfile
+import asyncio, base64, binascii, copy, hashlib, io, json, logging, re, threading, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from aiohttp import web
 
 SLUG = re.compile(r'^/[a-z0-9][a-z0-9/-]{0,159}$')
 FIELDS = ('slug', 'title', 'body', 'category', 'body_format')
+logger = logging.getLogger(__name__)
 
 def validate_images(images):
     if not isinstance(images, list) or len(images) > 5: raise ValueError('Maksimum 5 şəkil əlavə edin')
@@ -121,7 +122,9 @@ class GuideCMS:
         except FileExistsError as exc: return web.json_response({'success': False, 'error': str(exc)}, status=409)
         except web.HTTPRequestEntityTooLarge: return web.json_response({'success': False, 'error':'Şəkillərin ümumi ölçüsü çox böyükdür'},status=413)
         except (ValueError, json.JSONDecodeError) as exc: return web.json_response({'success': False, 'error': str(exc)}, status=400)
-        except Exception: return web.json_response({'success': False, 'error': 'Təlimat yaddaşı hazırda əlçatan deyil'}, status=503)
+        except Exception:
+            logger.exception('Guide editor storage operation failed')
+            return web.json_response({'success': False, 'error': 'Təlimat yaddaşı hazırda əlçatan deyil'}, status=503)
 
     async def export(self, request):
         actor = int(request.get('authenticated_chat_id') or 0)
@@ -141,6 +144,7 @@ class GuideCMS:
             doc=await asyncio.to_thread(self.read)
             return web.json_response(public_projection(doc),headers={'Access-Control-Allow-Origin':'*','Cache-Control':'public, max-age=30'})
         except Exception:
+            logger.exception('Public guide feed load failed')
             return web.json_response({'success':False,'error':'Təlimatlar hazırda əlçatan deyil'},status=503,headers={'Access-Control-Allow-Origin':'*'})
 
     async def public_image(self, request):

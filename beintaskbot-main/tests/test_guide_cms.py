@@ -17,6 +17,21 @@ class Tests(unittest.TestCase):
  def tearDown(self):self.temp.cleanup()
  def test_draft_is_not_exported(self):
   doc=self.cms.save(self.data,1);self.assertIsNone(doc['items'][0]['published'])
+ def test_packaged_seed_is_valid_and_not_excluded_from_cli_upload(self):
+  base=Path(__file__).resolve().parents[1]
+  cms=GuideCMS(base,lambda actor:True,Storage())
+  doc=cms.read()
+  self.assertGreater(len(doc['items']),0)
+  self.assertTrue(all('slug' in row and 'draft' in row for row in doc['items']))
+  self.assertIn('!guide_site/seed.json',(base/'.gitignore').read_text())
+ def test_storage_error_is_logged_and_not_reported_as_auth_failure(self):
+  self.cms.read=lambda:(_ for _ in ()).throw(FileNotFoundError('seed.json'))
+  request=SimpleNamespace(method='GET',get=lambda key:1)
+  with self.assertLogs('guide_cms',level='ERROR') as logs:
+   response=asyncio.run(self.cms.api(request))
+  self.assertEqual(response.status,503)
+  self.assertNotIn('giriş',json.loads(response.text)['error'])
+  self.assertIn('Guide editor storage operation failed',logs.output[0])
  def test_ready_then_draft_keeps_export_version(self):
   ready=self.cms.save({**self.data,'action':'ready'},1)
   doc=self.cms.save({**self.data,'version':ready['version'],'body':'Edited draft'},1)
