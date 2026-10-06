@@ -7651,7 +7651,32 @@ async def handle_api_action(request: web.Request) -> web.Response:
     action = data.get("action", "")
     phone = data.get("phone", "")
     try:
-        if action == "deal_edit":
+        if action == "deal_unreachable":
+            lead_id = int(data.get("lead_id") or 0)
+            access = await asyncio.to_thread(employee_access_profile, chat_id)
+            if not access.get('active') or 'deals' not in (access.get('permissions') or []) or not lead_id or not await asyncio.to_thread(lead_allowed_for_chat, lead_id, chat_id):
+                return web.json_response({'success': False, 'error': 'Bu sövdələşmə üçün icazəniz yoxdur.'}, status=403)
+            # Fixed business action, not a client-supplied arbitrary pipeline
+            # change. Never use personal-funnel fallback stage IDs here.
+            target_pipeline = int(SOVDELESMELER_PIPELINE_ID)
+            _pipeline_stage_cache.pop(target_pipeline, None)
+            _stages, names, _ui = await asyncio.to_thread(load_pipeline_stage_maps, target_pipeline, fallback=False)
+            normalize = lambda name: ' '.join(str(name).casefold().replace('ı', 'i').replace('\u0307', '').split())
+            matches = [int(sid) for sid, name in names.items() if normalize(name) == normalize('Təxirə salınıb') and int(sid) not in {142, 143}]
+            if len(matches) != 1:
+                return web.json_response({'success': False, 'error': 'Sövdələşmələr vərəqində Təxirə salınıb mərhələsi tapılmadı.'}, status=400)
+            status_id = matches[0]
+            updated = await asyncio.to_thread(update_lead_kommo, lead_id, {'pipeline_id': target_pipeline, 'status_id': status_id})
+            if not updated:
+                return web.json_response({'success': False, 'error': 'Sövdələşmə köçürülmədi. Yenidən cəhd edin.'}, status=502)
+            invalidate_rufat_overview_cache()
+            _clear_terminal_reentry(lead_id)
+            stage_key = next((key for key, sid in _stages.items() if int(sid) == status_id), '')
+            record_lead_pulse_event(lead_id, 'deal_edit', pipeline_id=target_pipeline, stage_key=stage_key)
+            return web.json_response({'success': True, 'pipeline_id': target_pipeline, 'status_id': status_id,
+                                      'stage_key': stage_key, 'stage_name': names[status_id],
+                                      'message': 'Sövdələşmə Təxirə salınıb mərhələsinə köçürüldü.'})
+        elif action == "deal_edit":
             lead_id = int(data.get("lead_id") or 0)
             if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
                 return web.json_response({"success": False, "error": "Доступ запрещён."}, status=403)

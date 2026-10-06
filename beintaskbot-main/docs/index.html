@@ -9724,6 +9724,11 @@ function bindSamilDealCard(card, deal) {
     if(moreButton) moreButton.addEventListener('click', event => { event.stopPropagation(); showDealContextMenu(deal, event.clientX, event.clientY); });
     const viewButton = card.querySelector('.deal-open-view');
     if(viewButton) viewButton.addEventListener('click', event => { event.stopPropagation(); openUnifiedClientChat(deal.id, deal); });
+    const unreachableButton = card.querySelector('.deal-unreachable');
+    if(unreachableButton) {
+        unreachableButton.addEventListener('click', event => { event.stopPropagation(); markDealUnreachable(deal, unreachableButton); });
+        unreachableButton.addEventListener('touchstart', event => event.stopPropagation(), {passive:true});
+    }
     card.addEventListener('dragstart', event => {
         samilDealDragState = { dealId: String(deal.id), fromStage: deal.stage_key };
         card.classList.add('dragging');
@@ -9856,7 +9861,7 @@ function renderSamilDeals() {
                     ${clientMessage ? `<div class="deal-last-msg">${escapeHtml(clientMessage)}</div>` : ''}
                 </div>
                 <div class="mt-3 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 flex-wrap"><button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button></div>
+                    <div class="flex items-center gap-3 flex-wrap"><button type="button" class="deal-open-view text-[11px] font-semibold text-slate-700 underline">Baxış</button><button type="button" class="deal-unreachable rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] font-semibold text-amber-800 disabled:opacity-60" draggable="false">Ulaşmaq olmadı</button></div>
                     <span class="deal-drag-hint text-[10px] text-gray-400 font-semibold">Sürüşdür</span>
                 </div>
             </article>`;
@@ -10003,6 +10008,30 @@ async function openSamilDeals() {
 
 function chatsEmptyHtml() {
     return `<div class="chats-empty"><div class="chats-empty-title">Müştəri seçilməyib</div><div class="chats-empty-sub">Soldan müştəri seçin</div></div>`;
+}
+async function markDealUnreachable(deal, button) {
+    if(button.disabled) return;
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<span class="yt-spin" aria-label="Yüklənir"></span> Köçürülür…';
+    try {
+        const result = await samilDealAction({action:'deal_unreachable', lead_id:Number(deal.id)});
+        samilDeals = samilDeals.filter(item => String(item.id) !== String(deal.id));
+        Object.keys(samilDealsByStage).forEach(key => {
+            const before = samilDealsByStage[key] || [];
+            const after = before.filter(item => String(item.id) !== String(deal.id));
+            samilDealsByStage[key] = after;
+            if(before.length !== after.length && Number.isFinite(Number(samilStageCounts[key]))) samilStageCounts[key] = Math.max(0, Number(samilStageCounts[key]) - (before.length - after.length));
+        });
+        renderSamilDeals();
+        toast(result.message || 'Sövdələşmə Təxirə salınıb mərhələsinə köçürüldü.', false);
+        loadSamilWorkspace(false, null, true).catch(error => console.warn('Deal moved; list refresh failed', error));
+    } catch(error) {
+        toast(error.message || 'Sövdələşmə köçürülmədi.', true);
+    } finally {
+        button.disabled = false;
+        button.innerHTML = original;
+    }
 }
 function chatsSeenKey() { return 'chats_seen_v1_' + CURRENT_USER_ID; }
 function chatsDraftsKey() { return 'chats_drafts_v1_' + CURRENT_USER_ID; }
