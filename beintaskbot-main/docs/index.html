@@ -37,6 +37,8 @@
         #tab-bar { z-index:11060 !important; }
         #toast.error { background:#b91c1c; }
         .screen { display:none; } .screen.active { display:block; }
+        #pending-queue-tabs { display:flex; flex-shrink:0; }
+        #pending-queue-tabs > button { flex:1; min-width:0; width:auto; white-space:nowrap; }
         .option-card { background:#f1f5f9; color:#1e293b; border:2px solid transparent; border-radius:12px; padding:12px; font-size:13px; text-align:center; cursor:pointer; font-weight:600; }
         .option-card.selected { background:#2481cc; color:#fff; }
         #screen-create {
@@ -1442,10 +1444,10 @@
         <div id="linear-search-wrap" class="rounded-2xl border border-violet-100 bg-white p-2 shadow-sm" hidden>
             <input id="linear-client-search" type="search" oninput="filterLinearTasks(this.value)" placeholder="Linear-da müştəri və ya tapşırıq axtar..." class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:border-violet-300" autocomplete="off">
         </div>
-        <div class="grid grid-cols-1 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
-            <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
+        <div id="pending-queue-tabs" class="gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
+            <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab" aria-selected="true">Sistem təsdiqləri</button>
             <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" style="display:none;" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
-            <button id="pending-queue-news" type="button" onclick="showNewsReview()" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Xəbər təsdiqi</button>
+            <button id="pending-queue-news" type="button" onclick="showNewsReview()" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab" aria-selected="false">Xəbərlər</button>
         </div>
         <section id="system-pending-section">
             <div class="samil-kanban-wrap custom-scroll">
@@ -4405,6 +4407,8 @@ async function showNewsReview(forceRefresh = false) {
     document.getElementById('pending-queue-system')?.classList.remove('bg-white','shadow-sm','text-violet-800');
     document.getElementById('pending-queue-linear')?.classList.remove('bg-white','shadow-sm','text-violet-800');
     document.getElementById('pending-queue-news')?.classList.add('bg-white','shadow-sm','text-violet-800');
+    document.getElementById('pending-queue-system')?.setAttribute('aria-selected','false');
+    document.getElementById('pending-queue-news')?.setAttribute('aria-selected','true');
     const subtitle = document.getElementById('pending-page-subtitle'); if(subtitle) subtitle.textContent = 'Yeniliklər yayımlanmadan əvvəl sizin təsdiqinizi gözləyir';
     const list = document.getElementById('linear-news-review-list'); const meta = document.getElementById('linear-news-review-meta');
     if(!list || !meta) return;
@@ -4482,6 +4486,8 @@ async function showPendingQueue(queue, forceRefresh = false) {
     if(linearButton) linearButton.className = linearActive ? activeClass : inactiveClass;
     if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
     if(newsButton) newsButton.className = inactiveClass;
+    if(systemButton) systemButton.setAttribute('aria-selected', String(!linearActive));
+    if(newsButton) newsButton.setAttribute('aria-selected', 'false');
     if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
     if(typeSelect) { typeSelect.hidden = linearActive; typeSelect.style.display = linearActive ? 'none' : ''; }
     if(linearSearchToggle) linearSearchToggle.hidden = !linearActive;
