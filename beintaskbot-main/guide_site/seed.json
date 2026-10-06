@@ -1,0 +1,1172 @@
+[
+  {
+    "slug": "/dashboard",
+    "draft": {
+      "slug": "/dashboard",
+      "title": "Göstəricilər",
+      "body": "",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/main",
+    "draft": {
+      "slug": "/dashboard/main",
+      "title": "Əsas",
+      "body": "Ümumi qrafik şəklində olan və müxtəlif hesabatların göstəricilərinin əks olunduğu səhifədir. Günlük olan satışlar, satışlardan olan gəlir, günlük pul mədaxil-məxarici, borclar, komisyon satışlar (səyyar satışlar) və sifarişlər bir paneldə əks olunur. Sahibkarın ümumi kapitalı qrafik şəklində əks olunur. (Anbar qalığı + balans + borclar), həmçinin satış nöqtələri və hesabda olan balans qrafik şəkildə göstərilir. Satış qrafikində isə aylıq satışın diaqramması göstərilir.",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/documents",
+    "draft": {
+      "slug": "/dashboard/documents",
+      "title": "Sənədlər",
+      "body": "Sistem daxilində yaradılan bütün sənədlərin əks olunduğu səhifədir. Filter seçimi ilə eyni anda müxtəlif parametrlərə görə axtarış edib sənədlər ilə tanış olmaq olar",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/basket",
+    "draft": {
+      "slug": "/dashboard/basket",
+      "title": "Səbət",
+      "body": "Silinən sənədlər və məhsullar ilk olaraq Səbət səhifəsində əks olunur. Səbət səhifəsində olan sənədləri bərpa etmək və səbətdən köklü silmək mümkündür. düyməsi ilə silinmiş sənədi yenidən bərpa etmək mümkündür düyməsi ilə səbətdəki sənədi köklü silmək olar Səbəti təmizlə Səbəti təmizlə düyməsi ilə səbətdəki sənədlərin hamısını köklü silmək olar",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/audit",
+    "draft": {
+      "slug": "/dashboard/audit",
+      "title": "Audit",
+      "body": "Sənədlərdə baş verən dəyişiklikləri Audit səhifəsində izləmək mümkündür.",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/support",
+    "draft": {
+      "slug": "/dashboard/support",
+      "title": "Texniki dəstək",
+      "body": "",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/support/more",
+    "draft": {
+      "slug": "/dashboard/support/more",
+      "title": "Ətraflı",
+      "body": "Operatorlar ilə əlaqə saxlamaq üçün və sistemdə yaranmış çətinliklər ilə bağlı texniki dəstəyə müraciət etmək üçün nəzərdə tutulub. Həmçinin, biznes məsləhətləri üçün fərdi məhləhətçi ilə əlaqə saxlamaq olar.",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/support/instruction",
+    "draft": {
+      "slug": "/dashboard/support/instruction",
+      "title": "İstifadə qaydası",
+      "body": "Səhifələrin istifadə qaydasını izahlı şəkildə göstərmək üçün nəzərdə tutulub. Ardıcıl olaraq təklif olunan seçimləri istifadə edərək, əməliyyatları icra etmək olar.",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/dashboard/support/contact",
+    "draft": {
+      "slug": "/dashboard/support/contact",
+      "title": "Operator ilə əlaqə",
+      "body": "Əməliyyatların icra olunması zamanı kömək xarakterli təlimatlar əldə etmək üçün nəzərdə tutulub. ? düyməsini sıxın və açılan pəncərədə Təlimat düyməsinə klik edin Tərtibatçı ilə əlaqə düyməsi ilə birbaşa texniki dəstək şöbəsinə WhatsApp vasitəsilə yaza bilərsiniz",
+      "category": "dashboard"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products",
+    "draft": {
+      "slug": "/products",
+      "title": "Məhsullar",
+      "body": "",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters",
+    "draft": {
+      "slug": "/products/parameters",
+      "title": "Parametrlər",
+      "body": "",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/product",
+    "draft": {
+      "slug": "/products/parameters/product",
+      "title": "Məhsul",
+      "body": "Məhsul və xidmətlərin qeydiyyatı üçün nəzərdə tutulub. Yeni məhsul yaratmaq üçün Yeni məhsul düyməsinə sıxmaq lazımdır. Açılan pəncərədə məhsulun adı, varsa barkodu, qrupu, alış və satış qiymətini qeyd edib düyməsini sıxmaq lazımdır. Məhsulun sifarişi üçün təyin edəcəyiniz sayı minimal qalıq xanasında qeyd edin. Hansı təchizatçıdan alındığını qeyd etmək üçün Təchizatçı xanasını qeyd edin.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/service",
+    "draft": {
+      "slug": "/products/parameters/service",
+      "title": "Xidmət",
+      "body": "Yeni xidmət , xidmət yaratmaq üçün nəzərdə tutulub. Alışı olmayan, anbarda mövcud olmayan lakin satış edilə bilən xidmət anlayışıdır. Yeni xidmət düyməsi ilə açılan pəncərədə lazımi xanaları doldurub seçimini etmək lazımdır.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/group",
+    "draft": {
+      "slug": "/products/parameters/group",
+      "title": "Qrup",
+      "body": "Yeni qrup düyməsi ilə məhsulları qruplaşdırmaq üçün qruplar təyin olunur. Qrup formalaşdırıb məhsulları qruplara ayırmaq, gələcəkdə hesabatlar əldə etmək, məhsulu axtarmaq və filterləmək zamanı istifadə olunur. Bunun üçün qrup adını təyin edib düyməsini sıxmaq lazımdır.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/complect",
+    "draft": {
+      "slug": "/products/parameters/complect",
+      "title": "Dəst",
+      "body": "Bir neçə məhsulu Dəst şəklində satmaq, almaq ... üçün nəzərdə tutulub. Misal üçün Mebel dəsti və Otaq papıları həm dəst şəklində həm də tək tək satıla bilir. Və yaxud 2 və daha çox məhsulu birləşdirib satmaq olar. Dəst düyməsini sıxın. Açılan pəncərədə Dəst üçün Ad təyin edin. Məhsullar düyməsini sıxın və açılan pəncərədə Dəstin tərkibinə daxil olan məhsulları müəyyən edin Əlavə et düyməsini sıxın və düyməsi ilə əməliyyatı tamamlayın.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/party",
+    "draft": {
+      "slug": "/products/parameters/party",
+      "title": "Partiya",
+      "body": "Əgər eyni məhsul müxtəlif partiyalar şəklində anbara daxil olursa, bu prosesi qeyd etmək üçün məhsulun partiyaları qeyd edilməlidir. Partiya əlavə etməyin ilk yolu Ayarlar səhifəsində Partiya seçimini edib, Yeni partiya düyməsini sıxmaq lazımdır. Açılan pəncərədə Partiya adını qeyd edib düyməsini sıxmaq lazımdır. Məhsul yaradılanda partiyalı məhsul olduğunu qeyd etmək lazımdır. Yeni məhsul düyməsini sıxın və açılan pəncərədə xanaları doldurub Əlavə parametrlər hissəsində Partiyalı məhsul seçimini edin düyməsini sıxın.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/series",
+    "draft": {
+      "slug": "/products/parameters/series",
+      "title": "Seriya",
+      "body": "Bir məhsulun müxtəlif seriya nömrələri ilə alışı və satışı üçün nəzərdə tutulub. Məhsulun seriya nömrəsi unikaldır (təkrarlanmır). Alış zamanı məhsulun seriya nömrəsi qeyd edilməlidir. Satış zamanı seriyalı məhsulun seriyası qeyd edilməlidir.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/edit",
+    "draft": {
+      "slug": "/products/parameters/edit",
+      "title": "Redaktə et",
+      "body": "Məhsullar ilə əməliyyatlar zamanı kütləvi dəyişiklik etmək üçün Redaktə et düyməsindən istifadə etmək olar. Nümunədə bir neçə məhsulun eyni anda qrupunu dəyişmək göstərilib. Qrup adınin üzərinə tıklayıb, həmin qrupdakı bütün məhsulları seçib, Redaktə et düyməsini sıxmaq lazımdır. Açılmış pəncərədə kütləvi dəyişiklik etmək istədiyiniz seçim edilir. Daha sonra seçimə uyğun olan dəyişiklik olunur və düyməsi sıxılır.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/search",
+    "draft": {
+      "slug": "/products/parameters/search",
+      "title": "Sürətli axtarış",
+      "body": "Məhsulun adı, barkodu, art kodu, məhsula yazılan şərhə görə sürətli axtaış etmək üçün nəzərdə tutulub. Axtarış, yazı yazılan kimi avtomatik olaraq baş verir. Həmçinin Enter düyməsini də sıxıb axtarış etmək olar.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/units",
+    "draft": {
+      "slug": "/products/parameters/units",
+      "title": "Ölçü vahidləri",
+      "body": "Ölçü vahidi təyin etmək üçün Ölçü vahidi xanasında seçim edin. Yeni ölçü vahidi təyin etmək üçün nümumədəki ardıcıllığa baxın.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/kit",
+    "draft": {
+      "slug": "/products/parameters/kit",
+      "title": "Bağlamalar",
+      "body": "Məhsulun müxtəlif say və ölçü vahidi ilə, bağlama şəklində alış , satış və s. icra etmək üçün bağlama funksiyası nəzərdə tutulub. Həmçinin bağlamaya alış və satış qiyməti təyin etmək mümkündür. Qeyd : Məhsula bir neçə bağlama təyin etmək olur",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/modification",
+    "draft": {
+      "slug": "/products/parameters/modification",
+      "title": "Modifikasiya",
+      "body": "Bir məhsula müxtəlif modifikasiyalar təyin etmək olar. Bunun üçün məhsul kartında modifikasiya bölməsinə keçid edərək Yeni modifikasiya düyməsini sıxıb, modifikasiyanın adını və növünü təyin edib düyməsini sıxmaq lazımdır. Misal üçün, kitab məhsuluna cild, müəllif, nəşriyyat və s. modifikasiya əlavə edib daha sonrakı axtarış əməliyyatlarında istifadə edə bilərsiniz. Yeni modifikasiya əlavə etdikdən sonra düyməsini sıxmaq lazımdır.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/pricetypes",
+    "draft": {
+      "slug": "/products/parameters/pricetypes",
+      "title": "Qiymət tipləri",
+      "body": "Bir məhsula bir neçə qiymət təyin etmək olar. Yeni qiymət düyməsinə sıxıb açılan pəncərədə qiymət tipinin adını qeyd edib düyməsini sıxmaq lazımdır. Daha sonra məhsul yaratmaq üçün açılmış pəncərədə məhsula yeni qiymət tipi təyin edib düyməsini sıxa bilərsiniz.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/parameters/archive",
+    "draft": {
+      "slug": "/products/parameters/archive",
+      "title": "Arxivləmə",
+      "body": "Təchizatçıdan daxil olmayan məhsulları, anbar qalığı 0 olduqdan sonra ümumi siyahıda (anbar qalığı, kassa proqramı, məhsullar) görünməməsi üçün məhsulu arxivə yerləşdirmək olar. ... düyməsinə sıxıb açılan pəncərədə Arxivə yerləşdir düyməsini sıxmaq lazımdır. Arxivdə olan məhsulu yenidən istifadə etmək üçün, Arxivdən çıxart seçimi edilməlidir.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/enter",
+    "draft": {
+      "slug": "/products/enter",
+      "title": "Daxilolma",
+      "body": "Məhsulları anbara daxil etmək üçün nəzərdə tutulub. Bunun üçün yeni daxilolma sənədi yaratmaq lazımdır. Ardıcıllıq nümunədə göstərilib. Açılmış pəncərədə məhsulları axtarış xanasından əlavə edib, sayını yazmaq lazımdır. Bu zaman qiyməti də dəyişmək olur. Əlavə xərc hissəsində yazılacaq məbləğ mayanın formalaşmasına təsir edəcək. Məsələn, məhsulun anbara daxil olması zamanı logistika və ya Gömrük xərclərini əlavə xərc hissəsində qeyd etsəniz, ümumi xərc, məhsullar arasında proporsional qaydada bölünəcək (qiyməti az olan məhsulun üzərinə az, cox olan məhsula isə çox əlavə olunacaq) və maya dəyəri formalaşacaq",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/loss",
+    "draft": {
+      "slug": "/products/loss",
+      "title": "Silinmə",
+      "body": "Anbarda məhsul sayını azaltmaq üçün nəzərdə tutulub. Yeni silinmə sənədi ilə seçilmiş məhsulun sayını azalda bilərsiniz. Açılmış pəncərədə axtarış xanasından lazım olan məhsulu seçib sənədə əlavə etmək lazımdır. Daha sonra silinməli olan sayı qeyd edib düyməsini sıxmaqla məhsul sayını azaltmış oluruq.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/move",
+    "draft": {
+      "slug": "/products/move",
+      "title": "Yerdəyişmə",
+      "body": "Məhsulların bir anbardan başqa anbara yerdəyişməsi üçün nəzərdə tutulub. Yerdəyişmə sənədi yaratmaq üçün nümunədəki ardıcıllığı icra etmək lazımdır. Açılan pəncərədə əməliyyatları ardıcıllıqla icra edib düyməsini sıxmaq lazımdır.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/products/inventory",
+    "draft": {
+      "slug": "/products/inventory",
+      "title": "İnventarizasiya",
+      "body": "İnventarizasiya , anbar sayımı zamanı real say ilə düzəliş üçün nəzərdə tutulub. Yeni inventarizasiya düyməsini sıxıb açılan sənəddə sayım olunacaq anbarı seçib, Anbar qalığı düyməsi ilə məhsulları əlavə etmək olar. Seçilmiş məhsullar inventarizasiya səhifəsinə avtomatik əlavə olunacaq. Faktiki say qeyd olunduqdan sonra düyməsini sıxmaq lazımdır. İnventarizasiya sənədi yadda saxlanıldıqdan sonra Sənəd yarat düyməsi ilə Daxilolma və ya Silinmə əməliyyatı icra olunur. Qeyd : Daxilolma və Silinmə sənədinə keçid olduqda, məhsulların fərqi avtomatik olaraq Daxilolma və Silinmə sənədinə yerləşdirilir. Qeyd : İnventarizasiya sənədi heç bir halda məhsulların anbar qalığına təsir etmir.",
+      "category": "products"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies",
+    "draft": {
+      "slug": "/supplies",
+      "title": "Alışlar",
+      "body": "",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies/supply",
+    "draft": {
+      "slug": "/supplies/supply",
+      "title": "Alış",
+      "body": "Alışlar – məhsul alışı əməliyyatlarını icra etmək üçün nəzərdə tutulub. Nümunədəki ardıcıllığa əməl edərək alış sənədini yaratmaq olar. Yeni alış sənədinə lazım olan məlumatları əlavə edərək düyməsini sıxın Alış sənədi yadda saxlanıldıqdan sonra, sənədi tərk etmədən yeni sənədlər yarada bilərsiniz. Alış ilə bağlı ödəniş , qaytarma və ya alınan məhsulların satış sənədlərini yarada bilərsiniz. Bunun üçün Sənəd yarat düyməsini sıxıb, təqdim olunan seçimlərdən birini seçmək lazımdır Yadda saxlanılmış sənədi excell formatda endirə, həm də çap edə bilərsiniz. ... düyməsi ilə sənədi silmək olar. Alış sənədinin təyinat hissəsində sənədə əlavələr edərək düyməsini sıxın Məhsulları sənədə əlavə etməyin digər yolu, Məhsullar düyməsini sıxmaqla olur. Bu halda açılmış pəncərədən məhsulları seçib Əlavə et düyməsini sıxmaq lazımdır. Məhsulları həmçinin sol tərəfdəki qruplara görə də seçib sənədə əlavə etmək olar.",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies/expense",
+    "draft": {
+      "slug": "/supplies/expense",
+      "title": "Əlavə xərc",
+      "body": "Alış sənədinə məhsulları axtarış xanasından əlavə edib, sayını yazmaq lazımdır. Bu zaman qiyməti də dəyişmək olur. Əlavə xərc hissəsində yazılacaq məbləğ mayanın formalaşmasına təsir edəcək. Məsələn, məhsulun anbara daxil olması zamanı logistika və ya Gömrük xərclərini əlavə xərc hissəsində qeyd etsəniz, ümumi xərc, məhsullar arasında proporsional qaydada bölünəcək (qiyməti az olan məhsulun üzərinə az, cox olan məhsula isə çox əlavə olunacaq) və maya dəyəri formalaşacaq",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies/return",
+    "draft": {
+      "slug": "/supplies/return",
+      "title": "Qaytarma",
+      "body": "Alışların geri qaytarması sənədi, anbarda olan məshulların təchizatçıya geri qaytarılması üçündür. Nümunəyə baxaraq bu sənədi yarada bilərsiniz. Yeni yaradılmış alışların qaytarılması sənədini ardıcıllıqla doldurub düyməsini sıxın.",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies/order",
+    "draft": {
+      "slug": "/supplies/order",
+      "title": "Sifariş",
+      "body": "Alışın sifarişi, Təchizatçılara verilən sifarişlər üçün nəzərdə tutulub. Sifariş sənədini açıb statusu dəyişmək və Yeni satış düyməsini sıxıb, sifariş sənədini satış sənədinə verimək olar. düyməsini sıxıb satış sənədini formalaşdırmaq olar.",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/supplies/prepareorder",
+    "draft": {
+      "slug": "/supplies/prepareorder",
+      "title": "Sifarişin formalaşması",
+      "body": "Məhsula təyin olunan minimal qalıqdan sifariş üçün məhsullar formalaşır. Siyahıda olan məhsulları filter vasitəsi ilə çeşidləyərək ( təchizatçıya görə, məhsul qrupuna görə, anbar qalığı 0-a düşən məhsullara görə və s. ) sifaris yarat düyməsi ilə siyahıda olan məhsullara görə təchizatçılara sifarişlər hazırlanır. Növbəti mərhələdə sifarişi təchizatçıya göndərdikdən sonra sifarişi alış sənədinə çevirmək olar. Bu halda sifarış sənədinin statusunu dəyişə bilərsiniz. Filter düyməsini sıxıb müxtəlif parametrlərə (təchizatçı, siyahı, anbar və s.) görə məhsulları Axtar düyməsinə sıxıb təyin etmək lazımdır. Daha sonra Sifarişi hazırla düyməsini sıxıb sifarişləri formalaşdırmaq lazımdır.",
+      "category": "supplies"
+    },
+    "published": null
+  },
+  {
+    "slug": "/demands",
+    "draft": {
+      "slug": "/demands",
+      "title": "Satışlar",
+      "body": "",
+      "category": "demands"
+    },
+    "published": null
+  },
+  {
+    "slug": "/demands/demand",
+    "draft": {
+      "slug": "/demands/demand",
+      "title": "Satış",
+      "body": "Satış sənədi, topdan məhsul satışı əməliyyatlarını icra etmək üçün nəzərdə tutulub. Nümunədə satış sənədinin yaradılması göstərilib. Yeni satış sənədinə lazım olan məlumatları əlavə edərək düyməsini sıxın Satış sənədi yadda saxlanıldıqdan sonra, sənədi tərk etmədən yeni sənədlər yarada bilərsiniz. Satış ilə bağlı ödəniş , qaytarma sənədlərini yarada bilərsiniz. Bunun üçün Sənəd yarat düyməsini sıxıb, təqdim olunan seçimlərdən birini seçmək lazımdır Yadda saxlanılmış sənədi ... düyməsi ilə silmək olar",
+      "category": "demands"
+    },
+    "published": null
+  },
+  {
+    "slug": "/demands/return",
+    "draft": {
+      "slug": "/demands/return",
+      "title": "Qaytarma",
+      "body": "Satışların geri qaytarması sənədi, topdan satılan məhsulların geri qaytarılması üçün nəzərdə tutulub. Nümunədə sənədin yaradılması ardıcıllığı göstərilib. Yeni yaradılmış satışın qaytarılması sənədini ardıcıllıqla doldurub düyməsini sıxın. Satışın qaytarılması sənədini qısa yolla da yaratmaq olar. Bunun üçün satış sənədini tərk etmədən Sənəd yarat düyməsini, daha sonra isə qaytarılan məhsulları sənəddə saxlayıb Qaytarma düyməsini sıxmaq lazımdır. Sənədi yadda saxlamaq üçün düyməsini sıxmaq lazım olacaq",
+      "category": "demands"
+    },
+    "published": null
+  },
+  {
+    "slug": "/demands/order",
+    "draft": {
+      "slug": "/demands/order",
+      "title": "Sifariş",
+      "body": "Sifariş sənədi, müştərilərdən gələn sifarişlərin formalaşdırılması üçün nəzərdə tutulub. Sifariş sənədi yaratmaq üçün nümunədəki ardıcıllığı icra etmək lazımdır. Yeni sifariş düyməsi ilə açılan pəncərədə sifariş olunacaq məhsulları əlavə edib Yadda saxla düyməsini sıxmaq lazımdır. Sifariş sənədini yadda saxladıqdan sonra, sənədi tərk etmədən sifariş sənədini Satış sənədinə çevirmək olar. Sənəd yarat düyməsi ilə sifariş edilən məhsulların satış sənədi açılacaq. düyməsi ilə satış sənədini yaratmaq olar.",
+      "category": "demands"
+    },
+    "published": null
+  },
+  {
+    "slug": "/demands/comission",
+    "draft": {
+      "slug": "/demands/comission",
+      "title": "Komisyon satış",
+      "body": "Məhsul və xidmətləri komissiya qarşılığında satmaq üçün nəzərdə tutulub. Misal 1 Məhsulu birbaşa təchizatçının anbarından alıcıya satmaq. Bu halda, istifadəçi məhsulu öz anbarına alış etmədən satışını həyata keçirir. Komisyon satış zamanı yalnız alış və satış qiyməti qeyd olunur. Sənəd yadda saxlanıldıqdan sonra həmin təchizatçıya borc formalaşır. Həmçinin satışdan qalan marja hesabatlarda əks olunur. Komissiya qarşılığında satılan məhsul, digər məhsullardan fərqli olaraq yaradılanda əlavə parametr hissəsində Komisyon məhsul seçimi edilməlidir Komisyon təyin edilən məhsulu sənədə əlavə etdikdə, hansı təchizatçıdan alındığı seçilməlidir (və həmin təchizatçıya dərhal borc formalaşır). Qeyd : Alış qiyməti məhsulu aldığımız məbləğdir. Satış qiyməti məhsulun satıldığı qiymətdir. Faiz isə satış məbləğindən təchizatçıya verilən faizin göstəricisidir Qiymətlər təyin edin və düyməsi ilə sənədi yadda saxlayın Hesabatlar səhifəsində qazanc, Borclar səhifəsində borclara nəzarət edə bilərsiniz Misal 2 Hər hansı bir servis xidmətində ustalar ilə faiz qarşılığında müştərilərə xidmət göstərildikdə komisyon satış zamanı ustaya veriləcək faiz, xidmət icra olunan kimi borclar səhifəsində əks olunur. Həmçinin göstərilən xidmətlərdən qalan marja Hesabatlar səhifəsində əks olunur. Yeni məhsul yaradılanda Əlavə parametr hissəsində Komisyon məhsul seçimi edilməlidir. Komisyon məhsulu əlavə etdikdə açılan pəncərədə xidmət göstərəcək usta seçilməlidir. Qeyd : Faiz qarşılığında fəaliyyət göstərən ustalara Tərəf müqabillər səhifəsində satışdan veriləcək faiz təyin edilir. Komisyon satış zamanı avtomatik təyin olunan faiz ustaya borc kimi yazılır. Komisyon satış sənədinə bu məhsulu əlavə edib, qiymətlər təyin edin və düyməsi ilə sənədi yadda saxlayın. Hesabatlar səhifəsində qazanc, Borclar səhifəsində borclara nəzarət edə bilərsiniz Misal 3 Komisyon satış sənədinə digər məhsulların əlavə edilməsi. Komisyon satış sənədinə məhsulu əlavə edib və düyməsi ilə sənədi yadda saxlayın",
+      "category": "demands"
+    },
+    "published": null
+  },
+  {
+    "slug": "/customers",
+    "draft": {
+      "slug": "/customers",
+      "title": "Tərəf müqabillər",
+      "body": "",
+      "category": "customers"
+    },
+    "published": null
+  },
+  {
+    "slug": "/customers/customer",
+    "draft": {
+      "slug": "/customers/customer",
+      "title": "Tərəf müqabil",
+      "body": "İstifadəçinin müştəriləri, məhsul aldığı təchizatçılar, əməkdaşlar və s. qeydiyyata almaq üçün nəzərdə tutulub. Yeni tərəf müqabil yaratmaq üçün nümunəyə uyğun ardıcıllığı icra etmək lazımdır. Yeni müştəri düyməsini sıxıb açılan pəncərədə ad, qrup, təyin edib düyməsini sıxmaq lazımdır. Tərəf müqabillər səhifəsində müştərinin bonus hesabı , təyin olunmuş endirimi əks olunur. Müştəriləri qruplaşdırmaq üçün Yeni qrup düyməsini sıxıb açılan pəncərədə qrup adını təyin edib düyməsini sıxmaq lazımdır.",
+      "category": "customers"
+    },
+    "published": null
+  },
+  {
+    "slug": "/customers/discount",
+    "draft": {
+      "slug": "/customers/discount",
+      "title": "Müştəri endirimi",
+      "body": "Alış , satış əməliyyatları zamanı, tərəf-müqabilin (kontragent) endirimini bütün məhsullara şamil etmək üçün nəzərdə tutulub. Qeyd : Ayrı aryılıqda məhsula tətbiq edilən endirim silinib tərəf-müqabil (kontragent) endirimi tətbiq ediləcək.",
+      "category": "customers"
+    },
+    "published": null
+  },
+  {
+    "slug": "/customers/pricetypes",
+    "draft": {
+      "slug": "/customers/pricetypes",
+      "title": "Müştəri qiymət tipləri",
+      "body": "Alış , satış əməliyyatları zamanı, məhsullara təyin edilən qiymət tipi bütün məhsullara şamil etmək üçün nəzərdə tutulub.",
+      "category": "customers"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance",
+    "draft": {
+      "slug": "/finance",
+      "title": "Maliyyə",
+      "body": "",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance/payments",
+    "draft": {
+      "slug": "/finance/payments",
+      "title": "Ödənişlər",
+      "body": "",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance/payments/paymentin",
+    "draft": {
+      "slug": "/finance/payments/paymentin",
+      "title": "Mədaxil",
+      "body": "Ödənişlər səhifəsində, sahibkar, tərəf-müqabillərdən (kontragent) Nağd və Nağdsız şəkildə Mədaxil ( qəbul etdiyi ) ödənişləri qeyd edib düyməsini sıxmaq lazımdır. Qeyd : Xərc maddəsi olaraq məhsul alınması seçilməlidir. Nümunədə Maliyyə ⮞ Ödənişlər ⮞ Mədaxil səhifəsinə keçid göstərilib.",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance/payments/paymentout",
+    "draft": {
+      "slug": "/finance/payments/paymentout",
+      "title": "Məxaric",
+      "body": "Ödənişlər səhifəsində, sahibkar, tərəf-müqabillərdən (kontragent) Nağd və Nağdsız şəkildə Məxaric ( ödədiyi ) ödənişləri qeyd edib düyməsini sıxmaq lazımdır. Qeyd : Xərc maddəsi olaraq məhsul alınması seçilməlidir. Nümunədə Maliyyə ⮞ Ödənişlər ⮞ Məxaric səhifəsinə keçid göstərilib.",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance/payments/spenditem",
+    "draft": {
+      "slug": "/finance/payments/spenditem",
+      "title": "Xərc maddəsi",
+      "body": "Həmçinin, şirkətin etdiyi bütün xərclər ödənişlər səhifəsindən həyata keçirilir. Qeyd: Uyğun olan xərc maddəsi seçilməlidir. Nümunədə Maliyyə ⮞ Ödənişlər ⮞ Xərc maddəsinin formalaşdırılması göstərilib. Məxaric düyməsini sıxıb Nağd və ya Nağdsız seçimin edib, açılan pəncərədə lazım olan xanaları doldurmaq lazımdır. Daha sonra + düyməsi ilə yeni xərc maddəsi əlavə edib düyməsini sıxmaq lazımdır.",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/finance/debts",
+    "draft": {
+      "slug": "/finance/debts",
+      "title": "Borclar",
+      "body": "Borclar səhifəsi sahibkarın alacaq və verəcək borclarının göstəricisidir. Müştərinin borcunun necə formalaşması tarixçəsinə üzləşmə aktı ilə baxmaq olar. Tərəf müqabil (kontragent) adının üstünə tıklasaq, həmin tərəf müqabil ilə ümumi borcun formalaşmasına səbəb olan bütün əməliyyatlar istifadəçiyə təqdim olunacaq. ( Üzləşmə aktı ) . Həmçinin üzləşmə aktını Çap edib və ya endirib müştəriyə təqdim etmək olar. Nümunədə Maliyyə ⮞ Borclar ⮞ Üzləşmə aktı səhifəsinə keçid göstərilib.",
+      "category": "finance"
+    },
+    "published": null
+  },
+  {
+    "slug": "/expeditors",
+    "draft": {
+      "slug": "/expeditors",
+      "title": "Distributorlar",
+      "body": "",
+      "category": "expeditors"
+    },
+    "published": null
+  },
+  {
+    "slug": "/expeditors/handoverto",
+    "draft": {
+      "slug": "/expeditors/handoverto",
+      "title": "Təhvil",
+      "body": "Təhvil sənədi, distributora (ekspediterə) təhvil verilən məhsulları qeyd etmək üçün nəzərdə tutulub. Təhvil düyməsini sıxıb, açılan pəncərədə lazım olan xanaları doldurub düyməsini sıxmaq lazımdır. Bağla düyməsi ilə sənədi bağlayıb əsas səhifəyə keçə bilərsiniz. Nümunədə Komisyon satış ⮞ Təhvil ilə bağlı məlumatların əks olunduğu səhifəyə keçid göstərilib.",
+      "category": "expeditors"
+    },
+    "published": null
+  },
+  {
+    "slug": "/expeditors/handoverfrom",
+    "draft": {
+      "slug": "/expeditors/handoverfrom",
+      "title": "Qəbul",
+      "body": "Qəbul sənədi, distributora (ekspediterə) qəbul edilən məhsulları qe yd etmək üçün nəzərdə tutulub. Qəbul düyməsini sıxıb, açılan pəncərədə lazım olan xanaları doldurub düyməsini sıxmaq lazımdır. Bağla düyməsi ilə sənədi bağlayıb əsas səhifəyə keçə bilərsiniz. Nümunədə Komisyon satış ⮞ Qəbul ilə bağlı məlumatların əks olunduğu səhifəyə keçid göstərilib.",
+      "category": "expeditors"
+    },
+    "published": null
+  },
+  {
+    "slug": "/expeditors/moneytransfer",
+    "draft": {
+      "slug": "/expeditors/moneytransfer",
+      "title": "Pul transfer",
+      "body": "Sahibkar və distributorlar (ekspediter) arasında olan pul mübadiləsi, mədaxil və məxaric şəklində icra olunan əməliyyat nəticəsində distributorların balansı formalaşır. Həmçinin, ümumi borca təsir etmədən distributorun balansını artırmaq üçün xərc maddəsi korrekt seçilməlidir. Pul məxaric düyməsini sıxıb, açılan pəncərədə lazım olan xanaları doldurub düyməsini sıxmaq lazımdır. Nümunədə Komisyon satış ⮞ Pul transfer səhifəsinə keçid göstərilib.",
+      "category": "expeditors"
+    },
+    "published": null
+  },
+  {
+    "slug": "/expeditors/expeditor",
+    "draft": {
+      "slug": "/expeditors/expeditor",
+      "title": "Distributor",
+      "body": "Distributor (Ekspediterlər) səhifəsində sahibkara olan ümumi borc , anbar qalığı (səyyar anbar), alacaq borclar (nisyələr) və balans əks olunur. Əgər Distributor (ekspediter) adının üzərinə tıklasaq açılan pəncərədə həmin Distributor (ekspediter) ilə qarşılıqlı hesabat görünəcək Əgər anbar qalığı üzərinə tıklasaq açılan pəncərədə Distributorin (ekspediter) anbar qalığı əks olunacaq Balans, Distributorə (ekspediter) olan pulun göstəricisidir Nümunədə Distributorlar ⮞ Distributor səhifəsinə keçid göstərilib. Alacaq borc üzərinə tıklasaq, açılan pəncərədə borclar barədə məlumatlar əks olunacaq. Açılmış pəncərədə tərəf müqabil adının üstünə tıklasaq, həmin tərəf müqabil ilə ümumi borcun formalaşmasına səbəb olan bütün əməliyyatlar istifadəçiyə təqdim olunacaq. ( Üzləşmə aktı ) Nümunədə Distributorlar ⮞ Üzləşmə aktına keçid göstərilib.",
+      "category": "expeditors"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash",
+    "draft": {
+      "slug": "/cash",
+      "title": "Kassa",
+      "body": "",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/program",
+    "draft": {
+      "slug": "/cash/program",
+      "title": "Kassa proqramı",
+      "body": "Pərakəndə satış nöqtələrində satışları icra etmək üçün nəzərdə tutulub. Kassa proqramını endirmək üçün ardıcıllıq nümumədə göstərilib.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/login",
+    "draft": {
+      "slug": "/cash/login",
+      "title": "Daxil ol",
+      "body": "İnternet olmadan kassa proqramına daxil olmaq üçün Şəbəkəsiz seçimini edin. Bu halda kassadan icra olunan əməliyyatlar yadda saxlanılır və şəbəkəyə qoşulduqda məlumatlar sinxronizasiya olunur. İnternet olduğu halda kassa proqramına daxil olmaq üçün Daxil ol seçimini etmək lazımdır.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/sale",
+    "draft": {
+      "slug": "/cash/sale",
+      "title": "Satış",
+      "body": "Pərakəndə satışları icra etmək üçün kassa proqramında axtarış hissəsində satılacaq məhsul axtarılır və satış üçün səbətə əlavə olunur Satılacaq məhsulun miqdarı, satış qiyməti, endirim dəyişilə bilər Cəm məbləğ üzərinə klik olunduqda açılan pəncərədə ödəniş növünü (nəğd, nəğgsiz, bonus, borc) seçmək lazımdır Ümumi məbləğ yazısının üzərinə klik olunduqda satış əməliyyatı tamamlanır Pərakəndə satışları icra etmək üçün kassa proqramında axtarış hissəsində satılacaq məhsulun üzərindəki barkod oxudularaq səbətə əlavə olunur Satılacaq məhsulun miqdarı, satış qiyməti, endirim dəyişilə bilər Cəm məbləğ üzərinə klik olunduqda açılan pəncərədə ödəniş növünü (nəğd, nəğgsiz, bonus, borc) seçmək lazımdır Ümumi məbləğ yazısının üzərinə klik olunduqda satış əməliyyatı tamamlanır",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/return",
+    "draft": {
+      "slug": "/cash/return",
+      "title": "Qaytarma",
+      "body": "Pərakəndə satışların qaytarmasını icra etmək üçün kassa proqramında Menyu seçimini edib açılan pəncərədə satışlar yazısının üzərinə klik etmək lazımdır Təqdim olunan satışların içindən hansı satışın qaytarmasının icra olunması təyin edilməlidir. Axtarış, məhsulun adına və barkoduna görə, satış qaiməsinin nömrəsinə görə, məbləğə və Müştəri adına görə icra oluna bilər Axtarışın nəticəsinə görə seçilmiş satış üzərinə klik etmək və açılan pəncərədə Geri qaytarma düyməsini sıxmaq lazımdır Qaytarılacaq məhsulun miqdarı təyin edilməli və düyməsi ilə qaytarma əməliyyatı tamamalanmalıdır Qeyd : Qaytarılacaq məbləğ nəğd, bonus, borc olaraq istifadəçiyə göstəriləcək",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/turn",
+    "draft": {
+      "slug": "/cash/turn",
+      "title": "Növbələr",
+      "body": "",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/payments",
+    "draft": {
+      "slug": "/cash/payments",
+      "title": "Mədaxil & Məxaric",
+      "body": "Kassa mədaxil ilə administrator tərəfindən kassaya daxil edilən pul qeyd edilə bilər. Kassa mədaxil əməliyyatı zamanı Sahibkar balansı azalır, kassa balansı artır. Kassa məxaric əməliyyatı ilə administrator tərəfindən kassadan çıxarılan pulu qeyd etmək olar. Bu zaman, kassa balansı azalır, sahibkar balansı isə artır.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/handpanel",
+    "draft": {
+      "slug": "/cash/handpanel",
+      "title": "Əl paneli",
+      "body": "Tez-tez satılan, barkodsuz məhsulların sürətli satışını təşkil etmək üçün nəzərdə tutulub. Nümunədə məhsulların kassada əl panelinə əlavə olunması və əl panelindən silinməsi göstərilib.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings",
+    "draft": {
+      "slug": "/cash/settings",
+      "title": "Ayarlar",
+      "body": "",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/admin",
+    "draft": {
+      "slug": "/cash/settings/admin",
+      "title": "Admin",
+      "body": "Kassa proqramında Admin ilə bağlı məlumatlar qeyd edilə bilər Kassa proqramında Ayarlar düyməsini sıxın, şifrəni daxil edib Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Admin seçimini edin Daha sonra, Admin üçün müəyyən edilən şifrə və çek çap edən printer i qeyd edib düyməsini sıxın Yeni versiya v x.x.x.x düyməsi ilə kassa proqramındakı yenilənməni tətbiq etmək olar",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/check",
+    "draft": {
+      "slug": "/cash/settings/check",
+      "title": "Çek",
+      "body": "Kassa proqramında satışın Çekində əks olunacaq məlumatlar qeyd edilə bilər Kassa proqramında Ayarlar düyməsini sıxın, şifrəni daxil edib Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Çek seçimini edin Daha sonra, Çek başlıq və Çek sonluq xanalarında əks olunacaq məlumatları qeyd edib düyməsini sıxın Çek çap edən printerdəki kağızın ölçüsünü və çek çap olunsun seçin",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/fiscal",
+    "draft": {
+      "slug": "/cash/settings/fiscal",
+      "title": "Fiskal çek",
+      "body": "Kassa proqramında Fiskal çek ilə bağlı məlumatlar qeyd edilə bilər Kassa proqramında Ayarlar düyməsini sıxın, şifrəni daxil edib Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Fiskal seçimini edin Daha sonra, Fiskal çek mövcuddur seçimini edin. IP, Port, Şifrə, İstifadəçi adı xanalarına lazım olan məlumatları qeyd edin və düyməsini sıxın",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/product",
+    "draft": {
+      "slug": "/cash/settings/product",
+      "title": "Məhsul",
+      "body": "Kassa proqramında istifadəçiyə görünən məhsulun məlumatlarını tənzimləmək olar Kassa proqramında Ayarlar düyməsini sıxın, şifrəni daxil edib Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Məhsul seçimini edin Birdən çox ölçü vahidi olan məhsul üçün nəzərdə tutulub. Səbətə əlavə olunan zaman əsas vahid və ya seçim ilə tənzimlənir Daha sonra, kassa proqramında görünəcək məhsulun minimal qiyməti seçimini edin və düyməsini sıxın Partiyalı məhsulun satışı zamanı partiya seçimi avtomatik olaraq verilir",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/customergroups",
+    "draft": {
+      "slug": "/cash/settings/customergroups",
+      "title": "Müştəri qrupları",
+      "body": "Kassa proqramında görünəcək müştəri qruplarını müəyyənləşdirmək olar Kassa proqramında Ayarlar düyməsini sıxın, şifrəni daxil edib Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Müştəri qrupları seçimini edin Daha sonra, kassa proqramında görünəcək müştəri qruplarını təyin edin və düyməsini sıxın.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/settings/security",
+    "draft": {
+      "slug": "/cash/settings/security",
+      "title": "Təhlükəsizlik",
+      "body": "Kassa proqramında təhlükəsizlik məqsədi ilə əməliyyatların icrasını məhdudlaşdırmaq olar. Bunun üçün əməliyyatlara şifrə təyin edilməlidir Kassa proqramında Ayarlar düyməsini sıxın, Enter düyməsi ilə ayarlara keçid edin Açılan pəncərədə Admin xanasının qarşısında təyin etdiyiniz şifrə ni qeyd edin və düyməsini sıxın Daha sonra, Təhlükəsizlik pəncərəsinə keçid edin və hansı əməliyyata şifrə təyin olunacağını müəyyən edib düyməsini sıxın Seçim etdiyiniz əməliyyatı icra etmək üçün təyin etdiyiniz şifrəni yazmaq lazım olacaq",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/rightpanel",
+    "draft": {
+      "slug": "/cash/rightpanel",
+      "title": "Sağ panel",
+      "body": "Kassa proqramında interfeysin sağ yuxarı hissəsi Düyməsi növbədəki əməliyyatların sayınının göstəricisidir. Müəyyən zaman ərzində həmin əməliyyatlar ümumi məlumat bazasına göndərilir Düyməsi ilə məlumat bazasında olan dəyişiklikləri manual olaraq yenilənmə barədə sorğu göndərmək üçün nəzərdə tutulub. Bu düymə sıxılmasa, 10 dəqiqə intervalında yenilənmə barədə sorğu avtomatik olaraq icra olunur İnternet Şəbəkəsi ilə əlaqənin göstəricisidir. Əlaqə olduqda yaşıl, olmadıqda isə qırmızı rəngdə olacaq Ə Düyməsi kassa balansı və istifadəçi barədə məlumatların ək olunduğu pəncərəni açmaq üçün nəzərdə tutulub",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/customer",
+    "draft": {
+      "slug": "/cash/customer",
+      "title": "Müştəri",
+      "body": "Kassa proqramında icra olunan satışlar zamanı Müştəri ilə əməliyyatlar etmək üçün nəzərdə tutulub Müştəri düyməsini sıxıb açılan pəncərədə siyahıdan müştəriləri seçmək lazımdır. Məhsul səbətə əlavə olunduqdan sonra Müştərinin endirimi ümumi satış məbləğinə şamil olunacaq Müştəri düyməsini sıxıb açılan pəncərədə müştərilərin bonus balansına, borc larına nəzarət etmək və Yeni müştəri əlavə etmək olar",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/discount",
+    "draft": {
+      "slug": "/cash/discount",
+      "title": "Endirim",
+      "body": "Kassa proqramında icra olunan satışlar zamanı endirim etmək üçün nəzərdə tutulub Məhsul səbətə əlavə olunduqdan sonra məhsulun üzərinə klik edilərək sayını dəyişmək və endirim təyin etmək olar. Endirimi həm faiz , həm də məbləğ ilə təyin etmək olur Ümumi endirim seçimi edib, səbətə əlavə olunan bütün məhsullara endirim təyin etmək olar Qeyd : bütün hallarda satış əməliyyatını yekunlaşdırmaq üçün Cəm və Ümumi məbləğ düymələrini sıxmaq lazımdır",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/paymenttypes",
+    "draft": {
+      "slug": "/cash/paymenttypes",
+      "title": "Ödəniş növləri",
+      "body": "Kassa proqramında icra olunan satışlardan əldə olunan pul vəsaitlərini qeyd etmək üçün nəzərdə tutulub. Ödənişlər dörd formada qəbul edilə bilər Nəğd olaraq alınan pul vəsaitləri Nəğd ödənişlər seçimi edilərək qeyd olunur Kart ilə ödənilən ödənişi qeyd etmək üçün Kart ilə ödənişlər seçimini edib məbləği yazmalı və düyməsini sıxmaq lazımdır Müştəri seçimi edildikdən sonra aktiv olan Bonus ödənişləri , ödənişin bonus balansından silinməsi üçün nəzərdə tutulub Müştəri seçimi edildikdən sonra aktiv olan Borc seçimi, satışın nisyə ( borca ) satıldığını qeyd etmək üçün nəzərdə tutulub Qeyd : bütün hallarda satış əməliyyatını yekunlaşdırmaq üçün Ümumi məbləğ düyməsini sıxmaq lazımdır",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/queue",
+    "draft": {
+      "slug": "/cash/queue",
+      "title": "Gözləmə",
+      "body": "Kassa qarşısında yaranan növbələri aradan qaldırmaq və müştəri məmnuniyyətini artırmaq üçün nəzərdə tutulub Eyni anda bir neçə satışı icra etmək üçün + düyməsi ilə satış pəncərəsi açmaq lazımdır Hər bir pəncərəyə müxtəlif məhsulları əlavə etmək, endirim təyin etmək və satış etmək olar",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/credit",
+    "draft": {
+      "slug": "/cash/credit",
+      "title": "Nisyə",
+      "body": "",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/credit/sale",
+    "draft": {
+      "slug": "/cash/credit/sale",
+      "title": "Satış",
+      "body": "Kassa proqramından nisyə satışları icra etmək üçün nəzərdə tutulub.",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/credit/return",
+    "draft": {
+      "slug": "/cash/credit/return",
+      "title": "Qaytarma",
+      "body": "Kassa proqramından borcu olan müştərinin qaytarma edən zaman ödənişin borcdan çıxılması və ya nəğd ödənilməsi seçimini etməlidir",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/party",
+    "draft": {
+      "slug": "/cash/party",
+      "title": "Partiyalar",
+      "body": "Məhsul müxtəlif tarixlərdə daxil olduqda və satış zamanı tarixə görə (pariya) satış etmək üçün nəzərdə tutulub. Partiyalı məhsul Məhsulu axtarış xanasından axtarın və barkod oxuyucu ilə barkodu oxudun Məhsul səbətə əlavə olunduqda açılan pəncərədə hansı partiya olduğunu seçin Satışı tamamlayın",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/cash/units",
+    "draft": {
+      "slug": "/cash/units",
+      "title": "Ölçü vahidləri",
+      "body": "Bir məhsulun bir neçə ölçü vahidi olduqda kassadan satış zamanı seçim etmək üçün nəzərdə tutulub. Ölçü vahidlərini formalaşdırmaq üçün linkə keçid edin. Ölçü vahidləri Misal 1 Əgər istifadəçi, Pol taxtası məhsulunu həm m həm də ədədlə satmaq istəyirsə, məhsulu satış üçün səbətə əlavə edəndə ölçü vahidini təyin etməlidir. Misal 2 Əgər istifadəçi, Bolt 25 məhsulunu həm qutu həm də ədədlə satmaq istəyirsə, məhsulu satış üçün səbətə əlavə edəndə ölçü vahidini təyin etməlidir",
+      "category": "cash"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports",
+    "draft": {
+      "slug": "/reports",
+      "title": "Hesabatlar",
+      "body": "",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/profit",
+    "draft": {
+      "slug": "/reports/profit",
+      "title": "Mənfəət",
+      "body": "Mənfəət hesabatı müəyyən bir müddət ərzində malların topdan və pərakəndə satışları və qaytarmalarından əldə olunan gəlir i və marja sıdır. Məhsulun satışından olan qazancı , maya dəyərinin satış qiymətinə olan fərqi və qiymət siyasətinin göstəricisidir İstifadəçinin satışları və qaytarmaları hesablanaraq qazanc və marja barədə mənfəət hesabatı təqdim etmək üçün nəzərdə tutulub Nümunədə Hesabatlar ⮞ Mənfəət səhifəsinə baxmaq üçün ardıcıllıq göstərilib Filter düyməsini sıxıb, lazım olan xanaları doldurub, Axtar düyməsini sıxmaq lazımdır.",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/profitloss",
+    "draft": {
+      "slug": "/reports/profitloss",
+      "title": "Mənfəət və zərər",
+      "body": "Sahibkarın müəyyən dövr ərzində etdiyi satış dövriyyəsi , dövriyyənin mayası , ümumi mənfəəti , həmin müddət ərzində etdiyi xərcləri nəzərə alaraq təmiz mənfəətin göstəricisidir Nümunədə Hesabatlar ⮞ Mənfəət səhifəsinə baxmaq üçün ardıcıllıq göstərilib",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/turnover",
+    "draft": {
+      "slug": "/reports/turnover",
+      "title": "Dövriyyə",
+      "body": "Ümumi məhsulların dövriyyəsi ilə bağlı hesabat əldə etmək üçün nəzərdə tutulub. Filter bölməsində axtardığınız parametrlərə uyğun olaraq məhsul və ya məhsul qrupu nun dövriyyəsi, təchizatçı dan alınan məhsulların dövriyyəsi (alışı, satışı) barədə və digər məlumatları əldə etmək olar. Nümunədə Hesabatlar Dövriyyə baxmaq üçün ardıcıllıq göstərilib. Nümunədə Hesabatlar ⮞ Dövriyyə səhifəsinə baxmaq üçün ardıcıllıq göstərilib Filter düyməsini sıxıb, lazım olan xanaları doldurub, Axtar düyməsini sıxmaq lazımdır.",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/debts",
+    "draft": {
+      "slug": "/reports/debts",
+      "title": "Borclar",
+      "body": "Alacaq-Verəcək borclar barədə məlumat əldə etmək üçün nəzərdə tutulub. Nümunədə Hesabatlar ⮞ Borclar səhifəsinə baxmaq üçün ardıcıllıq göstərilib Müştərilərlə icra edilən bütün əməliyyatların ( sənədlərin ) çıxarışıdır. Tərəf müqabilə verilən (satış, məxaric, alışın qaytarması ) və alınan ( alış, mədaxil, satışın geri qaytarması) əməliyyatlar nəticəsində seçilmiş tarix aralığına görə formalaşan borcun üzləşmə aktı . Nümunədə Hesabatlar ⮞ Borclar ⮞ Üzləşmə səhifəsinə baxmaq üçün ardıcıllıq göstərilib",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/balance",
+    "draft": {
+      "slug": "/reports/balance",
+      "title": "Balans",
+      "body": "Sistemdə olan pul vəsaitinin göstəricisidir. Nağd və nağdsız şəkildə ödənişlərin nəticəsində balans formalaşır. Satış nöqtəsi nin balansı, kassa proqramından icra olunan əməliyyatların nəticəsində formalaşır. Hesab balansı, nağdsız icra olunan əməliyyatların nəticəsində formalaşır. Nümunədə Hesabatlar ⮞ Balans ilə bağlı məlumatların əks olunduğu səhifəyə keçid göstərilib",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/reports/stockbalance",
+    "draft": {
+      "slug": "/reports/stockbalance",
+      "title": "Anbar qalığı",
+      "body": "Anbar qalığı səhifəsi məhsulların anbarda olan sayı , mayası, satış qiymətinin göstəricisidir. Həmçinin, bir neçə anbar olduqda məhsulları anbarlara görə çeşidləmək mümkündür Filter ilə müxtəlif meyarlara görə axtarış etmək üçün Axtar düyməsini sıxmaq lazımdır.",
+      "category": "reports"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings",
+    "draft": {
+      "slug": "/settings",
+      "title": "Ayarlar",
+      "body": "",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/profile",
+    "draft": {
+      "slug": "/settings/profile",
+      "title": "Profil",
+      "body": "Nümunədə istifadəçinin profili ilə bağlı məlumatlar göstərilib. Şirkət adı və telefon nömrəsi qaimələrdə əks olunacaq. Həmçinin, müştərilərə veriləcək cashback faizini bu səhifədə təyin edirsiniz. Məlumatları yazdıqdan sonra düyməsini sıxmaq lazımdır.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/rates",
+    "draft": {
+      "slug": "/settings/rates",
+      "title": "Tariflər",
+      "body": "Tariflər səhifəsində seçdiyimiz xidmətləri aktiv və ya deaktiv edib düyməsini sıxın. Qeyd : Tarif dəyişildikdə gündəlik xidmət haqqı balansdan silinir. Nümunədə istifadəçinin qoşulduğu tarif göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/payment",
+    "draft": {
+      "slug": "/settings/payment",
+      "title": "Ödəniş",
+      "body": "",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/payment/million",
+    "draft": {
+      "slug": "/settings/payment/million",
+      "title": "Milli Ön",
+      "body": "Profil balansını artırmaq üçün Milli ön ödəmə sistemində aşağıdakı ardıcıllığa əməl etmək lazımdır Milli ön ödəmə sistemində Elektron pul kisəsi nə daxil olun. Yığım ödəniş sistemini seçin. Digər xidmətlər seçimini edin Bein Systems seçin Qeydiyyatdan keçdiyiniz telefon nömrəsini yazın və irəli düyməsini sıxın Əskinazları daxil edin və irəli düyməsini sıxın Qeyd : Ödəniş zamanı komissiya haqqı tutulmur. Profil balansını bitdikdə, sistemə daxil ola bilmədikdə balansı artırmaq üçün aşağıdakı ardıcıllığa əməl etmək lazımdır Bein.az saytına daxil olduqdan sonra, texniki dəstək düyməsini sıxın və açılan pəncərədə seçimini edin. Açılan dialoq pəncərəsində Balans artır seçimini edin Növbəti mərhələdə istifadəçi, Milli Ön ödəmə sisteminə yönləndiriləcək. Qeydiyyatdan keçdiyiniz nömrəni daxil edib irəli düyməsini sıxın. Ödəyəcəyiniz məbləği qeyd edib irəli düyməsini sıxın. Qeydiyyatdan keçdiyiniz telefon nömrəsini yazın və irəli düyməsini sıxın Kart məlumatlarını daxil etmək üçün açılan pəncərədə məlumatlar daxil edilib ödə düyməsini sıxın. Qeyd : Ödəniş zamanı komissiya haqqı tutulmur.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/payment/emanat",
+    "draft": {
+      "slug": "/settings/payment/emanat",
+      "title": "E-Manat",
+      "body": "Profil balansını artırmaq üçün Emanat ödəmə sistemində aşağıdakı ardıcıllığa əməl etmək lazımdır Emanat ödəmə sistemində E-pulqabı ödənişləri seçimini edin Bein Systems seçin. Qeydiyyatdan keçdiyiniz telefon nömrəsini yazın və irəli düyməsini sıxın. Əskinazları daxil edin və ödə düyməsini sıxın Qeyd : Ödəniş zamanı komissiya haqqı tutulmur.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/payment/inprogram",
+    "draft": {
+      "slug": "/settings/payment/inprogram",
+      "title": "Proqram daxili",
+      "body": "Profil balansını artırmaq üçün aşağıdakı ardıcıllığa əməl etmək lazımdır Bein.az saytında istifadəçi profilinə daxil olduqdan sonra, düyməsini sıxın və açılan pəncərədə texniki dəstək seçimini edin Açılan dialoq pəncərəsində Balans artır seçimini edin Növbəti mərhələdə istifadəçi, Milli Ön ödəmə sisteminə yönləndiriləcək. Qeydiyyatdan keçdiyiniz nömrəni daxil edib irəli düyməsini sıxın Ödəyəcəyiniz məbləği qeyd edib irəli düyməsini sıxın Kart məlumatlarını daxil etmək üçün açılan pəncərədə məlumatlar daxil edilib ödə düyməsini sıxın Qeyd : Ödəniş zamanı komissiya haqqı tutulmur. Balansı artırmaq üçün balans səhifəsində artirilacaq məbləği yazıb Ödə düyməsini sıxın. Açılmış pəncərədə məlumatları yazıb ödənişi təsdiq edin. Balansınız avtomatik olaraq yenilənəcək. Qeyd : Ödəniş zamanı komissiya haqqı tutulmur. Nümunədə istifadəçinin sistemdən istifadə etmək üçün etdiyi ödənişlər və sistemdən istifadə etmək üçün günlük hesabdan çıxılan ödənişlər əsasında formalaşan balansı göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/payment/history",
+    "draft": {
+      "slug": "/settings/payment/history",
+      "title": "Tarixçə",
+      "body": "Balans səhifəsində Ödəniş tarixçəsi sözünün üzərinə klik olunsa, istifadəçinin ödəniş etdiyi tarixlər və məbləğlər göstəriləcək. Nümunədə istifadəçinin sistemdən istifadə etmək üçün etdiyi ödənişlər və məbləğlərin siyahısı göstərilir.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/control",
+    "draft": {
+      "slug": "/settings/control",
+      "title": "Yoxlama",
+      "body": "Əməliyyatlar nəticəsində məhsulun maya dəyərinin hesablanması zamanı istifadəçi tərəfindən icra olunan ardıcıllıq xətaları barədə istifadəçiyə məlumat vermək üçün və bu xətaları aradan qaldırmaq üçün nəzərdə tutulub. Ayarlar səhifəsində Yoxlama seçimi edildikdən sonra açılan pəncərədə xətalı məhsullar göstərilir. Məhsulun adının üzərinə klik olunduqda isə, açılan pəncərədə həmin məhsul ilə bağlı əməliyyatlar əks olunur. Xətanın baş verdiyi əməliyyatlar sarı rəng ilə göstərilir. Növbəti addım olaraq, sarı rəngdə göstərilən əməliyyatın üzərinə klik edərək açılmış pəncərdə dəyişiklik olunur və düyməsi sıxılır. Nümunədə xətalı sənəd ilə bağlı əməliyyat ardıcıllığı göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/stocks",
+    "draft": {
+      "slug": "/settings/stocks",
+      "title": "Anbarlar",
+      "body": "Yeni anbar yaratmaq üçün nəzərdə tutulub. Yeni anbar yaratmaq üçün bu səhifəyə keçid etmək lazımdır. Ayarlar səhifəsində Anbarlar seçimi edildikdən sonra açılan pəncərədə Anbar düyməsi ilə yaradılacaq anbarın adını təyin edib düyməsini sıxmaq lazımdır. Qeyd : Sahibkar, sistemdə qeydiyyatdan keçdiyi zaman Əsas anbar adında artıq anbar formalaşır və bütün əməliyyatlar Əsas anbar üzərindən aparılır. Qeyd : Yeni yaradılacaq anbarı, başqa anbarın içinə də yerləşdirmək olar.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/owners",
+    "draft": {
+      "slug": "/settings/owners",
+      "title": "İsitfadəçilər",
+      "body": "Sistemdən istifadə edəcək şəxslər üçün nəzərdə tutulub. Sahibkarın əməkdaşlarını, anbardarlar, dükandakı satıcılar, səyyar çalışan ekspediterləri qeyd etmək üçündür Ayarlar səhifəsində İsitfadəçilər seçimi edildikdən sonra açılan pəncərədə İstifadəçi düyməsi ilə yaradılacaq yeni istifadəçinin adını, parolunu təyin edib düyməsini sıxmaq lazımdır. Qeyd : Yeni istifadəçi sistemə əlavə olunduqda mütləq Ayarlar ⮞ Tariflər səhifəsindən artırılan istifadəçi sayı nəzərə alınmalı və aktiv status seçimi edilməlidir. Əks halda yeni istifadəçi, öz login parolu ilə sistemə daxil ola bilməyəcək Nümunədə yeni istifadəçi yaratmaq ardıcıllığı göstərilib. Sahibkar, sistemdən istifadə edəcək istifadəçilərə icazələr təyin etməlidir Yeni yaradılan istifadəçinin icazələrini təyin etmək üçün düyməsini sıxıb, açılan pəncərədə istifadəçinin vəzifəsini müəyyənləşdirmək və düyməsini sıxmaq lazımdır Qeyd : istifadəçinin icazələri təyin edilərkən, fəlaliyyət göstərəcəkləri satış nöqtəsi və ya anbar seçimi mütləq edilməlidir Nümunədə yeni istifadəçinin icazələrini təyin etmək qaydası göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/departments",
+    "draft": {
+      "slug": "/settings/departments",
+      "title": "Şöbələr",
+      "body": "İşçiləri və Məhsulları şöbələrə bölmək və işçiləri ( istifadəçiləri ) aidiyyəti üzrə şöbələrə təyin etmək üçün nəzərdə tutulub. Şöbələrdəki əməkdaşların eyni şöbənin məhsulları ilə hərəkətlərini nəzarətdə saxlamağa imkan yaradır. Ayarlar səhifəsində şöbələr seçimi edildikdən sonra açılan pəncərədə Şöbə düyməsi ilə yaradılacaq şöbənin adını təyin edib düyməsini sıxmaq lazımdır. Nümunədə yeni şöbə yaratmaq ardıcıllığı göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/templates",
+    "draft": {
+      "slug": "/settings/templates",
+      "title": "Şablonlar",
+      "body": "Sahibkar, məhsulların üzərinə barkod çap olunmuş stiker yapışdırmaq istədikdə barkod printerdə çap olunacaq şablonu seçməlidir Ayarlar səhifəsində şablonlar seçimi edildikdən sonra düyməsini sıxmaq lazımdır. Nümunədə şablonlar ilə əməliyyatlar göstərilib.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/settings/spenditems",
+    "draft": {
+      "slug": "/settings/spenditems",
+      "title": "Xərc maddələri",
+      "body": "Sahibkarın bütün xərclərini qeyd etmək üçün nəzərdə tutulub. Nümunədə yeni xərc maddəsi yaratmaq ardıcıllığı göstərilib. Ayarlar səhifəsində xərc maddələri seçimi edildikdən sonra Xərc maddəsi düyməsini sıxıb, açılan pəncərədə xərc maddəsinin adını qeyd etmək və düyməsini sıxmaq lazımdır.",
+      "category": "settings"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common",
+    "draft": {
+      "slug": "/common",
+      "title": "Ümumi anlayışlar",
+      "body": "",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/print",
+    "draft": {
+      "slug": "/common/print",
+      "title": "Çap",
+      "body": "Sənədləri çap etmək üçün nəzərdə tutulub. İstifadəçi istənilən vaxt istənilən sənədi çap edə bilər. Bunun üçün Çap et düyməsini sıxmaq lazımdır.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/save",
+    "draft": {
+      "slug": "/common/save",
+      "title": "Yadda saxla",
+      "body": "Bütün əməliyyatlar düyməsini sıxmaqla tamamlanır. düyməsi sıxılmadan Bağla düyməsi ilə bağlanan səhifədə dəyişikliklər (əlavə olunan məhsullar, dəyişilmiş miqdar, və s.) yadda saxlanılmır.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/close",
+    "draft": {
+      "slug": "/common/close",
+      "title": "Bağla",
+      "body": "Bütün səhifələrdən çıxış Bağla düyməsini sıxmaqla icra olunur.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/excel",
+    "draft": {
+      "slug": "/common/excel",
+      "title": "Excel",
+      "body": "Məhsulların ümumi siyahısını, anbar qalığını və sənədləri excell formatinda endirmək üçün nəzərdə tutulub. İstifadəçi istənilən vaxt istənilən sənədi excell formatında endirə bilər. Bunun üçün Yüklə düyməsini sıxmaq lazımdır.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/closealert",
+    "draft": {
+      "slug": "/common/closealert",
+      "title": "Bağla xəbərdarlıq",
+      "body": "Məhsula və ya hər hansı əməliyyata edilmiş dəyişiklikləri yadda saxlamadan Bağla düyməsini sıxanda, istifadəçiyə dəyişikliklərin saxlanılması barədə xəbərdarlıq edilir Ok düyməsini sıxanda dəyişikliklər yadda saxlanılmayacaq və sənəd bağlanacaq düyməsini sıxanda dəyişikliklər yadda saxlanılacaq Geri qayıt düyməsini sıxanda dəyişikliklərə əlavə olunması üçün yenidən səhifə açılacaq",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/shorts",
+    "draft": {
+      "slug": "/common/shorts",
+      "title": "Qısa keçid",
+      "body": "Göy rəng ilə təsvir olunmuş adların üzərinə klik olunduqda açılan pəncərədə dəyişiklik və nəzarət etmək üçün nəzərdə tutulub.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/fastsearch",
+    "draft": {
+      "slug": "/common/fastsearch",
+      "title": "Sürətli axtarış",
+      "body": "Məhsullar və anbar qalığı səhifəsində sürətli axtarışla məhsulun adı, barkodu, art kodu, şərhinə görə axtarış etmək üçün nəzərdə tutulub. Digər sənədlər olan səhifələrdə isə, sənəd nömrəsinə görə axtarış üçün nəzərdə tutulub. Axtarış xanasına yazılan son hərfdən dərhal sonra axtarma əməliyyatı icra olunur. Əlavə heç bir düyməni sıxmağa ehtiyac qalmır.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/filter",
+    "draft": {
+      "slug": "/common/filter",
+      "title": "Filter",
+      "body": "Eyni anda məhsulun bir neçə parametrinə görə axtarış üçün nəzərdə tutulub",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/stockquantity",
+    "draft": {
+      "slug": "/common/stockquantity",
+      "title": "Sənədlərdə anbar qalığı",
+      "body": "Sənədlərin içində göstərilən anbar qalığı, sənədin yarandığı tarixdəki ( andakı ) anbar qalığıdır. Qeyd: sənəd yaradıldığı tarixdən ( andan ) öncəki qalıqdır.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/owner",
+    "draft": {
+      "slug": "/common/owner",
+      "title": "Sənədlərdə cavabdeh",
+      "body": "Sənədlərin cavabdehi, sənədləri yaradan istifadəçini bildirir. Cavabdehə görə axtarışlarda hesabatlar əldə etmək olar.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/department",
+    "draft": {
+      "slug": "/common/department",
+      "title": "Sənədlərdə şöbə",
+      "body": "Şöbələr, anbarda olan məhsulları şöbələrə ayırmaq üçün nəzərdə tutulub. Cavabdehləri müxtəlif şöbələrə bağlamaq olur. Satış zamanı hər bir cavabdeh özünə aid şöbənin məhsullarının satışını icra edə bilər.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/status",
+    "draft": {
+      "slug": "/common/status",
+      "title": "Sənədlərdə keçirilib",
+      "body": "Bütün sənədlərdə keçirilib aktiv olmalıdır. Deaktiv olduqda sənəd bazaya oturmur , və qaralama kimi istifadə olunur.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/related",
+    "draft": {
+      "slug": "/common/related",
+      "title": "Əlaqəli sənədlər",
+      "body": "Əlaqəli sənədlər bölməsində sənədin içindən olan ödəniş və qaytarma sənədləri əks olunur.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/discount",
+    "draft": {
+      "slug": "/common/discount",
+      "title": "Sənədlərdə endirim",
+      "body": "Həm bütün məhsullara həm də bir neçə məhsula endirim təyin etmək üçün nəzərdə tutulub. Qeyd: Ümumi endirim təyin olunduqda, ayrı aryılıqda məhsula tətbiq edilən endirim silinib ümumi endirim tətbiq ediləcək.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/modifications",
+    "draft": {
+      "slug": "/common/modifications",
+      "title": "Sənədin Modifikasiyası",
+      "body": "Sənədə müxtəlif modifikasiyalar təyin etmək olar. Bunun üçün sənədlərin icində Yeni modifikasiya düyməsini sıxıb, modifikasiyanın adını və növünü təyin edib düyməsini sıxmaq lazımdır. Misal üçün, satış sənədində müştərinin ünvanı, hansı satış kanalından gəldiyi, catdırılması, çatdıtılma edəcək əməkdaş, təyin olunan usta və s. modifikasiya əlavə edib daha sonrakı axtarış əməliyyatlarında istifadə edə bilərsiniz.",
+      "category": "common"
+    },
+    "published": null
+  },
+  {
+    "slug": "/common/terms",
+    "draft": {
+      "slug": "/common/terms",
+      "title": "Terminlər",
+      "body": "Sənəd ⮞ Məhsullar ilə yerinə yetirilən bütün hərəkətlər (alış, satış, qaytarma, daxilolma, silinmə, yerdəyişmə, sifariş) sənədlər şəklində icra olunur Məhsul ⮞ Sistemdə mövcud olan mallardır Anbar ⮞ Məhsulların yerləşdiyi məkanı xarakterizə edir Tərəf müqabil ⮞ Qarşı tərəf ilə olunacaq müqavilələr Qazanc ⮞ Məhsul satışından ilkin yaranan, xərcsiz mənfəətdir Marja ⮞ Gəlirlilik faizidir Mənfəət ⮞ Məhsulların ilkin qazancıdır Alış ⮞ Təchizatçıdan alınan məhsulların qeyd olunduğu sənəddir Alışın geriqaytarması ⮞ Təchizatçılara qaytarılan məhsulların qeyd olunduğu sənəddir Alışın sifarişi ⮞ Təchizatçıdan alınacaq məhsulların qeyd olunduğu sənəddir Minimal qalıq ⮞ Təchzatçılardan alınacaq məhsulların formlaşması üçün nəzərdə tutulub Satış ⮞ Alıcılara satılan məhsulların qeyd olunduğu sənəddir Satışın geriqaytarması ⮞ Alıcılara qaytarılan məhsulların qeyd olunduğu sənəddir Satışın sifarişi ⮞ Alıcıların sifariş etdiyi məhsulların qeyd olunduğu sənəddir Daxilolma ⮞ Anbara daxil olacaq məhsulların qeyd olunduğu sənəddir Silinmə ⮞ Anbardan silinəcək məhsulların qeyd olunduğu sənəddir Yerdəyişmə ⮞ Anbarlar arası məhsul yerdəyişmələrinin qeyd olunduğu sənəddir Anbar qalığı ⮞ Anbarlarda olan məhsulların siyahısı olan bölmədir Maliyyə ⮞ Pul hərəkətidir Komisyon satış ⮞ Səyyar şəkildə icra olunan satışların qeyd olunkası üçündür Cavabdeh ⮞ Sənədi yaradan iftifadəçi Dövriyyə ⮞ Məhsulların bütün hərəkətidir Balans ⮞ Pulların göstəricisidir İstehsalat ⮞ Bir neçə xammaldan məhsul hazırlanması prosesidir Yoxlama ⮞ Mayanın formalaşması zamanı ardıcıllıq ilə bağlı yaranan xətalı məhsulların siyahısıdır",
+      "category": "common"
+    },
+    "published": null
+  }
+]

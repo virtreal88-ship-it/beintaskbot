@@ -1,0 +1,102 @@
+"""Authenticated guide editor and static site export. Never deploys files."""
+import asyncio, copy, io, json, re, threading, zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from aiohttp import web
+
+SLUG = re.compile(r'^/[a-z0-9][a-z0-9/-]{0,159}$')
+FIELDS = ('slug', 'title', 'body', 'category')
+
+def validate_article(data):
+    if not isinstance(data, dict): raise ValueError('Məqalə məlumatları düzgün deyil')
+    item = {key: str(data.get(key) or '').strip() for key in FIELDS}
+    if not SLUG.fullmatch(item['slug']) or '//' in item['slug'] or item['slug'].endswith('/'):
+        raise ValueError('Ünvanı /products/inventory nümunəsində yazın')
+    if not 1 <= len(item['title']) <= 180: raise ValueError('Başlıq tələb olunur (maksimum 180 simvol)')
+    if not 1 <= len(item['body']) <= 60000: raise ValueError('Məqalənin mətni tələb olunur (maksimum 60000 simvol)')
+    if len(item['category']) > 100: raise ValueError('Bölmə adı çox uzundur')
+    return item
+
+def export_zip(base_dir, published):
+    base = Path(base_dir) / 'guide_site'
+    payload = {'items': [{k: row.get(k, '') for k in FIELDS} for row in published]}
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('guide-articles.json', json.dumps(payload, ensure_ascii=False))
+        archive.write(base / 'guide-articles.js', 'guide-articles.js')
+        archive.write(base / 'index.html', 'index.html')
+        archive.writestr('UPLOAD.txt', 'Upload these files to the root of support.akul.az. Keep existing static, images, guide.css, guide.js and .htaccess. Export contains only articles explicitly marked ready. Nothing is uploaded automatically.\n')
+    return output.getvalue()
+
+class GuideCMS:
+    def __init__(self, base_dir, allowed, storage):
+        self.base = Path(base_dir)
+        self.allowed = allowed
+        self.storage = storage
+        self.lock = threading.Lock()
+        self.filename = 'guide_articles.json'
+
+    def seed(self):
+        return json.loads((self.base / 'guide_site' / 'seed.json').read_text(encoding='utf-8'))
+
+    def read(self):
+        doc = self.storage._load_file(self.filename)
+        if not doc: return {'version': 0, 'items': self.seed()}
+        if not isinstance(doc, dict) or not isinstance(doc.get('items'), list):
+            raise RuntimeError('Invalid guide storage')
+        return copy.deepcopy(doc)
+
+    def save(self, data, actor):
+        item = validate_article(data)
+        if data.get('action') not in ('draft', 'ready'): raise ValueError('Qaralama və ya ixraca hazır seçimini edin')
+        with self.lock:
+            doc = self.read()
+            if data.get('version') != doc.get('version', 0): raise FileExistsError('Məqalələr dəyişib. Saxlamazdan əvvəl səhifəni yeniləyin.')
+            old = next((row for row in doc['items'] if row['slug'] == item['slug']), None)
+            if old is None:
+                old = {'slug': item['slug'], 'published': None}
+                doc['items'].append(old)
+            old['draft'] = item
+            if data['action'] == 'ready': old['published'] = copy.deepcopy(item)
+            old['updated_at'] = datetime.now(timezone.utc).isoformat()
+            old['updated_by'] = actor
+            doc['version'] = doc.get('version', 0) + 1
+            with self.storage._lock:
+                previous = copy.deepcopy(self.storage._cache.get(self.filename, {}))
+                self.storage._cache[self.filename] = doc
+            if not self.storage._save_file(self.filename):
+                with self.storage._lock: self.storage._cache[self.filename] = previous
+                raise RuntimeError('Saxlama alınmadı; dəyişikliklər yadda saxlanılmadı')
+            return doc
+
+    async def api(self, request):
+        actor = int(request.get('authenticated_chat_id') or 0)
+        if not actor or not self.allowed(actor): return web.json_response({'success': False, 'error': 'Təlimatları redaktə etmək icazəniz yoxdur'}, status=403)
+        try:
+            if request.method == 'GET': doc = await asyncio.to_thread(self.read)
+            else: doc = await asyncio.to_thread(self.save, await request.json(), actor)
+            return web.json_response({'success': True, **doc}, headers={'Cache-Control': 'no-store'})
+        except FileExistsError as exc: return web.json_response({'success': False, 'error': str(exc)}, status=409)
+        except (ValueError, json.JSONDecodeError) as exc: return web.json_response({'success': False, 'error': str(exc)}, status=400)
+        except Exception: return web.json_response({'success': False, 'error': 'Təlimat yaddaşı hazırda əlçatan deyil'}, status=503)
+
+    async def export(self, request):
+        actor = int(request.get('authenticated_chat_id') or 0)
+        if not actor or not self.allowed(actor): return web.json_response({'success': False, 'error': 'Təlimatları redaktə etmək icazəniz yoxdur'}, status=403)
+        try:
+            doc = await asyncio.to_thread(self.read)
+            articles = [row['published'] for row in doc['items'] if row.get('published')]
+            body = await asyncio.to_thread(export_zip, self.base, articles)
+            return web.Response(body=body, content_type='application/zip', headers={'Content-Disposition': 'attachment; filename="support-articles.zip"', 'Cache-Control': 'no-store'})
+        except Exception: return web.json_response({'success': False, 'error': 'İxrac hazırda əlçatan deyil'}, status=503)
+
+    async def page(self, request):
+        return web.FileResponse(self.base / 'docs' / 'guide-editor.html', headers={'Cache-Control': 'no-store'})
+
+def register_guide_cms(app, base_dir, allowed, storage):
+    cms = GuideCMS(base_dir, allowed, storage)
+    app.router.add_get('/guide-editor', cms.page)
+    app.router.add_get('/api/guides', cms.api)
+    app.router.add_post('/api/guides', cms.api)
+    app.router.add_get('/api/guides/export', cms.export)
+    return cms

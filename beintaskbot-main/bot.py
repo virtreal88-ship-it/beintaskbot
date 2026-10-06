@@ -23411,6 +23411,10 @@ async def start_webhook_server():
     app_web.router.add_post("/api/linear/tesdiq", handle_api_linear_tesdiq)
     app_web.router.add_get("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_post("/api/linear/tasks", handle_api_linear_tesdiq)
+    from guide_cms import register_guide_cms
+    import gh_storage as guide_storage
+    register_guide_cms(app_web, os.path.dirname(os.path.abspath(__file__)),
+                       lambda chat_id: employee_has_permission(chat_id, "approvals_news"), guide_storage)
     app_web.router.add_get("/api/linear/news", handle_api_linear_news)
     app_web.router.add_route("GET", "/api/linear/news/review", handle_api_linear_news_review)
     app_web.router.add_route("POST", "/api/linear/news/review", handle_api_linear_news_review)
