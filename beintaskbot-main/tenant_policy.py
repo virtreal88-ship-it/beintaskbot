@@ -123,8 +123,10 @@ class TenantPolicy:
         """Executor routing plan, independent of the provider's single admin."""
         if not self.allows('tasks'):
             raise ValueError('Tapşırıqlar üçün icazəniz yoxdur.')
-        scope = self.pipeline_scope()
-        if self.profile.get('role') == 'manager':
+        # Administrators can see all pipelines, but their personal tasks must
+        # route only to pipelines owned by or explicitly assigned to them.
+        scope = TenantPolicy({**self.profile, 'role': 'manager'}).pipeline_scope() if self.privileged else self.pipeline_scope()
+        if self.profile.get('role') == 'manager' or scope:
             choices = [item for item in scope if not pipeline_id or item['pipeline_id'] == positive_id(pipeline_id)]
             if not choices:
                 raise ValueError('İcraçının aktiv vərəqi yoxdur.')

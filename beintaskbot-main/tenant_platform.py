@@ -237,6 +237,18 @@ def _ensure_schema(conn) -> None:
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_task_commands (
+                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                    actor_id BIGINT NOT NULL,
+                    request_id UUID NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    state JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, actor_id, request_id)
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_crm_messages (
                     id UUID PRIMARY KEY,
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
