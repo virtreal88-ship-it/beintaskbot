@@ -1152,12 +1152,12 @@ def _publish_linear_news_to_telegram(item: dict) -> int | None:
     identifier = str(item.get("identifier") or "").strip()
     title = str(item.get("title") or "Yenilik").strip()
     summary = str(item.get("summary") or "").strip()
-    project_url = {"AKUL": "https://akul.az", "DINE": "https://dine.az"}.get(project)
     lines = [f"🆕 {project or 'BeinSystems'} — {identifier}".strip(), "", title]
     if summary:
         lines.extend(["", summary])
-    if project_url:
-        lines.extend(["", f"🔗 {project_url}"])
+    custom_url = str(item.get("media_url") or "").strip()
+    if custom_url:
+        lines.extend(["", f"🔗 {custom_url}"])
     text = "\n".join(lines)[:3900]
     try:
         media_url = str(item.get("media_url") or "").strip()
@@ -19907,7 +19907,7 @@ def _linear_description_metadata(description: str) -> tuple[dict[str, str], str]
 def _linear_news_project_key(issue: dict) -> str:
     """Map a Linear project name to the two public product streams."""
     value = str(issue.get("project") or "").strip().upper()
-    for key in ("AKUL", "DINE"):
+    for key in ("AKUL", "DINE", "BEINSYSTEMS"):
         if re.search(rf"\b{key}\b", value) or value.startswith(key):
             return key
     return ""
@@ -20662,7 +20662,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
 async def handle_api_linear_news(request: web.Request) -> web.Response:
     """Public release feed; only AI-prepared, non-bug Done items are exposed."""
     project = str(request.rel_url.query.get("project") or "").strip().upper()
-    if project not in {"", "AKUL", "DINE"}:
+    if project not in {"", "AKUL", "DINE", "BEINSYSTEMS"}:
         return web.json_response({"success": False, "error": "Layihə düzgün deyil."}, status=400)
     try:
         rows = await asyncio.to_thread(list_linear_news, project_key=project, limit=60)
@@ -20695,7 +20695,7 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
         title = str(data.get("title") or "").strip()
         summary = str(data.get("summary") or "").strip()
         project = str(data.get("project_key") or "").strip().upper()
-        if not title or not summary or project not in {"AKUL", "DINE"}:
+        if not title or not summary or project not in {"AKUL", "DINE", "BEINSYSTEMS"}:
             return web.json_response({"success": False, "error": "Layihə, başlıq və qısa mətn tələb olunur."}, status=400)
         try:
             source_id = f"manual-news-{uuid.uuid4()}"

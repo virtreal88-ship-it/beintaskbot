@@ -367,7 +367,7 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
     """Persist one customer-facing Linear release note for 90 days."""
     issue_id = str(source_issue_id or "").strip()
     project = str(project_key or "").strip().upper()
-    if not issue_id or project not in {"AKUL", "DINE"}:
+    if not issue_id or project not in {"AKUL", "DINE", "BEINSYSTEMS"}:
         raise TenantPlatformError("Linear xəbəri üçün mənbə və layihə tələb olunur.")
     expires_at = datetime.now(timezone.utc) + timedelta(days=90)
     with _connect() as conn:

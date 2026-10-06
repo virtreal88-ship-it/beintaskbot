@@ -18,7 +18,7 @@
   <header class="wrap top"><div class="brand">CRM Smart Assistant</div><a class="back" href="/">Ana səhifə →</a></header>
   <main class="wrap">
     <section class="hero"><div class="eyebrow">BeinSystems məhsul yenilikləri</div><h1>İşiniz üçün vacib dəyişikliklər.</h1><p>AKUL və DINE layihələrində istifadəyə verilmiş yeni imkanlar burada izah olunur. Texniki səhvlər və daxili düzəlişlər bu siyahıya əlavə edilmir.</p></section>
-    <nav class="tabs" aria-label="Layihə seçimi"><button class="tab active" data-project="">Hamısı</button><button class="tab" data-project="AKUL">AKUL</button><button class="tab" data-project="DINE">DINE</button></nav>
+    <nav class="tabs" aria-label="Layihə seçimi"><button class="tab active" data-project="">Hamısı</button><button class="tab" data-project="AKUL">AKUL</button><button class="tab" data-project="DINE">DINE</button><button class="tab" data-project="BEINSYSTEMS">BEINSYSTEMS</button></nav>
     <div id="state" class="state">Yeniliklər yüklənir…</div><section id="news" class="grid" aria-live="polite"></section>
   </main>
   <script>
@@ -29,7 +29,7 @@
       state.textContent='Yeniliklər yüklənir…'; list.innerHTML='';
       try{const r=await fetch('/api/linear/news'+(project?'?project='+encodeURIComponent(project):''));const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'error');
         if(!d.items.length){state.textContent='Bu layihədə hələ yeni xəbər yoxdur.';list.innerHTML='<div class="empty">Yeni funksiyalar hazır olduqda burada görünəcək.</div>';return}
-        state.textContent=d.items.length+' yenilik'; list.innerHTML=d.items.map(x=>{const projectUrl=x.media_url|| (x.project_key==='AKUL'?'https://akul.az':'https://dine.az');return `<article class="item"><div class="meta"><span>${esc(x.project_key)} · ${esc(x.identifier)}</span><span>${esc(date(x.done_at))}</span></div><h2><strong>${esc(x.title)}</strong></h2><p class="summary">${esc(x.summary)}</p><a class="source" href="${esc(projectUrl)}" target="_blank" rel="noreferrer">Xəbərə keçid →</a></article>`}).join('');
+        state.textContent=d.items.length+' yenilik'; list.innerHTML=d.items.map(x=>{const projectUrl=String(x.media_url||'').trim();const id=String(x.identifier||'').toUpperCase()==='MANUAL'?'':` · ${esc(x.identifier)}`;const link=projectUrl?`<a class="source" href="${esc(projectUrl)}" target="_blank" rel="noreferrer">Xəbərə keçid →</a>`:'';return `<article class="item"><div class="meta"><span>${esc(x.project_key)}${id}</span><span>${esc(date(x.done_at))}</span></div><h2><strong>${esc(x.title)}</strong></h2><p class="summary">${esc(x.summary)}</p>${link}</article>`}).join('');
       }catch(e){state.textContent='Yeniliklər hazırda yüklənmədi.';list.innerHTML='<div class="empty">Bir az sonra yenidən yoxlayın.</div>'}
     }
     document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));b.classList.add('active');load(b.dataset.project)})); load();
