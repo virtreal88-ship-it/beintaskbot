@@ -31,9 +31,30 @@
 <div class="modal" id="dealModal"><div class="modal-card"><div class="modal-head"><h2 id="modalTitle">Sövdələşmə</h2><button class="close" id="closeModal">×</button></div><div id="modalContent"></div></div></div>
 <script>
 (()=>{
-  const state={me:null,deals:[],tasks:[],view:'tasks'}; const $=id=>document.getElementById(id);
+  const state={me:null,deals:[],tasks:[],view:'tasks',capabilities:{},rolePermissions:{}}; const $=id=>document.getElementById(id);
   const inviteRole=$('inviteRole'); if(inviteRole && ![...inviteRole.options].some(o=>o.value==='master')) inviteRole.insertAdjacentHTML('beforeend','<option value="master">Usta</option>');
-  const api=async(url,opt)=>{const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(opt&&opt.headers||{})},...opt});const d=await r.json().catch(()=>({success:false,error:'Server cavabı oxunmadı.'}));if(!r.ok||!d.success)throw new Error(d.error||'Sorğu alınmadı.');return d};
+  const api=async(url,opt)=>{
+    const r=await fetch(url,{credentials:'same-origin',...opt,headers:{'Content-Type':'application/json',...(opt&&opt.headers||{})}});
+    const d=await r.json().catch(()=>({success:false,error:'Server cavabı oxunmadı.'}));
+    if(!r.ok||!d.success)throw new Error(d.error||'Sorğu alınmadı.');
+    if(url==='/api/platform/me') applyCapabilities(d);
+    return d;
+  };
+  function applyCapabilities(data){
+    state.me=data.member;state.capabilities=data.capabilities||{};state.rolePermissions=data.role_permissions||{};
+    const modules=state.capabilities.modules||{};
+    document.querySelectorAll('.nav [data-view]').forEach(button=>{
+      const key=button.dataset.view;
+      button.hidden=key!=='profile'&&!modules[key];
+      button.style.display=button.hidden?'none':'';
+    });
+    if(!modules[state.view]&&state.view!=='profile'){
+      state.view=['tasks','customers','deals','settings'].find(key=>modules[key])||'profile';
+      document.querySelectorAll('.nav [data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===state.view));
+      document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id==='view-'+state.view));
+    }
+    document.dispatchEvent(new CustomEvent('tenant-profile',{detail:data}));
+  }
   const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
   const notice=(id,text)=>{const n=$(id);n.textContent=text||'';n.classList.toggle('show',!!text)}; const date=v=>{if(!v)return 'Tarix göstərilməyib';const d=new Date(v);return Number.isNaN(d)?'Tarix göstərilməyib':d.toLocaleString('az-AZ',{dateStyle:'medium',timeStyle:'short'})};
   const setLoading=(button,on)=>{button.disabled=on;button.classList.toggle('loading',on)};
@@ -51,11 +72,12 @@
   async function loadRequests(){try{const d=await api('/api/platform/access-requests');$('accessRequests').innerHTML=(d.requests||[]).filter(r=>r.status==='pending').map(r=>`<div class="member"><div><b>${esc(r.display_name||r.card_name)}</b><small>${esc(r.role)} · Telegram təsdiqi gözləyir</small></div><div class="request-actions"><button class="outline" data-approve="${r.id}">Təsdiqlə</button><button class="outline danger" data-reject="${r.id}">Rədd et</button></div></div>`).join('')||'<span class="sub">Yeni sorğu yoxdur.</span>';$('accessRequests').querySelectorAll('[data-approve],[data-reject]').forEach(b=>b.onclick=async()=>{try{await api('/api/platform/access-requests',{method:'POST',body:JSON.stringify({request_id:b.dataset.approve||b.dataset.reject,action:b.dataset.approve?'approve':'reject'})});loadSettings()}catch(e){alert(e.message)}})}catch(e){$('accessRequests').textContent=e.message}}
   document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id==='view-'+state.view));if(state.view==='settings')loadSettings();if(state.view==='profile')loadProfile();});
   $('dealsRefresh').onclick=()=>loadDeals(true);$('customersRefresh').onclick=()=>loadDeals(true);$('tasksRefresh').onclick=()=>loadTasks(true);$('dealSearch').oninput=e=>filterDeals(e.target.value,'dealsList',false);$('customerSearch').oninput=e=>filterDeals(e.target.value,'customersList',true);$('closeModal').onclick=()=>$('dealModal').classList.remove('show');$('dealModal').onclick=e=>{if(e.target===$('dealModal'))$('dealModal').classList.remove('show')};
-  $('createInvite').onclick=async()=>{const b=$('createInvite');const name=$('inviteName').value.trim();if(!name)return alert('Əməkdaşın adını yazın.');b.disabled=true;try{const d=await api('/api/platform/invites',{method:'POST',body:JSON.stringify({display_name:name,role:$('inviteRole').value,permissions:$('inviteRole').value==='manager'?['deals','tasks','customers']:['tasks']})});$('inviteLink').innerHTML=`Link hazırdır (7 gün):<br><b>${esc(d.invite.url)}</b><br><button class="outline" style="margin-top:8px" id="copyInvite">Kopyala</button>`;$('inviteLink').classList.add('show');$('copyInvite').onclick=async()=>{await navigator.clipboard.writeText(d.invite.url);$('copyInvite').textContent='Kopyalandı'};loadSettings()}catch(e){alert(e.message)}finally{b.disabled=false}};
+  $('createInvite').onclick=async()=>{const b=$('createInvite');const name=$('inviteName').value.trim();if(!name)return alert('Əməkdaşın adını yazın.');b.disabled=true;try{const role=$('inviteRole').value;const d=await api('/api/platform/invites',{method:'POST',body:JSON.stringify({display_name:name,role,permissions:state.rolePermissions[role]||[]})});$('inviteLink').innerHTML=`Link hazırdır (7 gün):<br><b>${esc(d.invite.url)}</b><br><button class="outline" style="margin-top:8px" id="copyInvite">Kopyala</button>`;$('inviteLink').classList.add('show');$('copyInvite').onclick=async()=>{await navigator.clipboard.writeText(d.invite.url);$('copyInvite').textContent='Kopyalandı'};loadSettings()}catch(e){alert(e.message)}finally{b.disabled=false}};
   $('testKommo').onclick=async()=>{const b=$('testKommo');b.disabled=true;try{const d=await api('/api/platform/integrations/kommo/test');$('integrationInfo').textContent=`Kommo işləyir: ${d.account?.name||'bağlantı təsdiqləndi'}`}catch(e){$('integrationInfo').textContent=e.message}finally{b.disabled=false}};
   $('disconnectKommo').onclick=async()=>{if(!confirm('Kommo bağlantısı ayrılsın? Yenidən qoşmaq üçün OAuth lazımdır.'))return;try{await api('/api/platform/integrations/disconnect',{method:'POST',body:JSON.stringify({provider:'kommo'})});loadSettings()}catch(e){alert(e.message)}};
   $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;try{await api('/api/platform/logout',{method:'POST',body:'{}'});location.href='/login'}catch(e){alert(e.message)}};
-  (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}await loadTasks(true);await loadDeals(false);loadSettings()})();
+  (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}if(state.capabilities.modules?.tasks)await loadTasks(true);if(state.capabilities.modules?.deals||state.capabilities.modules?.customers)await loadDeals(false);renderProfile(state.me);if(state.me.role==='owner')loadSettings()})();
 })();
 </script>
+<script src="/assets/tenant-workflow.js"></script>
 </body></html>

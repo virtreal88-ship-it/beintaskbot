@@ -19,6 +19,7 @@ from threading import Lock
 import psycopg
 from psycopg.rows import dict_row
 from cryptography.fernet import Fernet, InvalidToken
+from tenant_policy import ROLE_PERMISSIONS, validate_workflow_patch
 
 
 class TenantPlatformError(RuntimeError):
@@ -40,12 +41,7 @@ def _invite_token(value: object) -> str:
 
 _schema_ready = False
 _schema_lock = Lock()
-_ROLE_PERMISSIONS = {
-    "owner": ["deals", "tasks", "customers", "employees", "integrations", "finance", "settings", "hot_orders", "linear"],
-    "manager": ["deals", "tasks", "customers"],
-    "worker": ["tasks", "hot_orders"],
-    "master": ["hot_orders"],
-}
+_ROLE_PERMISSIONS = ROLE_PERMISSIONS
 _DEFAULT_MODULES = {"deals": True, "tasks": True, "customers": True, "hot_orders": False, "finance": False}
 _DEFAULT_NOTIFICATIONS = {"new_lead": True, "incoming_message": True, "task_assigned": True, "task_overdue": True}
 
@@ -117,9 +113,9 @@ def _ensure_schema(conn) -> None:
             # introduced. Replace only the generated role constraints; data is
             # preserved and the migration is safe to run on every startup.
             cur.execute("ALTER TABLE saas_tenant_members DROP CONSTRAINT IF EXISTS saas_tenant_members_role_check")
-            cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'manager', 'worker', 'master'))")
+            cur.execute("ALTER TABLE saas_tenant_members ADD CONSTRAINT saas_tenant_members_role_check CHECK (role IN ('owner', 'admin', 'manager', 'worker', 'master'))")
             cur.execute("ALTER TABLE saas_tenant_invites DROP CONSTRAINT IF EXISTS saas_tenant_invites_role_check")
-            cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('manager', 'worker', 'master'))")
+            cur.execute("ALTER TABLE saas_tenant_invites ADD CONSTRAINT saas_tenant_invites_role_check CHECK (role IN ('admin', 'manager', 'worker', 'master'))")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_integrations (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -747,7 +743,7 @@ def _kommo_domain(value: str) -> str:
 def _role(value: str, *, owner: bool = False) -> str:
     if owner:
         return "owner"
-    return value if value in {"manager", "worker", "master"} else "worker"
+    return value if value in {"admin", "manager", "worker", "master"} else "worker"
 
 
 def _permissions(value, role: str) -> list[str]:
@@ -761,8 +757,8 @@ def _permissions(value, role: str) -> list[str]:
     requested = [str(item) for item in value if str(item) in allowed]
     if role == "master":
         requested = [item for item in requested if item == "hot_orders"]
-        return requested or list(_ROLE_PERMISSIONS["master"])
-    return requested or list(_ROLE_PERMISSIONS.get(role, _ROLE_PERMISSIONS["worker"]))
+        return requested
+    return list(dict.fromkeys(requested))
 
 
 def _slug(name: str) -> str:
@@ -782,32 +778,26 @@ def _tenant_payload(row: dict) -> dict:
     return result
 
 
-def list_tenant_workflow_config(*, tenant_id: str, owner_id: int) -> dict:
-    """Return configurable pipelines, stages and workflow policies."""
-    current = member(str(tenant_id), int(owner_id))
-    if not current or current.get("role") != "owner":
-        raise TenantPlatformError("Yalnız şirkət sahibi workflow ayarlarını görə bilər.")
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
+def _read_tenant_workflow(cur, tenant_id: str) -> dict:
+    """Read configuration on the existing membership DB connection."""
+    cur.execute("""
                 SELECT pipeline_id, name, active, owner_telegram_id, settings
                 FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid
                 ORDER BY name, pipeline_id
             """, (str(tenant_id),))
-            pipelines = cur.fetchall()
-            cur.execute("""
+    pipelines = cur.fetchall()
+    cur.execute("""
                 SELECT pipeline_id, stage_id, name, sort_order, stage_type, settings
                 FROM saas_tenant_pipeline_stages WHERE tenant_id=%s::uuid
                 ORDER BY pipeline_id, sort_order, name
             """, (str(tenant_id),))
-            stages = cur.fetchall()
-            cur.execute("""
+    stages = cur.fetchall()
+    cur.execute("""
                 SELECT policy_key, value, updated_by, updated_at
                 FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid
                 ORDER BY policy_key
             """, (str(tenant_id),))
-            policies = cur.fetchall()
+    policies = cur.fetchall()
     def normalize(row: dict) -> dict:
         item = dict(row)
         if not isinstance(item.get("settings"), dict): item["settings"] = {}
@@ -820,20 +810,62 @@ def list_tenant_workflow_config(*, tenant_id: str, owner_id: int) -> dict:
     }
 
 
+def list_tenant_workflow_config(*, tenant_id: str, owner_id: int) -> dict:
+    """Return configurable pipelines, stages and workflow policies."""
+    current = member(str(tenant_id), int(owner_id))
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("Yalnız şirkət sahibi workflow ayarlarını görə bilər.")
+    return current["workflow"]
+
+
 def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                                 pipelines: list[dict] | None = None,
                                 stages: list[dict] | None = None,
-                                policies: dict | None = None) -> dict:
+                                policies: dict | None = None,
+                                members: list[dict] | None = None) -> dict:
     """Replace the owner-managed workflow configuration atomically."""
     current = member(str(tenant_id), int(owner_id))
     if not current or current.get("role") != "owner":
         raise TenantPlatformError("Yalnız şirkət sahibi workflow ayarlarını dəyişə bilər.")
+    try:
+        validate_workflow_patch(pipelines, stages, policies)
+    except ValueError as exc:
+        raise TenantPlatformError(str(exc)) from exc
     pipelines = pipelines if isinstance(pipelines, list) else []
     stages = stages if isinstance(stages, list) else []
     policies = policies if isinstance(policies, dict) else {}
+    if members is not None and not isinstance(members, list):
+        raise TenantPlatformError('Əməkdaşlar siyahı olmalıdır.')
+    members = members or []
+    for item in members:
+        if not isinstance(item, dict) or not str(item.get('telegram_id') or '').isdigit() or item.get('role') not in {'admin','manager','worker','master'}:
+            raise TenantPlatformError('Əməkdaş növü və hesabı düzgün deyil.')
+        if not str(item.get('display_name') or '').strip() or not isinstance(item.get('permissions'), list):
+            raise TenantPlatformError('Əməkdaşın adı və hüquqları düzgün deyil.')
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            # Validate links against this company's current membership before
+            # any insert. IDs from another company must never grant access.
+            cur.execute("SELECT telegram_id,role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE", (str(tenant_id),))
+            member_roles = {int(row['telegram_id']): row['role'] for row in cur.fetchall()}
+            member_ids = set(member_roles)
+            if any(int(item['telegram_id']) not in member_ids or int(item['telegram_id']) == int(owner_id) for item in members):
+                raise TenantPlatformError('Yalnız bu şirkətin aktiv əməkdaşlarını dəyişə bilərsiniz.')
+            member_roles.update({int(item['telegram_id']): item['role'] for item in members})
+            cur.execute("SELECT pipeline_id FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid", (str(tenant_id),))
+            pipeline_ids = {str(row['pipeline_id']) for row in cur.fetchall()} | {str(item['pipeline_id']) for item in pipelines}
+            for item in pipelines:
+                if item.get('owner_telegram_id') and int(item['owner_telegram_id']) not in member_ids:
+                    raise TenantPlatformError('Vərəqin sahibi bu şirkətin əməkdaşı deyil.')
+                if item.get('owner_telegram_id') and member_roles[int(item['owner_telegram_id'])] not in {'owner','admin','manager'}:
+                    raise TenantPlatformError('Vərəqin sahibi vərəq istifadəçisi və ya administrator olmalıdır.')
+            for item in stages:
+                if str(item['pipeline_id']) not in pipeline_ids:
+                    raise TenantPlatformError('Mərhələnin vərəqi bu şirkətdə yoxdur.')
+            for key, value in (policies.get('members') or {}).items():
+                if int(key) not in member_ids or any(str(pid) not in pipeline_ids for pid in value.get('pipeline_ids', [])):
+                    raise TenantPlatformError('Əməkdaş və vərəq eyni şirkətə aid olmalıdır.')
             for item in pipelines:
                 pid = str(item.get("pipeline_id") or "").strip()[:120]
                 if not pid: continue
@@ -866,6 +898,15 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
                     VALUES (%s::uuid,%s,%s::jsonb,%s)
                     ON CONFLICT (tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()
                 """, (str(tenant_id), policy_key, _json(value), int(owner_id)))
+            for item in members:
+                cur.execute("""
+                    UPDATE saas_tenant_members SET display_name=%s,role=%s,permissions=%s::jsonb,updated_at=now()
+                    WHERE tenant_id=%s::uuid AND telegram_id=%s AND role <> 'owner' AND active=TRUE
+                """, (str(item['display_name']).strip()[:120], item['role'], _json(_permissions(item['permissions'],item['role'])), str(tenant_id), int(item['telegram_id'])))
+            cur.execute("""
+                INSERT INTO saas_tenant_audit_events (id,tenant_id,actor_telegram_id,action,entity_type,payload)
+                VALUES (%s,%s::uuid,%s,'workflow_updated','workflow',%s::jsonb)
+            """, (uuid.uuid4(), str(tenant_id), int(owner_id), _json({'pipelines': len(pipelines), 'stages': len(stages), 'policy_keys': list(policies)})))
         conn.commit()
     return list_tenant_workflow_config(tenant_id=tenant_id, owner_id=owner_id)
 
@@ -921,12 +962,23 @@ def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
 
 
 def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] | None = None,
-                   status_ids: list[int] | None = None, limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+                   status_ids: list[int] | None = None, limit: int = 100, offset: int = 0,
+                   scope: list[dict] | None = None) -> tuple[list[dict], int]:
     """List only the selected tenant's cached deals, with DB-side filtering."""
     safe_limit = max(1, min(int(limit or 100), 200))
     safe_offset = max(0, int(offset or 0))
     clauses = ["tenant_id = %s::uuid"]
     values: list = [tenant_id]
+    if scope is not None:
+        scope_clauses = []
+        for rule in scope:
+            clause = 'pipeline_id = %s'
+            values.append(int(rule['pipeline_id']))
+            if rule.get('status_ids'):
+                clause += ' AND status_id = ANY(%s)'
+                values.append([int(sid) for sid in rule['status_ids']])
+            scope_clauses.append('(' + clause + ')')
+        clauses.append('(' + ' OR '.join(scope_clauses) + ')' if scope_clauses else 'FALSE')
     needle = str(search or "").strip()[:160]
     if needle:
         clauses.append("(name ILIKE %s OR contact_name ILIKE %s OR phone ILIKE %s OR stage_name ILIKE %s)")
@@ -995,9 +1047,11 @@ def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
 
 
 def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, limit: int = 100) -> list[dict]:
+    if responsible_id == 0:
+        return []
     clauses = ["tenant_id = %s::uuid"]
     values: list = [tenant_id]
-    if responsible_id:
+    if responsible_id is not None:
         clauses.append("responsible_id = %s")
         values.append(int(responsible_id))
     with _connect() as conn:
@@ -1111,9 +1165,11 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
                 WHERE m.tenant_id = %s::uuid AND m.telegram_id = %s AND m.active = TRUE
             """, (tenant_id, int(telegram_id)))
             row = cur.fetchone()
+            workflow = _read_tenant_workflow(cur, tenant_id) if row else {}
     if not row:
         return None
     result = dict(row)
+    result['workflow'] = workflow
     result["tenant_id"] = str(result["tenant_id"])
     # ``member`` is returned directly by JSON API handlers. PostgreSQL gives
     # timestamps as datetime instances, which must be made JSON-safe here.
@@ -1190,7 +1246,7 @@ def upsert_member(*, tenant_id: str, owner_id: int, telegram_id: int, display_na
         raise TenantPlatformError("Əməkdaşın adını yazın.")
     is_owner = target_id == int(current["telegram_id"])
     selected_role = _role(str(role or ""), owner=is_owner)
-    selected_permissions = _permissions(permissions or [], selected_role)
+    selected_permissions = _permissions(permissions, selected_role)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:

@@ -50,6 +50,7 @@ from telegram.ext import (
 from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
+from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
     release_hot_order, submit_hot_order, settle_hot_order, update_hot_order, cancel_hot_order,
@@ -21297,7 +21298,9 @@ async def handle_platform_me(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("Platform session lookup failed")
         return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
-    return web.json_response({"success": True, "member": profile, "integrations": integrations, "companies": companies, "members": members})
+    safe_profile = {key: value for key, value in profile.items() if key != 'workflow'}
+    return web.json_response({"success": True, "member": safe_profile, "capabilities": TenantPolicy(profile).public_capabilities(),
+                              "role_permissions": ROLE_PERMISSIONS, "integrations": integrations, "companies": companies, "members": members})
 
 
 async def handle_platform_login(request: web.Request) -> web.Response:
@@ -21412,13 +21415,47 @@ async def handle_platform_workflow_config(request: web.Request) -> web.Response:
                 save_tenant_workflow_config,
                 tenant_id=tenant_id, owner_id=owner_id,
                 pipelines=data.get("pipelines"), stages=data.get("stages"), policies=data.get("policies"),
+                members=data.get('members'),
             )
-        return web.json_response({"success": True, **config})
+        return web.json_response({"success": True, **config, "role_permissions": ROLE_PERMISSIONS})
     except TenantPlatformError as exc:
         return web.json_response({"success": False, "error": str(exc)}, status=400)
+    except (ValueError, TypeError):
+        return web.json_response({"success": False, "error": "Workflow məlumatı düzgün deyil."}, status=400)
     except Exception:
         logger.exception("Tenant workflow configuration failed: tenant=%s", tenant_id)
         return web.json_response({"success": False, "error": "Workflow ayarları saxlanmadı."}, status=500)
+
+
+async def handle_platform_workflow_catalog(request: web.Request) -> web.Response:
+    """Import account choices without creating or changing Kommo resources."""
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({'success': False, 'error': 'Yalnız şirkət sahibi üçün.'}, status=403)
+    # These reads share a rotating OAuth refresh token; do not start two
+    # independent refreshes of the same credentials in this catalog request.
+    results = []
+    for path, params in (('leads/pipelines', None), ('users', {'limit': 250})):
+        try:
+            results.append(await _tenant_kommo_request(profile['tenant_id'], 'GET', path, params=params))
+        except Exception as exc:
+            results.append(exc)
+    warnings = []
+    pipelines, users = [], []
+    for kind, result in zip(('pipelines', 'users'), results):
+        if isinstance(result, Exception):
+            logger.warning('Tenant workflow catalog failed: tenant=%s kind=%s', profile['tenant_id'], kind)
+            warnings.append('Kommo vərəqləri yüklənmədi.' if kind == 'pipelines' else 'Kommo istifadəçiləri yüklənmədi. Kommo administrator icazəsini yoxlayın.')
+            continue
+        for item in (result.get('_embedded') or {}).get(kind, []):
+            if kind == 'users':
+                if (item.get('rights') or {}).get('is_active', True):
+                    users.append({'id': item['id'], 'name': item.get('name') or item.get('email') or str(item['id'])})
+            else:
+                pipelines.append({'pipeline_id': str(item['id']), 'name': item.get('name') or '',
+                                  'stages': [{'stage_id': str(stage['id']), 'name': stage.get('name') or '', 'sort_order': int(stage.get('sort') or 0)}
+                                             for stage in (item.get('_embedded') or {}).get('statuses', [])]})
+    return web.json_response({'success': True, 'pipelines': pipelines, 'users': users, 'warnings': warnings})
 
 
 def _safe_platform_patch(value) -> dict:
@@ -21932,6 +21969,34 @@ async def handle_platform_save_kommo_pipelines(request: web.Request) -> web.Resp
         if pipeline_id > 0:
             selected.append({"id": pipeline_id, "stage_ids": stage_ids[:100]})
     try:
+        # Onboarding and the settings editor must write the same runtime
+        # configuration. Saving the wizard cannot silently leave old scopes.
+        remote = await _tenant_kommo_request(profile['tenant_id'], 'GET', 'leads/pipelines')
+        remote_pipelines = (remote.get('_embedded') or {}).get('pipelines') or []
+        selected_by_id = {str(item['id']): item['stage_ids'] for item in selected}
+        remote_by_id = {str(item['id']): item for item in remote_pipelines}
+        if any(pid not in remote_by_id for pid in selected_by_id):
+            raise TenantPlatformError('Seçilən vərəq Kommo hesabınızda yoxdur.')
+        prior = profile.get('workflow') or {}
+        prior_pipelines = {str(item['pipeline_id']): item for item in prior.get('pipelines', [])}
+        prior_stages = {(str(item['pipeline_id']), str(item['stage_id'])): item for item in prior.get('stages', [])}
+        pipelines, stages = [], []
+        for pid, pipeline in remote_by_id.items():
+            pipelines.append({**prior_pipelines.get(pid, {}), 'pipeline_id': pid, 'name': pipeline.get('name') or '', 'active': pid in selected_by_id})
+            status_rows = (pipeline.get('_embedded') or {}).get('statuses') or []
+            if any(sid not in {int(stage['id']) for stage in status_rows} for sid in selected_by_id.get(pid, [])):
+                raise TenantPlatformError('Seçilən mərhələ bu Kommo vərəqində yoxdur.')
+            for stage in status_rows:
+                old = prior_stages.get((pid, str(stage['id'])), {})
+                visible = not selected_by_id.get(pid) or int(stage['id']) in selected_by_id[pid]
+                stages.append({**old, 'pipeline_id': pid, 'stage_id': str(stage['id']), 'name': stage.get('name') or '',
+                               'sort_order': int(stage.get('sort') or 0), 'stage_type': old.get('stage_type') or 'open',
+                               'settings': {**old.get('settings', {}), 'visible': visible}})
+        for pid, old in prior_pipelines.items():
+            if pid not in remote_by_id:
+                pipelines.append({**old, 'active': False})
+        await asyncio.to_thread(save_tenant_workflow_config, tenant_id=profile['tenant_id'], owner_id=int(profile['telegram_id']),
+                                pipelines=pipelines, stages=stages)
         tenant = await asyncio.to_thread(
             update_onboarding,
             tenant_id=profile["tenant_id"],
@@ -21945,28 +22010,12 @@ async def handle_platform_save_kommo_pipelines(request: web.Request) -> web.Resp
 
 def _tenant_has_module(profile: dict, module: str) -> bool:
     """Authorise the public CRM strictly from the tenant member record."""
-    if profile.get("role") == "owner":
-        return True
-    return module in set(profile.get("permissions") or []) and bool((profile.get("modules") or {}).get(module, False))
+    return TenantPolicy(profile).allows(module)
 
 
 def _tenant_selected_pipeline_ids(profile: dict) -> tuple[list[int], dict[int, set[int]]]:
-    selected = (((profile.get("onboarding") or {}).get("pipeline") or {}).get("selected") or [])
-    pipeline_ids: list[int] = []
-    stages: dict[int, set[int]] = {}
-    for item in selected if isinstance(selected, list) else []:
-        try:
-            pipeline_id = int((item or {}).get("id") or 0)
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if pipeline_id <= 0:
-            continue
-        pipeline_ids.append(pipeline_id)
-        stages[pipeline_id] = {
-            int(stage_id) for stage_id in ((item or {}).get("stage_ids") or [])
-            if str(stage_id).isdigit() and int(stage_id) > 0
-        }
-    return list(dict.fromkeys(pipeline_ids)), stages
+    scope = TenantPolicy(profile).pipeline_scope()
+    return [item['pipeline_id'] for item in scope], {item['pipeline_id']: set(item['status_ids']) for item in scope}
 
 
 def _tenant_kommo_timestamp(value) -> str | None:
@@ -21997,9 +22046,9 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
     """
     tenant_id = str(profile["tenant_id"])
     pipeline_ids, selected_stages = _tenant_selected_pipeline_ids(profile)
-    if not pipeline_ids:
+    if not pipeline_ids and not include_tasks:
         raise TenantPlatformError("Əvvəl Kommo-da göstəriləcək vərəq və mərhələləri seçin.")
-    pipeline_payload = await _tenant_kommo_request(tenant_id, "GET", "leads/pipelines")
+    pipeline_payload = await _tenant_kommo_request(tenant_id, "GET", "leads/pipelines") if pipeline_ids else {}
     stage_names: dict[int, str] = {}
     for pipeline in ((pipeline_payload.get("_embedded") or {}).get("pipelines") or []):
         for stage in ((pipeline.get("_embedded") or {}).get("statuses") or []):
@@ -22022,7 +22071,9 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
                 status_id = int(lead.get("status_id") or 0)
             except (TypeError, ValueError):
                 continue
-            if not lead_id or (selected_stages.get(pipeline_id) and status_id not in selected_stages[pipeline_id]):
+            # Cache hidden/terminal stages too. Otherwise a deal that leaves
+            # an allowed stage keeps its old visible status in PostgreSQL.
+            if not lead_id:
                 continue
             contacts = ((lead.get("_embedded") or {}).get("contacts") or [])
             contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
@@ -22036,7 +22087,11 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
     saved_deals = await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=snapshots)
     saved_tasks = 0
     if include_tasks:
-        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params={"filter[entity_type]": "2", "limit": 250})
+        responsible_id = TenantPolicy(profile).task_responsible_id()
+        task_params = {"filter[entity_type]": "2", "limit": 250}
+        if responsible_id:
+            task_params['filter[responsible_user_id]'] = responsible_id
+        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params=task_params) if responsible_id != 0 else {}
         task_rows = (tasks_payload.get("_embedded") or {}).get("tasks") or []
         normalized_tasks = []
         for task in task_rows:
@@ -22063,7 +22118,7 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
 
 async def handle_platform_crm_deals(request: web.Request) -> web.Response:
     profile = _tenant_member_from_request(request)
-    if not profile or not _tenant_has_module(profile, "deals"):
+    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
         return web.json_response({"success": False, "error": "Sövdələşmələr üçün icazəniz yoxdur."}, status=403)
     should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
     sync_error = ""
@@ -22085,13 +22140,14 @@ async def handle_platform_crm_deals(request: web.Request) -> web.Response:
     rows, total = await asyncio.to_thread(
         list_tenant_crm_deals, tenant_id=profile["tenant_id"], search=str(values.get("search") or ""),
         pipeline_ids=pipeline_ids, status_ids=status_ids, limit=limit, offset=offset,
+        scope=TenantPolicy(profile).pipeline_scope(),
     )
     return web.json_response({"success": True, "deals": rows, "total": total, "stale": bool(sync_error), "warning": sync_error})
 
 
 async def handle_platform_crm_deal(request: web.Request) -> web.Response:
     profile = _tenant_member_from_request(request)
-    if not profile or not _tenant_has_module(profile, "deals"):
+    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
         return web.json_response({"success": False, "error": "Sövdələşmə üçün icazəniz yoxdur."}, status=403)
     try:
         lead_id = int(request.rel_url.query.get("lead_id") or 0)
@@ -22100,7 +22156,7 @@ async def handle_platform_crm_deal(request: web.Request) -> web.Response:
     if lead_id <= 0:
         return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
     row = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
-    if not row:
+    if not TenantPolicy(profile).can_access_deal(row):
         return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
     return web.json_response({"success": True, "deal": row})
 
@@ -22144,7 +22200,7 @@ async def _sync_tenant_chat(profile: dict, lead_id: int) -> list[dict]:
     """Read one recent Talk and cache messages within that tenant only."""
     tenant_id = str(profile["tenant_id"])
     deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
-    if not deal:
+    if not TenantPolicy(profile).can_access_deal(deal):
         raise TenantPlatformError("Sövdələşmə seçilmiş siyahıda deyil.")
     payload = await _tenant_kommo_request(
         tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50},
@@ -22181,6 +22237,9 @@ async def handle_platform_crm_chat(request: web.Request) -> web.Response:
         lead_id = 0
     if lead_id <= 0:
         return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
+    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=profile['tenant_id'], kommo_lead_id=lead_id)
+    if not TenantPolicy(profile).can_access_deal(deal):
+        return web.json_response({'success': False, 'error': 'Sövdələşmə seçilmiş siyahıda deyil.'}, status=404)
     warning = ""
     if str(request.rel_url.query.get("refresh") or "").casefold() in {"1", "true", "yes"}:
         try:
@@ -22211,7 +22270,7 @@ async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur."}, status=400)
     tenant_id = str(profile["tenant_id"])
     deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
-    if not deal:
+    if not TenantPolicy(profile).can_access_deal(deal):
         return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
     try:
         talks_payload = await _tenant_kommo_request(tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50})
@@ -22248,7 +22307,8 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
         except Exception:
             logger.exception("Tenant CRM task sync failed: tenant=%s", profile["tenant_id"])
             sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
-    rows = await asyncio.to_thread(list_tenant_crm_tasks, tenant_id=profile["tenant_id"], limit=200)
+    rows = await asyncio.to_thread(list_tenant_crm_tasks, tenant_id=profile["tenant_id"], limit=200,
+                                  responsible_id=TenantPolicy(profile).task_responsible_id())
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
@@ -22384,6 +22444,12 @@ async def redirect_platform_app(request: web.Request) -> web.Response:
         return web.Response(status=404, text="Tenant CRM page not found")
     response = web.FileResponse(html_path)
     response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    return response
+
+
+async def serve_tenant_workflow_script(_request: web.Request) -> web.Response:
+    response = web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workflow.js'))
+    response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
     return response
 
 
@@ -23287,6 +23353,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/members", handle_platform_members)
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
+    app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
     app_web.router.add_post("/api/platform/onboarding/assistant", handle_platform_ai_onboarding)
     app_web.router.add_post("/api/platform/onboarding/finish", handle_platform_finish_onboarding)
     app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
@@ -23321,6 +23388,7 @@ async def start_webhook_server():
     app_web.router.add_get("/nece-baslamaq", serve_getting_started_page)
     app_web.router.add_get("/news", serve_news_page)
     app_web.router.add_get("/documentation", serve_documentation_page)
+    app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
