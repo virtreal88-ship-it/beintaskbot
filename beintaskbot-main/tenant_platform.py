@@ -133,6 +133,48 @@ def _ensure_schema(conn) -> None:
                 )
             """)
             cur.execute("ALTER TABLE saas_tenant_integrations ADD COLUMN IF NOT EXISTS secrets BYTEA NULL")
+            # Tenant-owned workflow configuration. External Kommo IDs are
+            # stored as text because providers do not share one identifier
+            # type. Nothing in the runtime should need a customer-specific
+            # Python constant after these tables are populated.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_tenant_pipelines (
+                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                    pipeline_id TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    owner_telegram_id BIGINT NULL,
+                    settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, pipeline_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_tenant_pipeline_stages (
+                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                    pipeline_id TEXT NOT NULL,
+                    stage_id TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    stage_type TEXT NOT NULL DEFAULT 'open',
+                    settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, pipeline_id, stage_id),
+                    FOREIGN KEY (tenant_id, pipeline_id) REFERENCES saas_tenant_pipelines(tenant_id, pipeline_id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_tenant_workflow_policies (
+                    tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+                    policy_key TEXT NOT NULL,
+                    value JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    updated_by BIGINT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, policy_key)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS saas_tenant_pipeline_owner_idx ON saas_tenant_pipelines(tenant_id, owner_telegram_id, active)")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_oauth_states (
                     id TEXT PRIMARY KEY,
@@ -667,6 +709,94 @@ def _tenant_payload(row: dict) -> dict:
         if not isinstance(result.get(key), dict):
             result[key] = {}
     return result
+
+
+def list_tenant_workflow_config(*, tenant_id: str, owner_id: int) -> dict:
+    """Return configurable pipelines, stages and workflow policies."""
+    current = member(str(tenant_id), int(owner_id))
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("Yalnız şirkət sahibi workflow ayarlarını görə bilər.")
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT pipeline_id, name, active, owner_telegram_id, settings
+                FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid
+                ORDER BY name, pipeline_id
+            """, (str(tenant_id),))
+            pipelines = cur.fetchall()
+            cur.execute("""
+                SELECT pipeline_id, stage_id, name, sort_order, stage_type, settings
+                FROM saas_tenant_pipeline_stages WHERE tenant_id=%s::uuid
+                ORDER BY pipeline_id, sort_order, name
+            """, (str(tenant_id),))
+            stages = cur.fetchall()
+            cur.execute("""
+                SELECT policy_key, value, updated_by, updated_at
+                FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid
+                ORDER BY policy_key
+            """, (str(tenant_id),))
+            policies = cur.fetchall()
+    def normalize(row: dict) -> dict:
+        item = dict(row)
+        if not isinstance(item.get("settings"), dict): item["settings"] = {}
+        if item.get("updated_at"): item["updated_at"] = item["updated_at"].isoformat()
+        return item
+    return {
+        "pipelines": [normalize(row) for row in pipelines],
+        "stages": [normalize(row) for row in stages],
+        "policies": [normalize(row) for row in policies],
+    }
+
+
+def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
+                                pipelines: list[dict] | None = None,
+                                stages: list[dict] | None = None,
+                                policies: dict | None = None) -> dict:
+    """Replace the owner-managed workflow configuration atomically."""
+    current = member(str(tenant_id), int(owner_id))
+    if not current or current.get("role") != "owner":
+        raise TenantPlatformError("Yalnız şirkət sahibi workflow ayarlarını dəyişə bilər.")
+    pipelines = pipelines if isinstance(pipelines, list) else []
+    stages = stages if isinstance(stages, list) else []
+    policies = policies if isinstance(policies, dict) else {}
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            for item in pipelines:
+                pid = str(item.get("pipeline_id") or "").strip()[:120]
+                if not pid: continue
+                cur.execute("""
+                    INSERT INTO saas_tenant_pipelines (tenant_id, pipeline_id, name, active, owner_telegram_id, settings)
+                    VALUES (%s::uuid,%s,%s,%s,%s,%s::jsonb)
+                    ON CONFLICT (tenant_id,pipeline_id) DO UPDATE SET
+                      name=EXCLUDED.name, active=EXCLUDED.active,
+                      owner_telegram_id=EXCLUDED.owner_telegram_id,
+                      settings=EXCLUDED.settings, updated_at=now()
+                """, (str(tenant_id), pid, str(item.get("name") or "")[:180], bool(item.get("active", True)),
+                       int(item.get("owner_telegram_id") or 0) or None, _json(item.get("settings") if isinstance(item.get("settings"), dict) else {})))
+            for item in stages:
+                pid = str(item.get("pipeline_id") or "").strip()[:120]
+                sid = str(item.get("stage_id") or "").strip()[:120]
+                if not pid or not sid: continue
+                cur.execute("""
+                    INSERT INTO saas_tenant_pipeline_stages (tenant_id,pipeline_id,stage_id,name,sort_order,stage_type,settings)
+                    VALUES (%s::uuid,%s,%s,%s,%s,%s,%s::jsonb)
+                    ON CONFLICT (tenant_id,pipeline_id,stage_id) DO UPDATE SET
+                      name=EXCLUDED.name, sort_order=EXCLUDED.sort_order,
+                      stage_type=EXCLUDED.stage_type, settings=EXCLUDED.settings, updated_at=now()
+                """, (str(tenant_id), pid, sid, str(item.get("name") or "")[:180], int(item.get("sort_order") or 0),
+                       str(item.get("stage_type") or "open")[:40], _json(item.get("settings") if isinstance(item.get("settings"), dict) else {})))
+            for key, value in policies.items():
+                policy_key = str(key or "").strip()[:120]
+                if not policy_key: continue
+                cur.execute("""
+                    INSERT INTO saas_tenant_workflow_policies (tenant_id,policy_key,value,updated_by)
+                    VALUES (%s::uuid,%s,%s::jsonb,%s)
+                    ON CONFLICT (tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()
+                """, (str(tenant_id), policy_key, _json(value), int(owner_id)))
+        conn.commit()
+    return list_tenant_workflow_config(tenant_id=tenant_id, owner_id=owner_id)
 
 
 def _public_crm_row(row: dict) -> dict:

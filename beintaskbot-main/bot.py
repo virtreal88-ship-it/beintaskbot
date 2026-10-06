@@ -73,6 +73,7 @@ from tenant_platform import (
     claim_linear_news_publish_slot,
     update_linear_news_review,
     seed_linear_news_review_once,
+    list_tenant_workflow_config, save_tenant_workflow_config,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -21366,6 +21367,32 @@ async def handle_platform_members(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "members": members})
 
 
+async def handle_platform_workflow_config(request: web.Request) -> web.Response:
+    """Owner API for tenant-specific pipelines, stages and workflow policies."""
+    profile = _tenant_member_from_request(request, owner_only=True)
+    if not profile:
+        return web.json_response({"success": False, "error": "Yalnız şirkət sahibi üçün."}, status=403)
+    tenant_id = str(profile["tenant_id"])
+    owner_id = int(profile["telegram_id"])
+    try:
+        if request.method == "GET":
+            config = await asyncio.to_thread(list_tenant_workflow_config, tenant_id=tenant_id, owner_id=owner_id)
+        else:
+            data = await request.json()
+            data = data if isinstance(data, dict) else {}
+            config = await asyncio.to_thread(
+                save_tenant_workflow_config,
+                tenant_id=tenant_id, owner_id=owner_id,
+                pipelines=data.get("pipelines"), stages=data.get("stages"), policies=data.get("policies"),
+            )
+        return web.json_response({"success": True, **config})
+    except TenantPlatformError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    except Exception:
+        logger.exception("Tenant workflow configuration failed: tenant=%s", tenant_id)
+        return web.json_response({"success": False, "error": "Workflow ayarları saxlanmadı."}, status=500)
+
+
 def _safe_platform_patch(value) -> dict:
     if not isinstance(value, dict):
         return {}
@@ -23228,6 +23255,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/me", handle_platform_me)
     app_web.router.add_get("/api/platform/members", handle_platform_members)
     app_web.router.add_post("/api/platform/members", handle_platform_members)
+    app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
+    app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/onboarding/assistant", handle_platform_ai_onboarding)
     app_web.router.add_post("/api/platform/onboarding/finish", handle_platform_finish_onboarding)
     app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
