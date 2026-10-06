@@ -478,7 +478,7 @@ _ROSTER_CLEANUP_FILE = "employee_roster_cleanup_v1.json"
 # historical Telegram/Kommo mapping, while this record controls Mini App
 # access and can be safely changed by the administrator.
 _EMPLOYEE_ACCESS_FILE = "employee_access.json"
-_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "customers", "employees", "linear", "linear_create", "linear_edit")
+_EMPLOYEE_PERMISSIONS = ("deals", "tasks", "hot_orders", "hot_orders_create", "finance", "passive_tasks", "waiting", "approvals_system", "approvals_news", "customers", "employees", "linear", "linear_create", "linear_edit")
 _ALL_EMPLOYEE_PERMISSIONS = frozenset(_EMPLOYEE_PERMISSIONS)
 _MASTER_PERMISSIONS = frozenset({"hot_orders", "hot_orders_create"})
 _HOT_ORDER_SKILLS = ("all", "montaj", "temir", "catdirilma", "servis", "digər")
@@ -495,6 +495,8 @@ def _normalize_employee_permissions(value, role: str = "") -> list[str]:
     # which made the switch ineffective: removing the hot-order checkbox and
     # retaining tasks silently brought it back on every save.
     role_key = str(role or "").strip().casefold()
+    if values & {"approvals_system", "approvals_news"}:
+        values.add("waiting")
     if role_key in {"master", "usta"}:
         values &= _MASTER_PERMISSIONS
         if not values:
@@ -573,6 +575,18 @@ def employee_access_profile(chat_id: int) -> dict:
             role = "Usta"
         else:
             role = "Əməkdaş"
+        if not stored.get("approval_permissions_version"):
+            # Persist the requested Huseyn grant once; later admin edits win.
+            values = set(stored.get("permissions") or [])
+            if cid == int(HUSEYN_CHAT_ID):
+                values.update({"waiting", "approvals_news"})
+                values.discard("approvals_system")
+            elif role == "Admin" and "waiting" in values:
+                values.update({"approvals_system", "approvals_news"})
+            stored = {**stored, "permissions": list(values), "approval_permissions_version": 1}
+            records = _load_employee_access_records()
+            records[str(cid)] = stored
+            _save_employee_access_records(records)
         permissions = _normalize_employee_permissions(stored.get("permissions"), role)
         if not stored.get("linear_create_permission_version") and role != "Usta":
             # One-time compatibility default; explicit subsequent saves win.
@@ -622,7 +636,9 @@ def employee_access_profile(chat_id: int) -> dict:
     return {
         "active": True,
         "role": role,
-        "permissions": list(_ALL_EMPLOYEE_PERMISSIONS),
+        "permissions": [key for key in _EMPLOYEE_PERMISSIONS
+                        if key not in {"approvals_system", "approvals_news"}
+                        or role == "Admin" or (cid == int(HUSEYN_CHAT_ID) and key == "approvals_news")],
         "ai_enabled": cid in {ADMIN_CHAT_ID, RUFAT_CHAT_ID},
         "hot_order_skills": ["all"],
         "completion_requires_admin": False,
@@ -781,7 +797,12 @@ def employee_has_permission(chat_id: int, permission: str) -> bool:
     # but menu/module visibility follows the saved permission matrix. This
     # makes an explicitly closed module (for example İsti sifarişlər) stay
     # closed instead of being re-enabled by a frontend `isAdmin ||` shortcut.
-    return bool(profile.get("active")) and permission in set(profile.get("permissions") or [])
+    permissions = set(profile.get("permissions") or [])
+    if permission in {"approvals_system", "approvals_news"} and "waiting" not in permissions:
+        return False
+    if permission == "waiting" and not permissions.intersection({"approvals_system", "approvals_news"}):
+        return False
+    return bool(profile.get("active")) and permission in permissions
 
 
 def can_receive_staff_notification(chat_id) -> bool:
@@ -19559,6 +19580,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "permissions_version": 2,
             "linear_create_permission_version": 1,
+            "approval_permissions_version": 1,
             "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
@@ -19607,6 +19629,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "role": role, "permissions": permissions, "active": active,
             "permissions_version": 2,
             "linear_create_permission_version": 1,
+            "approval_permissions_version": 1,
             "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
@@ -19624,6 +19647,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "permissions": old_record.get("permissions") or permissions,
                 "permissions_version": 2,
                 "linear_create_permission_version": 1,
+                "approval_permissions_version": 1,
                 "active": False,
                 "ai_enabled": bool(old_record.get("ai_enabled", ai_enabled)),
                 "hot_order_skills": old_record.get("hot_order_skills") or hot_order_skills,
@@ -20680,10 +20704,10 @@ async def handle_api_linear_news(request: web.Request) -> web.Response:
 
 
 async def handle_api_linear_news_review(request: web.Request) -> web.Response:
-    """Administrator review queue for customer-facing Linear releases."""
+    """Review queue for employees explicitly allowed to publish news."""
     chat_id = int(request.get("authenticated_chat_id") or 0)
-    if not chat_id or not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Yalnız Admin üçün."}, status=403)
+    if not chat_id or not employee_has_permission(chat_id, "approvals_news"):
+        return web.json_response({"success": False, "error": "Xəbər təsdiqi üçün icazə yoxdur."}, status=403)
     if request.method == "GET":
         try:
             rows = await asyncio.to_thread(list_linear_news, limit=60, approval_status="pending")
@@ -22632,7 +22656,9 @@ def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
     if path.startswith(("/api/balance", "/api/kpi", "/api/admin_balances")):
         return "finance"
     if path.startswith("/api/pending_actions"):
-        return "waiting"
+        return "approvals_system"
+    if path == "/api/linear/news/review":
+        return "approvals_news"
     if path.startswith("/api/linear/"):
         return "linear"
     if path.startswith("/api/gozleme"):

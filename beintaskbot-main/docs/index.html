@@ -2458,7 +2458,12 @@ function toggleSidebarPin() {
 }
 applyDesktopSidebar();
 
-function hasEmployeePermission(permission) { return employeePermissions.has(permission); }
+function hasEmployeePermission(permission) {
+    if(permission === 'waiting') return employeePermissions.has('waiting') && (employeePermissions.has('approvals_system') || employeePermissions.has('approvals_news'));
+    return employeePermissions.has(permission);
+}
+function canReviewSystem() { return hasEmployeePermission('waiting') && hasEmployeePermission('approvals_system'); }
+function canReviewNews() { return hasEmployeePermission('waiting') && hasEmployeePermission('approvals_news'); }
 async function loadEmployeeSession() {
     // In browser mode the signed cookie, not an old pwa_uid, is the identity.
     const sessionHeaders = TELEGRAM_INIT_DATA ? {'X-TG-User-ID': CURRENT_USER_ID} : {};
@@ -4194,7 +4199,7 @@ function showPendingConfirmPanel(action) {
 }
 
 async function loadPendingActions(showFeedback = false) {
-    if(!isAdmin) return false;
+    if(!canReviewSystem()) return false;
     const playingPendingAudio = document.querySelector('#pending-actions-container audio');
     if(playingPendingAudio && !playingPendingAudio.paused) return false;
     const container = document.getElementById('pending-actions-container');
@@ -4357,7 +4362,7 @@ function startPendingActionPolling() {
     stopPendingActionPolling();
     pendingActionsTimer = setInterval(() => {
         if(!document.getElementById('screen-pending')?.classList.contains('active')) return;
-        if(pendingQueue !== 'linear') loadPendingActions();
+        if(pendingQueue === 'system' && canReviewSystem()) loadPendingActions();
     }, 30000);
 }
 
@@ -4383,8 +4388,11 @@ function linearNewsReviewCard(item) {
     </article>`;
 }
 async function showNewsReview(forceRefresh = false) {
-    if(!isAdmin) return;
+    if(!canReviewNews()) return;
     pendingQueue = 'news';
+    document.getElementById('pending-type-select')?.setAttribute('hidden','');
+    document.getElementById('linear-search-toggle')?.setAttribute('hidden','');
+    document.getElementById('linear-search-wrap')?.setAttribute('hidden','');
     document.getElementById('system-pending-section')?.setAttribute('hidden','');
     document.getElementById('linear-tesdiq-section')?.setAttribute('hidden','');
     document.getElementById('linear-news-review-section')?.removeAttribute('hidden');
@@ -4423,7 +4431,8 @@ async function createLinearNews() {
 }
 
 async function showPendingQueue(queue, forceRefresh = false) {
-    if(!isAdmin) return;
+    if(queue === 'news') return showNewsReview(forceRefresh);
+    if(!canReviewSystem()) return canReviewNews() ? showNewsReview(forceRefresh) : undefined;
     pendingQueue = queue === 'system' ? 'system' : 'linear';
     const linearSection = document.getElementById('linear-tesdiq-section');
     const newsSection = document.getElementById('linear-news-review-section');
@@ -4445,7 +4454,7 @@ async function showPendingQueue(queue, forceRefresh = false) {
     if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
     if(newsButton) newsButton.className = inactiveClass;
     if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
-    if(typeSelect) typeSelect.style.display = linearActive ? 'none' : '';
+    if(typeSelect) { typeSelect.hidden = linearActive; typeSelect.style.display = linearActive ? 'none' : ''; }
     if(linearSearchToggle) linearSearchToggle.hidden = !linearActive;
     if(linearSearchWrap && !linearActive) {
         linearSearchWrap.hidden = true;
@@ -4470,12 +4479,17 @@ async function refreshPendingQueue() {
 }
 
 async function openPendingActions() {
-    if(!isAdmin) { toast('Bu bölmə yalnız Admin üçündür.', true); switchTab('tab-tasks'); return; }
+    if(!canReviewSystem() && !canReviewNews()) { toast('Bu bölmə üçün icazə yoxdur.', true); switchTab(firstAllowedTab()); return; }
     nav('screen-pending');
+    const systemButton = document.getElementById('pending-queue-system');
+    const newsButton = document.getElementById('pending-queue-news');
+    if(systemButton) systemButton.hidden = !canReviewSystem();
+    if(newsButton) newsButton.hidden = !canReviewNews();
     startPendingActionPolling();
     // System confirmations are the primary director workflow. Linear is
     // intentionally never restored as the default after navigation/reload.
-    await showPendingQueue('system', true);
+    if(canReviewSystem()) await showPendingQueue('system', true);
+    else await showNewsReview(true);
 }
 
 let currentFilter = localStorage.getItem('pinned_filter') || (CURRENT_USER_ID === '1628569350' ? 'Nizami Qasımov' : 'all');
@@ -12483,11 +12497,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const EMPLOYEE_PERMISSION_LABELS = {
     deals: 'Sövdələşmələr', tasks: 'Tapşırıqlar', finance: 'Maliyyə', passive_tasks: 'Gözləmə',
-    waiting: 'Təsdiq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', hot_orders_create: 'İsti sifariş yaratmaq', employees: 'Əməkdaşlar', linear: 'Linear tapşırıqlar', linear_create: 'Linear tapşırığı yaratmaq', linear_edit: 'Linear redaktə'
+    waiting: 'Təsdiq', approvals_system: 'Sistem təsdiqləri', approvals_news: 'Xəbərləri təsdiqləmək və yayımlamaq', customers: 'Müştərilər', hot_orders: 'İsti sifarişlər', hot_orders_create: 'İsti sifariş yaratmaq', employees: 'Əməkdaşlar', linear: 'Linear tapşırıqlar', linear_create: 'Linear tapşırığı yaratmaq', linear_edit: 'Linear redaktə'
 };
 function employeePermissionInputs(selected = []) {
     const chosen = new Set(selected || []);
-    return Object.entries(EMPLOYEE_PERMISSION_LABELS).map(([key, label]) => `<label class="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2"><input type="checkbox" data-employee-permission="${key}" ${chosen.has(key) ? 'checked' : ''}><span>${label}</span></label>`).join('');
+    const input = (key, label) => `<label class="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2"><input type="checkbox" data-employee-permission="${key}" ${chosen.has(key) ? 'checked' : ''}><span>${label}</span></label>`;
+    return Object.entries(EMPLOYEE_PERMISSION_LABELS).filter(([key]) => !key.startsWith('approvals_')).map(([key, label]) => key === 'waiting'
+        ? `<div class="col-span-full rounded-xl border border-slate-200 p-2">${input(key,label)}<div class="mt-2 grid gap-2 pl-4">${input('approvals_system',EMPLOYEE_PERMISSION_LABELS.approvals_system)}${input('approvals_news',EMPLOYEE_PERMISSION_LABELS.approvals_news)}</div></div>`
+        : input(key,label)).join('');
 }
 const HOT_ORDER_SKILL_LABELS = {all:'Bütün sifarişlər', montaj:'Montaj', temir:'Təmir', catdirilma:'Çatdırılma', servis:'Servis', 'digər':'Digər'};
 function employeeHotSkillDropdown(selected = []) {
@@ -12497,6 +12514,11 @@ function employeeHotSkillDropdown(selected = []) {
 }
 function closeEmployeeEditor() { document.getElementById('employee-editor-modal')?.remove(); }
 document.addEventListener('change', event => {
+    if(event.target.matches('[data-employee-permission]')) {
+        const key = event.target.getAttribute('data-employee-permission');
+        if(key === 'waiting' && !event.target.checked) document.querySelectorAll('[data-employee-permission^="approvals_"]').forEach(el => { el.checked = false; });
+        if(key.startsWith('approvals_') && event.target.checked) { const parent = document.querySelector('[data-employee-permission="waiting"]'); if(parent) parent.checked = true; }
+    }
     if(!event.target.matches('[data-employee-hot-skill]')) return;
     const selected = [...document.querySelectorAll('[data-employee-hot-skill]:checked')]
         .map(item => HOT_ORDER_SKILL_LABELS[item.getAttribute('data-employee-hot-skill')]).filter(Boolean);

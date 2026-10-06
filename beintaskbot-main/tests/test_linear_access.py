@@ -202,6 +202,7 @@ class LinearAccessTests(unittest.TestCase):
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "employee_access_profile")
         record = {"role": "Əməkdaş", "active": True, "permissions": ["linear"]}
         ns = dict(self.ns, _load_employee_access_records=lambda: {str(RASIM): record},
+                  _save_employee_access_records=Mock(),
                   _RETIRED_EMPLOYEE_CHAT_IDS=set(), _normalize_employee_permissions=lambda value, role: list(value),
                   _normalize_hot_order_skills=lambda value: [], _EMPLOYEE_PERMISSIONS=("linear", "linear_create"))
         exec(compile(ast.Module(body=[node], type_ignores=[]), "<profile>", "exec"), ns)
