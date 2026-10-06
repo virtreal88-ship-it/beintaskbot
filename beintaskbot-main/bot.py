@@ -69,11 +69,11 @@ from tenant_platform import (
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published,
-    prune_linear_news, reset_linear_news_publishing_once,
+    prune_linear_news,
     require_linear_news_review_once,
+    restore_linear_news_publications_once,
     claim_linear_news_publish_slot,
     update_linear_news_review,
-    seed_linear_news_review_once,
     list_tenant_workflow_config, save_tenant_workflow_config,
 )
 # import sqlite3  # replaced by gh_storage
@@ -136,8 +136,6 @@ LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL"
 # Publishing is enabled again by explicit product-owner request. Delivery is
 # still throttled to one item per synchronization cycle and deduplicated in DB.
 LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "true").strip().casefold() in {"1", "true", "yes", "on"}
-LINEAR_NEWS_RESEED_KEY = "telegram-feed-curated-v2"
-LINEAR_NEWS_REVIEW_TEST_KEY = "telegram-news-review-test-v1"
 LINEAR_NEWS_START_HOUR = 9
 LINEAR_NEWS_END_HOUR = 19
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
@@ -20616,18 +20614,11 @@ async def _sync_linear_news(issues: list[dict]) -> None:
     try:
         if not LINEAR_NEWS_TELEGRAM_ENABLED:
             return
-        await asyncio.to_thread(
-            reset_linear_news_publishing_once,
-            migration_key=LINEAR_NEWS_RESEED_KEY,
-        )
+        await asyncio.to_thread(restore_linear_news_publications_once)
         await asyncio.to_thread(
             require_linear_news_review_once,
             migration_key="telegram-news-explicit-review-v1",
         )
-        existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
-        # Leave one real current release in the administrator's review queue
-        # so the new confirmation flow can be tested before wider publishing.
-        await asyncio.to_thread(seed_linear_news_review_once, migration_key=LINEAR_NEWS_REVIEW_TEST_KEY)
         existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
         known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
         # Backfill the channel once for releases already archived before the
@@ -20639,6 +20630,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 break
             if (not isinstance(row, dict) or row.get("approval_status") != "approved"
                     or not row.get("reviewed_at")
+                    or row.get("first_published_at")
                     or row.get("telegram_published_at") or row.get("telegram_message_id")):
                 continue
             slot_key = _linear_news_current_publish_slot()
@@ -20710,8 +20702,12 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Xəbər təsdiqi üçün icazə yoxdur."}, status=403)
     if request.method == "GET":
         try:
-            rows = await asyncio.to_thread(list_linear_news, limit=60, approval_status="pending")
-            return web.json_response({"success": True, "items": rows})
+            offset = max(0, int(request.rel_url.query.get("offset") or 0))
+            await asyncio.to_thread(restore_linear_news_publications_once)
+            rows = await asyncio.to_thread(list_linear_news, limit=60, approval_status="pending", offset=offset)
+            return web.json_response({"success": True, "items": rows, "has_more": len(rows) == 60, "next_offset": offset + len(rows)})
+        except (TypeError, ValueError):
+            return web.json_response({"success": False, "error": "Yanlış səhifə."}, status=400)
         except Exception:
             logger.exception("Linear news review queue failed")
             return web.json_response({"success": False, "error": "Xəbər təsdiqləri yüklənmədi."}, status=500)
@@ -20772,6 +20768,8 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
         if not row:
             return web.json_response({"success": False, "error": "Xəbər tapılmadı."}, status=404)
         if action == "approve":
+            if row.get("first_published_at") or row.get("telegram_published_at") or row.get("telegram_message_id"):
+                return web.json_response({"success": True, "published": True, "already_published": True, "item": row})
             message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, row)
             if not message_id:
                 return web.json_response({"success": False, "error": "Xəbər Telegram kanalına göndərilmədi."}, status=502)

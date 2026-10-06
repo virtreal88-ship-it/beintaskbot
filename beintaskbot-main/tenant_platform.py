@@ -320,6 +320,7 @@ def _ensure_schema(conn) -> None:
                     media_url TEXT NOT NULL DEFAULT '',
                     media_type TEXT NOT NULL DEFAULT '',
                     reviewed_at TIMESTAMPTZ NULL,
+                    first_published_at TIMESTAMPTZ NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
@@ -332,6 +333,7 @@ def _ensure_schema(conn) -> None:
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS media_url TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ NULL")
+            cur.execute("ALTER TABLE crm_linear_news ADD COLUMN IF NOT EXISTS first_published_at TIMESTAMPTZ NULL")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_tenant_webhook_events (
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -460,7 +462,7 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
     return item
 
 
-def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status: str = "approved") -> list[dict]:
+def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status: str = "approved", offset: int = 0) -> list[dict]:
     """Return non-expired release notes, newest first."""
     project = str(project_key or "").strip().upper()
     status = str(approval_status or "").strip().lower()
@@ -468,6 +470,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
         size = max(1, min(int(limit), 200))
     except (TypeError, ValueError):
         size = 60
+    start = max(0, int(offset or 0))
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -476,15 +479,17 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
                     SELECT * FROM crm_linear_news
                     WHERE project_key = %s AND expires_at > now()
                       AND (%s = '' OR approval_status = %s)
-                    ORDER BY done_at DESC, created_at DESC LIMIT %s
-                """, (project, status, status, size))
+                      AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
+                    ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
+                """, (project, status, status, status, size, start))
             else:
                 cur.execute("""
                     SELECT * FROM crm_linear_news
                     WHERE expires_at > now()
                       AND (%s = '' OR approval_status = %s)
-                    ORDER BY done_at DESC, created_at DESC LIMIT %s
-                """, (status, status, size))
+                      AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
+                    ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
+                """, (status, status, status, size, start))
             rows = cur.fetchall()
     result = []
     for row in rows:
@@ -492,7 +497,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
         item["id"] = str(item.get("id") or "")
         if not isinstance(item.get("raw"), dict):
             item["raw"] = {}
-        for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "reviewed_at", "created_at", "updated_at"):
+        for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "first_published_at", "reviewed_at", "created_at", "updated_at"):
             if item.get(key):
                 item[key] = item[key].isoformat()
         result.append(item)
@@ -527,7 +532,7 @@ def update_linear_news_review(*, source_issue_id: str, title: str, summary: str,
         return None
     item = dict(row)
     item["id"] = str(item.get("id") or "")
-    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "reviewed_at", "created_at", "updated_at"):
+    for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "first_published_at", "reviewed_at", "created_at", "updated_at"):
         if item.get(key):
             item[key] = item[key].isoformat()
     return item
@@ -545,6 +550,7 @@ def mark_linear_news_published(*, source_issue_id: str, telegram_message_id: int
                 UPDATE crm_linear_news
                 SET telegram_message_id = %s,
                     telegram_published_at = now(),
+                    first_published_at = COALESCE(first_published_at, now()),
                     updated_at = now()
                 WHERE source_issue_id = %s
             """, (telegram_message_id, issue_id))
@@ -611,13 +617,45 @@ def require_linear_news_review_once(*, migration_key: str) -> bool:
                     UPDATE crm_linear_news
                     SET approval_status='pending',
                         reviewed_at=NULL,
-                        telegram_message_id=NULL,
-                        telegram_published_at=NULL,
                         updated_at=now()
                     WHERE approval_status='approved' AND reviewed_at IS NULL
+                      AND first_published_at IS NULL
+                      AND telegram_message_id IS NULL AND telegram_published_at IS NULL
                 """)
         conn.commit()
     return applied
+
+
+def restore_linear_news_publications_once() -> None:
+    """Preserve delivery history and recover the release reported by its owner."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crm_linear_news
+                SET first_published_at=COALESCE(first_published_at, telegram_published_at, updated_at),
+                    approval_status='approved',
+                    reviewed_at=COALESCE(reviewed_at, telegram_published_at, updated_at)
+                WHERE (telegram_message_id IS NOT NULL OR telegram_published_at IS NOT NULL)
+                  AND first_published_at IS NULL
+            """)
+            cur.execute("""
+                INSERT INTO crm_linear_news_migrations (migration_key)
+                VALUES ('restore-owner-confirmed-bs-1321-v1')
+                ON CONFLICT (migration_key) DO NOTHING RETURNING migration_key
+            """)
+            if cur.fetchone():
+                # The old migration erased delivery marks. The owner explicitly
+                # confirmed this identifier was already shared; do not resend it.
+                cur.execute("""
+                    UPDATE crm_linear_news
+                    SET approval_status='approved',
+                        reviewed_at=COALESCE(reviewed_at, now()),
+                        first_published_at=COALESCE(first_published_at, now()),
+                        updated_at=now()
+                    WHERE identifier='BS-1321'
+                """)
+        conn.commit()
 
 
 def claim_linear_news_publish_slot(*, slot_key: str) -> bool:

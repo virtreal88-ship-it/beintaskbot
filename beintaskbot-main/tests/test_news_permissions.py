@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
 
 def load_functions():
@@ -17,6 +17,7 @@ def load_functions():
         'asyncio': asyncio,
         'web': SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {'data': data, 'status': status}),
         'list_linear_news': Mock(return_value=[{'title': 'New feature'}]),
+        'restore_linear_news_publications_once': Mock(),
         'logger': Mock(),
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<news-permissions>', 'exec'), namespace)
@@ -28,7 +29,7 @@ class NewsPermissionTests(unittest.TestCase):
         self.ns, self.profile = load_functions()
 
     def test_news_editor_can_read_without_admin_or_linear_access(self):
-        request = SimpleNamespace(method='GET', get=lambda key: 7329891614)
+        request = SimpleNamespace(method='GET', get=lambda key: 7329891614, rel_url=SimpleNamespace(query={}))
         response = asyncio.run(self.ns['handle_api_linear_news_review'](request))
         self.assertEqual(response['status'], 200)
         self.assertTrue(response['data']['success'])
@@ -54,6 +55,24 @@ class NewsPermissionTests(unittest.TestCase):
     def test_closed_parent_page_blocks_news(self):
         self.profile['permissions'] = ['approvals_news']
         self.assertFalse(self.ns['employee_has_permission'](7329891614, 'approvals_news'))
+
+    def test_review_queue_accepts_next_page(self):
+        self.ns['list_linear_news'].return_value = [{'title': str(i)} for i in range(60)]
+        request = SimpleNamespace(method='GET', get=lambda key: 7329891614, rel_url=SimpleNamespace(query={'offset': '60'}))
+        response = asyncio.run(self.ns['handle_api_linear_news_review'](request))
+        self.ns['list_linear_news'].assert_called_once_with(limit=60, approval_status='pending', offset=60)
+        self.assertEqual(response['data']['next_offset'], 120)
+        self.assertTrue(response['data']['has_more'])
+
+    def test_already_published_news_is_not_sent_twice(self):
+        self.ns['update_linear_news_review'] = Mock(return_value={'first_published_at': '2026-10-06T09:00:00Z'})
+        publish = self.ns['_publish_linear_news_to_telegram'] = Mock()
+        request = SimpleNamespace(method='POST', get=lambda key: 7329891614,
+                                  json=AsyncMock(return_value={'action': 'approve', 'source_issue_id': 'published'}))
+        response = asyncio.run(self.ns['handle_api_linear_news_review'](request))
+        self.assertEqual(response['status'], 200)
+        self.assertTrue(response['data']['already_published'])
+        publish.assert_not_called()
 
     def test_huseyn_grant_is_persisted_once_and_revocation_wins(self):
         source = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))

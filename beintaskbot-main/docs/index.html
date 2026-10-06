@@ -287,6 +287,9 @@
             #screen-pending.active #linear-tesdiq-section:not([hidden]) { display:flex; flex-direction:column; }
             #screen-pending.active #linear-tesdiq-list { min-height:0; overflow-y:auto; }
             #screen-pending.active #system-pending-section:not([hidden]) { overflow-y:auto; }
+            #screen-pending.active #linear-news-review-section:not([hidden]) { display:flex; flex-direction:column; flex:1; min-height:0; }
+            #linear-news-review-section > .flex { flex-shrink:0; }
+            #screen-pending.active #linear-news-review-list { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-bottom:24px; }
             #screen-linear.active { overflow:hidden; }
             #screen-linear.active #linear-tasks-container { flex:1; min-height:0; overflow-y:auto; }
             #gozleme-container.samil-kanban-board, #notifications-container.samil-kanban-board { grid-auto-columns:calc((100% - 42px) / 4); height:100%; min-height:0; gap:14px; }
@@ -4374,6 +4377,9 @@ function stopPendingActionPolling() {
 }
 
 let linearNewsReviewLoaded = false;
+let linearNewsReviewOffset = 0;
+let linearNewsReviewLoading = false;
+let linearNewsReviewGeneration = 0;
 function linearNewsReviewCard(item) {
     const id = escapeHtml(item.source_issue_id || '');
     const project = escapeHtml(item.project_key || '');
@@ -4403,15 +4409,38 @@ async function showNewsReview(forceRefresh = false) {
     const list = document.getElementById('linear-news-review-list'); const meta = document.getElementById('linear-news-review-meta');
     if(!list || !meta) return;
     list.innerHTML = '<div class="px-3 py-4 text-center text-xs text-emerald-600">Yüklənir…</div>';
+    linearNewsReviewOffset = 0;
+    linearNewsReviewGeneration += 1;
+    linearNewsReviewLoading = false;
+    await loadMoreNewsReview(linearNewsReviewGeneration);
+}
+async function loadMoreNewsReview(generation = linearNewsReviewGeneration) {
+    if(!canReviewNews() || linearNewsReviewLoading) return;
+    linearNewsReviewLoading = true;
+    const list = document.getElementById('linear-news-review-list');
+    const meta = document.getElementById('linear-news-review-meta');
+    const offset = linearNewsReviewOffset;
+    const more = document.getElementById('news-review-load-more');
+    if(more) { more.disabled = true; more.textContent = 'Yüklənir…'; }
     try {
-        const r = await fetch(API_BASE + '/api/linear/news/review?_ts=' + Date.now(), {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
+        const r = await fetch(API_BASE + '/api/linear/news/review?offset=' + offset + '&_ts=' + Date.now(), {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
         const d = await r.json(); if(!r.ok || !d.success) throw new Error(d.error || 'Xəbərlər yüklənmədi.');
+        if(generation !== linearNewsReviewGeneration) return;
         const rows = Array.isArray(d.items) ? d.items : [];
-        meta.textContent = `${rows.length} xəbər təsdiq gözləyir`;
-        list.innerHTML = rows.length ? rows.map(linearNewsReviewCard).join('') : '<div class="px-3 py-4 text-center text-xs text-slate-500">Təsdiq gözləyən xəbər yoxdur.</div>';
+        if(offset === 0) list.innerHTML = '';
+        document.getElementById('news-review-load-more')?.remove();
+        list.insertAdjacentHTML('beforeend', rows.map(linearNewsReviewCard).join(''));
+        linearNewsReviewOffset = Number(d.next_offset) || (offset + rows.length);
+        meta.textContent = `${linearNewsReviewOffset}${d.has_more ? '+' : ''} xəbər təsdiq gözləyir`;
+        if(!linearNewsReviewOffset) list.innerHTML = '<div class="px-3 py-4 text-center text-xs text-slate-500">Təsdiq gözləyən xəbər yoxdur.</div>';
+        if(d.has_more) list.insertAdjacentHTML('beforeend', '<button id="news-review-load-more" type="button" onclick="loadMoreNewsReview()" class="w-full rounded-xl bg-white border border-emerald-100 px-3 py-3 text-xs font-bold text-emerald-700">Daha çox xəbər göstər</button>');
         list.querySelectorAll('textarea[data-news-title],textarea[data-news-summary]').forEach(el => { const resize=()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';}; el.addEventListener('input',resize); resize(); });
         linearNewsReviewLoaded = true;
-    } catch(e) { meta.textContent = 'Yüklənmədi'; list.innerHTML = `<div class="px-3 py-4 text-xs text-red-500">${escapeHtml(e.message || 'Xəta')}</div>`; }
+    } catch(e) {
+        if(generation !== linearNewsReviewGeneration) return;
+        if(offset === 0) { meta.textContent = 'Yüklənmədi'; list.innerHTML = `<div class="px-3 py-4 text-xs text-red-500">${escapeHtml(e.message || 'Xəta')}</div>`; }
+        else { toast(e.message || 'Xəta',true); if(more) { more.disabled = false; more.textContent = 'Yenidən yoxla'; } }
+    } finally { if(generation === linearNewsReviewGeneration) linearNewsReviewLoading = false; }
 }
 async function reviewLinearNews(sourceId, action, button) {
     const card = document.querySelector(`[data-news-review-id="${CSS.escape(sourceId)}"]`); if(!card) return;
