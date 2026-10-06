@@ -71,7 +71,7 @@ from tenant_platform import (
     list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, delete_linear_news,
-    upsert_linear_news, list_linear_news, mark_linear_news_published,
+    upsert_linear_news, list_linear_news, mark_linear_news_published, sync_linear_news_environments,
     prune_linear_news,
     require_linear_news_review_once,
     restore_linear_news_publications_once,
@@ -19967,24 +19967,8 @@ def _linear_news_project_key(issue: dict) -> str:
 
 def _linear_issue_environment(issue: dict) -> str:
     """Read Linear's environment labels in both API and normalized shapes."""
-    labels = issue.get("labels") or []
-    if isinstance(labels, dict):
-        labels = labels.get("nodes") or []
-    environments: list[str] = []
-    for label in labels:
-        name = str(label.get("name") or "") if isinstance(label, dict) else str(label or "")
-        name = name.strip().upper()
-        if name in {"ONLINE", "BETA", "DEV"} and name not in environments:
-            environments.append(name)
-    if environments:
-        return ", ".join(environments)
-    # Older CRM tasks can still carry the field in their description.
-    metadata, _ = _linear_description_metadata(str(issue.get("description") or ""))
-    for value in (metadata.get("environment"), issue.get("environment")):
-        clean = str(value or "").strip()
-        if clean and clean.casefold() != "göstərilməyib":
-            return clean
-    return "Göstərilməyib"
+    from linear_metadata import issue_environment
+    return issue_environment(issue)
 
 
 def _linear_issue_is_bug_fix(issue: dict) -> bool:
@@ -20666,6 +20650,7 @@ def _linear_news_current_publish_slot() -> str:
 async def _sync_linear_news(issues: list[dict]) -> None:
     """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
     try:
+        await asyncio.to_thread(sync_linear_news_environments, issues or [])
         if not LINEAR_NEWS_TELEGRAM_ENABLED:
             return
         await asyncio.to_thread(restore_linear_news_publications_once)

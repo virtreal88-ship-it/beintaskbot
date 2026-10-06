@@ -4393,6 +4393,7 @@ function linearNewsReviewCard(item) {
     const mediaType = String(item.media_type || '').toLowerCase();
     return `<article class="rounded-xl border border-emerald-100 bg-white p-3 shadow-sm" data-news-review-id="${id}">
       <div class="flex items-center justify-between gap-2"><div class="text-[10px] font-extrabold text-emerald-700">${project}${identifier}</div>${item.source_url ? `<a href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-600">Linear ↗</a>` : ''}</div>
+      <div class="mt-2 text-xs text-slate-600"><b>Mühit:</b> ${escapeHtml(item.environment || 'Göstərilməyib')}</div>
       <label class="mt-2 block text-[10px] font-bold text-slate-500">Başlıq<textarea data-news-title rows="1" class="mt-1 w-full resize-none overflow-hidden rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold outline-none">${escapeHtml(item.title || '')}</textarea></label>
       <label class="mt-2 block text-[10px] font-bold text-slate-500">Qısa mətn<textarea data-news-summary rows="3" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.summary || '')}</textarea></label>
       <div class="mt-2"><input data-news-media-url class="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] outline-none" value="${escapeHtml(item.media_url || '')}" placeholder="Xəbər linki (istəyə görə)"></div>

@@ -470,8 +470,32 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
     return item
 
 
+def sync_linear_news_environments(issues: list[dict]) -> None:
+    """Refresh live metadata only; never rewrite reviewed copy or delivery marks."""
+    from linear_metadata import issue_environment
+    rows = [{"source_id": str(issue.get("source_id") or issue.get("id") or ""),
+             "environment": issue_environment(issue), "issue": issue}
+            for issue in issues if isinstance(issue, dict) and (issue.get("source_id") or issue.get("id"))]
+    if not rows:
+        return
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crm_linear_news AS news
+                SET environment=source.environment,
+                    raw=jsonb_set(COALESCE(news.raw, '{}'::jsonb), '{linear}', source.issue, true)
+                FROM jsonb_to_recordset(%s::jsonb) AS source(source_id text, environment text, issue jsonb)
+                WHERE news.source_issue_id=source.source_id
+                  AND (news.environment IS DISTINCT FROM source.environment
+                       OR news.raw->'linear' IS DISTINCT FROM source.issue)
+            """, (_json(rows),))
+        conn.commit()
+
+
 def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status: str = "approved", offset: int = 0) -> list[dict]:
     """Return non-expired release notes, newest first."""
+    from linear_metadata import news_environment
     project = str(project_key or "").strip().upper()
     status = str(approval_status or "").strip().lower()
     try:
@@ -505,6 +529,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
         item["id"] = str(item.get("id") or "")
         if not isinstance(item.get("raw"), dict):
             item["raw"] = {}
+        item["environment"] = news_environment(item)
         for key in ("source_created_at", "done_at", "expires_at", "telegram_published_at", "first_published_at", "reviewed_at", "created_at", "updated_at"):
             if item.get(key):
                 item[key] = item[key].isoformat()
