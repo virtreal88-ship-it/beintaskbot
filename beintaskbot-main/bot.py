@@ -19965,6 +19965,28 @@ def _linear_news_project_key(issue: dict) -> str:
     return ""
 
 
+def _linear_issue_environment(issue: dict) -> str:
+    """Read Linear's environment labels in both API and normalized shapes."""
+    labels = issue.get("labels") or []
+    if isinstance(labels, dict):
+        labels = labels.get("nodes") or []
+    environments: list[str] = []
+    for label in labels:
+        name = str(label.get("name") or "") if isinstance(label, dict) else str(label or "")
+        name = name.strip().upper()
+        if name in {"ONLINE", "BETA", "DEV"} and name not in environments:
+            environments.append(name)
+    if environments:
+        return ", ".join(environments)
+    # Older CRM tasks can still carry the field in their description.
+    metadata, _ = _linear_description_metadata(str(issue.get("description") or ""))
+    for value in (metadata.get("environment"), issue.get("environment")):
+        clean = str(value or "").strip()
+        if clean and clean.casefold() != "göstərilməyib":
+            return clean
+    return "Göstərilməyib"
+
+
 def _linear_issue_is_bug_fix(issue: dict) -> bool:
     """Keep implementation bugs out of the customer-facing release feed."""
     labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
@@ -20394,7 +20416,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
             "assignee": str((row.get("assignee") or {}).get("name") or "Təyin olunmayıb"),
             "operator": description_meta.get("operator") or str((row.get("creator") or {}).get("name") or "Göstərilməyib"),
             "project": description_meta.get("project") or str((row.get("project") or {}).get("name") or ""),
-            "environment": description_meta.get("environment") or "Göstərilməyib",
+            "environment": _linear_issue_environment(row),
             "labels": [str(x.get("name") or "") for x in ((row.get("labels") or {}).get("nodes") or []) if isinstance(x, dict)],
         })
     # Linear's default order is mutable (updatedAt). The director queue is
@@ -20413,7 +20435,8 @@ def _linear_issue_context(issue_id: str) -> dict:
     """Load a Linear issue and refuse cross-team mutations."""
     payload = _linear_graphql("""
     query ConfirmationIssue($id: String!) {
-      issue(id: $id) { id identifier title description url team { id } state { id name type } assignee { id name } }
+      issue(id: $id) { id identifier title description url team { id } state { id name type } assignee { id name }
+        labels { nodes { name } } project { name } creator { name } }
     }
     """, {"id": issue_id})
     issue = payload.get("issue") or {}
@@ -20570,9 +20593,12 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
     # Account/Project/Environment prefixes.  Prefer those fields, then fall
     # back to the prefixes for webhook/manual status changes.
     client = str(issue.get("client") or metadata.get("client") or _linear_client_hint(raw_description) or "Göstərilməyib").strip()
-    project = str(issue.get("project") or metadata.get("project") or "Göstərilməyib").strip()
-    environment = str(issue.get("environment") or metadata.get("environment") or "Göstərilməyib").strip()
-    operator = str(issue.get("operator") or metadata.get("operator") or "Göstərilməyib").strip()
+    project_value = issue.get("project")
+    if isinstance(project_value, dict):
+        project_value = project_value.get("name")
+    project = str(project_value or metadata.get("project") or "Göstərilməyib").strip()
+    environment = _linear_issue_environment(issue)
+    operator = str(issue.get("operator") or metadata.get("operator") or (issue.get("creator") or {}).get("name") or "Göstərilməyib").strip()
     task_text = visible.strip() or "Göstərilməyib"
     details = [
         f"Status: {state_name}",

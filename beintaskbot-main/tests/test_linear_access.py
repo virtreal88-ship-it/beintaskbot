@@ -25,7 +25,7 @@ def load_linear_functions():
         "get_rufat_compat_chat_ids", "is_rufat_chat", "_linear_identity_chat_id",
         "_linear_operator_for_chat", "_linear_create_identity_for_chat", "_linear_can_create_for_chat",
         "_linear_account_key", "_linear_account_matches", "_linear_account_scope", "_linear_issue_matches_scope", "_linear_save_test_result",
-        "_linear_client_hint", "_linear_description_metadata", "_load_linear_tesdiq_issues",
+        "_linear_client_hint", "_linear_description_metadata", "_linear_issue_environment", "_load_linear_tesdiq_issues",
         "handle_api_linear_tesdiq", "handle_api_session",
     }
     selected = [
@@ -86,6 +86,21 @@ class LinearAccessTests(unittest.TestCase):
 
     def call(self, request):
         return asyncio.run(self.ns["handle_api_linear_tesdiq"](request))
+
+    def test_environment_from_linear_labels_reaches_board(self):
+        self.rows[0]["labels"] = {"nodes": [{"name": "BETA"}]}
+        result = self.call(Request(RUFAT, query={"scope": "all"}))
+        self.assertEqual(result["data"]["issues"][0]["environment"], "BETA")
+
+    def test_environment_shapes_fallback_and_unrelated_labels(self):
+        environment = self.ns["_linear_issue_environment"]
+        for labels in (["DEV", "ONLINE", "DEV"], {"nodes": [{"name": "DEV"}, {"name": "ONLINE"}]}):
+            self.assertEqual(environment({"labels": labels}), "DEV, ONLINE")
+        self.assertEqual(environment({"labels": ["bug"], "description": "Mühit: BETA\ntext"}), "BETA")
+        self.assertEqual(environment({"environment": "ONLINE"}), "ONLINE")
+        self.assertEqual(environment({"labels": ["bug"], "environment": "Göstərilməyib"}), "Göstərilməyib")
+        self.assertEqual(environment({}), "Göstərilməyib")
+        self.assertEqual(environment({"labels": ["DEV"], "description": "Mühit: BETA"}), "DEV")
 
     def test_rufat_sees_own_account_without_dictionary_or_operator_filter(self):
         for query in ({"scope": "all"}, {"scope": "all", "q": "rufet"}):

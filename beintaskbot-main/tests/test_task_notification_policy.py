@@ -1,6 +1,7 @@
 """Regression checks without starting the bot or sending real notifications."""
 import ast
 import asyncio
+import re
 import types
 import unittest
 from pathlib import Path
@@ -11,14 +12,14 @@ class PolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tree = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
-        names = {"task_assignee_is_self", "_notify_linear_status_change", "_notify_linear_status_transitions"}
+        names = {"task_assignee_is_self", "_notify_linear_status_change", "_notify_linear_status_transitions", "_linear_issue_environment", "_linear_description_metadata"}
         cls.code = compile(ast.Module(body=[n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names], type_ignores=[]), "<policy>", "exec")
 
     def setUp(self):
         self.rows = [{"chat_id": 1, "name": "Admin", "active": True}, {"chat_id": 99, "name": "Rüfət Həsənzadə", "active": True}, {"chat_id": 3, "name": "Hüseyn", "active": True}, {"chat_id": 4, "name": "Former", "active": False}]
         self.push = Mock()
         self.telegram = AsyncMock()
-        self.ns = {"asyncio": asyncio, "ADMIN_CHAT_ID": 1, "RUFAT_CHAT_ID": 2,
+        self.ns = {"asyncio": asyncio, "re": re, "ADMIN_CHAT_ID": 1, "RUFAT_CHAT_ID": 2,
             "normalize_assignee_name": lambda name: str(name).strip(),
             "_employee_directory_rows": lambda: self.rows,
             "get_chat_id_by_name": lambda name: {"Rüfət": 2, "Hüseyn": 3}.get(name),
@@ -57,6 +58,18 @@ class PolicyTests(unittest.TestCase):
         self.push.side_effect = RuntimeError("push failure")
         asyncio.run(self.ns["_notify_linear_status_change"]({"id": "1"}, {"name": "Done"}))
         self.assertEqual(self.telegram.await_count, 3)
+
+    def test_environment_label_in_raw_and_board_notifications(self):
+        for labels in ({"nodes": [{"name": "BETA"}]}, ["BETA"]):
+            with self.subTest(labels=labels):
+                self.telegram.reset_mock()
+                issue = {"id": "BS-1248", "labels": labels,
+                         "environment": "Göstərilməyib", "project": {"name": "Akul Web"}}
+                asyncio.run(self.ns["_notify_linear_status_change"](issue, {"name": "Done"}))
+                for call in self.telegram.call_args_list:
+                    self.assertIn("Mühit: BETA", call.kwargs["text"])
+                    self.assertIn("Layihə: Akul Web", call.kwargs["text"])
+                self.assertIn("Mühit: BETA", self.push.call_args.args[2])
 
 
 if __name__ == "__main__":
