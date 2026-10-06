@@ -7,6 +7,8 @@ const start = html.indexOf('async function markDealUnreachable(');
 const end = html.indexOf('\nfunction ',start);
 assert(start >= 0 && end > start);
 assert.match(html,/class="deal-unreachable[^>]+>Ulaşmaq olmadı<\/button>/);
+assert.match(html,/class="deal-unreachable ml-auto shrink-0/);
+assert.doesNotMatch(html,/<span[^>]*deal-drag-hint[^>]*>Sürüşdür<\/span>/);
 const events = [];
 let reject = false, finish;
 const context = {console,
