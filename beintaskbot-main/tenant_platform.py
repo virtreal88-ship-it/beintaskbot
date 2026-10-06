@@ -1046,11 +1046,28 @@ def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
     return saved
 
 
-def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, limit: int = 100) -> list[dict]:
+def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, scope: dict | None = None, limit: int = 100) -> list[dict]:
     if responsible_id == 0:
         return []
     clauses = ["tenant_id = %s::uuid"]
     values: list = [tenant_id]
+    if scope is not None:
+        kind = scope.get('kind')
+        if kind == 'pipelines':
+            pipeline_clauses = []
+            for item in scope.get('pipelines', []):
+                pipeline_clauses.append('(d.pipeline_id = %s' + (' AND d.status_id = ANY(%s)' if item.get('status_ids') else '') + ')')
+                values.append(int(item['pipeline_id']))
+                if item.get('status_ids'):
+                    values.append(item['status_ids'])
+            clauses.append('EXISTS (SELECT 1 FROM saas_crm_deals d WHERE d.tenant_id = saas_crm_tasks.tenant_id '
+                           'AND d.kommo_lead_id = saas_crm_tasks.kommo_lead_id AND ('
+                           + (' OR '.join(pipeline_clauses) or 'FALSE') + '))')
+        elif kind == 'marker' and scope.get('marker'):
+            clauses.append('strpos(text, %s) > 0')
+            values.append(str(scope['marker']))
+        elif kind != 'all':
+            clauses.append('FALSE')
     if responsible_id is not None:
         clauses.append("responsible_id = %s")
         values.append(int(responsible_id))

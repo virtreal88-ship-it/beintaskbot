@@ -54,10 +54,40 @@ class TenantPolicyTests(unittest.TestCase):
         person=profile();person['workflow']['stages'][0]['settings']['visible']=False
         self.assertNotIn(10,[item['pipeline_id'] for item in TenantPolicy(person).pipeline_scope()])
 
-    def test_missing_kommo_id_is_not_an_all_task_scope(self):
-        self.assertEqual(TenantPolicy(profile(telegram_id=99)).task_responsible_id(),0)
-        self.assertEqual(TenantPolicy(profile('worker')).task_responsible_id(),50)
-        self.assertIsNone(TenantPolicy(profile('owner')).task_responsible_id())
+    def test_task_scope_does_not_depend_on_provider_user(self):
+        self.assertEqual(TenantPolicy(profile(telegram_id=99)).task_scope(),{'kind':'pipelines','pipelines':[]})
+        self.assertEqual(TenantPolicy(profile()).task_scope()['pipelines'],[{'pipeline_id':10,'status_ids':[100]}])
+        self.assertEqual(TenantPolicy(profile('worker')).task_scope()['kind'],'marker')
+        self.assertEqual(TenantPolicy(profile('owner')).task_scope(),{'kind':'all'})
+
+    def test_marker_is_stable_and_tenant_specific(self):
+        person=profile('worker');marker=TenantPolicy(person).task_marker()
+        person['display_name']='New name';person['workflow']={}
+        self.assertEqual(TenantPolicy(person).task_marker(),marker)
+        person['tenant_id']='other-company'
+        self.assertNotEqual(TenantPolicy(person).task_marker(),marker)
+        self.assertNotEqual(TenantPolicy(profile('worker',21)).task_marker(),marker)
+
+    def test_pipeline_executor_routes_deal_before_task(self):
+        policy=TenantPolicy(profile())
+        for has_deal,action in [(True,'move_deal'),(False,'create_deal')]:
+            self.assertEqual(policy.task_creation_route(has_deal=has_deal),
+                             {'action':action,'pipeline_id':10,'status_id':100,'marker':''})
+
+    def test_marker_executor_does_not_move_deal(self):
+        policy=TenantPolicy(profile('worker'))
+        self.assertEqual(policy.task_creation_route(has_deal=True),{'action':'keep_deal','marker':policy.task_marker()})
+        self.assertEqual(policy.task_creation_route(has_deal=False)['action'],'standalone')
+
+    def test_closed_and_ambiguous_pipeline_creation_is_rejected(self):
+        with self.assertRaises(ValueError):
+            TenantPolicy(profile(telegram_id=99)).task_creation_route(has_deal=False)
+        person=profile();person['workflow']['pipelines'][1]['owner_telegram_id']=20
+        with self.assertRaises(ValueError):
+            TenantPolicy(person).task_creation_route(has_deal=True)
+        person['permissions']=[]
+        with self.assertRaises(ValueError):
+            TenantPolicy(person).task_creation_route(has_deal=False)
 
     def test_configuration_change_applies_to_next_snapshot(self):
         person=profile();self.assertTrue(TenantPolicy(person).allows('tasks'))
@@ -122,11 +152,11 @@ class TenantRuntimeTests(unittest.TestCase):
             self.assertEqual(result['status'],404)
         self.ns['list_tenant_crm_messages'].assert_not_called()
 
-    def test_task_query_is_scoped_to_assigned_kommo_user(self):
+    def test_task_query_is_scoped_to_internal_marker(self):
         self.person['role']='worker'
         result=asyncio.run(self.ns['handle_platform_crm_tasks'](self.request))
         self.assertEqual(result['status'],200)
-        self.assertEqual(self.ns['list_tenant_crm_tasks'].call_args.kwargs['responsible_id'],50)
+        self.assertEqual(self.ns['list_tenant_crm_tasks'].call_args.kwargs['scope'],TenantPolicy(self.person).task_scope())
 
     def test_workflow_settings_remain_owner_only(self):
         self.person['role']='admin';self.request.method='GET'

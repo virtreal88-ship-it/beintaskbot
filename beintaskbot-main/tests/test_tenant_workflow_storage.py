@@ -70,6 +70,25 @@ class WorkflowStorageTests(unittest.TestCase):
         self.assertEqual(self.ns['list_crm_tasks'](tenant_id='company-a',responsible_id=0),[])
         self.ns['_connect'].assert_not_called()
 
+    def test_tasks_use_tenant_deal_scope_before_limit_not_kommo_user(self):
+        self.cursor.fetchall.side_effect=None;self.cursor.fetchall.return_value=[]
+        self.ns['list_crm_tasks'](tenant_id='company-a',scope={'kind':'pipelines','pipelines':[{'pipeline_id':10,'status_ids':[100]}]})
+        sql,params=self.cursor.execute.call_args.args
+        self.assertIn('d.tenant_id = saas_crm_tasks.tenant_id',sql)
+        self.assertIn('d.kommo_lead_id = saas_crm_tasks.kommo_lead_id',sql)
+        self.assertIn('d.status_id = ANY(%s)',sql)
+        self.assertNotIn('responsible_id = %s',sql)
+        self.assertEqual(params,['company-a',10,[100],100])
+
+    def test_task_markers_match_exactly_and_missing_scope_denies(self):
+        self.cursor.fetchall.side_effect=None;self.cursor.fetchall.return_value=[]
+        self.ns['list_crm_tasks'](tenant_id='company-a',scope={'kind':'marker','marker':'[CRM:abc]'})
+        sql,params=self.cursor.execute.call_args.args
+        self.assertIn('strpos(text, %s) > 0',sql)
+        self.assertEqual(params,['company-a','[CRM:abc]',100])
+        self.ns['list_crm_tasks'](tenant_id='company-a',scope={'kind':'pipelines','pipelines':[]})
+        self.assertIn('FALSE',self.cursor.execute.call_args.args[0])
+
     def test_explicitly_closed_permissions_are_not_restored(self):
         self.assertEqual(self.ns['_permissions']([],'worker'),[])
         self.assertEqual(self.ns['_permissions']([],'master'),[])

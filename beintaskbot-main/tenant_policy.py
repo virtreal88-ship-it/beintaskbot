@@ -102,9 +102,46 @@ class TenantPolicy:
                    and (not item['status_ids'] or positive_id(deal.get('status_id')) in item['status_ids'])
                    for item in self.pipeline_scope())
 
-    def task_responsible_id(self) -> int | None:
-        # None is an explicitly privileged all-user scope. 0 denies access.
-        return None if self.privileged else positive_id(self.member_settings.get('kommo_user_id'))
+    def task_marker(self) -> str:
+        """Provider text marker; never a name or shared Kommo responsible user."""
+        import hashlib
+        identity = f"{self.profile.get('tenant_id')}:{positive_id(self.profile.get('telegram_id'))}"
+        return '[CRM:' + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32] + ']'
+
+    def task_scope(self) -> dict:
+        if not self.allows('tasks'):
+            return {'kind': 'denied'}
+        if self.privileged:
+            return {'kind': 'all'}
+        if self.profile.get('role') == 'manager':
+            # A pipeline user must not fall back to markers when all stages
+            # have been hidden or their pipeline has been disabled.
+            return {'kind': 'pipelines', 'pipelines': self.pipeline_scope()}
+        return {'kind': 'marker', 'marker': self.task_marker()}
+
+    def task_creation_route(self, *, has_deal: bool, pipeline_id: int = 0) -> dict:
+        """Executor routing plan, independent of the provider's single admin."""
+        if not self.allows('tasks'):
+            raise ValueError('Tapşırıqlar üçün icazəniz yoxdur.')
+        scope = self.pipeline_scope()
+        if self.profile.get('role') == 'manager':
+            choices = [item for item in scope if not pipeline_id or item['pipeline_id'] == positive_id(pipeline_id)]
+            if not choices:
+                raise ValueError('İcraçının aktiv vərəqi yoxdur.')
+            if len(choices) > 1:
+                raise ValueError('İcraçının vərəqini seçin.')
+            target = choices[0]
+            stages = sorted((s for s in self.config.get('stages', [])
+                             if positive_id(s.get('pipeline_id')) == target['pipeline_id']
+                             and s.get('stage_type', 'open') == 'open'
+                             and positive_id(s.get('stage_id')) not in {142, 143}
+                             and (s.get('settings') or {}).get('visible', True)),
+                            key=lambda s: (s.get('sort_order', 0), positive_id(s.get('stage_id'))))
+            if not stages:
+                raise ValueError('İcraçının ilk açıq mərhələsini sazlayın.')
+            return {'action': 'move_deal' if has_deal else 'create_deal',
+                    'pipeline_id': target['pipeline_id'], 'status_id': positive_id(stages[0]['stage_id']), 'marker': ''}
+        return {'action': 'keep_deal' if has_deal else 'standalone', 'marker': self.task_marker()}
 
     def requires_task_approval(self, *, creator_id: int, executor_id: int, completion: bool = False) -> bool:
         settings = self.policies.get('task_approval') or {}
@@ -119,7 +156,7 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
-                'pipeline_scope': self.pipeline_scope(), 'kommo_user_id': self.task_responsible_id(),
+                'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
 

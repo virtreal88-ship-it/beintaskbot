@@ -91,11 +91,8 @@
     });
     $('wf-members').innerHTML=members.map(member => {
       const settings=(rules.members || {})[String(member.telegram_id)] || {}, owner=member.role === 'owner';
-      const kommoOptions=[...catalog.users];
-      if(settings.kommo_user_id && !kommoOptions.some(user => String(user.id) === String(settings.kommo_user_id))) kommoOptions.push({id:settings.kommo_user_id,name:'Kommo #'+settings.kommo_user_id});
       return `<details class="wf-card" data-member="${escape(member.telegram_id)}"><summary>${escape(member.display_name)} · ${escape(roles[member.role])}</summary>
         <div class="wf-grid"><label>Əməkdaş növü<select data-role ${owner ? 'disabled' : ''}>${Object.entries(roles).filter(([key]) => key !== 'owner' || owner).map(([key,label]) => `<option value="${key}" ${key === member.role ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-        <label>Kommo istifadəçisi<select data-kommo><option value="">Təyin edilməyib</option>${kommoOptions.map(user => `<option value="${escape(user.id)}" ${String(user.id) === String(settings.kommo_user_id) ? 'selected' : ''}>${escape(user.name)}</option>`).join('')}</select></label>
         <label>İcazəli vərəqlər<select multiple data-member-pipelines>${rows.map(row => `<option value="${escape(row.pipeline_id)}" ${(settings.pipeline_ids || []).map(String).includes(String(row.pipeline_id)) ? 'selected' : ''}>${escape(row.name)}</option>`).join('')}</select></label></div>
         <div class="wf-grid" data-permissions>${Object.entries(modules).map(([key,label]) => check(key,label,(member.permissions || []).includes(key))).join('')}</div>
         ${check('creation_requires_admin','Tapşırıq yaradılmasını təsdiqləmək',settings.creation_requires_admin ?? rules.task_approval?.creation_requires_admin)}
@@ -138,7 +135,8 @@
         const member=session.members.find(m=>String(m.telegram_id)===card.dataset.member);
         const role=card.querySelector('[data-role]').value;
         const confirmationFlags=Object.fromEntries(['creation_requires_admin','completion_requires_admin','deal_completion_requires_admin'].map(key=>[key,card.querySelector(`[data-wf="${key}"]`).checked]));
-        nextRules.members[card.dataset.member]={...(nextRules.members[card.dataset.member] || {}),...confirmationFlags,kommo_user_id:Number(card.querySelector('[data-kommo]').value) || null,pipeline_ids:role === 'manager' ? [...card.querySelector('[data-member-pipelines]').selectedOptions].map(option=>option.value) : []};
+        nextRules.members[card.dataset.member]={...(nextRules.members[card.dataset.member] || {}),...confirmationFlags,pipeline_ids:role === 'manager' ? [...card.querySelector('[data-member-pipelines]').selectedOptions].map(option=>option.value) : []};
+        delete nextRules.members[card.dataset.member].kommo_user_id;
         if(role !== 'owner') nextMembers.push({telegram_id:member.telegram_id,display_name:member.display_name,role,permissions:[...card.querySelectorAll('[data-permissions] input:checked')].map(input=>input.dataset.wf)});
       });
       // Inactive employees retain their settings, but are not revalidated as

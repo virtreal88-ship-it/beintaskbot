@@ -21435,7 +21435,8 @@ async def handle_platform_workflow_catalog(request: web.Request) -> web.Response
     # These reads share a rotating OAuth refresh token; do not start two
     # independent refreshes of the same credentials in this catalog request.
     results = []
-    for path, params in (('leads/pipelines', None), ('users', {'limit': 250})):
+    # Employees are app memberships, not separate paid Kommo seats.
+    for path, params in (('leads/pipelines', None),):
         try:
             results.append(await _tenant_kommo_request(profile['tenant_id'], 'GET', path, params=params))
         except Exception as exc:
@@ -22087,11 +22088,10 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
     saved_deals = await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=snapshots)
     saved_tasks = 0
     if include_tasks:
-        responsible_id = TenantPolicy(profile).task_responsible_id()
-        task_params = {"filter[entity_type]": "2", "limit": 250}
-        if responsible_id:
-            task_params['filter[responsible_user_id]'] = responsible_id
-        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params=task_params) if responsible_id != 0 else {}
+        # All app employees may share a single provider administrator. Scope
+        # is enforced in PostgreSQL by deal pipeline or membership marker.
+        task_params = {"limit": 250}
+        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params=task_params)
         task_rows = (tasks_payload.get("_embedded") or {}).get("tasks") or []
         normalized_tasks = []
         for task in task_rows:
@@ -22102,7 +22102,7 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dic
             if not task_id:
                 continue
             normalized_tasks.append({
-                "kommo_task_id": task_id, "kommo_lead_id": int(task.get("entity_id") or 0),
+                "kommo_task_id": task_id, "kommo_lead_id": int(task.get("entity_id") or 0) if task.get("entity_type") in ('leads', 2, '2') else 0,
                 "text": str(task.get("text") or task.get("complete_till_at") or "Tapşırıq"),
                 "due_at": _tenant_kommo_timestamp(task.get("complete_till")),
                 "responsible_id": int(task.get("responsible_user_id") or 0),
@@ -22308,7 +22308,7 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
             logger.exception("Tenant CRM task sync failed: tenant=%s", profile["tenant_id"])
             sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
     rows = await asyncio.to_thread(list_tenant_crm_tasks, tenant_id=profile["tenant_id"], limit=200,
-                                  responsible_id=TenantPolicy(profile).task_responsible_id())
+                                  scope=TenantPolicy(profile).task_scope())
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
