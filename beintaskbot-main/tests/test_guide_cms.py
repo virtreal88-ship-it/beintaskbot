@@ -1,7 +1,9 @@
 import unittest,tempfile,json,threading,copy,zipfile,io,asyncio,base64
 from pathlib import Path
 from types import SimpleNamespace
-from guide_cms import GuideCMS,validate_article,export_zip,validate_images
+from guide_cms import GuideCMS,validate_article,export_zip,validate_images,public_projection
+from types import SimpleNamespace
+from aiohttp import web
 class Storage:
  def __init__(self):self._cache={};self._lock=threading.Lock();self.ok=True
  def _load_file(self,name):return self._cache.get(name,{})
@@ -62,4 +64,24 @@ class Tests(unittest.TestCase):
   doc=self.cms.save({**self.data,'version':ready['version'],'images':[photo]},1)
   self.assertEqual(doc['items'][0]['published']['images'],[])
   self.assertEqual(len(doc['items'][0]['draft']['images']),1)
+ def test_public_feed_excludes_drafts_and_private_fields(self):
+  doc=self.cms.save({**self.data,'action':'ready'},1)
+  draft=self.cms.save({**self.data,'version':doc['version'],'body':'Private new draft'},1)
+  data=public_projection(draft);self.assertEqual(len(data['items']),1)
+  self.assertEqual(data['items'][0]['body'],self.data['body'])
+  for key in ['updated_by','draft','version','updated_at']:self.assertNotIn(key,data['items'][0])
+ def test_public_image_does_not_expose_draft_photo(self):
+  import hashlib
+  raw=b'\xff\xd8\xff'+b'a'*20+b'\xff\xd9'
+  self.cms.save({**self.data,'images':[{'data':base64.b64encode(raw).decode()}]},1)
+  request=SimpleNamespace(match_info={'filename':hashlib.sha256(raw).hexdigest()+'.jpg'})
+  with self.assertRaises(web.HTTPNotFound):asyncio.run(self.cms.public_image(request))
+ def test_published_photo_has_public_asset_url_and_correct_mime(self):
+  raw=b'\xff\xd8\xff'+b'a'*20+b'\xff\xd9'
+  doc=self.cms.save({**self.data,'action':'ready','images':[{'data':base64.b64encode(raw).decode(),'alt':'Photo'}]},1)
+  asset=public_projection(doc)['items'][0]['images'][0]
+  self.assertNotIn('data',asset)
+  request=SimpleNamespace(match_info={'filename':asset['src'].split('/')[-1]})
+  response=asyncio.run(self.cms.public_image(request));self.assertEqual(response.body,raw);self.assertEqual(response.content_type,'image/jpeg')
+  self.assertEqual(response.headers['Access-Control-Allow-Origin'],'*')
 if __name__=='__main__':unittest.main()

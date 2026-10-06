@@ -1,13 +1,13 @@
-# Редактор инструкций
+# Təlimat redaktoru
 
-После развёртывания обновлённого beintaskbot откройте /guide-editor на том же домене, где находится веб-панель. Сначала войдите обычным способом. Доступ к API имеют только активные пользователи с существующим правом approvals_news. Нет отдельного публичного доступа к черновикам.
+CRM-də Təlimatlar səhifəsi və /guide-editor ünvanı. Redaktor üçün mövcud approvals_news icazəsi tələb olunur. Məqalələr ilkin sayt fayllarından idxal olunub; redaktor hər açılışda saytdan məlumat köçürmür.
 
-Редактор импортирует 117 заголовков из исходного support-приложения и извлекает простой текст статей. Исходные страницы и GIF остаются на сайте. Проверьте извлечённый текст перед сохранением: элементы интерфейса JSX могли быть опущены. Страницы-каталоги имеют пустой текст. Новые статьи рекомендуется создавать с адресом /articles/your-topic.
+Qaralama düyməsi yalnız qaralamanı saxlayır. Yayımla məqalənin açıq versiyasını saxlayır. Mətn və şəkillər mövcud gh_storage vasitəsilə PostgreSQL və ya GitHub data branch-də daimi saxlanılır. Saytın məqaləni yükləməsi həmin nüsxəni silmir. Versiya konflikti başqa istifadəçinin düzəlişini əvəz etmir.
 
-Сохранить черновик: не включать новую редакцию в экспорт. Готово для экспорта: включить новую редакцию в ZIP. Конфликт версии не перезаписывает чужую правку. Хранение использует существующий gh_storage (PostgreSQL или GitHub data branch); это не записи в Telegram и не публикация на сервер сайта.
+support-redesign-upload.zip bir dəfə support.akul.az kökünə yüklənir; mövcud static və images faylları saxlanılmalıdır. Botun yenilənmiş main versiyası işə salınmalıdır. Bundan sonra hər redaktədən sonra ZIP yükləmək lazım deyil. ZIP ixracı əlavə ehtiyat seçimidir.
 
-Скачать ZIP: скачать index.html, guide-articles.js, guide-articles.json. Передайте архив человеку с доступом к support.akul.az. Ему нужно загрузить эти файлы в корень сайта, сохранив static, images, guide.css, guide.js и .htaccess. Для нового дизайна отдельно применяется support-redesign-upload.zip. Новые статьи доступны по ссылкам и через поиск, статьи /articles/* появляются на главной.
+/api/guides/public yalnız yayımlanmış mətnləri qaytarır. /api/guides/public/images/... yalnız yayımlanmış şəkilləri göstərir. Qaralamalar və daxili istifadəçi məlumatları açıq API-yə daxil deyil. Redaktə API-si autentifikasiya və icazə tələb edir. Açıq oxuma API-si CORS dəstəkləyir.
 
-Редактор не имеет доступа к серверу support.akul.az и не может обновить рабочий сайт без загрузки ZIP. Автоматическое обновление потребовало бы отдельного подключения сайта к публичному API и однократного обновления файлов на хостинге; такой механизм здесь не включён.
+Sayt açılışda və açıq görünən səhifədə hər 5 dəqiqədən bir yenilikləri yoxlayır. Son uğurlu mətnlər brauzerin localStorage yaddaşında saxlanılır. Şəkillərin əsli botun yaddaşındadır. API əlçatan olmadıqda ilkin təlimatlar və mövcud mətn nüsxəsi qalır; şəkillərin yüklənməsi API-nin əlçatanlığından asılıdır.
 
-Redaktə və yeni məqalə ayrıca modal pəncərədə açılır. Maksimum 5 şəkil əlavə etmək olar; JPEG, PNG, WEBP və AVIF brauzerdə optimallaşdırılaraq JPEG kimi saxlanılır. Hər optimallaşdırılmış şəkil maksimum 120 KB-dir. Şəkillər qaralama/ixrac versiyası ilə birlikdə yaddaşa yazılır, ZIP-də images/articles qovluğuna daxil edilir. Fayl adları məzmun hashindən yaradılır; SVG və başqa aktiv formatlar serverdə qəbul edilmir.
+Redaktə və yeni məqalə ayrıca modal pəncərədə açılır. Maksimum 5 şəkil: JPEG, PNG, WEBP və AVIF brauzerdə JPEG kimi optimallaşdırılır. Hər optimallaşdırılmış şəkil maksimum 120 KB-dir. SVG və başqa aktiv formatlar qəbul edilmir. Yeni məqalənin bölməsi və ünvanı cari bölməyə görə avtomatik hazırlanır.

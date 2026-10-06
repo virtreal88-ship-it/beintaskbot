@@ -53,8 +53,21 @@ def export_zip(base_dir, published):
         archive.writestr('guide-articles.json', json.dumps(payload, ensure_ascii=False))
         archive.write(base / 'guide-articles.js', 'guide-articles.js')
         archive.write(base / 'index.html', 'index.html')
+        if (base/'guide-live.js').exists():archive.write(base/'guide-live.js','guide-live.js')
         archive.writestr('UPLOAD.txt', 'Upload these files to the root of support.akul.az. Keep existing static, images, guide.css, guide.js and .htaccess. Export contains only articles explicitly marked ready. Nothing is uploaded automatically.\n')
     return output.getvalue()
+
+def public_projection(doc):
+    items=[]
+    for row in doc.get('items',[]):
+        published=row.get('published')
+        if not published: continue
+        item={key:published.get(key,'') for key in FIELDS};item['images']=[]
+        for photo in validate_images(published.get('images',[])):
+            raw=base64.b64decode(photo['data']);extension='jpg' if photo['mime']=='image/jpeg' else 'png'
+            item['images'].append({'src':'/api/guides/public/images/'+hashlib.sha256(raw).hexdigest()+'.'+extension,'alt':photo['alt']})
+        items.append(item)
+    return {'success':True,'items':items}
 
 class GuideCMS:
     def __init__(self, base_dir, allowed, storage):
@@ -122,10 +135,33 @@ class GuideCMS:
     async def page(self, request):
         return web.FileResponse(self.base / 'docs' / 'guide-editor.html', headers={'Cache-Control': 'no-store'})
 
+    async def public_feed(self, request):
+        try:
+            doc=await asyncio.to_thread(self.read)
+            return web.json_response(public_projection(doc),headers={'Access-Control-Allow-Origin':'*','Cache-Control':'public, max-age=30'})
+        except Exception:
+            return web.json_response({'success':False,'error':'Təlimatlar hazırda əlçatan deyil'},status=503,headers={'Access-Control-Allow-Origin':'*'})
+
+    async def public_image(self, request):
+        filename=request.match_info['filename']
+        if not re.fullmatch(r'[a-f0-9]{64}\.(jpg|png)',filename):raise web.HTTPNotFound()
+        try:
+            doc=await asyncio.to_thread(self.read)
+            for row in doc['items']:
+                if not row.get('published'):continue
+                for photo in validate_images(row['published'].get('images',[])):
+                    raw=base64.b64decode(photo['data']);extension='jpg' if photo['mime']=='image/jpeg' else 'png'
+                    if hashlib.sha256(raw).hexdigest()+'.'+extension==filename:
+                        return web.Response(body=raw,content_type=photo['mime'],headers={'Access-Control-Allow-Origin':'*','Cache-Control':'public, max-age=86400','X-Content-Type-Options':'nosniff'})
+        except Exception:raise web.HTTPServiceUnavailable()
+        raise web.HTTPNotFound()
+
 def register_guide_cms(app, base_dir, allowed, storage):
     cms = GuideCMS(base_dir, allowed, storage)
     app.router.add_get('/guide-editor', cms.page)
     app.router.add_get('/api/guides', cms.api)
     app.router.add_post('/api/guides', cms.api)
     app.router.add_get('/api/guides/export', cms.export)
+    app.router.add_get('/api/guides/public',cms.public_feed)
+    app.router.add_get('/api/guides/public/images/{filename}',cms.public_image)
     return cms

@@ -22595,7 +22595,7 @@ _TENANT_SESSION_TTL_SEC = 8 * 60 * 60
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
 _WEB_LOGIN_TTL_SEC = 10 * 60
 _PERMANENT_WEB_LOGIN_TTL_SEC = 365 * 24 * 60 * 60
-_PUBLIC_API_PATHS = {"/api/deal/public", "/api/linear/news"}
+_PUBLIC_API_PATHS = {"/api/deal/public", "/api/linear/news", "/api/guides/public"}
 _ALLOWED_WEB_ORIGINS = {"https://virtreal88-ship-it.github.io"}
 _web_login_requests: dict[str, dict] = {}
 _web_login_lock = threading.Lock()
@@ -22786,6 +22786,8 @@ def _is_public_api_request(request: web.Request) -> bool:
     # handlers verify that session themselves instead of accepting a legacy
     # BeinSystems employee identity.
     if request.path.startswith("/api/platform/"):
+        return True
+    if request.method in {"GET", "HEAD"} and request.path.startswith("/api/guides/public/images/"):
         return True
     if request.path in _PUBLIC_API_PATHS:
         return True
