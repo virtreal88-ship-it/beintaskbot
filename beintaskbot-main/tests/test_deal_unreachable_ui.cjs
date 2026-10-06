@@ -17,11 +17,25 @@ const context = {console,
   loadSamilWorkspace:async()=>events.push('refresh'),
   samilDealAction:async payload=>{events.push(payload);await new Promise(resolve=>finish=resolve);if(reject)throw Error('failed');return {success:true};}};
 vm.runInNewContext(html.slice(start,end),context);
+const helperStart = html.indexOf('function dealUnreachableButtonHtml(');
+const helperEnd = html.indexOf('\nfunction ', helperStart);
+context.CURRENT_USER_ID = '20';
+context.hasEmployeePermission = () => true;
+context.escapeHtml = value => String(value);
+vm.runInNewContext(html.slice(helperStart,helperEnd),context);
+assert.match(context.dealUnreachableButtonHtml({id:7},false),/data-deal-unreachable-id="7"/);
+assert.equal(context.dealUnreachableButtonHtml({id:7},true),'');
+context.hasEmployeePermission = () => false;
+assert.equal(context.dealUnreachableButtonHtml({id:7},false),'');
+context.hasEmployeePermission = () => true;
+assert.match(html,/\$\{dealUnreachableButtonHtml\(deal, readonly\)\}/);
+assert.match(html,/staff \? dealUnreachableButtonHtml\(deal, !!\(opts && opts.readonly\)\)/);
 (async()=>{
   const button = {disabled:false,innerHTML:'Ulaşmaq olmadı'};
   const pending = context.markDealUnreachable({id:7},button);
   assert.equal(button.disabled,true);assert.match(button.innerHTML,/yt-spin/);
   await context.markDealUnreachable({id:7},button);
+  await context.markDealUnreachable({id:7},{disabled:false,innerHTML:'Ulaşmaq olmadı'});
   assert.equal(events.filter(e=>typeof e==='object').length,1);
   finish();await pending;
   assert.equal(context.samilDeals.length,1);assert.equal(context.samilStageCounts.new,1);

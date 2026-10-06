@@ -7949,6 +7949,17 @@ function dealUi(id) {
 }
 function bindDealSideActions(deal) {
     const root = document.getElementById('deal-view-modal') || document;
+    document.querySelectorAll('[data-deal-unreachable-id]').forEach(button => {
+        if(String(button.dataset.dealUnreachableId) !== String(deal.id)) return;
+        button.onclick = async event => {
+            event.stopPropagation();
+            const moved = await markDealUnreachable(deal, button);
+            if(moved && _dealViewState && String(_dealViewState.id) === String(deal.id)) {
+                if(document.getElementById('deal-view-modal')) closeDealViewModal();
+                else closeNoticeClient();
+            }
+        };
+    });
     const noteOpen = dealUi('deal-note-open');
     const noteForm = dealUi('deal-note-form');
     const noteBtn = dealUi('deal-note-save');
@@ -8324,6 +8335,7 @@ function dealDetailSectionsHtml(deal, token, opts) {
                     ? `${kommoLink ? `<div><a href="${escapeHtml(kommoLink)}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">Kommo-da aç</a></div>` : ''}${waLink ? `<div><a href="${escapeHtml(waLink)}" style="color:#2563eb;font-weight:600">WhatsApp-da aç</a></div>` : ''}`
                     : ((canShowKommoLink() && dealKommoUrl(deal)) ? `<div><a href="${escapeHtml(dealKommoUrl(deal))}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600">🔗 Kommo-da aç</a></div>` : '')}
             </div>
+            ${staff ? dealUnreachableButtonHtml(deal, !!(opts && opts.readonly)) : ''}
             <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Tapşırıqlar</span>${staff ? '<button type="button" id="deal-task-plus" class="deal-mini-plus" title="Tapşırıq yarat">+</button>' : ''}</div>
             <div${staff ? ' id="deal-tasks-list"' : ''}>${staff ? dealTasksListHtml(deal, false) : tasksHtml}</div>
             <div style="margin-top:14px;font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px"><span>Qeydlər</span>${staff ? '<button type="button" id="deal-note-open" class="deal-mini-plus" title="Qeyd əlavə et">+</button>' : ''}</div>
@@ -8420,6 +8432,10 @@ function closeDealViewModal(opts) {
         if(document.getElementById('screen-chats')?.classList.contains('active')) renderChatsList();
     }
 }
+function dealUnreachableButtonHtml(deal, readonly) {
+    if(readonly || !CURRENT_USER_ID || !hasEmployeePermission('deals') || !deal || !deal.id) return '';
+    return `<div style="display:flex;justify-content:flex-end;margin-top:12px"><button type="button" data-deal-unreachable-id="${escapeHtml(String(deal.id))}" class="deal-unreachable ml-auto shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 disabled:opacity-60">Ulaşmaq olmadı</button></div>`;
+}
 function dealInfoBodyHtml(deal, readonly) {
     const name = dealClientName(deal);
     const phones = Array.isArray(deal.phones) && deal.phones.length ? deal.phones : (deal.phone ? [deal.phone] : []);
@@ -8438,6 +8454,7 @@ function dealInfoBodyHtml(deal, readonly) {
             ${dealSideDetailsHtml(deal)}
         </div>
         ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
+        ${dealUnreachableButtonHtml(deal, readonly)}
         <h3>Tapşırıq</h3>
         ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-task-create" title="Tapşırıq yarat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq yarat</span></button>'}
         <div id="deal-tasks-list">${dealTasksListHtml(deal, readonly)}</div>
@@ -9469,7 +9486,7 @@ function paintDealViewModal(deal, readonly, opts) {
         const modal = document.createElement('div');
         modal.id = 'deal-view-modal';
         modal.style.cssText = 'position:fixed;inset:0;z-index:12000;background:#fff;overflow:hidden;padding:0;will-change:transform';
-        modal.innerHTML = dealDetailSectionsHtml(deal, token, {staff: true});
+        modal.innerHTML = dealDetailSectionsHtml(deal, token, {staff: true, readonly});
         document.body.classList.add('deal-modal-open', 'chat-open');
         document.body.appendChild(modal);
         root = modal;
@@ -10014,7 +10031,10 @@ function chatsEmptyHtml() {
     return `<div class="chats-empty"><div class="chats-empty-title">Müştəri seçilməyib</div><div class="chats-empty-sub">Soldan müştəri seçin</div></div>`;
 }
 async function markDealUnreachable(deal, button) {
-    if(button.disabled) return;
+    const pending = markDealUnreachable.pending || (markDealUnreachable.pending = new Set());
+    const key = String(deal.id);
+    if(button.disabled || pending.has(key)) return false;
+    pending.add(key);
     const original = button.innerHTML;
     button.disabled = true;
     button.innerHTML = '<span class="yt-spin" aria-label="Yüklənir"></span> Köçürülür…';
@@ -10030,9 +10050,12 @@ async function markDealUnreachable(deal, button) {
         renderSamilDeals();
         toast(result.message || 'Sövdələşmə Təxirə salınıb mərhələsinə köçürüldü.', false);
         loadSamilWorkspace(false, null, true).catch(error => console.warn('Deal moved; list refresh failed', error));
+        return true;
     } catch(error) {
         toast(error.message || 'Sövdələşmə köçürülmədi.', true);
+        return false;
     } finally {
+        pending.delete(key);
         button.disabled = false;
         button.innerHTML = original;
     }
