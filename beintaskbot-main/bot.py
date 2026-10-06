@@ -71,6 +71,8 @@ from tenant_platform import (
     upsert_linear_news, list_linear_news, mark_linear_news_published,
     prune_linear_news, reset_linear_news_publishing_once,
     claim_linear_news_publish_slot,
+    update_linear_news_review,
+    seed_linear_news_review_once,
 )
 # import sqlite3  # replaced by gh_storage
 
@@ -133,6 +135,7 @@ LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL"
 # still throttled to one item per synchronization cycle and deduplicated in DB.
 LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "true").strip().casefold() in {"1", "true", "yes", "on"}
 LINEAR_NEWS_RESEED_KEY = "telegram-feed-curated-v2"
+LINEAR_NEWS_REVIEW_TEST_KEY = "telegram-news-review-test-v1"
 LINEAR_NEWS_START_HOUR = 9
 LINEAR_NEWS_END_HOUR = 19
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
@@ -1157,11 +1160,22 @@ def _publish_linear_news_to_telegram(item: dict) -> int | None:
         lines.extend(["", f"🔗 {project_url}"])
     text = "\n".join(lines)[:3900]
     try:
-        response = _http.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": channel, "text": text, "disable_web_page_preview": False},
-            timeout=10,
-        )
+        media_url = str(item.get("media_url") or "").strip()
+        media_type = str(item.get("media_type") or "").strip().lower()
+        if media_url and media_type in {"photo", "video"}:
+            method = "sendPhoto" if media_type == "photo" else "sendVideo"
+            field = "photo" if media_type == "photo" else "video"
+            response = _http.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
+                json={"chat_id": channel, field: media_url, "caption": text[:1024]},
+                timeout=15,
+            )
+        else:
+            response = _http.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": channel, "text": text, "disable_web_page_preview": False},
+                timeout=10,
+            )
         if not response.ok:
             logger.warning("Linear news channel publish rejected: status=%s body=%s", response.status_code, (response.text or "")[:240])
             return None
@@ -20580,7 +20594,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             reset_linear_news_publishing_once,
             migration_key=LINEAR_NEWS_RESEED_KEY,
         )
-        existing = await asyncio.to_thread(list_linear_news, limit=200)
+        existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
         # Clean the current feed as well as filtering future releases. This
         # catches bugfixes that were archived before the stricter classifier
         # was deployed; the original Linear issue is retained in ``raw`` so
@@ -20595,6 +20609,10 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             row for row in existing
             if not (isinstance(row, dict) and _stored_linear_news_is_bug_fix(row))
         ]
+        # Leave one real current release in the administrator's review queue
+        # so the new confirmation flow can be tested before wider publishing.
+        await asyncio.to_thread(seed_linear_news_review_once, migration_key=LINEAR_NEWS_REVIEW_TEST_KEY)
+        existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
         known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
         # Backfill the channel once for releases already archived before the
         # channel integration was enabled. The persisted message id prevents
@@ -20603,7 +20621,8 @@ async def _sync_linear_news(issues: list[dict]) -> None:
         for row in existing:
             if published >= 1:
                 break
-            if not isinstance(row, dict) or row.get("telegram_published_at") or row.get("telegram_message_id"):
+            if (not isinstance(row, dict) or row.get("approval_status") != "approved"
+                    or row.get("telegram_published_at") or row.get("telegram_message_id")):
                 continue
             if _stored_linear_news_is_bug_fix(row):
                 await asyncio.to_thread(_delete_linear_news_from_telegram, row)
@@ -20652,17 +20671,6 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 source_url=str(issue.get("url") or ""),
                 raw={"linear": issue, "generated_by": "openai"},
             )
-            message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, saved)
-            if message_id:
-                await asyncio.to_thread(
-                    mark_linear_news_published,
-                    source_issue_id=source_id,
-                    telegram_message_id=message_id,
-                )
-                # Deliberately publish only one release per cycle so the
-                # owner can review the channel sequentially.
-                await asyncio.to_thread(prune_linear_news)
-                return
             known.add(source_id)
         await asyncio.to_thread(prune_linear_news)
     except Exception:
@@ -20680,6 +20688,52 @@ async def handle_api_linear_news(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("Linear news feed failed")
         return web.json_response({"success": False, "error": "Yeniliklər yüklənmədi."}, status=500)
+
+
+async def handle_api_linear_news_review(request: web.Request) -> web.Response:
+    """Administrator review queue for customer-facing Linear releases."""
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    if not chat_id or not is_admin(chat_id):
+        return web.json_response({"success": False, "error": "Yalnız Admin üçün."}, status=403)
+    if request.method == "GET":
+        try:
+            rows = await asyncio.to_thread(list_linear_news, limit=60, approval_status="pending")
+            return web.json_response({"success": True, "items": rows})
+        except Exception:
+            logger.exception("Linear news review queue failed")
+            return web.json_response({"success": False, "error": "Xəbər təsdiqləri yüklənmədi."}, status=500)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    source_id = str(data.get("source_issue_id") or "").strip()
+    action = str(data.get("action") or "save").strip().lower()
+    if not source_id or action not in {"save", "approve", "reject"}:
+        return web.json_response({"success": False, "error": "Xəbər və əməliyyat seçin."}, status=400)
+    try:
+        status = "approved" if action == "approve" else "rejected" if action == "reject" else "pending"
+        row = await asyncio.to_thread(
+            update_linear_news_review,
+            source_issue_id=source_id,
+            title=str(data.get("title") or ""),
+            summary=str(data.get("summary") or ""),
+            body=str(data.get("body") or ""),
+            media_url=str(data.get("media_url") or ""),
+            media_type=str(data.get("media_type") or ""),
+            approval_status=status,
+        )
+        if not row:
+            return web.json_response({"success": False, "error": "Xəbər tapılmadı."}, status=404)
+        if action == "approve":
+            message_id = await asyncio.to_thread(_publish_linear_news_to_telegram, row)
+            if not message_id:
+                return web.json_response({"success": False, "error": "Xəbər Telegram kanalına göndərilmədi."}, status=502)
+            await asyncio.to_thread(mark_linear_news_published, source_issue_id=source_id, telegram_message_id=message_id)
+        return web.json_response({"success": True, "published": action == "approve", "item": row})
+    except Exception:
+        logger.exception("Linear news review action failed")
+        return web.json_response({"success": False, "error": "Xəbər yadda saxlanmadı."}, status=500)
 
 
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -23123,6 +23177,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_post("/api/linear/tasks", handle_api_linear_tesdiq)
     app_web.router.add_get("/api/linear/news", handle_api_linear_news)
+    app_web.router.add_route("GET", "/api/linear/news/review", handle_api_linear_news_review)
+    app_web.router.add_route("POST", "/api/linear/news/review", handle_api_linear_news_review)
     app_web.router.add_route('OPTIONS', '/api/linear/accounts', lambda r: web.Response())
     app_web.router.add_get("/api/linear/accounts", handle_api_linear_accounts)
     app_web.router.add_post("/api/linear/accounts", handle_api_linear_accounts)

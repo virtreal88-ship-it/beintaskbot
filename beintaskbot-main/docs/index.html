@@ -1442,6 +1442,7 @@
         <div class="grid grid-cols-1 gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Təsdiq siyahıları">
             <button id="pending-queue-system" type="button" onclick="showPendingQueue('system')" class="rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm" role="tab">Sistem sorğuları</button>
             <button id="pending-queue-linear" type="button" onclick="showPendingQueue('linear')" style="display:none;" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Linear</button>
+            <button id="pending-queue-news" type="button" onclick="showNewsReview()" class="rounded-lg px-3 py-2 text-xs font-bold text-slate-500" role="tab">Xəbər təsdiqi</button>
         </div>
         <section id="system-pending-section">
             <div class="samil-kanban-wrap custom-scroll">
@@ -1456,6 +1457,10 @@
                 </div>
             </div>
             <div id="linear-tesdiq-list" class="space-y-2 bg-slate-50 p-2"></div>
+        </section>
+        <section id="linear-news-review-section" class="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden" hidden>
+            <div class="flex items-center justify-between px-3 py-2.5 bg-emerald-50/70 border-b border-emerald-100"><div><div class="text-xs font-extrabold text-emerald-900">Xəbər təsdiqi</div><div id="linear-news-review-meta" class="text-[10px] text-emerald-600 mt-0.5">Yoxlanılmamış yeniliklər</div></div></div>
+            <div id="linear-news-review-list" class="space-y-2 bg-slate-50 p-2"></div>
         </section>
     </div>
 
@@ -4363,13 +4368,58 @@ function stopPendingActionPolling() {
     }
 }
 
+let linearNewsReviewLoaded = false;
+function linearNewsReviewCard(item) {
+    const id = escapeHtml(item.source_issue_id || '');
+    const project = escapeHtml(item.project_key || '');
+    const mediaType = String(item.media_type || '').toLowerCase();
+    return `<article class="rounded-xl border border-emerald-100 bg-white p-3 shadow-sm" data-news-review-id="${id}">
+      <div class="flex items-center justify-between gap-2"><div class="text-[10px] font-extrabold text-emerald-700">${project} · ${escapeHtml(item.identifier || '')}</div><a href="${escapeHtml(item.source_url || '#')}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-600">Linear ↗</a></div>
+      <label class="mt-2 block text-[10px] font-bold text-slate-500">Başlıq<input data-news-title class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm font-bold outline-none" value="${escapeHtml(item.title || '')}"></label>
+      <label class="mt-2 block text-[10px] font-bold text-slate-500">Qısa mətn<textarea data-news-summary rows="3" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.summary || '')}</textarea></label>
+      <label class="mt-2 block text-[10px] font-bold text-slate-500">Ətraflı mətn<textarea data-news-body rows="4" class="mt-1 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs outline-none">${escapeHtml(item.body || '')}</textarea></label>
+      <div class="mt-2 grid grid-cols-[1fr_100px] gap-2"><input data-news-media-url class="rounded-lg border border-slate-200 px-2.5 py-2 text-[11px] outline-none" value="${escapeHtml(item.media_url || '')}" placeholder="Foto/video URL (istəyə görə)"><select data-news-media-type class="rounded-lg border border-slate-200 px-2 py-2 text-[11px] outline-none"><option value="">Yoxdur</option><option value="photo" ${mediaType === 'photo' ? 'selected' : ''}>Foto</option><option value="video" ${mediaType === 'video' ? 'selected' : ''}>Video</option><option value="link" ${mediaType === 'link' ? 'selected' : ''}>Link</option></select></div>
+      <div class="mt-3 flex flex-wrap gap-1.5"><button type="button" onclick="reviewLinearNews('${id}','save',this)" class="rounded-lg bg-slate-100 px-2.5 py-2 text-[10px] font-extrabold text-slate-700">Yadda saxla</button><button type="button" onclick="reviewLinearNews('${id}','approve',this)" class="rounded-lg bg-emerald-600 px-2.5 py-2 text-[10px] font-extrabold text-white">Təsdiqlə və yayımla</button><button type="button" onclick="reviewLinearNews('${id}','reject',this)" class="rounded-lg bg-rose-50 px-2.5 py-2 text-[10px] font-extrabold text-rose-700">Rədd et</button></div>
+    </article>`;
+}
+async function showNewsReview(forceRefresh = false) {
+    if(!isAdmin) return;
+    pendingQueue = 'news';
+    document.getElementById('system-pending-section')?.setAttribute('hidden','');
+    document.getElementById('linear-tesdiq-section')?.setAttribute('hidden','');
+    document.getElementById('linear-news-review-section')?.removeAttribute('hidden');
+    document.getElementById('pending-queue-system')?.classList.remove('bg-white','shadow-sm','text-violet-800');
+    document.getElementById('pending-queue-linear')?.classList.remove('bg-white','shadow-sm','text-violet-800');
+    document.getElementById('pending-queue-news')?.classList.add('bg-white','shadow-sm','text-violet-800');
+    const subtitle = document.getElementById('pending-page-subtitle'); if(subtitle) subtitle.textContent = 'Yeniliklər yayımlanmadan əvvəl sizin təsdiqinizi gözləyir';
+    const list = document.getElementById('linear-news-review-list'); const meta = document.getElementById('linear-news-review-meta');
+    if(!list || !meta) return;
+    list.innerHTML = '<div class="px-3 py-4 text-center text-xs text-emerald-600">Yüklənir…</div>';
+    try {
+        const r = await fetch(API_BASE + '/api/linear/news/review?_ts=' + Date.now(), {headers:{'X-TG-User-ID':CURRENT_USER_ID}, cache:'no-store'});
+        const d = await r.json(); if(!r.ok || !d.success) throw new Error(d.error || 'Xəbərlər yüklənmədi.');
+        const rows = Array.isArray(d.items) ? d.items : [];
+        meta.textContent = `${rows.length} xəbər təsdiq gözləyir`;
+        list.innerHTML = rows.length ? rows.map(linearNewsReviewCard).join('') : '<div class="px-3 py-4 text-center text-xs text-slate-500">Təsdiq gözləyən xəbər yoxdur.</div>';
+        linearNewsReviewLoaded = true;
+    } catch(e) { meta.textContent = 'Yüklənmədi'; list.innerHTML = `<div class="px-3 py-4 text-xs text-red-500">${escapeHtml(e.message || 'Xəta')}</div>`; }
+}
+async function reviewLinearNews(sourceId, action, button) {
+    const card = document.querySelector(`[data-news-review-id="${CSS.escape(sourceId)}"]`); if(!card) return;
+    const payload = {source_issue_id:sourceId, action, title:card.querySelector('[data-news-title]')?.value || '', summary:card.querySelector('[data-news-summary]')?.value || '', body:card.querySelector('[data-news-body]')?.value || '', media_url:card.querySelector('[data-news-media-url]')?.value || '', media_type:card.querySelector('[data-news-media-type]')?.value || ''};
+    if(button) { button.disabled = true; button.textContent = '…'; }
+    try { const r=await fetch(API_BASE+'/api/linear/news/review',{method:'POST',headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID},body:JSON.stringify(payload)}); const d=await r.json(); if(!r.ok||!d.success) throw new Error(d.error||'Əməliyyat alınmadı'); toast(action==='approve'?'Xəbər yayımlandı':action==='reject'?'Xəbər rədd edildi':'Xəbər saxlanıldı',false); if(action!=='save') showNewsReview(true); } catch(e) { toast(e.message||'Xəta',true); if(button){button.disabled=false;button.textContent=action==='approve'?'Təsdiqlə və yayımla':action==='reject'?'Rədd et':'Yadda saxla';} }
+}
+
 async function showPendingQueue(queue, forceRefresh = false) {
     if(!isAdmin) return;
     pendingQueue = queue === 'system' ? 'system' : 'linear';
     const linearSection = document.getElementById('linear-tesdiq-section');
+    const newsSection = document.getElementById('linear-news-review-section');
     const systemSection = document.getElementById('system-pending-section');
     const linearButton = document.getElementById('pending-queue-linear');
     const systemButton = document.getElementById('pending-queue-system');
+    const newsButton = document.getElementById('pending-queue-news');
     const subtitle = document.getElementById('pending-page-subtitle');
     const typeSelect = document.getElementById('pending-type-select');
     const linearSearchToggle = document.getElementById('linear-search-toggle');
@@ -4377,10 +4427,12 @@ async function showPendingQueue(queue, forceRefresh = false) {
     const activeClass = 'rounded-lg px-3 py-2 text-xs font-extrabold text-violet-800 bg-white shadow-sm';
     const inactiveClass = 'rounded-lg px-3 py-2 text-xs font-bold text-slate-500';
     const linearActive = pendingQueue === 'linear';
+    if(newsSection) newsSection.hidden = true;
     if(linearSection) linearSection.hidden = !linearActive;
     if(systemSection) systemSection.hidden = linearActive;
     if(linearButton) linearButton.className = linearActive ? activeClass : inactiveClass;
     if(systemButton) systemButton.className = linearActive ? inactiveClass : activeClass;
+    if(newsButton) newsButton.className = inactiveClass;
     if(subtitle) subtitle.textContent = linearActive ? 'Linear-dan direktorun qərar gözləyən işləri' : 'Telegram və webhook sorğularını idarə edin';
     if(typeSelect) typeSelect.style.display = linearActive ? 'none' : '';
     if(linearSearchToggle) linearSearchToggle.hidden = !linearActive;
