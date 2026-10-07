@@ -961,18 +961,16 @@ def _public_crm_row(row: dict) -> dict:
 
 def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
     """Persist a tenant's Kommo deal snapshot without touching legacy data."""
-    saved = 0
+    from tenant_crm_snapshots import deal_rows
+    rows = deal_rows(tenant_id, deals, _json)
+    if not rows:
+        return 0
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            for item in deals:
-                try:
-                    lead_id = int(item.get("kommo_lead_id") or item.get("id") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if lead_id <= 0:
-                    continue
-                cur.execute("""
+            # Psycopg 3 pipelines executemany internally: one transaction,
+            # without a separate network round trip for every snapshot.
+            cur.executemany("""
                     INSERT INTO saas_crm_deals
                     (tenant_id, kommo_lead_id, pipeline_id, status_id, stage_name, name, contact_name, phone,
                      channel, last_message, last_message_at, source_updated_at, raw, synced_at)
@@ -985,17 +983,9 @@ def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
                         channel = EXCLUDED.channel, last_message = EXCLUDED.last_message,
                         last_message_at = EXCLUDED.last_message_at,
                         source_updated_at = EXCLUDED.source_updated_at, raw = EXCLUDED.raw, synced_at = now()
-                """, (
-                    tenant_id, lead_id, int(item.get("pipeline_id") or 0), int(item.get("status_id") or 0),
-                    str(item.get("stage_name") or "")[:240], str(item.get("name") or "")[:500],
-                    str(item.get("contact_name") or "")[:500], str(item.get("phone") or "")[:80],
-                    str(item.get("channel") or "")[:100], str(item.get("last_message") or "")[:4000],
-                    item.get("last_message_at") or None, item.get("source_updated_at") or None,
-                    _json(item.get("raw") if isinstance(item.get("raw"), dict) else {}),
-                ))
-                saved += 1
+                """, rows)
         conn.commit()
-    return saved
+    return len(rows)
 
 
 def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] | None = None,
@@ -1054,18 +1044,14 @@ def get_crm_deal(*, tenant_id: str, kommo_lead_id: int) -> dict | None:
 
 
 def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
-    saved = 0
+    from tenant_crm_snapshots import task_rows
+    rows = task_rows(tenant_id, tasks, _json)
+    if not rows:
+        return 0
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            for item in tasks:
-                try:
-                    task_id = int(item.get("kommo_task_id") or item.get("id") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if task_id <= 0:
-                    continue
-                cur.execute("""
+            cur.executemany("""
                     INSERT INTO saas_crm_tasks
                     (tenant_id, kommo_task_id, kommo_lead_id, text, due_at, responsible_id, completed, raw, synced_at)
                     VALUES (%s::uuid, %s, %s, %s, %s::timestamptz, %s, %s, %s::jsonb, now())
@@ -1073,14 +1059,9 @@ def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
                         kommo_lead_id = EXCLUDED.kommo_lead_id, text = EXCLUDED.text, due_at = EXCLUDED.due_at,
                         responsible_id = EXCLUDED.responsible_id, completed = EXCLUDED.completed,
                         raw = EXCLUDED.raw, synced_at = now()
-                """, (
-                    tenant_id, task_id, int(item.get("kommo_lead_id") or 0), str(item.get("text") or "")[:4000],
-                    item.get("due_at") or None, int(item.get("responsible_id") or 0), bool(item.get("completed")),
-                    _json(item.get("raw") if isinstance(item.get("raw"), dict) else {}),
-                ))
-                saved += 1
+                """, rows)
         conn.commit()
-    return saved
+    return len(rows)
 
 
 def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, scope: dict | None = None, limit: int = 100) -> list[dict]:
