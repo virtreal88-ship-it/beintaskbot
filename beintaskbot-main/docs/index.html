@@ -13305,7 +13305,14 @@ async function submitSubtask(parentTaskId) {
     document.getElementById('subtask-modal').remove();
 }
 // Balance System
-const BALANCE_EMPLOYEE_OPTIONS = '<option value="6824377548">Rüfət Həsənzadə</option><option value="7329891614">Hüseyn Səfərov</option><option value="1289510272">Sərmayə Əhmədsoy</option><option value="6596538872">Asya Agayeva</option><option value="1142054888">Nuranə Şirinova</option><option value="7920785774">Rasim Əsgərov</option>';
+async function loadBalanceEmployeeOptions() {
+    const r = await fetch(API_BASE + '/api/admin_balances', {headers: {'X-TG-User-ID': CURRENT_USER_ID}});
+    const j = await r.json();
+    if(!r.ok || !j.success) throw new Error(j.error || 'Əməkdaşlar yüklənmədi');
+    const employees = (Array.isArray(j.employees) ? j.employees : []).filter(e => Number.isSafeInteger(Number(e.tg_id)) && Number(e.tg_id) > 0);
+    if(!employees.length) throw new Error('Aktiv əməkdaş yoxdur.');
+    return '<option value="">Əməkdaş seçin</option>' + employees.map(e => `<option value="${Number(e.tg_id)}">${escapeBalanceText(e.name)}</option>`).join('');
+}
 
 function escapeBalanceText(value) {
     return String(value ?? '—').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -13453,14 +13460,17 @@ async function confirmBalanceTransaction(employeeId, taskId, button, txId) {
     }
 }
 
-function openMedaxil() {
+async function openMedaxil() {
     if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
+    let employeeOptions;
+    try { employeeOptions = await loadBalanceEmployeeOptions(); }
+    catch(e) { toast(e.message || 'Əməkdaşlar yüklənmədi', true); return; }
     const existing = document.getElementById('medaxil-modal'); if(existing) existing.remove();
     const html = `<div id="medaxil-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
         <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Mədaxil</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
-        <select id="med-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
+        <select id="med-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${employeeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
         <input type="number" min="0.01" step="0.01" id="med-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Açıqlama:</label>
@@ -13474,6 +13484,7 @@ async function submitMedaxil() {
     const employeeId = document.getElementById('med-employee').value;
     const amount = Number(document.getElementById('med-amount').value);
     const description = document.getElementById('med-description').value.trim();
+    if(!employeeId) { toast('Əməkdaş seçin!', true); return; }
     if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
     if(!description) { toast('Açıqlama daxil edin!', true); return; }
     const button = document.getElementById('med-submit');
@@ -13496,14 +13507,17 @@ async function submitMedaxil() {
     } finally { hideLoader(); }
 }
 
-function openMexaric() {
+async function openMexaric() {
     if(!isAdmin) { toast('Bu əməliyyat yalnız Admin üçündür.', true); return; }
+    let employeeOptions;
+    try { employeeOptions = await loadBalanceEmployeeOptions(); }
+    catch(e) { toast(e.message || 'Əməkdaşlar yüklənmədi', true); return; }
     const existing = document.getElementById('mexaric-modal'); if(existing) existing.remove();
     const html = `<div id="mexaric-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
       <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:340px;">
         <h3 style="font-size:14px;font-weight:600;margin-bottom:12px;">Məxaric (Ödəniş)</h3>
         <label style="font-size:11px;color:#888;font-weight:600;">Əməkdaş:</label>
-        <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${BALANCE_EMPLOYEE_OPTIONS}</select>
+        <select id="mex-employee" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">${employeeOptions}</select>
         <label style="font-size:11px;color:#888;font-weight:600;">Məbləğ (AZN):</label>
         <input type="number" min="0.01" step="0.01" id="mex-amount" placeholder="50" style="width:100%;padding:8px;border:1px solid #e5e7eb;border-radius:10px;margin-bottom:8px;font-size:12px;">
         <label style="font-size:11px;color:#888;font-weight:600;">Qeyd:</label>
@@ -13517,6 +13531,7 @@ async function submitMexaric() {
     const employeeId = document.getElementById('mex-employee').value;
     const amount = Number(document.getElementById('mex-amount').value);
     const note = document.getElementById('mex-note').value.trim() || 'Ödəniş';
+    if(!employeeId) { toast('Əməkdaş seçin!', true); return; }
     if(!Number.isFinite(amount) || amount <= 0) { toast('Müsbət məbləğ daxil edin!', true); return; }
         const button = document.getElementById('mex-submit');
     showLoader();

@@ -24259,10 +24259,14 @@ async def handle_api_balance_credit(request: web.Request) -> web.Response:
     except (TypeError, ValueError):
         return web.json_response({"success": False, "error": "Əməkdaş və ya məbləğ yanlışdır."}, status=400)
     description = str(data.get("description") or "Mədaxil").strip()[:500]
-    if not employee_id or not math.isfinite(amount) or amount <= 0:
+    if employee_id <= 0 or not math.isfinite(amount) or amount <= 0:
         return web.json_response({"success": False, "error": "Müsbət məbləğ və əməkdaş seçin."}, status=400)
 
-    employee_name = get_employee_name_by_chat_id(employee_id, str(employee_id))
+    employee = next((row for row in _employee_directory_rows()
+                     if row.get("active") and int(row["chat_id"]) == employee_id), None)
+    if employee is None:
+        return web.json_response({"success": False, "error": "Əməkdaş hesabı aktiv deyil və ya dəyişib. Siyahını yeniləyin."}, status=409)
+    employee_name = str(employee.get("name") or employee_id)
     saved = add_balance_transaction(
         employee_id,
         0,
