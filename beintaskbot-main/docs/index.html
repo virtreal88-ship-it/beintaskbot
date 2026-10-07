@@ -1568,7 +1568,7 @@
     </div>
 </div>
 
-<div id="task-edit-modal" onclick="if(event.target===this) closeTaskEditModal()">
+<div id="task-edit-modal">
     <div class="task-edit-card" onclick="event.stopPropagation()">
         <input id="modal-task-client" placeholder="Müştəri adı">
         <input id="modal-task-phone" type="tel" placeholder="Telefon">
@@ -3050,6 +3050,7 @@ async function submitEditNote() {
 }
 
 function submitTask() {
+    if(!validateTaskDateField(editingTaskId ? 'edit-deadline-custom' : 'task-deadline-custom')) return;
     const textEl = editingTaskId ? document.getElementById('edit-task-desc') : document.getElementById('task-desc');
     const textInput = textEl.value.trim();
     if(editingTaskId) {
@@ -3110,7 +3111,7 @@ function formatTaskDeadline(raw) {
     const d = new Date(stamp);
     if(isNaN(d.getTime())) return '';
     const p = n => String(n).padStart(2, '0');
-    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    return formatLinearTimestamp(d.toISOString()).slice(0,16);
 }
 function appendDealTask(deal, item) {
     if(!deal || !_dealViewState || String(_dealViewState.id) !== String(deal.id)) return;
@@ -3489,7 +3490,7 @@ function formatLinearTimestamp(value) {
         timeZone:'Asia/Baku', year:'numeric', month:'2-digit', day:'2-digit',
         hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'
     }).formatToParts(parsed).map(part => [part.type, part.value]));
-    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+    return `${parts.day}/${parts.month}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function linearBoardCardHtml(item) {
@@ -3776,7 +3777,6 @@ function openLinearEditModal(issueId) {
         <label class="mb-1 block text-[11px] font-bold text-slate-500">Açıqlama</label><div class="relative"><textarea id="linear-edit-description" rows="8" class="w-full resize-y rounded-xl border border-slate-200 px-3 py-3 pb-12 text-sm leading-6 outline-none focus:border-violet-300" placeholder="Tapşırığın açıqlaması">${escapeHtml(item.description || '')}</textarea><button id="linear-ai-edit-button" type="button" onclick="rewriteLinearEditWithAI('${escapeHtml(issueId)}')" class="absolute bottom-2 right-2 rounded-lg bg-violet-100 px-3 py-2 text-[11px] font-extrabold text-violet-700">✦ AI ilə düzəlt</button></div>
         <div class="mt-4 grid grid-cols-2 gap-2"><button type="button" onclick="closeLinearModal()" class="rounded-xl bg-slate-100 py-3 text-xs font-bold text-slate-600">Bağla</button><button id="linear-edit-save" type="button" onclick="saveLinearEdit('${escapeHtml(issueId)}')" class="rounded-xl bg-violet-600 py-3 text-xs font-extrabold text-white">Yadda saxla</button></div>
     </div>`;
-    modal.addEventListener('click', event => { if(event.target === modal) closeLinearModal(); });
     document.body.appendChild(modal);
 }
 
@@ -4888,7 +4888,7 @@ function createCrmTaskCard(t, mode) {
     const displayDesc = stripNamePrefix(t.desc || t.task_text || t.text || '');
     const assigneeName = t.assigneeName || t.assignee_name || t.responsible_user_name || '';
     const title = t.contact_name || (isStaffCardTitle(t.lead_name || t.name, t) ? '' : (t.lead_name || t.name)) || displayDesc || 'Tapşırıq';
-    const when = t.overdue_text || t.time || t.deadline || '';
+    const when = t.complete_till || t.deadline_ts ? formatLinearTimestamp(new Date(Number(t.complete_till || t.deadline_ts) * 1000).toISOString()).slice(0,16) : formatDealTaskDeadline(t);
     const phoneList = Array.isArray(t.phones) && t.phones.length ? t.phones : (t.phone ? [t.phone] : []);
     const phone = phoneList.filter(Boolean).join(', ');
     const leadId = t.lead_id || t.entity_id || '';
@@ -5038,6 +5038,8 @@ function isDealTaskCompleted(item) {
 
 function formatDealTaskDeadline(item) {
     if(!item) return '';
+    const deadlineStamp = Number(item.complete_till || item.deadline_ts || 0);
+    if(deadlineStamp > 0 && Number.isFinite(deadlineStamp)) return formatLinearTimestamp(new Date(deadlineStamp * 1000).toISOString()).slice(0,16);
     let val = item.deadline || item.time || item.deadline_text || '';
     if(typeof val === 'string' && val.startsWith('custom:')) {
         val = val.slice(7).trim();
@@ -5048,11 +5050,11 @@ function formatDealTaskDeadline(item) {
             const dt = new Date(trimmed);
             if(!isNaN(dt.getTime())) {
                 const p = n => String(n).padStart(2, '0');
-                return p(dt.getDate()) + '.' + p(dt.getMonth() + 1) + '.' + dt.getFullYear() + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+                return formatLinearTimestamp(dt.toISOString()).slice(0,16);
             }
         }
         if(!/^\d{9,12}$/.test(trimmed)) {
-            return trimmed;
+            return trimmed.replace(/^(\d{2})\.(\d{2})\.(\d{4})/, '$1/$2/$3');
         }
     }
     const ts = Number(item.complete_till || item.deadline_ts || (typeof val === 'number' || (typeof val === 'string' && /^\d{9,12}$/.test(val.trim())) ? val : 0));
@@ -5061,7 +5063,7 @@ function formatDealTaskDeadline(item) {
             const dt = new Date(ts * 1000);
             if(!isNaN(dt.getTime())) {
                 const p = n => String(n).padStart(2, '0');
-                return p(dt.getDate()) + '.' + p(dt.getMonth() + 1) + '.' + dt.getFullYear() + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+                return formatLinearTimestamp(dt.toISOString()).slice(0,16);
             }
         } catch(_) {}
     }
@@ -12515,7 +12517,7 @@ function openTaskEditModal(task) {
             if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawDl)) {
                 dlEl.value = rawDl.slice(0, 16);
             } else {
-                const m = rawDl.match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
+                const m = rawDl.match(/^(\d{2})[./](\d{2})[./](\d{4})\s+(\d{2}):(\d{2})/);
                 if(m) {
                     dlEl.value = `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}`;
                 } else {
@@ -12538,6 +12540,7 @@ function closeTaskEditModal() {
     editingTaskId = null;
 }
 async function saveTaskEditModal() {
+    if(!validateTaskDateField('modal-task-deadline')) return;
     const taskId = editingTaskId || selectedTaskId;
     let task = mockTasks.find(t => t.id === taskId);
     const dealTask = _dealViewState && _dealViewState.deal && Array.isArray(_dealViewState.deal.tasks)
@@ -13944,5 +13947,6 @@ async function uploadVoiceNote(entityId, entityType) {
     };
 }
 </script>
+<script src="/assets/task-date-fields.js"></script>
 </body>
 </html>

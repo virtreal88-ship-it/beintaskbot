@@ -22747,6 +22747,10 @@ async def serve_tenant_push_script(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push.js'),headers={'Cache-Control':'no-store'})
 
 
+async def serve_task_date_fields(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','task-date-fields.js'),headers={'Cache-Control':'no-store'})
+
+
 async def serve_tenant_push_worker(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push-sw.js'),
                             headers={'Cache-Control':'no-store','Service-Worker-Allowed':'/app/'})
@@ -23662,6 +23666,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/me", handle_platform_me)
     app_web.router.add_get('/app/push-sw.js',serve_tenant_push_worker)
     app_web.router.add_get('/assets/tenant-push.js',serve_tenant_push_script)
+    app_web.router.add_get('/assets/task-date-fields.js',serve_task_date_fields)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_get("/api/platform/members", handle_platform_members)
