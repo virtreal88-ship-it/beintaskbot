@@ -56,6 +56,11 @@ from tenant_task_commands import task_executor_profiles, TaskCommandPending, pen
 from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
+from tenant_push import (
+    MAX_DEVICES as TENANT_PUSH_MAX_DEVICES,
+    register_device as register_tenant_push_device, list_devices as list_tenant_push_devices,
+    disable_device as disable_tenant_push_device,
+)
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
     release_hot_order, submit_hot_order, settle_hot_order, update_hot_order, cancel_hot_order,
@@ -22417,6 +22422,38 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
+async def handle_platform_push_devices(request: web.Request) -> web.Response:
+    """Tenant device API; never use global legacy push subscriptions."""
+    profile = _tenant_member_from_request(request)
+    if not profile or profile.get('active') is not True:
+        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
+    if request.method != 'GET' and (request.content_type != 'application/json'
+            or request.headers.get('Origin', '').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
+        return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+    headers = {'Cache-Control': 'no-store'}
+    try:
+        if request.method == 'GET':
+            devices = await asyncio.to_thread(list_tenant_push_devices, profile)
+            return web.json_response({'success': True, 'devices': devices, 'max_devices': TENANT_PUSH_MAX_DEVICES,
+                                      'public_key': VAPID_PUBLIC_KEY, 'delivery_enabled': False}, headers=headers)
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError('Sorğu düzgün deyil.')
+        if data.get('action') == 'subscribe':
+            device = await asyncio.to_thread(register_tenant_push_device, profile, data.get('subscription'), data.get('label', ''))
+            return web.json_response({'success': True, 'device': device, 'delivery_enabled': False}, headers=headers)
+        if data.get('action') == 'unsubscribe':
+            await asyncio.to_thread(disable_tenant_push_device, profile, data.get('device_id'))
+            return web.json_response({'success': True}, headers=headers)
+        raise ValueError('Əməliyyat düzgün deyil.')
+    except (ValueError, TenantPlatformError) as exc:
+        return web.json_response({'success': False, 'error': str(exc)}, status=400, headers=headers)
+    except Exception:
+        # Subscription URLs/keys are private. No request/error bodies in logs.
+        logger.error('Tenant push device API failed: tenant=%s', profile['tenant_id'])
+        return web.json_response({'success': False, 'error': 'Cihaz ayarları saxlanmadı.'}, status=500, headers=headers)
+
+
 async def handle_platform_task_options(request: web.Request) -> web.Response:
     profile = _tenant_member_from_request(request)
     if not profile or not TenantPolicy(profile).allows('tasks'):
@@ -23569,6 +23606,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/login", handle_platform_login)
     app_web.router.add_post("/api/platform/logout", handle_platform_logout)
     app_web.router.add_get("/api/platform/me", handle_platform_me)
+    app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
+    app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_get("/api/platform/members", handle_platform_members)
     app_web.router.add_post("/api/platform/members", handle_platform_members)
     app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)

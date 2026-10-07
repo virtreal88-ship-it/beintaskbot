@@ -295,6 +295,28 @@ def _ensure_schema(conn) -> None:
                 ON saas_approval_notification_deliveries (updated_at) WHERE status='sending'
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_push_devices (
+                    endpoint_hash TEXT PRIMARY KEY,
+                    owner_telegram_id BIGINT NOT NULL,
+                    subscription BYTEA NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_member_push_devices (
+                    tenant_id UUID NOT NULL,
+                    telegram_id BIGINT NOT NULL,
+                    endpoint_hash TEXT NOT NULL REFERENCES saas_push_devices(endpoint_hash) ON DELETE CASCADE,
+                    label TEXT NOT NULL DEFAULT '',
+                    active BOOLEAN NOT NULL DEFAULT TRUE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id,telegram_id,endpoint_hash),
+                    FOREIGN KEY (tenant_id,telegram_id)
+                        REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_crm_messages (
                     id UUID PRIMARY KEY,
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
