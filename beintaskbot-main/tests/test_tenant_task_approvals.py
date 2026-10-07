@@ -89,7 +89,7 @@ class ApprovalStorageTests(unittest.TestCase):
         rows = commands.pending_task_approvals(person('owner',1))
         self.cur.execute.assert_called_once()
         sql, params = self.cur.execute.call_args.args
-        self.assertIn('c.tenant_id=%s::uuid',sql);self.assertEqual(params,('company-a',))
+        self.assertIn('c.tenant_id=%s::uuid',sql);self.assertEqual(params,('company-a',201))
         self.assertIn("NOT IN ('done', 'rejected')",sql)
         self.assertIn('e.tenant_id=c.tenant_id',sql)
         self.assertEqual(rows[0]['executor_name'],'Employee')
@@ -100,6 +100,55 @@ class ApprovalStorageTests(unittest.TestCase):
         sql, params = self.cur.execute.call_args.args
         self.assertIn('tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid',sql)
         self.assertEqual(params,('company-a',20,'request'))
+
+    def test_cursor_paging_keeps_ties_and_does_not_use_offset(self):
+        created = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        rows = [{'actor_id': 20, 'request_id': uuid.UUID(int=i), 'created_at': created,
+                 'state': {'step': 'waiting_approval'}, 'creator_name': 'Worker', 'executor_name': 'Worker'}
+                for i in (1, 2, 3)]
+        self.cur.fetchall.return_value = rows
+        first = commands.pending_task_approval_page(person('owner', 1), limit=2)
+        self.assertTrue(first['has_more'])
+        self.assertEqual(len(first['approvals']), 2)
+        self.assertEqual(self.cur.execute.call_args.args[1], ('company-a', 3))
+        # After both earlier tasks leave the queue, the third must not be skipped.
+        self.cur.fetchall.return_value = rows[2:]
+        second = commands.pending_task_approval_page(person('owner', 1), limit=2, cursor=first['next_cursor'])
+        sql, params = self.cur.execute.call_args.args
+        self.assertNotIn('OFFSET', sql)
+        self.assertIn('(c.created_at, c.actor_id, c.request_id) >', sql)
+        self.assertIn('c.created_at ASC, c.actor_id ASC, c.request_id ASC', sql)
+        self.assertEqual(params, ('company-a', created, 20, str(uuid.UUID(int=2)), 3))
+        self.assertEqual(second['approvals'][0]['request_id'], str(uuid.UUID(int=3)))
+        self.assertFalse(second['has_more']); self.assertIsNone(second['next_cursor'])
+
+    def test_invalid_cursor_or_limit_never_opens_database(self):
+        with self.assertRaises(ValueError):
+            commands.pending_task_approval_page(person('owner', 1), cursor='bad!')
+        with self.assertRaises(ValueError):
+            commands.pending_task_approval_page(person('owner', 1), limit=201)
+        self.connect.assert_not_called()
+
+    def test_queue_larger_than_200_is_read_in_bounded_pages(self):
+        created = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+        rows = [{'actor_id': 20, 'request_id': uuid.UUID(int=i), 'created_at': created,
+                 'state': {'step': 'waiting_approval'}, 'creator_name': 'Worker', 'executor_name': 'Worker'}
+                for i in range(1, 251)]
+        def fetch_page():
+            params = self.cur.execute.call_args.args[1]
+            after = uuid.UUID(params[3]).int if len(params) > 2 else 0
+            return [row for row in rows if row['request_id'].int > after][:params[-1]]
+        self.cur.fetchall.side_effect = fetch_page
+        seen, cursor = [], ''
+        while True:
+            page = commands.pending_task_approval_page(person('owner', 1), cursor=cursor)
+            self.assertLessEqual(len(page['approvals']), 50)
+            seen.extend(row['request_id'] for row in page['approvals'])
+            if not page['has_more']:
+                break
+            cursor = page['next_cursor']
+        self.assertEqual(seen, [str(row['request_id']) for row in rows])
+        self.assertEqual(self.cur.execute.call_count, 5)
 
     def test_denied_reader_does_not_open_database(self):
         with self.assertRaises(TenantPlatformError):commands.pending_task_approvals(person())
@@ -113,19 +162,20 @@ class ApprovalEndpointTests(unittest.IsolatedAsyncioTestCase):
         tree.body = [n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'handle_platform_task_approvals']
         self.profile = person('owner',1)
         self.decide = AsyncMock(return_value={'task_id':9})
-        self.pending = Mock(return_value=[])
+        self.pending = Mock(return_value={'approvals': [], 'has_more': False, 'next_cursor': None})
         from tenant_policy import TenantPolicy
         import asyncio
         self.ns = {'web': SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,status=200,**kwargs:(status,data)),
                    '_tenant_member_from_request':lambda request:self.profile,'TenantPolicy':TenantPolicy,
-                   'pending_task_approvals':self.pending,'decide_task_approval':self.decide,
+                   'pending_task_approval_page':self.pending,'decide_task_approval':self.decide,
                    'asyncio':asyncio,'_tenant_kommo_request':Mock(),'logger':Mock(),
                    'TaskCommandPending':commands.TaskCommandPending,'TenantPlatformError':TenantPlatformError,
                    'CANONICAL_WEB_ORIGIN':'https://crm.pro.az'}
         exec(compile(tree,'<review-api>','exec'),self.ns)
         self.endpoint = self.ns['handle_platform_task_approvals']
         self.request = SimpleNamespace(method='POST',content_type='application/json',
-            headers={'Origin':'https://crm.pro.az'},json=AsyncMock(return_value={'action':'approve'}))
+            headers={'Origin':'https://crm.pro.az'},json=AsyncMock(return_value={'action':'approve'}),
+            rel_url=SimpleNamespace(query={}))
 
     async def test_queue_denies_non_admin_and_disabled_permissions(self):
         self.profile = person()
@@ -145,11 +195,23 @@ class ApprovalEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_is_read_only_and_unknown_write_is_not_replayed(self):
         self.request.method='GET'
         self.assertEqual((await self.endpoint(self.request))[1]['approvals'],[])
+        self.pending.assert_called_once_with(self.profile, limit=50, cursor='')
         self.decide.assert_not_awaited()
         self.request.method='POST'
         self.decide.side_effect=commands.TaskCommandPending('check request')
         status,body=await self.endpoint(self.request)
         self.assertEqual(status,409);self.assertTrue(body['retry_same_request'])
+
+    async def test_get_forwards_bounded_page_parameters_and_reports_bad_cursor(self):
+        self.request.method = 'GET'
+        self.request.rel_url.query = {'limit': '25', 'cursor': 'cursor'}
+        self.pending.return_value = {'approvals': [], 'has_more': True, 'next_cursor': 'next'}
+        status, body = await self.endpoint(self.request)
+        self.assertEqual(status, 200); self.assertEqual(body['next_cursor'], 'next')
+        self.pending.assert_called_once_with(self.profile, limit='25', cursor='cursor')
+        self.pending.side_effect = ValueError('invalid cursor')
+        self.assertEqual((await self.endpoint(self.request))[0], 400)
+        self.decide.assert_not_awaited()
 
 
 if __name__ == '__main__':

@@ -249,6 +249,11 @@ def _ensure_schema(conn) -> None:
                 )
             """)
             cur.execute("""
+                CREATE INDEX IF NOT EXISTS saas_task_commands_approval_cursor_idx
+                ON saas_task_commands (tenant_id, created_at, actor_id, request_id)
+                WHERE state ? 'approval' AND state->>'step' NOT IN ('done', 'rejected')
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_crm_messages (
                     id UUID PRIMARY KEY,
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

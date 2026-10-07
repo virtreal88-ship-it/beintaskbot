@@ -3,28 +3,38 @@
   const host = document.getElementById('view-tasks');
   const panel = document.createElement('section');
   panel.className = 'panel'; panel.hidden = true; panel.style.marginTop = '20px';
-  panel.innerHTML = '<div style="display:flex;gap:12px;align-items:center;justify-content:space-between"><h2>Tapşırıq təsdiqləri</h2><button type="button" class="outline">Yenilə</button></div><p class="sub">Kommo-da yaradılmazdan əvvəl administrator təsdiqi gözləyən sorğular.</p><div class="approval-notice" role="status"></div><div class="approval-list"></div>';
+  panel.innerHTML = '<div style="display:flex;gap:12px;align-items:center;justify-content:space-between"><h2>Tapşırıq təsdiqləri</h2><button type="button" class="outline">Yenilə</button></div><p class="sub">Kommo-da yaradılmazdan əvvəl administrator təsdiqi gözləyən sorğular.</p><div class="approval-notice" role="status"></div><div class="approval-list"></div><button type="button" class="outline approval-more" style="margin-top:16px" hidden>Daha çox göstər</button>';
   host.append(panel);
   const refresh = panel.querySelector('button');
   const notice = panel.querySelector('.approval-notice');
   const list = panel.querySelector('.approval-list');
+  const more = panel.querySelector('.approval-more');
   let generation = 0;
+  let nextCursor = null;
+  const seen = new Set();
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  async function api(data) {
-    const response = await fetch('/api/platform/crm/task-approvals', {credentials:'same-origin',
+  async function api(data, cursor = null) {
+    const query = data ? '' : '?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    const response = await fetch('/api/platform/crm/task-approvals' + query, {credentials:'same-origin',
       method: data ? 'POST' : 'GET', headers:{'Content-Type':'application/json'},
       ...(data ? {body:JSON.stringify(data)} : {})});
     const result = await response.json();
     if (!response.ok || !result.success) throw Error(result.error || 'Sorğu alınmadı.');
     return result;
   }
-  async function load() {
-    const current = ++generation; refresh.disabled = true;
+  async function load(append = false) {
+    if (append && (more.disabled || !nextCursor)) return;
+    const cursor = append ? nextCursor : null;
+    const current = ++generation; refresh.disabled = true; more.disabled = true;
+    more.textContent = 'Yüklənir…';
     try {
-      const result = await api();
+      const result = await api(null, cursor);
       if (current !== generation || panel.hidden) return;
-      list.replaceChildren();
+      if (!append) { list.replaceChildren(); seen.clear(); }
       for (const item of result.approvals || []) {
+        const key = String(item.creator_id) + ':' + String(item.request_id);
+        if (seen.has(key)) continue;
+        seen.add(key);
         const card = document.createElement('article'); card.className = 'member';
         card.style.cssText = 'display:block;padding:16px 0;border-bottom:1px solid var(--line)';
         const task = item.task || {};
@@ -55,17 +65,22 @@
         }
         list.append(card);
       }
+      nextCursor = result.has_more && typeof result.next_cursor === 'string' ? result.next_cursor : null;
+      more.hidden = !nextCursor;
       if (!list.children.length) list.textContent = 'Təsdiq gözləyən tapşırıq yoxdur.';
     } catch (error) { if (current === generation) notice.textContent = error.message; }
-    finally { if (current === generation) refresh.disabled = false; }
+    finally { if (current === generation) { refresh.disabled = false; more.disabled = false; more.textContent = 'Daha çox göstər'; } }
   }
-  refresh.onclick = load;
+  refresh.onclick = () => load();
+  more.onclick = () => load(true);
   function apply(data) {
     panel.hidden = !(['owner','admin'].includes(data.member?.role) && data.capabilities?.modules?.tasks);
-    if (panel.hidden) { generation++; list.replaceChildren(); notice.textContent = ''; }
+    generation++; list.replaceChildren(); seen.clear(); nextCursor = null; more.hidden = true; notice.textContent = '';
+    if (panel.hidden) { more.disabled = false; refresh.disabled = false; }
     else load();
   }
-  document.addEventListener('tenant-profile', event => apply(event.detail));
+  let profileReceived = false;
+  document.addEventListener('tenant-profile', event => { profileReceived = true; apply(event.detail); });
   fetch('/api/platform/me', {credentials:'same-origin'}).then(response => response.json())
-    .then(data => { if (data.success) apply(data); }).catch(() => {});
+    .then(data => { if (data.success && !profileReceived) apply(data); }).catch(() => {});
 })();

@@ -4,6 +4,7 @@ The session advisory lock survives checkpoint commits, but releases on process
 death. Pending external writes are never replayed automatically after a crash.
 """
 import json
+from tenant_approval_cursor import approval_page_size, decode_approval_cursor, encode_approval_cursor
 from tenant_platform import _connect, _ensure_schema, TenantPlatformError
 
 
@@ -60,11 +61,24 @@ class TaskCommandStore:
 
 
 def pending_task_approvals(profile: dict) -> list[dict]:
+    """Compatibility helper for callers expecting the original list contract."""
+    return pending_task_approval_page(profile, limit=200)['approvals']
+
+
+def pending_task_approval_page(profile: dict, *, limit: object = 50, cursor: str = '') -> dict:
     """Only active administrators with task access can review this tenant."""
     from tenant_policy import TenantPolicy
     policy = TenantPolicy(profile)
     if not policy.privileged or not policy.allows('tasks'):
         raise TenantPlatformError('Təsdiq üçün icazəniz yoxdur.')
+    size = approval_page_size(limit)
+    after = decode_approval_cursor(cursor, str(profile['tenant_id']))
+    predicate = ''
+    params = [profile['tenant_id']]
+    if after:
+        predicate = 'AND (c.created_at, c.actor_id, c.request_id) > (%s::timestamptz, %s::bigint, %s::uuid)'
+        params.extend(after)
+    params.append(size + 1)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -76,13 +90,18 @@ def pending_task_approvals(profile: dict) -> list[dict]:
                              AND e.telegram_id::text=c.state->'task_input'->>'executor_id'
                            WHERE c.tenant_id=%s::uuid AND c.state ? 'approval'
                              AND c.state->>'step' NOT IN ('done', 'rejected')
-                           ORDER BY c.created_at ASC LIMIT 200''', (profile['tenant_id'],))
+                           ''' + predicate + '''
+                           ORDER BY c.created_at ASC, c.actor_id ASC, c.request_id ASC LIMIT %s''', tuple(params))
             rows = cur.fetchall()
-    return [{'creator_id': row['actor_id'], 'creator_name': row['creator_name'] or 'Əməkdaş',
+    has_more = len(rows) > size
+    visible = rows[:size]
+    approvals = [{'creator_id': row['actor_id'], 'creator_name': row['creator_name'] or 'Əməkdaş',
              'executor_name': row['executor_name'] or 'Əməkdaş',
              'request_id': str(row['request_id']), 'created_at': row['created_at'].isoformat(),
              'step': row['state'].get('step'), 'task': row['state'].get('task_input') or {}}
-            for row in rows]
+            for row in visible]
+    return {'approvals': approvals, 'has_more': has_more,
+            'next_cursor': encode_approval_cursor(visible[-1], str(profile['tenant_id'])) if has_more else None}
 
 
 def approval_command(profile: dict, creator_id: int, request_id: str) -> dict:

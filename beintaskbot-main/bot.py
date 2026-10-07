@@ -52,7 +52,7 @@ from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_tasks import create_task as create_tenant_task
-from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approvals
+from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approval_page
 from tenant_task_approvals import decide_task_approval
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
@@ -22460,8 +22460,10 @@ async def handle_platform_task_approvals(request: web.Request) -> web.Response:
         return web.json_response({'success': False, 'error': 'Təsdiq üçün icazəniz yoxdur.'}, status=403)
     try:
         if request.method == 'GET':
-            rows = await asyncio.to_thread(pending_task_approvals, profile)
-            return web.json_response({'success': True, 'approvals': rows}, headers={'Cache-Control': 'no-store'})
+            page = await asyncio.to_thread(pending_task_approval_page, profile,
+                                          limit=request.rel_url.query.get('limit', 50),
+                                          cursor=request.rel_url.query.get('cursor', ''))
+            return web.json_response({'success': True, **page}, headers={'Cache-Control': 'no-store'})
         if request.content_type != 'application/json' or (request.headers.get('Origin') and request.headers['Origin'].rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
         data = await request.json()
