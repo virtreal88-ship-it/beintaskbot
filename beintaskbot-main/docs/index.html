@@ -960,13 +960,13 @@
             body.chats-screen:has(.chats-app.chat-open) #tab-bar,
             body.chats-screen:has(.chats-app.chat-open) #tab-more-sheet { display:none !important; }
             body.chat-open #content-area,
-            body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0 !important; height:100vh !important; }
+            body.chats-screen:has(.chats-app.chat-open) #content-area { padding-bottom:0 !important; height:100% !important; }
             body.chat-open,
             body.chats-screen:has(.chats-app.chat-open) { overflow:hidden; }
             /* Müştərilər follows the same card-and-gutter language as the
                other mobile pages while keeping the chat view full-screen. */
             body.chats-screen:not(:has(.chats-app.chat-open)) #content-area {
-                padding:10px 16px 74px !important; background:#f4f6f8; overflow:hidden;
+                padding:10px 16px calc(74px + env(safe-area-inset-bottom, 0px)) !important; background:#f4f6f8; overflow:hidden;
             }
             body.chats-screen:not(:has(.chats-app.chat-open)) #screen-chats.screen.active {
                 height:100%; margin:0; min-height:0;
@@ -1003,7 +1003,13 @@
             body.chats-screen:has(.chats-app.chat-open) #content-area { padding:0 !important; }
             body.chats-screen:has(.chats-app.chat-open) .chats-app { margin:0; border:0; border-radius:0; box-shadow:none; }
         }
-    </style>
+        @media (max-width:1023px) {
+            body.h-screen { height:100vh; height:100dvh; }
+            #content-area { min-height:0; box-sizing:border-box; padding-bottom:calc(80px + env(safe-area-inset-bottom, 0px)); }
+            #tab-bar { height:calc(64px + env(safe-area-inset-bottom, 0px)); padding-bottom:env(safe-area-inset-bottom, 0px); box-sizing:border-box; }
+            #screen-pending > #guide-editor-entry { flex-shrink:0; }
+        }
+</style>
 </head>
 <body class="flex flex-col h-screen overflow-hidden">
 
@@ -1134,7 +1140,6 @@
 <!-- MAIN CONTENT AREA -->
 <div class="flex-1 overflow-y-auto px-4 py-3 custom-scroll pb-20" id="content-area">
 
-    <a id="guide-editor-entry" href="/guide-editor" style="display:none" class="mb-3 flex items-center justify-between rounded-2xl border border-blue-200 bg-blue-50 p-4 text-blue-800"><span><strong>Təlimatlar</strong><span class="block text-xs mt-1">İstifadə qaydasını əlavə edin və redaktə edin</span></span><span>↗</span></a>
     <!-- SCREEN: TASKS (main) -->
     <div id="screen-notifications" class="screen active space-y-3">
         <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
@@ -1432,6 +1437,7 @@
 
     <!-- SCREEN: PENDING ACTIONS (admin only) -->
     <div id="screen-pending" class="screen space-y-3">
+        <a id="guide-editor-entry" href="/guide-editor" style="display:none" class="flex items-center justify-between rounded-2xl border border-blue-200 bg-blue-50 p-4 text-blue-800"><span><strong>Təlimatlar</strong><span class="block text-xs mt-1">İstifadə qaydasını əlavə edin və redaktə edin</span></span><span>↗</span></a>
         <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div>
                 <div class="text-sm font-extrabold text-gray-800">Təsdiq</div>
