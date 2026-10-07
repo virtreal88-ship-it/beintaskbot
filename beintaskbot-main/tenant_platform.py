@@ -1227,16 +1227,14 @@ def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, scope: 
 
 def upsert_crm_messages(*, tenant_id: str, kommo_lead_id: int, messages: list[dict]) -> int:
     """Store a compact per-tenant chat snapshot; no messages cross tenants."""
-    saved = 0
+    from tenant_message_snapshots import message_rows
+    rows = message_rows(tenant_id, kommo_lead_id, messages, _json, uuid.uuid4)
+    if not rows:
+        return 0
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            for item in messages:
-                external_id = str(item.get("external_id") or item.get("id") or "").strip()
-                if not external_id:
-                    fingerprint = _json({"at": item.get("happened_at"), "body": item.get("body"), "direction": item.get("direction")})
-                    external_id = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
-                cur.execute("""
+            cur.executemany("""
                     INSERT INTO saas_crm_messages
                     (id, tenant_id, kommo_lead_id, external_id, direction, channel, author_name,
                      body, message_type, media_url, happened_at, raw)
@@ -1246,17 +1244,9 @@ def upsert_crm_messages(*, tenant_id: str, kommo_lead_id: int, messages: list[di
                         author_name = EXCLUDED.author_name, body = EXCLUDED.body,
                         message_type = EXCLUDED.message_type, media_url = EXCLUDED.media_url,
                         happened_at = EXCLUDED.happened_at, raw = EXCLUDED.raw
-                """, (
-                    uuid.uuid4(), tenant_id, int(kommo_lead_id), external_id[:500],
-                    str(item.get("direction") or "incoming")[:30], str(item.get("channel") or "")[:100],
-                    str(item.get("author_name") or "")[:240], str(item.get("body") or "")[:12000],
-                    str(item.get("message_type") or "text")[:60], str(item.get("media_url") or "")[:3000],
-                    item.get("happened_at") or None,
-                    _json(item.get("raw") if isinstance(item.get("raw"), dict) else {}),
-                ))
-                saved += 1
+                """, rows)
         conn.commit()
-    return saved
+    return len(rows)
 
 
 def list_crm_messages(*, tenant_id: str, kommo_lead_id: int, limit: int = 120) -> list[dict]:
