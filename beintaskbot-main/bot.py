@@ -1461,14 +1461,6 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                     send_push_notification(str(_new_chat), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client} - {_task_desc}')
                     remember_staff_notice(_new_chat, "new_task", "Yeni tapşırıq!", f"{_client} - {_task_desc}", int(action_data.get("lead_id") or 0))
                 except: pass
-        # Route Rüfət to his personal pipeline/sorğular; keep existing routing for others.
-        _lead_id_exec = action_data.get("lead_id")
-        if _lead_id_exec:
-            try:
-                if not move_lead_to_icraci(_lead_id_exec, new_name):
-                    logger.warning("Failed to route assigned deal %s to %s", _lead_id_exec, new_name)
-            except Exception as exc:
-                logger.warning("Failed to route assigned deal: %s", exc)
         # Notify cavabdeh (creator) about executor assignment
         _sender_name_uc = action_data.get("sender_name", "")
         _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
@@ -1601,38 +1593,6 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                     send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}')
                     remember_staff_notice(_target_chat_ae, "new_task", "Yeni tapşırıq!", f"{_client_ae} - {task_text}", int(action_data.get("lead_id") or 0))
                 except: pass
-            # Route the deal after assignment. Rüfət must always receive it in
-            # his own pipeline at the exact `sorgular` stage.
-            if _target_chat_ae:
-                if not move_lead_to_icraci(int(lead_id), _ae_name):
-                    logger.error(
-                        "Failed to route assigned deal: lead=%s assignee=%s",
-                        lead_id, _ae_name,
-                    )
-                    return False, "İcraçı təyin edildi, lakin sövdələşmə köçürülmədi."
-                if _ae_name == "Rüfət Həsənzadə":
-                    # Explicit notification is intentional: the stage-change
-                    # webhook may be delayed or suppressed as bot-initiated.
-                    _rufat_msg = (
-                        "📥 Rüfət Həsənzadə bölməsinə yeni sövdələşmə daxil oldu!\n\n"
-                        f"👤 {_client_ae or 'Adsız'}\n"
-                        f"📝 {task_text}\n"
-                        f"📞 {action_data.get('phone', '')}\n"
-                        f"📌 Mərhələ: sorğular\n"
-                        f"🔗 {_link_ae}"
-                    )
-                    try:
-                        asyncio.ensure_future(_bot_app.bot.send_message(
-                            int(_target_chat_ae), _rufat_msg,
-                            disable_web_page_preview=True,
-                        ))
-                        send_push_notification(
-                            str(_target_chat_ae),
-                            "📥 Yeni sövdələşmə: sorğular",
-                            f"{_client_ae or 'Adsız'} — {task_text}",
-                        )
-                    except Exception as exc:
-                        logger.warning("Rüfət notification failed: %s", exc)
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
 
     elif action_type == "confirm_stage":
@@ -4091,8 +4051,6 @@ def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: 
         if not lead_id:
             return {"success": False, "message": "❌ Müştəri üçün sövdələşmə yaradıla bilmədi."}
         logger.info("Auto-created lead %s for contact %s", lead_id, contact_id)
-    elif assignee_name:
-        move_lead_to_icraci(lead_id, assignee_name)
 
     entity_id = int(lead_id)
     entity_type = "leads"
@@ -8248,22 +8206,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
             logger.info(f"Create task result: {res}")
             if res:
                 save_task_priority(res, priority)
-                # Move the deal to the first stage of the selected icraçı funnel.
-                if True:
-                    _lead_id_to_move = result.get('entity_id') if result.get('entity_type') == 'leads' else None
-                    if not _lead_id_to_move and result.get('entity_type') == 'contacts':
-                        try:
-                            _cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{result['entity_id']}/leads", headers=HEADERS, timeout=8)
-                            if _cr.status_code == 200:
-                                _leads = _cr.json().get('_embedded',{}).get('leads',[])
-                                if _leads: _lead_id_to_move = _leads[0]['id']
-                        except: pass
-                    if assignee_name_raw and _lead_id_to_move:
-                        try:
-                            if move_lead_to_icraci(_lead_id_to_move, assignee_name_raw):
-                                logger.info(f"Moved lead {_lead_id_to_move} to funnel of {assignee_name_raw}")
-                        except Exception as _me:
-                            logger.error(f"Failed to move lead to icraçı funnel: {_me}")
                 msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
                 # Notify assignee by marker name
                 if assignee_name_raw:

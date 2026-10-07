@@ -124,6 +124,8 @@ class TenantPolicy:
         """Executor routing plan, independent of the provider's single admin."""
         if not self.allows('tasks'):
             raise ValueError('Tapşırıqlar üçün icazəniz yoxdur.')
+        if has_deal:
+            return {'action': 'keep_deal', 'marker': self.task_marker()}
         # Administrators can see all pipelines, but their personal tasks must
         # route only to pipelines owned by or explicitly assigned to them.
         scope = TenantPolicy({**self.profile, 'role': 'manager'}).pipeline_scope() if self.privileged else self.pipeline_scope()
@@ -142,7 +144,7 @@ class TenantPolicy:
                             key=lambda s: (s.get('sort_order', 0), positive_id(s.get('stage_id'))))
             if not stages:
                 raise ValueError('İcraçının ilk açıq mərhələsini sazlayın.')
-            return {'action': 'move_deal' if has_deal else 'create_deal',
+            return {'action': 'create_deal',
                     'pipeline_id': target['pipeline_id'], 'status_id': positive_id(stages[0]['stage_id']), 'marker': ''}
         return {'action': 'keep_deal' if has_deal else 'standalone', 'marker': self.task_marker()}
 

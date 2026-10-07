@@ -171,13 +171,16 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         state=MemoryStore.rows[('company-a',20,self.body['request_id'])][1]
         self.assertEqual(state['step'],'task_creating');self.assertIn('approval',state)
 
-    async def test_admin_routes_to_executor_pipeline_before_creating_task(self):
+    async def test_admin_assigning_manager_keeps_existing_deal_and_marks_task(self):
         self.actor=person('owner',1);self.executor=person('manager',21)
         self.body.update(lead_id=7,executor_id=21)
         await service.create_task(self.actor,self.body,self.request)
         writes=[call for call in self.calls if call[0]!='GET']
-        self.assertEqual(writes[0],('PATCH','leads/7',{'json_body':{'pipeline_id':11,'status_id':110}}))
-        self.assertEqual(writes[1][1],'tasks')
+        self.assertEqual(len(writes),1)
+        self.assertEqual(writes[0][:2],('POST','tasks'))
+        task=writes[0][2]['json_body'][0]
+        self.assertEqual(task['entity_id'],7)
+        self.assertIn(TenantPolicy(self.executor).task_marker(),task['text'])
 
     async def test_admin_assigning_worker_keeps_pipeline_and_marks_task(self):
         self.actor=person('owner',1);self.executor=person('worker',30)

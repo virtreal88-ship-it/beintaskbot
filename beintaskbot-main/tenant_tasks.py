@@ -103,7 +103,7 @@ async def create_task(profile: dict, data: dict, request: KommoRequest, *, revie
         responsible = positive_id(account.get('current_user_id'))
         if not responsible:
             raise TenantPlatformError('Kommo administrator hesabı müəyyən edilmədi.')
-        if route['action'] in {'create_deal', 'move_deal'}:
+        if route['action'] == 'create_deal':
             # Validate config against live provider stages before mutating.
             pipelines = await request(tenant, 'GET', 'leads/pipelines')
             provider = next((p for p in (pipelines.get('_embedded') or {}).get('pipelines', []) if positive_id(p.get('id')) == route['pipeline_id']), None)
@@ -135,10 +135,6 @@ async def create_task(profile: dict, data: dict, request: KommoRequest, *, revie
                 if not lead_id:
                     raise TenantPlatformError('Kommo sövdələşmə kodunu qaytarmadı.')
                 lead = {**lead, **body, 'name': payload['text'][:200]}
-            else:
-                await asyncio.to_thread(store.save, {'step': 'lead_moving', 'lead_id': lead_id})
-                await request(tenant, 'PATCH', f'leads/{lead_id}', json_body=body)
-                lead = {**lead, **body}
             await asyncio.to_thread(store.save, {'step': 'lead_ready', 'lead_id': lead_id})
             await asyncio.to_thread(upsert_crm_deals, tenant_id=tenant, deals=[{
                 'kommo_lead_id': lead_id, 'pipeline_id': route['pipeline_id'], 'status_id': route['status_id'],

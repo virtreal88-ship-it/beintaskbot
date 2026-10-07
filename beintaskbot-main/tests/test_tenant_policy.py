@@ -68,11 +68,11 @@ class TenantPolicyTests(unittest.TestCase):
         self.assertNotEqual(TenantPolicy(person).task_marker(),marker)
         self.assertNotEqual(TenantPolicy(profile('worker',21)).task_marker(),marker)
 
-    def test_pipeline_executor_routes_deal_before_task(self):
+    def test_pipeline_executor_never_moves_existing_deal(self):
         policy=TenantPolicy(profile())
-        for has_deal,action in [(True,'move_deal'),(False,'create_deal')]:
-            self.assertEqual(policy.task_creation_route(has_deal=has_deal),
-                             {'action':action,'pipeline_id':10,'status_id':100,'marker':''})
+        self.assertEqual(policy.task_creation_route(has_deal=True),{'action':'keep_deal','marker':policy.task_marker()})
+        self.assertEqual(policy.task_creation_route(has_deal=False),
+                         {'action':'create_deal','pipeline_id':10,'status_id':100,'marker':''})
 
     def test_marker_executor_does_not_move_deal(self):
         policy=TenantPolicy(profile('worker'))
@@ -84,7 +84,7 @@ class TenantPolicyTests(unittest.TestCase):
             TenantPolicy(profile(telegram_id=99)).task_creation_route(has_deal=False)
         person=profile();person['workflow']['pipelines'][1]['owner_telegram_id']=20
         with self.assertRaises(ValueError):
-            TenantPolicy(person).task_creation_route(has_deal=True)
+            TenantPolicy(person).task_creation_route(has_deal=False)
         person['permissions']=[]
         with self.assertRaises(ValueError):
             TenantPolicy(person).task_creation_route(has_deal=False)
