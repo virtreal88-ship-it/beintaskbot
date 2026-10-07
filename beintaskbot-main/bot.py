@@ -23749,6 +23749,27 @@ def _rehydrate_tecili_tasks():
         logger.warning(f"_rehydrate_tecili_tasks failed: {exc}")
 
 
+def current_tecili_recipient(task: dict) -> int:
+    """Pipeline-owned tasks follow the live deal; worker markers stay explicit."""
+    marker = _rufat_marker_name(str(task.get('text') or ''))
+    marked_chat = get_chat_id_by_name(marker) if marker else None
+    marked_funnel = bool(marked_chat and is_funnel_chat(marked_chat))
+    if marked_chat and not marked_funnel:
+        return int(marked_chat) if can_receive_staff_notification(marked_chat) else 0
+    entity_type = _normalize_kommo_entity_type(task.get('entity_type', 'leads'))
+    if entity_type == 'leads' and task.get('entity_id'):
+        lead = get_lead_details(int(task['entity_id']))
+        # A failed fresh read is not permission to notify the previous owner.
+        if not lead:
+            return 0
+        owner = get_chat_id_by_name(owner_name_for_pipeline(int(lead.get('pipeline_id') or 0)))
+        if owner:
+            return int(owner) if can_receive_staff_notification(owner) else 0
+        if marked_funnel:
+            return 0
+    return active_task_assignee_chat_id(task)
+
+
 async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
     """Every 15 minutes, re-notify assignees of open təcili tasks until completed."""
     if not _tecili_tasks:
@@ -23759,7 +23780,7 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
         return
     for task_id, info in list(_tecili_tasks.items()):
         try:
-            resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+            resp = await asyncio.to_thread(_http.get, f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
             if resp.status_code == 200:
                 t = resp.json()
                 if t.get("is_completed"):
@@ -23772,18 +23793,13 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
             elif resp.status_code == 404:
                 unregister_tecili_task(task_id)
                 continue
-            responsible_id = info.get("responsible_user_id")
-            if not responsible_id:
+            else:
+                # Never send from registry data after a failed current-task read.
                 continue
-            chat_id = get_chat_id_for_kommo_user(responsible_id)
+            chat_id = await asyncio.to_thread(current_tecili_recipient, t)
             task_text = info.get("text", "Tapşırıq")
             entity_id = info.get("entity_id")
             entity_type = info.get("entity_type", "leads")
-            _m = re.match(r"^\[(.+?)\]", task_text or "")
-            if _m:
-                marker_chat = get_chat_id_by_name(normalize_assignee_name(_m.group(1)))
-                if marker_chat:
-                    chat_id = marker_chat
             if not chat_id:
                 continue
             client_name = get_contact_name_from_entity(entity_id, entity_type) if entity_id else ""
