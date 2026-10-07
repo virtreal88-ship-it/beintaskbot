@@ -11,7 +11,7 @@ def news_source_key(issue: dict) -> str:
 
 
 def classify_news_source(issue: dict, client, model: str) -> dict:
-    """Only explicit new customer functionality is eligible; errors propagate."""
+    """Classify clear exclusions; ambiguous content stays available for review."""
     key = news_source_key(issue)
     if "parent_id" not in issue:
         return {"kind": "unknown", "source_key": key}

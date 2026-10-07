@@ -20707,7 +20707,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 raw = row.get("raw") or {}
                 source = live.get(str(row.get("source_issue_id") or "")) or raw.get("linear") or {}
                 classification = raw.get("news_classification") or {}
-                if (classification.get("kind") != "feature" or source.get("parent_id")
+                if (classification.get("kind") not in {"feature", "other"} or source.get("parent_id")
                         or classification.get("source_key") != news_source_key(source)):
                     continue
             if (not isinstance(row, dict) or row.get("approval_status") != "approved"
@@ -20747,7 +20747,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             except Exception:
                 logger.exception("Linear news classification failed for %s", issue.get("id"))
                 return
-            if classification["kind"] == "feature":
+            if classification["kind"] in {"feature", "other"}:
                 slot_key = _linear_news_current_publish_slot()
                 if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
                     return

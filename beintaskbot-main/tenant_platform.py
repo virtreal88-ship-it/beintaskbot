@@ -531,7 +531,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
                       AND (%s = '' OR approval_status = %s)
                       AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
                       AND (%s <> 'pending' OR source_issue_id LIKE 'manual-news-%%'
-                           OR (raw->'news_classification'->>'kind' = 'feature'
+                           OR (raw->'news_classification'->>'kind' IN ('feature', 'other')
                                AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                     ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
                 """, (project, status, status, status, status, size, start))
@@ -542,7 +542,7 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
                       AND (%s = '' OR approval_status = %s)
                       AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
                       AND (%s <> 'pending' OR source_issue_id LIKE 'manual-news-%%'
-                           OR (raw->'news_classification'->>'kind' = 'feature'
+                           OR (raw->'news_classification'->>'kind' IN ('feature', 'other')
                                AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                     ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
                 """, (status, status, status, status, size, start))
@@ -580,7 +580,7 @@ def update_linear_news_review(*, source_issue_id: str, title: str, summary: str,
                     updated_at=now()
                 WHERE source_issue_id=%s
                   AND (%s <> 'approved' OR source_issue_id LIKE 'manual-news-%%'
-                       OR (raw->'news_classification'->>'kind' = 'feature'
+                       OR (raw->'news_classification'->>'kind' IN ('feature', 'other')
                            AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                 RETURNING *
             """, (str(title or "")[:500], str(summary or "")[:1200],

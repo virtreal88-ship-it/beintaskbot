@@ -34,7 +34,7 @@ class NewsPublicationStorageTests(unittest.TestCase):
         sql, params = self.cur.execute.call_args.args
         self.assertIn('first_published_at IS NULL', sql)
         self.assertIn('LIMIT %s OFFSET %s', sql)
-        self.assertIn("raw->'news_classification'->>'kind' = 'feature'", sql)
+        self.assertIn("raw->'news_classification'->>'kind' IN ('feature', 'other')", sql)
         self.assertIn("raw->'linear'->>'parent_id'", sql)
         self.assertIn("manual-news-%%", sql)
         self.assertEqual(params[-1], 60)

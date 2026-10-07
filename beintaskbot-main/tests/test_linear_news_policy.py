@@ -39,7 +39,7 @@ class NewsPolicyTests(unittest.TestCase):
         self.assertNotEqual(key, news_source_key(dict(self.issue, description="Fix broken dashboard")))
         self.assertNotEqual(key, news_source_key(dict(self.issue, parent_id="parent")))
 
-    def test_sync_generates_copy_only_for_main_feature_and_caches_exclusions(self):
+    def test_sync_prepares_uncertain_main_task_for_review_and_caches_exclusions(self):
         tree = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
         function = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_sync_linear_news')
         save = Mock()
@@ -52,12 +52,12 @@ class NewsPolicyTests(unittest.TestCase):
               "upsert_linear_news": save, "prune_linear_news": Mock(), "logger": Mock()}
         exec(compile(ast.Module(body=[function], type_ignores=[]), '<news>', 'exec'), ns)
         self.create.side_effect = [SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"kind":"bug_fix"}'))]),
-                                  SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"kind":"feature"}'))])]
+                                  SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"kind":"other"}'))])]
         issues = [dict(self.issue, source_id="sub", parent_id="parent"),
                   dict(self.issue, source_id="bug"), self.issue]
         asyncio.run(ns['_sync_linear_news'](issues))
         self.assertEqual(save.call_count, 3)
-        self.assertEqual([call.kwargs['raw']['news_classification']['kind'] for call in save.call_args_list], ['subtask', 'bug_fix', 'feature'])
+        self.assertEqual([call.kwargs['raw']['news_classification']['kind'] for call in save.call_args_list], ['subtask', 'bug_fix', 'other'])
         generate.assert_called_once_with(self.issue)
         ns['claim_linear_news_publish_slot'].assert_called_once()
         archived = [{"source_issue_id": call.kwargs["source_issue_id"],
