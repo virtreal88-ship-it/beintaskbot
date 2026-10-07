@@ -1075,6 +1075,16 @@ def get_crm_deal(*, tenant_id: str, kommo_lead_id: int) -> dict | None:
     return _public_crm_row(row) if row else None
 
 
+def get_crm_task(*, tenant_id: str, kommo_task_id: int) -> dict | None:
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id=%s',
+                        (tenant_id, int(kommo_task_id)))
+            row = cur.fetchone()
+    return _public_crm_row(row) if row else None
+
+
 def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
     from tenant_crm_snapshots import task_rows
     rows = task_rows(tenant_id, tasks, _json)

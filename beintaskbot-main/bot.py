@@ -53,6 +53,7 @@ from gh_storage import read_json, write_json
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_tasks import create_task as create_tenant_task
 from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approval_page
+from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
@@ -22454,6 +22455,27 @@ async def handle_platform_task_create(request: web.Request) -> web.Response:
         return web.json_response({'success': False, 'error': 'Nəticə təsdiqlənmədi. Eyni sorğu ilə yenidən yoxlayın; yeni tapşırıq yaratmayın.'}, status=500)
 
 
+async def handle_platform_task_complete(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    if not profile or not TenantPolicy(profile).allows('tasks'):
+        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
+    if request.content_type != 'application/json' or (request.headers.get('Origin') and request.headers['Origin'].rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
+        return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+    try:
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise ValueError('Sorğu düzgün deyil.')
+        result = await complete_tenant_task(profile, data, _tenant_kommo_request)
+        return web.json_response({'success': True, **result})
+    except TaskCommandPending as exc:
+        return web.json_response({'success': False, 'error': str(exc), 'retry_same_request': True}, status=409)
+    except (ValueError, TenantPlatformError) as exc:
+        return web.json_response({'success': False, 'error': str(exc)}, status=400)
+    except Exception:
+        logger.exception('Tenant task completion failed: tenant=%s', profile['tenant_id'])
+        return web.json_response({'success': False, 'error': 'Nəticə yoxlanmalıdır. Eyni sorğu ilə yoxlayın; yeni sorğu yaratmayın.'}, status=500)
+
+
 async def handle_platform_task_approvals(request: web.Request) -> web.Response:
     profile = _tenant_member_from_request(request)
     if not profile or not TenantPolicy(profile).privileged or not TenantPolicy(profile).allows('tasks'):
@@ -22617,6 +22639,11 @@ async def redirect_platform_app(request: web.Request) -> web.Response:
 
 async def serve_tenant_task_approvals_script(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-task-approvals.js'),
+                            headers={'Cache-Control': 'no-store'})
+
+
+async def serve_tenant_task_completion_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-task-completion.js'),
                             headers={'Cache-Control': 'no-store'})
 
 
@@ -23538,6 +23565,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/members", handle_platform_members)
     app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/task-approvals', handle_platform_task_approvals)
+    app_web.router.add_post('/api/platform/crm/tasks/complete', handle_platform_task_complete)
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
@@ -23578,6 +23606,7 @@ async def start_webhook_server():
     app_web.router.add_get("/news", serve_news_page)
     app_web.router.add_get("/documentation", serve_documentation_page)
     app_web.router.add_get('/assets/tenant-task-approvals.js', serve_tenant_task_approvals_script)
+    app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get("/assets/tenant-tasks.js", serve_tenant_tasks_script)
     app_web.router.add_get("/", serve_landing_page)

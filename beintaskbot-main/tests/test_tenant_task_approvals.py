@@ -150,6 +150,16 @@ class ApprovalStorageTests(unittest.TestCase):
         self.assertEqual(seen, [str(row['request_id']) for row in rows])
         self.assertEqual(self.cur.execute.call_count, 5)
 
+    def test_completion_queue_preserves_kind_result_and_employee_context(self):
+        self.cur.fetchall.return_value = [{'actor_id': 20, 'request_id': uuid.uuid4(),
+            'state': {'step': 'waiting_approval', 'completion_input': {'task_id': 9, 'text': 'Call client',
+                      'result_text': 'Reached client', 'executor_id': 20}},
+            'created_at': datetime.now(timezone.utc), 'creator_name': 'Worker', 'executor_name': 'Worker'}]
+        page = commands.pending_task_approval_page(person('owner', 1))
+        self.assertEqual(page['approvals'][0]['kind'], 'completion')
+        self.assertEqual(page['approvals'][0]['task']['result_text'], 'Reached client')
+        self.assertIn("c.state->'completion_input'->>'executor_id'", self.cur.execute.call_args.args[0])
+
     def test_denied_reader_does_not_open_database(self):
         with self.assertRaises(TenantPlatformError):commands.pending_task_approvals(person())
         with self.assertRaises(TenantPlatformError):commands.approval_command(person(),20,'request')

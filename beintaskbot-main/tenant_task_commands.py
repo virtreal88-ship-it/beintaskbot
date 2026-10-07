@@ -39,7 +39,7 @@ class TaskCommandStore:
 
     def save(self, state: dict) -> None:
         # Keep the review envelope through provider checkpoints and retries.
-        state = {**{key: self.state[key] for key in ('approval', 'task_input') if key in self.state}, **state}
+        state = {**{key: self.state[key] for key in ('approval', 'task_input', 'completion_input') if key in self.state}, **state}
         with self.conn.cursor() as cur:
             cur.execute('''UPDATE saas_task_commands SET state=%s::jsonb, updated_at=now()
                            WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''',
@@ -58,6 +58,25 @@ class TaskCommandStore:
 
     def close(self) -> None:
         self.conn.close()
+
+    def lock_task(self, task_id: int) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s, 0)) AS locked',
+                        (f'task-complete:{self.key[0]}:{task_id}',))
+            if not cur.fetchone()['locked']:
+                raise TaskCommandPending('Bu tapşırıq üzrə başqa əməliyyat işlənir. Bir az gözləyin.')
+        self.conn.commit()
+
+    def check_task_completion(self, task_id: int) -> None:
+        """Task lock must be held; another request may already await review."""
+        with self.conn.cursor() as cur:
+            cur.execute('''SELECT request_id FROM saas_task_commands
+                           WHERE tenant_id=%s::uuid AND state->'completion_input'->>'task_id'=%s
+                             AND state->>'step' NOT IN ('done', 'rejected')
+                             AND NOT (actor_id=%s AND request_id=%s::uuid) LIMIT 1''',
+                        (self.key[0], str(task_id), self.key[1], self.key[2]))
+            if cur.fetchone():
+                raise TenantPlatformError('Bu tapşırığın tamamlanması artıq təsdiq gözləyir və ya işlənir.')
 
 
 def pending_task_approvals(profile: dict) -> list[dict]:
@@ -87,7 +106,7 @@ def pending_task_approval_page(profile: dict, *, limit: object = 50, cursor: str
                            FROM saas_task_commands c
                            LEFT JOIN saas_tenant_members m ON m.tenant_id=c.tenant_id AND m.telegram_id=c.actor_id
                            LEFT JOIN saas_tenant_members e ON e.tenant_id=c.tenant_id
-                             AND e.telegram_id::text=c.state->'task_input'->>'executor_id'
+                             AND e.telegram_id::text=COALESCE(c.state->'task_input'->>'executor_id', c.state->'completion_input'->>'executor_id')
                            WHERE c.tenant_id=%s::uuid AND c.state ? 'approval'
                              AND c.state->>'step' NOT IN ('done', 'rejected')
                            ''' + predicate + '''
@@ -98,7 +117,9 @@ def pending_task_approval_page(profile: dict, *, limit: object = 50, cursor: str
     approvals = [{'creator_id': row['actor_id'], 'creator_name': row['creator_name'] or 'Əməkdaş',
              'executor_name': row['executor_name'] or 'Əməkdaş',
              'request_id': str(row['request_id']), 'created_at': row['created_at'].isoformat(),
-             'step': row['state'].get('step'), 'task': row['state'].get('task_input') or {}}
+             'step': row['state'].get('step'),
+             'kind': 'completion' if row['state'].get('completion_input') else 'creation',
+             'task': row['state'].get('completion_input') or row['state'].get('task_input') or {}}
             for row in visible]
     return {'approvals': approvals, 'has_more': has_more,
             'next_cursor': encode_approval_cursor(visible[-1], str(profile['tenant_id'])) if has_more else None}

@@ -3,7 +3,7 @@
   const host = document.getElementById('view-tasks');
   const panel = document.createElement('section');
   panel.className = 'panel'; panel.hidden = true; panel.style.marginTop = '20px';
-  panel.innerHTML = '<div style="display:flex;gap:12px;align-items:center;justify-content:space-between"><h2>Tapşırıq təsdiqləri</h2><button type="button" class="outline">Yenilə</button></div><p class="sub">Kommo-da yaradılmazdan əvvəl administrator təsdiqi gözləyən sorğular.</p><div class="approval-notice" role="status"></div><div class="approval-list"></div><button type="button" class="outline approval-more" style="margin-top:16px" hidden>Daha çox göstər</button>';
+  panel.innerHTML = '<div style="display:flex;gap:12px;align-items:center;justify-content:space-between"><h2>Tapşırıq təsdiqləri</h2><button type="button" class="outline">Yenilə</button></div><p class="sub">Tapşırıqların yaradılması və tamamlanması üçün administrator təsdiqi gözləyən sorğular.</p><div class="approval-notice" role="status"></div><div class="approval-list"></div><button type="button" class="outline approval-more" style="margin-top:16px" hidden>Daha çox göstər</button>';
   host.append(panel);
   const refresh = panel.querySelector('button');
   const notice = panel.querySelector('.approval-notice');
@@ -40,7 +40,8 @@
         const task = item.task || {};
         const date = new Date(task.due_at);
         const due = Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('az-AZ');
-        card.innerHTML = `<b>${esc(item.creator_name)}</b><p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(task.text)}</p><p class="sub">İcraçı: ${esc(item.executor_name)} · ${task.lead_id ? 'Sövdələşmə #'+esc(task.lead_id) : 'Sövdələşməsiz'} · ${esc(due)}</p>`;
+        const completing = item.kind === 'completion';
+        card.innerHTML = `<span class="badge">${completing ? 'Tamamlama' : 'Yaratma'}</span> <b>${esc(item.creator_name)}</b><p style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(task.text)}</p>${completing ? `<p style="white-space:pre-wrap;overflow-wrap:anywhere"><b>Nəticə:</b> ${esc(task.result_text)}</p>` : ''}<p class="sub">İcraçı: ${esc(item.executor_name)} · ${task.lead_id ? 'Sövdələşmə #'+esc(task.lead_id) : 'Sövdələşməsiz'} · ${completing ? 'Tapşırıq #'+esc(task.task_id) : esc(due)}</p>`;
         if (item.step !== 'waiting_approval') {
           const text = document.createElement('p'); text.textContent = 'Əməliyyat başlayıb. Kommo nəticəsini yoxlayın. Sorğu: '+item.request_id;
           card.append(text);
@@ -52,7 +53,7 @@
               actions.querySelectorAll('button').forEach(b => b.disabled = true); button.textContent = 'Gözləyin…'; notice.textContent = '';
               try {
                 await api({creator_id:item.creator_id, request_id:item.request_id, action});
-                notice.textContent = action === 'approve' ? 'Tapşırıq yaradıldı.' : 'Sorğu rədd edildi.';
+                notice.textContent = action === 'approve' ? (completing ? 'Tapşırıq tamamlandı.' : 'Tapşırıq yaradıldı.') : 'Sorğu rədd edildi.';
                 await load(); document.getElementById('tasksRefresh').click();
               } catch (error) {
                 notice.textContent = error.message;

@@ -18,7 +18,7 @@ def load_service(filename, namespace):
     module=ModuleType(filename)
     module.__dict__.update(namespace)
     tree=ast.parse((Path(__file__).resolve().parents[1]/(filename+'.py')).read_text(encoding='utf-8-sig'))
-    tree.body=[node for node in tree.body if not isinstance(node,ast.ImportFrom) or node.module not in {'tenant_platform','tenant_task_commands','tenant_tasks'}]
+    tree.body=[node for node in tree.body if not isinstance(node,ast.ImportFrom) or node.module not in {'tenant_platform','tenant_task_commands','tenant_tasks','tenant_task_completion'}]
     exec(compile(tree,filename,'exec'),module.__dict__)
     return module
 
@@ -50,12 +50,18 @@ class MemoryStore:
         self.state=copy.deepcopy(previous[1] if previous else {})
         self.fingerprint=fingerprint
     def save(self, state):
-        state={**{key:self.state[key] for key in ('approval','task_input') if key in self.state},**state}
+        state={**{key:self.state[key] for key in ('approval','task_input','completion_input') if key in self.state},**state}
         self.state=copy.deepcopy(state);self.rows[self.key]=(self.fingerprint,copy.deepcopy(state))
     def close(self):
         pass
     def lock_deal(self, lead_id):
         pass
+    def lock_task(self, task_id):
+        pass
+    def check_task_completion(self, task_id):
+        for key, (_, state) in self.rows.items():
+            if key != self.key and key[0] == self.key[0] and state.get('completion_input', {}).get('task_id') == task_id and state.get('step') not in {'done', 'rejected'}:
+                raise TenantPlatformError('Already pending')
 
 
 class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
