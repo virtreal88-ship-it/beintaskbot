@@ -73,6 +73,7 @@ from tenant_platform import (
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published, sync_linear_news_environments,
+    save_linear_news_classification,
     prune_linear_news,
     require_linear_news_review_once,
     restore_linear_news_publications_once,
@@ -20302,6 +20303,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
           }) {
             nodes {
               id identifier title description priority dueDate createdAt updatedAt url
+              parent { id }
               state { id name color }
               assignee { id name }
               creator { name }
@@ -20320,6 +20322,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
           issues(first: 100, after: $after, orderBy: createdAt, filter: { team: { id: { eq: $teamId } } }) {
             nodes {
               id identifier title description priority dueDate createdAt updatedAt url
+              parent { id }
               state { id name color type }
               assignee { id name }
               creator { name }
@@ -20352,6 +20355,7 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
           }}) {{
             nodes {{
               id identifier title description priority dueDate createdAt updatedAt url
+              parent {{ id }}
               state {{ id name color }}
               assignee {{ id name }}
               creator {{ name }}
@@ -20379,8 +20383,10 @@ def _load_linear_tesdiq_issues(*, force: bool = False, search: str = "", all_tas
         items.append({
             "id": str(row.get("identifier") or ""),
             "source_id": str(row.get("id") or ""),
+            "parent_id": str((row.get("parent") or {}).get("id") or ""),
             "title": str(row.get("title") or description_meta.get("title") or "Tapşırıq"),
             "description": clean_description[:1200],
+            "news_source_description": clean_description[:16000],
             "client": description_meta.get("client") or _linear_client_hint(raw_description),
             "priority": int(row.get("priority") or 0),
             "due_date": row.get("dueDate"),
@@ -20650,6 +20656,7 @@ def _linear_news_current_publish_slot() -> str:
 
 async def _sync_linear_news(issues: list[dict]) -> None:
     """Archive customer-safe AKUL/DINE Done issues before Linear removes them."""
+    from linear_news_policy import classify_news_source, news_source_key
     try:
         await asyncio.to_thread(sync_linear_news_environments, issues or [])
         if not LINEAR_NEWS_TELEGRAM_ENABLED:
@@ -20659,8 +20666,36 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             require_linear_news_review_once,
             migration_key="telegram-news-explicit-review-v1",
         )
-        existing = await asyncio.to_thread(list_linear_news, limit=200, approval_status="")
+        existing = []
+        for offset in range(0, 2000, 200):
+            page = await asyncio.to_thread(list_linear_news, limit=200, approval_status="", offset=offset)
+            existing.extend(page)
+            if len(page) < 200:
+                break
         known = {str(row.get("source_issue_id") or "") for row in existing if isinstance(row, dict)}
+        # Reclassify the old unsent queue gradually, without rewriting the
+        # administrator's text or changing any publication/approval marks.
+        live = {str(issue.get("source_id") or issue.get("id") or ""): issue for issue in issues or []}
+        classified = 0
+        for row in existing:
+            if (row.get("first_published_at") or row.get("telegram_published_at")
+                    or row.get("telegram_message_id") or str(row.get("source_issue_id") or "").startswith("manual-news-")):
+                continue
+            raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+            source = live.get(str(row.get("source_issue_id") or "")) or raw.get("linear") or {}
+            previous = raw.get("news_classification") or {}
+            if previous.get("source_key") == news_source_key(source):
+                continue
+            if classified >= 3:
+                continue
+            classified += 1
+            try:
+                classification = await asyncio.to_thread(classify_news_source, source, llm_client, LLM_MODEL)
+                await asyncio.to_thread(save_linear_news_classification, str(row["source_issue_id"]), classification)
+                raw["news_classification"] = classification
+                row["raw"] = raw
+            except Exception:
+                logger.exception("Linear news classification failed for %s", row.get("identifier"))
         # Backfill the channel once for releases already archived before the
         # channel integration was enabled. The persisted message id prevents
         # duplicates on every 60-second synchronization cycle.
@@ -20668,6 +20703,13 @@ async def _sync_linear_news(issues: list[dict]) -> None:
         for row in existing:
             if published >= 1:
                 break
+            if not str(row.get("source_issue_id") or "").startswith("manual-news-"):
+                raw = row.get("raw") or {}
+                source = live.get(str(row.get("source_issue_id") or "")) or raw.get("linear") or {}
+                classification = raw.get("news_classification") or {}
+                if (classification.get("kind") != "feature" or source.get("parent_id")
+                        or classification.get("source_key") != news_source_key(source)):
+                    continue
             if (not isinstance(row, dict) or row.get("approval_status") != "approved"
                     or not row.get("reviewed_at")
                     or row.get("first_published_at")
@@ -20697,10 +20739,23 @@ async def _sync_linear_news(issues: list[dict]) -> None:
             source_id = str(issue.get("source_id") or issue.get("id") or "").strip()
             if not source_id or source_id in known:
                 continue
-            slot_key = _linear_news_current_publish_slot()
-            if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
+            if classified >= 3:
+                break
+            classified += 1
+            try:
+                classification = await asyncio.to_thread(classify_news_source, issue, llm_client, LLM_MODEL)
+            except Exception:
+                logger.exception("Linear news classification failed for %s", issue.get("id"))
                 return
-            generated = await asyncio.to_thread(_linear_news_ai_content, issue)
+            if classification["kind"] == "feature":
+                slot_key = _linear_news_current_publish_slot()
+                if not slot_key or not await asyncio.to_thread(claim_linear_news_publish_slot, slot_key=slot_key):
+                    return
+                generated = await asyncio.to_thread(_linear_news_ai_content, issue)
+            else:
+                # Cache exclusions too: they stay out of the review queue and
+                # do not consume a publication slot or generate marketing copy.
+                generated = {"title": str(issue.get("title") or ""), "summary": "", "body": ""}
             saved = await asyncio.to_thread(
                 upsert_linear_news,
                 source_issue_id=source_id,
@@ -20714,7 +20769,7 @@ async def _sync_linear_news(issues: list[dict]) -> None:
                 source_created_at=issue.get("created_at"),
                 done_at=issue.get("updated_at") or issue.get("created_at"),
                 source_url=str(issue.get("url") or ""),
-                raw={"linear": issue, "generated_by": "openai"},
+                raw={"linear": issue, "generated_by": "openai", "news_classification": classification},
             )
             known.add(source_id)
         await asyncio.to_thread(prune_linear_news)

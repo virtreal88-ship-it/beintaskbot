@@ -34,6 +34,9 @@ class NewsPublicationStorageTests(unittest.TestCase):
         sql, params = self.cur.execute.call_args.args
         self.assertIn('first_published_at IS NULL', sql)
         self.assertIn('LIMIT %s OFFSET %s', sql)
+        self.assertIn("raw->'news_classification'->>'kind' = 'feature'", sql)
+        self.assertIn("raw->'linear'->>'parent_id'", sql)
+        self.assertIn("manual-news-%%", sql)
         self.assertEqual(params[-1], 60)
 
     def test_news_environment_recovered_from_snapshot_without_writes(self):
@@ -61,6 +64,7 @@ class NewsPublicationStorageTests(unittest.TestCase):
         for field in ('title=', 'summary=', 'approval_status=', 'telegram_message_id=', 'expires_at='):
             self.assertNotIn(field, sql)
         self.assertIn('news.source_issue_id=source.source_id', sql)
+        self.assertIn("- 'news_classification'", sql)
 
     def test_owner_report_is_recovered_once_without_resending(self):
         self.cur.fetchone.return_value = {'migration_key': 'recovery'}

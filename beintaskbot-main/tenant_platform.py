@@ -473,8 +473,9 @@ def upsert_linear_news(*, source_issue_id: str, identifier: str, project_key: st
 def sync_linear_news_environments(issues: list[dict]) -> None:
     """Refresh live metadata only; never rewrite reviewed copy or delivery marks."""
     from linear_metadata import issue_environment
+    from linear_news_policy import news_source_key
     rows = [{"source_id": str(issue.get("source_id") or issue.get("id") or ""),
-             "environment": issue_environment(issue), "issue": issue}
+             "environment": issue_environment(issue), "issue": issue, "source_key": news_source_key(issue)}
             for issue in issues if isinstance(issue, dict) and (issue.get("source_id") or issue.get("id"))]
     if not rows:
         return
@@ -484,12 +485,29 @@ def sync_linear_news_environments(issues: list[dict]) -> None:
             cur.execute("""
                 UPDATE crm_linear_news AS news
                 SET environment=source.environment,
-                    raw=jsonb_set(COALESCE(news.raw, '{}'::jsonb), '{linear}', source.issue, true)
-                FROM jsonb_to_recordset(%s::jsonb) AS source(source_id text, environment text, issue jsonb)
+                    raw=jsonb_set(
+                        CASE WHEN news.raw->'news_classification'->>'source_key' IS DISTINCT FROM source.source_key
+                             THEN COALESCE(news.raw, '{}'::jsonb) - 'news_classification'
+                             ELSE COALESCE(news.raw, '{}'::jsonb) END,
+                        '{linear}', source.issue, true)
+                FROM jsonb_to_recordset(%s::jsonb) AS source(source_id text, environment text, issue jsonb, source_key text)
                 WHERE news.source_issue_id=source.source_id
                   AND (news.environment IS DISTINCT FROM source.environment
                        OR news.raw->'linear' IS DISTINCT FROM source.issue)
             """, (_json(rows),))
+        conn.commit()
+
+
+def save_linear_news_classification(source_issue_id: str, classification: dict) -> None:
+    """Cache eligibility without changing text, approval or delivery history."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE crm_linear_news
+                SET raw=jsonb_set(COALESCE(raw, '{}'::jsonb), '{news_classification}', %s::jsonb, true)
+                WHERE source_issue_id=%s
+            """, (_json(classification), str(source_issue_id)))
         conn.commit()
 
 
@@ -512,16 +530,22 @@ def list_linear_news(*, project_key: str = "", limit: int = 60, approval_status:
                     WHERE project_key = %s AND expires_at > now()
                       AND (%s = '' OR approval_status = %s)
                       AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
+                      AND (%s <> 'pending' OR source_issue_id LIKE 'manual-news-%%'
+                           OR (raw->'news_classification'->>'kind' = 'feature'
+                               AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                     ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
-                """, (project, status, status, status, size, start))
+                """, (project, status, status, status, status, size, start))
             else:
                 cur.execute("""
                     SELECT * FROM crm_linear_news
                     WHERE expires_at > now()
                       AND (%s = '' OR approval_status = %s)
                       AND (%s <> 'pending' OR (first_published_at IS NULL AND telegram_published_at IS NULL AND telegram_message_id IS NULL))
+                      AND (%s <> 'pending' OR source_issue_id LIKE 'manual-news-%%'
+                           OR (raw->'news_classification'->>'kind' = 'feature'
+                               AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                     ORDER BY done_at DESC, created_at DESC, id DESC LIMIT %s OFFSET %s
-                """, (status, status, status, size, start))
+                """, (status, status, status, status, size, start))
             rows = cur.fetchall()
     result = []
     for row in rows:
@@ -555,10 +579,13 @@ def update_linear_news_review(*, source_issue_id: str, title: str, summary: str,
                     reviewed_at=CASE WHEN %s IN ('approved','rejected') THEN now() ELSE NULL END,
                     updated_at=now()
                 WHERE source_issue_id=%s
+                  AND (%s <> 'approved' OR source_issue_id LIKE 'manual-news-%%'
+                       OR (raw->'news_classification'->>'kind' = 'feature'
+                           AND COALESCE(raw->'linear'->>'parent_id', '') = ''))
                 RETURNING *
             """, (str(title or "")[:500], str(summary or "")[:1200],
                    str(body or "")[:12000], str(media_url or "")[:1000],
-                   str(media_type or "")[:20], status, status, issue_id))
+                   str(media_type or "")[:20], status, status, issue_id, status))
             row = cur.fetchone()
         conn.commit()
     if not row:
