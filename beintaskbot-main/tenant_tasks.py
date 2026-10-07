@@ -38,8 +38,12 @@ def in_scope(policy: TenantPolicy, lead: dict) -> bool:
                for item in policy.pipeline_scope())
 
 
-async def create_task(profile: dict, data: dict, request: KommoRequest) -> dict:
+async def create_task(profile: dict, data: dict, request: KommoRequest, *, reviewer: dict | None = None) -> dict:
     actor = TenantPolicy(profile)
+    if reviewer is not None:
+        authority = TenantPolicy(reviewer)
+        if str(reviewer.get('tenant_id')) != str(profile.get('tenant_id')) or not authority.privileged or not authority.allows('tasks'):
+            raise TenantPlatformError('Təsdiq üçün icazəniz yoxdur.')
     if not actor.allows('tasks'):
         raise TenantPlatformError('Tapşırıqlar üçün icazəniz yoxdur.')
     payload = normalize_task_input(data, int(profile['telegram_id']))
@@ -50,19 +54,33 @@ async def create_task(profile: dict, data: dict, request: KommoRequest) -> dict:
     if not executor or not TenantPolicy(executor).allows('tasks'):
         raise TenantPlatformError('İcraçı aktiv deyil və ya tapşırıq icazəsi yoxdur.')
     policy = TenantPolicy(executor)
-    if not actor.privileged and policy.requires_task_approval(creator_id=int(profile['telegram_id']), executor_id=payload['executor_id']):
-        raise TenantPlatformError('Bu qayda administrator təsdiqi tələb edir. Administratora müraciət edin.')
+    requires_approval = not actor.privileged and policy.requires_task_approval(creator_id=int(profile['telegram_id']), executor_id=payload['executor_id'])
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     store = await asyncio.to_thread(TaskCommandStore, tenant, int(profile['telegram_id']), payload['request_id'], fingerprint)
     try:
         if store.state.get('step') == 'done':
             return store.state['result']
+        if store.state.get('step') == 'rejected':
+            raise TenantPlatformError('Tapşırıq sorğusu administrator tərəfindən rədd edilib.')
         if store.state.get('step') in {'lead_creating', 'lead_moving', 'task_creating'}:
             raise TaskCommandPending('Kommo əməliyyatının nəticəsi yoxlanmalıdır. Təkrar yaratmayın; administratorla əlaqə saxlayın. Sorğu: ' + payload['request_id'])
         if payload['complete_till'] <= time.time():
-            if store.state:
+            if store.state and store.state.get('step') != 'waiting_approval':
                 raise TaskCommandPending('Əvvəlki əməliyyatı administrator yoxlamalıdır. Sorğu: ' + payload['request_id'])
             raise TenantPlatformError('Gələcək tarix və saat seçin.')
+        if reviewer is not None and not store.state.get('approval'):
+            raise TenantPlatformError('Təsdiq sorğusu tapılmadı.')
+        if reviewer is None and (requires_approval or store.state.get('step') == 'waiting_approval'):
+            if not store.state:
+                await asyncio.to_thread(store.save, {'step': 'waiting_approval',
+                    'approval': {'status': 'pending'}, 'task_input': {
+                        'request_id': payload['request_id'], 'text': payload['text'],
+                        'due_at': datetime.fromtimestamp(payload['complete_till'], timezone.utc).isoformat(),
+                        'executor_id': payload['executor_id'], 'lead_id': payload['lead_id'],
+                        'pipeline_id': payload['pipeline_id']}})
+            if store.state.get('step') == 'waiting_approval':
+                return {'approval_pending': True, 'request_id': payload['request_id'],
+                        'warning': 'Tapşırıq administrator təsdiqinə göndərildi.'}
         lead_id = positive_id(store.state.get('lead_id')) or payload['lead_id']
         lead = None
         if lead_id:
@@ -105,6 +123,9 @@ async def create_task(profile: dict, data: dict, request: KommoRequest) -> dict:
                     route['status_id'] = positive_id(stage['id'])
             if not stage:
                 raise TenantPlatformError('Vərəq və ya mərhələ Kommo-da tapılmadı. Ayarları yeniləyin.')
+            if reviewer is not None and store.state.get('step') == 'waiting_approval':
+                await asyncio.to_thread(store.save, {'step': 'approval_accepted',
+                    'approval': {'status': 'approved', 'reviewer_id': int(reviewer['telegram_id'])}})
             body = {'pipeline_id': route['pipeline_id'], 'status_id': route['status_id']}
             if route['action'] == 'create_deal':
                 await asyncio.to_thread(store.save, {'step': 'lead_creating'})
@@ -124,6 +145,9 @@ async def create_task(profile: dict, data: dict, request: KommoRequest) -> dict:
                 'stage_name': stage.get('name', ''), 'name': lead.get('name', ''), 'raw': lead,
                 'contact_name': (cached or {}).get('contact_name', '') if payload['lead_id'] else '',
                 'phone': (cached or {}).get('phone', '') if payload['lead_id'] else ''}])
+        if reviewer is not None and store.state.get('step') == 'waiting_approval':
+            await asyncio.to_thread(store.save, {'step': 'approval_accepted',
+                'approval': {'status': 'approved', 'reviewer_id': int(reviewer['telegram_id'])}})
         task_body = {'text': payload['text'] + ('\n' + route['marker'] if route['marker'] else ''),
                      'task_type_id': 1, 'complete_till': payload['complete_till'],
                      'responsible_user_id': responsible, 'request_id': payload['request_id']}

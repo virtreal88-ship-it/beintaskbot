@@ -18,7 +18,7 @@ def load_service(filename, namespace):
     module=ModuleType(filename)
     module.__dict__.update(namespace)
     tree=ast.parse((Path(__file__).resolve().parents[1]/(filename+'.py')).read_text(encoding='utf-8-sig'))
-    tree.body=[node for node in tree.body if not isinstance(node,ast.ImportFrom) or node.module not in {'tenant_platform','tenant_task_commands'}]
+    tree.body=[node for node in tree.body if not isinstance(node,ast.ImportFrom) or node.module not in {'tenant_platform','tenant_task_commands','tenant_tasks'}]
     exec(compile(tree,filename,'exec'),module.__dict__)
     return module
 
@@ -50,6 +50,7 @@ class MemoryStore:
         self.state=copy.deepcopy(previous[1] if previous else {})
         self.fingerprint=fingerprint
     def save(self, state):
+        state={**{key:self.state[key] for key in ('approval','task_input') if key in self.state},**state}
         self.state=copy.deepcopy(state);self.rows[self.key]=(self.fingerprint,copy.deepcopy(state))
     def close(self):
         pass
@@ -100,6 +101,69 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         await service.create_task(self.actor,self.body,self.request)
         self.assertFalse(any(method=='PATCH' for method,_,_ in self.calls))
         self.assertEqual(self.calls[-1][1],'tasks')
+
+    def require_review(self):
+        self.executor['workflow']['policies']=[{'policy_key':'task_approval','value':
+            {'creation_requires_admin':True,'self_created_exempt':False}}]
+
+    async def test_review_queue_is_durable_and_retry_does_not_contact_kommo(self):
+        self.require_review()
+        first=await service.create_task(self.actor,self.body,self.request)
+        second=await service.create_task(self.actor,self.body,self.request)
+        self.assertTrue(first['approval_pending']);self.assertEqual(first,second)
+        self.assertEqual(self.calls,[])
+        state=MemoryStore.rows[('company-a',20,self.body['request_id'])][1]
+        self.assertEqual(state['step'],'waiting_approval');self.assertEqual(state['task_input']['text'],self.body['text'])
+
+    async def test_reviewed_request_is_created_once_and_keeps_reviewer(self):
+        self.require_review()
+        await service.create_task(self.actor,self.body,self.request)
+        reviewer=person('owner',1)
+        result=await service.create_task(self.actor,self.body,self.request,reviewer=reviewer)
+        count=len(self.calls)
+        self.assertEqual(await service.create_task(self.actor,self.body,self.request,reviewer=reviewer),result)
+        self.assertEqual(len(self.calls),count)
+        state=MemoryStore.rows[('company-a',20,self.body['request_id'])][1]
+        self.assertEqual(state['approval']['reviewer_id'],1)
+        self.assertIn('task_input',state)
+
+    async def test_review_authority_cannot_be_forged_by_task_body_or_other_tenant(self):
+        self.require_review();self.body['reviewer']={'role':'owner'}
+        self.assertTrue((await service.create_task(self.actor,self.body,self.request))['approval_pending'])
+        for reviewer in (person('manager',21),{**person('owner',1),'tenant_id':'company-b'},
+                         {**person('admin',1),'permissions':[]},{**person('owner',1),'active':False}):
+            with self.assertRaises(TenantPlatformError):
+                await service.create_task(self.actor,self.body,self.request,reviewer=reviewer)
+        self.assertEqual(self.calls,[])
+
+    async def test_review_cannot_bypass_current_pipeline_access(self):
+        self.require_review();self.body['lead_id']=7
+        await service.create_task(self.actor,self.body,self.request)
+        self.lead['pipeline_id']=11
+        with self.assertRaises(TenantPlatformError):
+            await service.create_task(self.actor,self.body,self.request,reviewer=person('owner',1))
+        self.assertFalse(any(method!='GET' for method,_,_ in self.calls))
+        self.assertEqual(MemoryStore.rows[('company-a',20,self.body['request_id'])][1]['step'],'waiting_approval')
+
+    async def test_rejected_request_never_reposts(self):
+        self.require_review()
+        await service.create_task(self.actor,self.body,self.request)
+        key=('company-a',20,self.body['request_id']);fingerprint,state=MemoryStore.rows[key]
+        MemoryStore.rows[key]=(fingerprint,{**state,'step':'rejected'})
+        with self.assertRaises(TenantPlatformError):await service.create_task(self.actor,self.body,self.request)
+        self.assertEqual(self.calls,[])
+
+    async def test_lost_review_write_response_remains_uncertain_without_reposting(self):
+        self.require_review()
+        await service.create_task(self.actor,self.body,self.request)
+        self.fail_tasks=True
+        reviewer=person('owner',1)
+        with self.assertRaises(TaskCommandPending):await service.create_task(self.actor,self.body,self.request,reviewer=reviewer)
+        count=len(self.calls)
+        with self.assertRaises(TaskCommandPending):await service.create_task(self.actor,self.body,self.request,reviewer=reviewer)
+        self.assertEqual(len(self.calls),count)
+        state=MemoryStore.rows[('company-a',20,self.body['request_id'])][1]
+        self.assertEqual(state['step'],'task_creating');self.assertIn('approval',state)
 
     async def test_admin_routes_to_executor_pipeline_before_creating_task(self):
         self.actor=person('owner',1);self.executor=person('manager',21)
