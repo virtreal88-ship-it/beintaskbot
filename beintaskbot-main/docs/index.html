@@ -5234,7 +5234,10 @@ async function fetchMediaBlob(url, onProgress) {
             }
         } catch(_e) {}
     }
-    const response = await fetch(url, {headers: authFetchHeaders()});
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 25000);
+    try {
+    const response = await fetch(url, {headers: authFetchHeaders(), signal: controller.signal});
     if(!response.ok) throw new Error('fail');
     const total = Number(response.headers.get('content-length') || 0);
     let blob;
@@ -5267,6 +5270,9 @@ async function fetchMediaBlob(url, onProgress) {
     }
     idbSet('media', url, blob).catch(() => {});
     return blob;
+    } finally {
+        window.clearTimeout(timeout);
+    }
 }
 async function loadMissingPhoto(wrap) {
     if(!wrap || wrap.dataset.loading === '1' || wrap.classList.contains('ready')) return;
@@ -5276,16 +5282,19 @@ async function loadMissingPhoto(wrap) {
     wrap.classList.remove('failed');
     try {
         const direct = wrap.getAttribute('data-src') || '';
+        const lookup = mediaLookupUrl(wrap, 'picture');
+        const cacheKey = mediaCacheKey(wrap, 'picture');
         let blob = null;
         const cloud = direct.indexOf('/api/wa/media/') >= 0;
         try {
-            blob = await fetchMediaBlob(cloud ? direct : mediaLookupUrl(wrap, 'picture'));
+            blob = await fetchMediaBlob(direct && !cloud ? direct : lookup);
         } catch(_lookup) {
             if(!direct || cloud) throw _lookup;
-            blob = await fetchMediaBlob(direct);
+            blob = await fetchMediaBlob(lookup);
         }
+        if(!blob || !blob.size) throw new Error('Şəkil yüklənmədi');
         const url = URL.createObjectURL(blob);
-        _mediaBlobs.set(mediaCacheKey(wrap, 'picture'), url);
+        _mediaBlobs.set(cacheKey, url);
         let img = wrap.querySelector('img');
         if(!img) {
             img = document.createElement('img');
@@ -9805,6 +9814,8 @@ async function moveSamilDealToStage(dealId, nextStageKey) {
     document.querySelector(`[data-deal-id="${dealId}"]`)?.classList.add('is-saving');
     try {
         await samilDealAction({ action:'deal_edit', lead_id:Number(dealId), stage_key:nextStageKey });
+        deal.lead_updated_at = Math.floor(Date.now() / 1000);
+        renderSamilDeals();
         toast('Mərhələ dəyişdirildi', false);
         persistLocalSamilWorkspace();
         document.querySelector(`[data-deal-id="${dealId}"]`)?.classList.remove('is-saving');
@@ -9817,6 +9828,16 @@ async function moveSamilDealToStage(dealId, nextStageKey) {
     }
 }
 
+function sortDealsByModified(deals) {
+    const timestamp = value => {
+        if(!value) return 0;
+        const numeric = Number(value);
+        if(Number.isFinite(numeric)) return numeric < 1e12 ? numeric * 1000 : numeric;
+        return Date.parse(value) || 0;
+    };
+    const modified = deal => timestamp(deal.lead_updated_at ?? (deal.updated_at || deal.modified_at || deal.created_at));
+    return deals.slice().sort((a, b) => modified(b) - modified(a) || Number(b.id || 0) - Number(a.id || 0));
+}
 function renderSamilDeals() {
     const nav = document.getElementById('samil-stage-nav');
     const stageSelect = document.getElementById('samil-stage-select');
@@ -9842,7 +9863,8 @@ function renderSamilDeals() {
     const isDesktop = window.matchMedia('(min-width: 1024px)').matches;
     const dealsForStage = key => {
         const deals = Array.isArray(samilDealsByStage[key]) ? samilDealsByStage[key] : samilDeals.filter(deal => deal.stage_key === key);
-        return dealListSearch ? deals.filter(deal => crmRecordMatchesSearch(deal, dealListSearch)) : deals;
+        const filtered = dealListSearch ? deals.filter(deal => crmRecordMatchesSearch(deal, dealListSearch)) : deals;
+        return sortDealsByModified(filtered);
     };
     let stagesToRender = isDesktop || samilStageFilter === 'all' ? SAMIL_UI_STAGES : SAMIL_UI_STAGES.filter(([key]) => key === samilStageFilter);
     if(dealListSearch && !isDesktop) {

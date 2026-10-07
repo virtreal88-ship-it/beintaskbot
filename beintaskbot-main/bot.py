@@ -9736,6 +9736,7 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "contacts": contact_rows,
             "source": source, "menbe": source,
             "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
+            "lead_updated_at": lead.get("updated_at", 0),
             "last_note": "", "last_client_message": "", "last_incoming_at": 0, "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
             "wa_line": _wa_line_for_pipeline(pipeline_id),
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
@@ -9951,6 +9952,7 @@ def patch_rufat_overview_deal_stage(lead_id: int, stage_key: str) -> None:
                 continue
             item["stage_key"] = stage_key
             item["stage_name"] = stage_name
+            item["lead_updated_at"] = int(_time_module.time())
             deal = item
             break
         if deal is None:
@@ -12503,6 +12505,7 @@ _wa_sent_save_timer: threading.Timer | None = None
 _wa_wamid_lead: dict[str, str] = {}
 _wa_io = ThreadPoolExecutor(max_workers=4, thread_name_prefix="wa-chat")
 _history_io = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kommo-history")
+_media_io = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kommo-media")
 
 
 def _load_sent_messages() -> dict:
@@ -13133,6 +13136,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
         "menbe": "",
         "created_at": created,
         "updated_at": max(updated, int(ts or 0)),
+        "lead_updated_at": updated,
         "chat_at": int(ts or 0),
         "last_note": "",
         "last_client_message": str(preview or ("Yeni mesaj" if unread else "Çat"))[:140],
@@ -13359,6 +13363,7 @@ def _overview_nizami_stage_deal(
         "menbe": "",
         "created_at": created_at,
         "updated_at": max(updated_at, int(ts or 0)),
+        "lead_updated_at": updated_at,
         "chat_at": int(ts or 0),
         "last_note": "",
         "last_client_message": str(preview or "")[:140],
@@ -17007,8 +17012,8 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
         wanted_talk = 0
     # Talks are returned without a guaranteed order. Prefer the newest ones,
     # keeping a specifically requested talk at the top, and cap the first
-    # screen load. The former 8 talks × 2 pages could consume 16+ Kommo calls
-    # for one tap and make the whole application wait behind the 6 RPS limit.
+    # screen load. Only the newest/requested conversation gets a second page;
+    # loading two pages of every talk would flood the shared Kommo rate limit.
     talks.sort(
         key=lambda row: int(row.get("updated_at") or row.get("created_at") or 0),
         reverse=True,
@@ -17020,12 +17025,12 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
     if active_talk:
         _lead_open_talk[lid] = _talk_id_of(active_talk)
 
-    for talk in talks:
+    for talk_index, talk in enumerate(talks):
         tid = _talk_id_of(talk)
         if not tid:
             continue
         origin = _talk_channel_key(talk)
-        messages, blocked, _more = _fetch_talk_messages(tid, pages=1, page_limit=80)
+        messages, blocked, _more = _fetch_talk_messages(tid, pages=2 if talk_index == 0 else 1, page_limit=80)
         for message in messages:
             formatted = _format_chat_message(message, origin)
             if formatted:
@@ -17048,7 +17053,7 @@ def _kommo_history_rows(lead_id: int, talk_id: int = 0, lead: dict | None = None
 
     # These sources preserve useful older dialogs that have disappeared from
     # the current Talk endpoint.
-    if not rows:
+    if len(rows) < 30:
         event_rows, _skipped = _fetch_chat_events(lid, contact_ids)
         for item in event_rows:
             add(item, entity_type="leads", entity_id=lid)
@@ -17114,7 +17119,7 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    _lead, err = await asyncio.to_thread(_authorized_deal_lead, chat_id, lead_id)
     if err:
         return err
     try:
@@ -18670,6 +18675,13 @@ def _media_bytes_response(request: web.Request, body: bytes, content_type: str) 
 
 
 async def handle_api_deal_file(request: web.Request) -> web.Response:
+    # Blocking Kommo lookups, downloads and conversion must never stall the
+    # aiohttp event loop (including unrelated history/API requests).
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_media_io, _deal_file_response, request)
+
+
+def _deal_file_response(request: web.Request) -> web.Response:
     src = unquote(str(request.rel_url.query.get("src") or "").strip())
     file_uuid = str(request.rel_url.query.get("uuid") or "").strip()
     note_id = 0
@@ -18749,6 +18761,14 @@ async def handle_api_deal_file(request: web.Request) -> web.Response:
         audio_resp = requests.get(src, headers=headers, timeout=20, allow_redirects=True)
         if audio_resp.status_code != 200:
             audio_resp = requests.get(src, timeout=20, allow_redirects=True)
+        if audio_resp.status_code != 200 and file_uuid:
+            # Signed Drive URLs expire while the chat remains cached. Resolve
+            # a fresh URL by the already-authorized file UUID before failing.
+            fresh_src = _drive_file_download_url(file_uuid)
+            if fresh_src and fresh_src != src:
+                src = fresh_src
+                fresh_headers = {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(src) else {}
+                audio_resp = requests.get(src, headers=fresh_headers, timeout=20, allow_redirects=True)
         if audio_resp.status_code != 200:
             return web.Response(status=404, text="Media not found")
         file_name = str(request.rel_url.query.get("name") or picked_name)
