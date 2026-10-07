@@ -10399,7 +10399,13 @@ function chatStageFilterKey(deal) {
     // filter can show every configured stage, including a stage with no deals.
     // Cross-funnel queue rows do not always include a key, so retain their
     // numeric Kommo status as the fallback.
-    const stage = String((deal && (deal.stage_key || deal.status_id || deal.stage_id || deal.stage_name)) || '');
+    let stage = String((deal && (deal.stage_key || deal.status_id || deal.stage_id || deal.stage_name)) || '');
+    if(pipeline === String(NIZAMI_PIPELINE_ID)) {
+        const status = String((deal && (deal.status_id || deal.stage_id)) || '');
+        const configured = NIZAMI_CHAT_FILTER_STAGES.find(([key,label,id]) =>
+            status ? String(id) === status : key === stage || label === stage);
+        if(configured) stage = configured[0];
+    }
     return pipeline + ':' + stage;
 }
 function chatStageFilterLabel(deal) {
@@ -10409,24 +10415,19 @@ function renderChatsStageFilter() {
     const box = document.getElementById('chats-stage-filter');
     if(!box) return;
     const options = new Map();
-    // For Nizami, the filter is a map of the working funnel—not merely a
-    // reflection of the three stages that happen to contain deals today.
-    // Terminal stages are deliberately omitted everywhere in this queue.
+    // Legacy owner's requested working stages. Do not import stage names
+    // from mixed employee inboxes or change any other company's workflow.
     if(isAdmin) {
-        (SAMIL_ALL_STAGES || []).forEach(pair => {
-            const key = String(Array.isArray(pair) ? pair[0] : '');
-            const label = String(Array.isArray(pair) ? pair[1] : key);
-            if(!key || key === 'ugurlu' || key === 'imtina') return;
-            options.set(String(NIZAMI_PIPELINE_ID) + ':' + key, label);
+        NIZAMI_CHAT_FILTER_STAGES.forEach(([key,label]) => {
+            options.set(String(NIZAMI_PIPELINE_ID) + ':' + key, 'Nizami Qasımov · ' + label);
         });
-    }
-    chatInboxSourceDeals().forEach(deal => {
+    } else chatInboxSourceDeals().forEach(deal => {
         if(!deal || !deal.id || !chatBelongsToViewer(deal) || isTerminalChatDeal(deal)) return;
         const key = chatStageFilterKey(deal);
         if(!options.has(key)) options.set(key, chatStageFilterLabel(deal));
     });
     for(const key of [..._chatsStageFilters]) if(!options.has(key)) _chatsStageFilters.delete(key);
-    const rows = [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'az'));
+    const rows = isAdmin ? [...options.entries()] : [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'az'));
     box.innerHTML = `<div class="chats-stage-filter-head"><span>Mərhələlər</span><button type="button" class="chats-stage-clear">Təmizlə</button></div>` + (rows.length
         ? rows.map(([key,label]) => `<label class="chats-stage-option"><input type="checkbox" value="${escapeHtml(key)}" ${_chatsStageFilters.has(key) ? 'checked' : ''}><span>${escapeHtml(label)}</span></label>`).join('')
         : '<div class="chats-search-empty">Mərhələ tapılmadı</div>');
@@ -10835,6 +10836,15 @@ function chatBelongsToViewer(deal) {
     return true;
 }
 const NIZAMI_PIPELINE_ID = 14243944;
+// Existing Kommo stage IDs for the legacy BeinSystems administrator only.
+const NIZAMI_CHAT_FILTER_STAGES = [
+    ['sorgular','yeni sorgu',109988196],
+    ['danisiqlar','danışıqlar',112086092],
+    ['telimat','təlimat',112086096],
+    ['yeni_sifaris','yeni sifariş',112086100],
+    ['gozleme','gözləmə',110774676],
+    ['muzakire','Müzakirə',110722180]
+];
 const SOVDELESMELER_PIPELINE_ID = 8329347;
 function isSuccessfulChatDeal(deal) {
     const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
