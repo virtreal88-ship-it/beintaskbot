@@ -500,10 +500,11 @@
         .wa-video-box.failed .wa-video-pct { position:static; display:inline-block; margin-top:6px; }
         .photo-wait { position:relative; display:inline-flex; align-items:center; justify-content:center; min-width:148px; min-height:96px; margin-top:6px; border-radius:8px; background:rgba(15,23,42,.06); overflow:hidden; }
         .photo-wait img.deal-zoom { margin:0; opacity:0; }
-        .photo-wait .audio-spin { position:absolute; width:16px; height:16px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
+        .photo-wait .audio-spin { display:none; position:absolute; width:16px; height:16px; border:2px solid #94a3b8; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }
         .photo-wait.ready img.deal-zoom { opacity:1; }
         .photo-wait.ready .audio-spin, .photo-wait.failed .audio-spin { display:none; }
-        .photo-wait .photo-miss { display:none; position:relative; z-index:2; border:0; background:transparent; font-size:13px; font-weight:600; color:#2563eb; text-decoration:underline; cursor:pointer; padding:8px 10px; }
+        .photo-wait .photo-miss { display:block; position:relative; z-index:2; border:0; background:transparent; font-size:13px; font-weight:600; color:#2563eb; text-decoration:underline; cursor:pointer; padding:8px 10px; }
+        .photo-wait.ready .photo-miss { display:none; }
         .photo-wait.failed { min-height:96px; }
         .photo-wait.failed .photo-miss { display:block; }
         .photo-wait.loading .audio-spin { display:block; }
@@ -5313,6 +5314,24 @@ async function loadMissingPhoto(wrap) {
         wrap.dataset.loading = '';
     }
 }
+const _photoLoadQueue = [];
+let _photoActiveLoads = 0;
+let _photoVisibilityObserver;
+function queuePhotoLoad(wrap) {
+    if(wrap.dataset.photoQueued || wrap.dataset.loading === '1' || wrap.classList.contains('ready')) return;
+    wrap.dataset.photoQueued = '1';
+    _photoLoadQueue.push(wrap);
+    pumpPhotoLoads();
+}
+function pumpPhotoLoads() {
+    while(_photoActiveLoads < 3 && _photoLoadQueue.length) {
+        const wrap = _photoLoadQueue.shift();
+        wrap.dataset.photoQueued = '';
+        if(!wrap.isConnected) continue;
+        _photoActiveLoads++;
+        loadMissingPhoto(wrap).finally(() => { _photoActiveLoads--; pumpPhotoLoads(); });
+    }
+}
 function bindPhotoWait(root) {
     (root || document).querySelectorAll('.photo-wait').forEach(wrap => {
         if(wrap.dataset.bound) return;
@@ -5335,9 +5354,22 @@ function bindPhotoWait(root) {
             button.addEventListener('click', event => {
                 event.preventDefault();
                 event.stopPropagation();
-                loadMissingPhoto(wrap);
+                queuePhotoLoad(wrap);
             });
         }
+        // photoWaitHtml has no <img>: binding a load event cannot start a
+        // request. Load visible placeholders explicitly, with a shared cap.
+        if('IntersectionObserver' in window) {
+            if(!_photoVisibilityObserver) _photoVisibilityObserver = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if(entry.isIntersecting) {
+                        _photoVisibilityObserver.unobserve(entry.target);
+                        queuePhotoLoad(entry.target);
+                    } else if(!entry.target.isConnected) _photoVisibilityObserver.unobserve(entry.target);
+                });
+            });
+            _photoVisibilityObserver.observe(wrap);
+        } else queuePhotoLoad(wrap);
     });
 }
 function dropAudioCache(wrap, audio) {
