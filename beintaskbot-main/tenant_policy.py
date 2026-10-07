@@ -1,5 +1,6 @@
 """Company workflow decisions, independent of Telegram names and integrations."""
 from dataclasses import dataclass
+from tenant_notifications import notification_catalog, validate_notification_preferences
 
 
 ROLE_PERMISSIONS = {
@@ -158,6 +159,7 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+                'notification_events': notification_catalog(),
                 'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
@@ -203,6 +205,8 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
         for flag in ('creation_requires_admin', 'completion_requires_admin', 'deal_completion_requires_admin'):
             if flag in item and not isinstance(item[flag], bool):
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
+        if 'notifications' in item:
+            validate_notification_preferences(item['notifications'])
     for key in ('task_approval', 'deal_completion', 'modules', 'notifications'):
         if any(not isinstance(v, bool) for v in ((policies or {}).get(key) or {}).values()):
             raise ValueError('Qayda üçün aktiv/deaktiv seçin.')

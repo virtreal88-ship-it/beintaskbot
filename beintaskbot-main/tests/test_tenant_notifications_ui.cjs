@@ -1,0 +1,29 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-workflow.js'),'utf8');
+new vm.Script(source);
+const functions=['notificationEditor','constrainNotifications','readNotificationPreferences'].map(name=>source.match(new RegExp(`function ${name}\\([^]*?\\n  \\}`))[0]).join('\n');
+const events=[{key:'task_assigned',label:'Task',module:'tasks',roles:['owner','admin','worker','manager'],channels:['telegram','push']},
+ {key:'hot_order_available',label:'Hot order',module:'hot_orders',roles:['owner','admin','worker','manager','master'],channels:['telegram','push']},
+ {key:'task_completion_requested',label:'Review',module:'tasks',roles:['owner','admin'],channels:['telegram','push']}];
+const rows=events.map(event=>({dataset:{notificationEvent:event.key},hidden:false,inputs:event.channels.map(channel=>({dataset:{notificationChannel:channel},checked:true,disabled:false})),querySelectorAll(){return this.inputs;}}));
+const permissions=['tasks','hot_orders'].map(key=>({dataset:{wf:key},checked:true}));
+const card={querySelectorAll(selector){return selector==='[data-notification-event]'?rows:permissions.filter(input=>input.checked);}};
+const context={session:{capabilities:{notification_events:events}},escape:String,card,events,modules:{tasks:true,hot_orders:true}};
+vm.createContext(context);vm.runInContext(functions,context);
+vm.runInContext('constrainNotifications(card,"master",events,modules)',context);
+assert(rows[0].hidden);assert(!rows[1].hidden);assert(rows[2].hidden);
+vm.runInContext('result=readNotificationPreferences(card)',context);
+assert.equal(context.result.task_assigned.telegram,false);assert.equal(context.result.hot_order_available.push,true);
+vm.runInContext('constrainNotifications(card,"worker",events,modules)',context);
+assert(!rows[0].hidden);assert(rows[2].hidden);
+permissions[0].checked=false;
+vm.runInContext('constrainNotifications(card,"admin",events,modules)',context);
+assert(rows[0].hidden);assert(rows[2].hidden);
+vm.runInContext('constrainNotifications(card,"owner",events,{})',context);
+assert(rows.every(row=>!row.hidden));
+vm.runInContext('html=notificationEditor({notifications:{task_assigned:{telegram:true,push:false}}})',context);
+assert(context.html.includes('data-notification-channel="telegram"'));
+assert(context.html.includes('data-notification-channel="push"'));
+assert(context.html.includes('hələ qoşulmayıb'));
+assert(source.includes('notifications:readNotificationPreferences(card)'));
+console.log('PASS: employee notification matrix changes with role/permissions, saves disabled channels off, and marks transport as pending.');
