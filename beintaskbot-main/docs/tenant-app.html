@@ -75,7 +75,7 @@
   $('createInvite').onclick=async()=>{const b=$('createInvite');const name=$('inviteName').value.trim();if(!name)return alert('Əməkdaşın adını yazın.');b.disabled=true;try{const role=$('inviteRole').value;const d=await api('/api/platform/invites',{method:'POST',body:JSON.stringify({display_name:name,role,permissions:state.rolePermissions[role]||[]})});$('inviteLink').innerHTML=`Link hazırdır (7 gün):<br><b>${esc(d.invite.url)}</b><br><button class="outline" style="margin-top:8px" id="copyInvite">Kopyala</button>`;$('inviteLink').classList.add('show');$('copyInvite').onclick=async()=>{await navigator.clipboard.writeText(d.invite.url);$('copyInvite').textContent='Kopyalandı'};loadSettings()}catch(e){alert(e.message)}finally{b.disabled=false}};
   $('testKommo').onclick=async()=>{const b=$('testKommo');b.disabled=true;try{const d=await api('/api/platform/integrations/kommo/test');$('integrationInfo').textContent=`Kommo işləyir: ${d.account?.name||'bağlantı təsdiqləndi'}`}catch(e){$('integrationInfo').textContent=e.message}finally{b.disabled=false}};
   $('disconnectKommo').onclick=async()=>{if(!confirm('Kommo bağlantısı ayrılsın? Yenidən qoşmaq üçün OAuth lazımdır.'))return;try{await api('/api/platform/integrations/disconnect',{method:'POST',body:JSON.stringify({provider:'kommo'})});loadSettings()}catch(e){alert(e.message)}};
-  $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;try{await api('/api/platform/logout',{method:'POST',body:'{}'});location.href='/login'}catch(e){alert(e.message)}};
+  $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;const b=$('logout');b.disabled=true;try{if(window.tenantPushLogout)await window.tenantPushLogout();await api('/api/platform/logout',{method:'POST',body:'{}'});location.href='/login'}catch(e){alert(e.message)}finally{b.disabled=false}};
   (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}if(state.capabilities.modules?.tasks)await loadTasks(true);if(state.capabilities.modules?.deals||state.capabilities.modules?.customers)await loadDeals(false);renderProfile(state.me);if(state.me.role==='owner')loadSettings()})();
 })();
 </script>
@@ -83,4 +83,5 @@
 <script src="/assets/tenant-task-approvals.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
+<script src="/assets/tenant-push.js"></script>
 </body></html>

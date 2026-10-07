@@ -56,10 +56,12 @@ from tenant_task_commands import task_executor_profiles, TaskCommandPending, pen
 from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
+from tenant_push_worker import deliver_push_notifications
 from tenant_push import (
     MAX_DEVICES as TENANT_PUSH_MAX_DEVICES,
     register_device as register_tenant_push_device, list_devices as list_tenant_push_devices,
     disable_device as disable_tenant_push_device,
+    disable_browser_device as disable_tenant_browser_push,
 )
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
@@ -20887,6 +20889,10 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
         await deliver_approval_notifications(context.bot, logger)
     except Exception:
         logger.exception('Tenant approval notification queue failed')
+    try:
+        await deliver_push_notifications(VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
+    except Exception:
+        logger.error('Tenant push notification queue failed')
 
 
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -21462,7 +21468,20 @@ async def handle_platform_logout(_request: web.Request) -> web.Response:
     The legacy BeinSystems cookie is intentionally untouched so the two
     products do not sign each other out.
     """
-    response = web.json_response({"success": True})
+    if _request.headers.get('Origin','').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/'):
+        return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
+    profile = _tenant_member_from_request(_request)
+    device_id = _request.cookies.get('tenant_push_device')
+    if profile and device_id:
+        try:
+            await asyncio.to_thread(disable_tenant_browser_push,profile,device_id)
+        except ValueError:
+            pass
+        except Exception:
+            logger.error('Tenant browser push cleanup failed')
+            return web.json_response({'success':False,'error':'Push cihazını ayırmaq alınmadı. Yenidən yoxlayın.'},status=503)
+    response = web.json_response({"success": True},headers={'Cache-Control':'no-store'})
+    response.del_cookie('tenant_push_device',path='/')
     response.del_cookie(_TENANT_SESSION_COOKIE, path="/")
     return response
 
@@ -22435,13 +22454,19 @@ async def handle_platform_push_devices(request: web.Request) -> web.Response:
         if request.method == 'GET':
             devices = await asyncio.to_thread(list_tenant_push_devices, profile)
             return web.json_response({'success': True, 'devices': devices, 'max_devices': TENANT_PUSH_MAX_DEVICES,
-                                      'public_key': VAPID_PUBLIC_KEY, 'delivery_enabled': False}, headers=headers)
+                                      'tenant_id': str(profile['tenant_id']), 'user_id': str(profile['telegram_id']),
+                                      'public_key': VAPID_PUBLIC_KEY, 'delivery_enabled': bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)}, headers=headers)
         data = await request.json()
         if not isinstance(data, dict):
             raise ValueError('Sorğu düzgün deyil.')
+        if (data.get('expected_tenant_id',str(profile['tenant_id'])) != str(profile['tenant_id'])
+                or str(data.get('expected_user_id',profile['telegram_id'])) != str(profile['telegram_id'])):
+            return web.json_response({'success':False,'error':'Kabinet dəyişib. Səhifəni yeniləyin.'},status=409,headers=headers)
         if data.get('action') == 'subscribe':
             device = await asyncio.to_thread(register_tenant_push_device, profile, data.get('subscription'), data.get('label', ''))
-            return web.json_response({'success': True, 'device': device, 'delivery_enabled': False}, headers=headers)
+            response = web.json_response({'success': True, 'device': device, 'delivery_enabled': bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)}, headers=headers)
+            response.set_cookie('tenant_push_device',device['device_id'],max_age=31536000,httponly=True,secure=True,samesite='Lax',path='/')
+            return response
         if data.get('action') == 'unsubscribe':
             await asyncio.to_thread(disable_tenant_push_device, profile, data.get('device_id'))
             return web.json_response({'success': True}, headers=headers)
@@ -22696,6 +22721,15 @@ async def serve_tenant_workflow_script(_request: web.Request) -> web.Response:
     response = web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workflow.js'))
     response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
     return response
+
+
+async def serve_tenant_push_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push.js'),headers={'Cache-Control':'no-store'})
+
+
+async def serve_tenant_push_worker(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push-sw.js'),
+                            headers={'Cache-Control':'no-store','Service-Worker-Allowed':'/app/'})
 
 
 async def serve_tenant_tasks_script(_request: web.Request) -> web.Response:
@@ -23606,6 +23640,8 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/login", handle_platform_login)
     app_web.router.add_post("/api/platform/logout", handle_platform_logout)
     app_web.router.add_get("/api/platform/me", handle_platform_me)
+    app_web.router.add_get('/app/push-sw.js',serve_tenant_push_worker)
+    app_web.router.add_get('/assets/tenant-push.js',serve_tenant_push_script)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_get("/api/platform/members", handle_platform_members)

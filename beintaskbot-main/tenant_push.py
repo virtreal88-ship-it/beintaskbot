@@ -123,3 +123,18 @@ def disable_device(profile: dict, device_id: object) -> None:
                                WHERE m.tenant_id=d.tenant_id AND m.telegram_id=d.telegram_id AND m.active=TRUE)''',
                         (tenant, user, device_id))
         conn.commit()
+
+
+def disable_browser_device(profile: dict, device_id: object) -> None:
+    """Logout ends this person's SaaS bindings on the current browser only."""
+    _,user=_identity(profile)
+    if not isinstance(device_id,str) or not re.fullmatch(r'[a-f0-9]{64}',device_id):
+        raise ValueError('Cihaz kodu düzgün deyil.')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''UPDATE saas_member_push_devices b SET active=FALSE,updated_at=now()
+                WHERE b.telegram_id=%s AND b.endpoint_hash=%s AND EXISTS
+                  (SELECT 1 FROM saas_push_devices d WHERE d.endpoint_hash=b.endpoint_hash AND d.owner_telegram_id=%s)''',
+                        (user,device_id,user))
+        conn.commit()

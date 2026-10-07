@@ -12,6 +12,13 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from test_tenant_tasks import load_service, TenantPlatformError, person
 
 
+class ApiResponse(tuple):
+    def __new__(cls,data,status=200,headers=None):
+        result=super().__new__(cls,(status,data,headers));result.cookies={};return result
+    def set_cookie(self,name,value,**kwargs):self.cookies[name]=(value,kwargs)
+    def del_cookie(self,name,**kwargs):self.cookies[name]=None
+
+
 def subscription():
     key=ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(Encoding.X962,PublicFormat.UncompressedPoint)
     encode=lambda raw:base64.urlsafe_b64encode(raw).decode().rstrip('=')
@@ -115,8 +122,8 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         nodes=[node for node in ast.parse(source).body if isinstance(node,ast.AsyncFunctionDef) and node.name=='handle_platform_push_devices']
         self.profile=person();self.register=Mock(return_value={'device_id':'hash'});self.disable=Mock();self.list=Mock(return_value=[])
         self.log=Mock()
-        namespace={'TENANT_PUSH_MAX_DEVICES':5,'web':SimpleNamespace(Request=object,Response=object,json_response=lambda data,status=200,headers=None:(status,data,headers)),
-                   '_tenant_member_from_request':lambda _:self.profile,'asyncio':asyncio,'VAPID_PUBLIC_KEY':'public',
+        namespace={'TENANT_PUSH_MAX_DEVICES':5,'web':SimpleNamespace(Request=object,Response=object,json_response=ApiResponse),
+                   '_tenant_member_from_request':lambda _:self.profile,'asyncio':asyncio,'VAPID_PUBLIC_KEY':'public','VAPID_PRIVATE_KEY':'private',
                    'CANONICAL_WEB_ORIGIN':'https://crm.pro.az','TenantPlatformError':TenantPlatformError,'logger':self.log,
                    'register_tenant_push_device':self.register,'disable_tenant_push_device':self.disable,'list_tenant_push_devices':self.list}
         exec(compile(ast.Module(body=nodes,type_ignores=[]),'<push-api>','exec'),namespace)
@@ -127,7 +134,7 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_identity_is_session_only_and_response_is_no_store(self):
         status,data,headers=await self.api(self.request)
         self.assertEqual(status,200);self.register.assert_called_once_with(self.profile,{},'')
-        self.assertFalse(data['delivery_enabled']);self.assertEqual(headers['Cache-Control'],'no-store')
+        self.assertTrue(data['delivery_enabled']);self.assertEqual(headers['Cache-Control'],'no-store')
 
     async def test_missing_foreign_origin_and_wrong_type_deny_before_storage(self):
         for headers in ({},{'Origin':'https://evil.test'}):
@@ -152,7 +159,17 @@ class PushApiTests(unittest.IsolatedAsyncioTestCase):
         status,data,headers=await self.api(self.request)
         self.assertEqual(status,200);self.list.assert_called_once_with(self.profile)
         self.assertEqual(data['public_key'],'public');self.assertEqual(data['max_devices'],5)
-        self.assertFalse(data['delivery_enabled'])
+        self.assertTrue(data['delivery_enabled'])
+
+    async def test_profile_change_precondition_prevents_rebinding_to_other_company(self):
+        self.request.json.return_value={'action':'subscribe','subscription':{},'expected_tenant_id':'old-company','expected_user_id':20}
+        self.assertEqual((await self.api(self.request))[0],409);self.register.assert_not_called()
+
+    async def test_subscribe_sets_only_http_only_browser_device_cookie(self):
+        response=await self.api(self.request)
+        self.assertEqual(response.cookies['tenant_push_device'][0],'hash')
+        self.assertTrue(response.cookies['tenant_push_device'][1]['httponly'])
+        self.assertTrue(response.cookies['tenant_push_device'][1]['secure'])
 
     async def test_disable_scoped_to_current_profile(self):
         self.request.json.return_value={'action':'unsubscribe','device_id':'a'*64,'tenant_id':'other'}

@@ -317,6 +317,25 @@ def _ensure_schema(conn) -> None:
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_approval_push_deliveries (
+                    tenant_id UUID NOT NULL,
+                    actor_id BIGINT NOT NULL,
+                    request_id UUID NOT NULL,
+                    recipient_id BIGINT NOT NULL,
+                    endpoint_hash TEXT NOT NULL REFERENCES saas_push_devices(endpoint_hash) ON DELETE CASCADE,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','sending','delivered','skipped','unknown','expired')),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id,actor_id,request_id,recipient_id,endpoint_hash),
+                    FOREIGN KEY (tenant_id,actor_id,request_id)
+                      REFERENCES saas_approval_notification_events(tenant_id,actor_id,request_id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS saas_push_deliveries_work_idx
+                ON saas_approval_push_deliveries(status,updated_at) WHERE status IN ('pending','sending')
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_crm_messages (
                     id UUID PRIMARY KEY,
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

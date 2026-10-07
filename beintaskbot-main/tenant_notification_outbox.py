@@ -4,9 +4,9 @@ from tenant_policy import TenantPolicy
 from tenant_notifications import notification_channels
 
 
-def eligible(profile: dict, event: str, tenant_id: str) -> bool:
+def eligible(profile: dict, event: str, tenant_id: str, channel: str = 'telegram') -> bool:
     return (profile.get('tenant_status') in {'active', 'onboarding', 'ready_for_integration'}
-            and 'telegram' in notification_channels(TenantPolicy(profile), event=event, tenant_id=tenant_id))
+            and channel in notification_channels(TenantPolicy(profile), event=event, tenant_id=tenant_id))
 
 
 def _profiles(cur, tenant_id: str, recipient_id: int | None = None) -> list[dict]:
@@ -43,6 +43,14 @@ def expand_events() -> int:
                                            (tenant_id,actor_id,request_id,recipient_id,channel)
                                            VALUES (%s::uuid,%s,%s::uuid,%s,'telegram') ON CONFLICT DO NOTHING''',
                                         (*key, profile['telegram_id']))
+                        if eligible(profile, item['event'], key[0], 'push'):
+                            cur.execute('''INSERT INTO saas_approval_push_deliveries
+                                (tenant_id,actor_id,request_id,recipient_id,endpoint_hash)
+                                SELECT %s::uuid,%s,%s::uuid,b.telegram_id,b.endpoint_hash
+                                FROM saas_member_push_devices b JOIN saas_push_devices p USING (endpoint_hash)
+                                WHERE b.tenant_id=%s::uuid AND b.telegram_id=%s AND b.active=TRUE
+                                  AND p.owner_telegram_id=b.telegram_id ON CONFLICT DO NOTHING''',
+                                        (*key, key[0], profile['telegram_id']))
                 cur.execute('''UPDATE saas_approval_notification_events SET expanded=TRUE
                                WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''', key)
         conn.commit()
