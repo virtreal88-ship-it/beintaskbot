@@ -57,6 +57,8 @@ from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
 from tenant_push_worker import deliver_push_notifications
+from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
+from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
     MAX_DEVICES as TENANT_PUSH_MAX_DEVICES,
     register_device as register_tenant_push_device, list_devices as list_tenant_push_devices,
@@ -20857,6 +20859,13 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
         logger.error('Tenant push notification queue failed')
 
 
+async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await run_sync_batch(_tenant_kommo_request, logger)
+    except Exception:
+        logger.error('Tenant CRM background sync unavailable')
+
+
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Observe external Linear transitions even while nobody opens the board."""
     try:
@@ -22131,80 +22140,32 @@ def _tenant_kommo_phone(contact: dict) -> str:
 
 
 async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dict:
-    """Fetch only selected Kommo pipelines and store a tenant-local snapshot.
+    """Compatibility entry point: enqueue reads; never wait for Kommo in HTTP."""
+    jobs = []
+    policy = TenantPolicy(profile)
+    if policy.allows('deals') or policy.allows('customers') or policy.task_scope().get('kind') == 'pipelines':
+        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'leads'))
+    if include_tasks and policy.allows('tasks'):
+        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'tasks'))
+    return {'jobs': jobs}
 
-    The browser reads PostgreSQL afterwards; this prevents pagination, search
-    and opening a side panel from issuing a burst of Kommo API requests.
-    """
-    tenant_id = str(profile["tenant_id"])
-    pipeline_ids, selected_stages = _tenant_selected_pipeline_ids(profile)
-    if not pipeline_ids and not include_tasks:
-        raise TenantPlatformError("Əvvəl Kommo-da göstəriləcək vərəq və mərhələləri seçin.")
-    pipeline_payload = await _tenant_kommo_request(tenant_id, "GET", "leads/pipelines") if pipeline_ids else {}
-    stage_names: dict[int, str] = {}
-    for pipeline in ((pipeline_payload.get("_embedded") or {}).get("pipelines") or []):
-        for stage in ((pipeline.get("_embedded") or {}).get("statuses") or []):
-            try:
-                stage_names[int(stage.get("id") or 0)] = str(stage.get("name") or "")
-            except (TypeError, ValueError):
-                continue
 
-    snapshots: list[dict] = []
-    for pipeline_id in pipeline_ids:
-        # A tenant config normally has just a handful of active stages.  One
-        # page is intentionally bounded; automatic webhooks will update it
-        # later, while manual refresh stays quick and polite to Kommo.
-        payload = await _tenant_kommo_request(
-            tenant_id, "GET", "leads", params={"filter[pipeline_id]": pipeline_id, "limit": 250, "with": "contacts"},
-        )
-        for lead in ((payload.get("_embedded") or {}).get("leads") or []):
-            try:
-                lead_id = int(lead.get("id") or 0)
-                status_id = int(lead.get("status_id") or 0)
-            except (TypeError, ValueError):
-                continue
-            # Cache hidden/terminal stages too. Otherwise a deal that leaves
-            # an allowed stage keeps its old visible status in PostgreSQL.
-            if not lead_id:
-                continue
-            contacts = ((lead.get("_embedded") or {}).get("contacts") or [])
-            contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
-            snapshots.append({
-                "kommo_lead_id": lead_id, "pipeline_id": pipeline_id, "status_id": status_id,
-                "stage_name": stage_names.get(status_id, "Mərhələ göstərilməyib"),
-                "name": str(lead.get("name") or "Adsız sövdələşmə"),
-                "contact_name": str(contact.get("name") or ""), "phone": _tenant_kommo_phone(contact),
-                "source_updated_at": _tenant_kommo_timestamp(lead.get("updated_at")), "raw": lead,
-            })
-    saved_deals = await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=snapshots)
-    saved_tasks = 0
-    if include_tasks:
-        # All app employees may share a single provider administrator. Scope
-        # is enforced in PostgreSQL by deal pipeline or membership marker.
-        task_params = {"limit": 250}
-        tasks_payload = await _tenant_kommo_request(tenant_id, "GET", "tasks", params=task_params)
-        task_rows = (tasks_payload.get("_embedded") or {}).get("tasks") or []
-        normalized_tasks = []
-        for task in task_rows:
-            try:
-                task_id = int(task.get("id") or 0)
-            except (TypeError, ValueError):
-                continue
-            if not task_id:
-                continue
-            normalized_tasks.append({
-                "kommo_task_id": task_id, "kommo_lead_id": int(task.get("entity_id") or 0) if task.get("entity_type") in ('leads', 2, '2') else 0,
-                "text": str(task.get("text") or task.get("complete_till_at") or "Tapşırıq"),
-                "due_at": _tenant_kommo_timestamp(task.get("complete_till")),
-                "responsible_id": int(task.get("responsible_user_id") or 0),
-                "completed": bool(task.get("is_completed")), "raw": task,
-            })
-        saved_tasks = await asyncio.to_thread(upsert_tenant_crm_tasks, tenant_id=tenant_id, tasks=normalized_tasks)
-    await asyncio.to_thread(
-        append_tenant_audit_event, tenant_id=tenant_id, actor_telegram_id=int(profile["telegram_id"]),
-        action="crm_sync", entity_type="kommo", payload={"deals": saved_deals, "tasks": saved_tasks},
-    )
-    return {"deals": saved_deals, "tasks": saved_tasks}
+async def handle_platform_crm_sync_status(request: web.Request) -> web.Response:
+    profile = _tenant_member_from_request(request)
+    policy = TenantPolicy(profile or {})
+    resources = []
+    if policy.allows('deals') or policy.allows('customers') or policy.task_scope().get('kind') == 'pipelines':
+        resources.append('leads')
+    if policy.allows('tasks'):
+        resources.append('tasks')
+    if not profile or not resources:
+        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
+    try:
+        jobs = await asyncio.to_thread(tenant_crm_sync_status, str(profile['tenant_id']), resources)
+        return web.json_response({'success': True, 'jobs': jobs})
+    except Exception:
+        logger.error('Tenant CRM sync status unavailable')
+        return web.json_response({'success': False, 'error': 'Sinxronizasiya vəziyyəti alınmadı.'}, status=503)
 
 
 async def handle_platform_crm_deals(request: web.Request) -> web.Response:
@@ -22687,6 +22648,11 @@ async def serve_tenant_workflow_script(_request: web.Request) -> web.Response:
 
 async def serve_tenant_push_script(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push.js'),headers={'Cache-Control':'no-store'})
+
+
+async def serve_tenant_crm_sync_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-crm-sync.js'),
+                            headers={'Cache-Control': 'no-store'})
 
 
 async def serve_task_date_fields(_request: web.Request) -> web.Response:
@@ -23633,6 +23599,7 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", handle_platform_save_kommo_pipelines)
     app_web.router.add_get("/api/platform/integrations/kommo/test", handle_platform_test_kommo_connection)
     app_web.router.add_get("/api/platform/crm/deals", handle_platform_crm_deals)
+    app_web.router.add_get('/api/platform/crm/sync', handle_platform_crm_sync_status)
     app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
@@ -23658,6 +23625,7 @@ async def start_webhook_server():
     app_web.router.add_get('/assets/tenant-task-approvals.js', serve_tenant_task_approvals_script)
     app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
+    app_web.router.add_get('/assets/tenant-crm-sync.js', serve_tenant_crm_sync_script)
     app_web.router.add_get("/assets/tenant-tasks.js", serve_tenant_tasks_script)
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
@@ -24605,6 +24573,8 @@ def main():
     # Background jobs
     job_queue = app.job_queue
     job_queue.run_repeating(check_tenant_approval_notifications, interval=60, first=30,
+                            job_kwargs={'max_instances': 1, 'coalesce': True})
+    job_queue.run_repeating(check_tenant_crm_sync, interval=15, first=10,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_linear_status_notifications, interval=60, first=20)
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)

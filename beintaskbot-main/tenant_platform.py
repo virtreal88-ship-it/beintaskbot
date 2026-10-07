@@ -1750,7 +1750,8 @@ def consume_kommo_oauth_state(state: str) -> dict:
     }
 
 
-def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payload: dict) -> dict:
+def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payload: dict,
+                          refresh_only: bool = False) -> dict:
     """Encrypt Kommo credentials before persisting them for this tenant only."""
     domain = _kommo_domain(account_domain)
     access_token = str(token_payload.get("access_token") or "")
@@ -1770,10 +1771,11 @@ def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payloa
             cur.execute("""
                 UPDATE saas_tenant_integrations
                 SET status = 'connected', account_domain = %s, metadata = %s::jsonb,
-                    secrets = %s, connected_at = now(), updated_at = now()
+                    secrets = %s, connected_at = CASE WHEN %s THEN connected_at ELSE now() END, updated_at = now()
                 WHERE tenant_id = %s::uuid AND provider = 'kommo'
+                  AND (NOT %s OR (status = 'connected' AND account_domain = %s))
                 RETURNING provider, status, account_domain, metadata, connected_at, updated_at
-            """, (domain, _json(metadata), encrypted, tenant_id))
+            """, (domain, _json(metadata), encrypted, refresh_only, tenant_id, refresh_only, domain))
             row = cur.fetchone()
         conn.commit()
     if not row:
@@ -1820,4 +1822,5 @@ def replace_kommo_tokens(*, tenant_id: str, account_domain: str, token_payload: 
         tenant_id=tenant_id,
         account_domain=account_domain,
         token_payload=token_payload,
+        refresh_only=True,
     )
