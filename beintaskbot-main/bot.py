@@ -55,6 +55,7 @@ from tenant_tasks import create_task as create_tenant_task
 from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approval_page
 from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
+from tenant_notification_worker import deliver_approval_notifications
 from hot_orders import (
     HotOrderError, create_hot_order, list_hot_orders, claim_hot_order,
     release_hot_order, submit_hot_order, settle_hot_order, update_hot_order, cancel_hot_order,
@@ -20876,6 +20877,13 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Xəbər yadda saxlanmadı."}, status=500)
 
 
+async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await deliver_approval_notifications(context.bot, logger)
+    except Exception:
+        logger.exception('Tenant approval notification queue failed')
+
+
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Observe external Linear transitions even while nobody opens the board."""
     try:
@@ -24538,6 +24546,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
     # Background jobs
     job_queue = app.job_queue
+    job_queue.run_repeating(check_tenant_approval_notifications, interval=60, first=30,
+                            job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_linear_status_notifications, interval=60, first=20)
     job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
     job_queue.run_repeating(tecili_alarm_check, interval=900, first=120)

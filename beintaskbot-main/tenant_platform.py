@@ -254,6 +254,47 @@ def _ensure_schema(conn) -> None:
                 WHERE state ? 'approval' AND state->>'step' NOT IN ('done', 'rejected')
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_approval_notification_events (
+                    tenant_id UUID NOT NULL,
+                    actor_id BIGINT NOT NULL,
+                    request_id UUID NOT NULL,
+                    event TEXT NOT NULL CHECK (event IN ('task_approval_requested', 'task_completion_requested')),
+                    expanded BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, actor_id, request_id),
+                    FOREIGN KEY (tenant_id, actor_id, request_id)
+                        REFERENCES saas_task_commands (tenant_id, actor_id, request_id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS saas_approval_events_pending_idx
+                ON saas_approval_notification_events (created_at) WHERE expanded=FALSE
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saas_approval_notification_deliveries (
+                    tenant_id UUID NOT NULL,
+                    actor_id BIGINT NOT NULL,
+                    request_id UUID NOT NULL,
+                    recipient_id BIGINT NOT NULL,
+                    channel TEXT NOT NULL CHECK (channel='telegram'),
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'sending', 'delivered', 'skipped', 'unknown')),
+                    message_id BIGINT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (tenant_id, actor_id, request_id, recipient_id, channel),
+                    FOREIGN KEY (tenant_id, actor_id, request_id)
+                        REFERENCES saas_approval_notification_events (tenant_id, actor_id, request_id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS saas_approval_deliveries_pending_idx
+                ON saas_approval_notification_deliveries (updated_at) WHERE status='pending'
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS saas_approval_deliveries_sending_idx
+                ON saas_approval_notification_deliveries (updated_at) WHERE status='sending'
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS saas_crm_messages (
                     id UUID PRIMARY KEY,
                     tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

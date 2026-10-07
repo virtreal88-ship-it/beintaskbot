@@ -44,6 +44,13 @@ class TaskCommandStore:
             cur.execute('''UPDATE saas_task_commands SET state=%s::jsonb, updated_at=now()
                            WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''',
                         (json.dumps(state), *self.key))
+            if state.get('step') == 'waiting_approval' and self.state.get('step') != 'waiting_approval':
+                event = 'task_completion_requested' if state.get('completion_input') else 'task_approval_requested'
+                # Same transaction as the request; never scan old requests.
+                cur.execute('''INSERT INTO saas_approval_notification_events
+                               (tenant_id, actor_id, request_id, event)
+                               VALUES (%s::uuid, %s, %s::uuid, %s) ON CONFLICT DO NOTHING''',
+                            (*self.key, event))
         self.conn.commit()
         self.state = state
 
