@@ -5,6 +5,7 @@
   const esc=value=>String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let profile, capabilities={}, scope='', epoch=0, offset=0, total=0, loading=false, busy=false, rows=[], pending=null;
   const PAGE=50, labels={open:'Açıq',claimed:'Qəbul edilib',cancelled:'Ləğv edilib'};
+  let linkOpened=false;
   const key=person=>`crm-hot-order:${person.tenant_id}:${person.telegram_id}`;
   const notice=(id,text)=>{$(id).textContent=text || '';$(id).classList.toggle('show',!!text);};
   async function api(url,data) {
@@ -98,6 +99,7 @@
     profile=data.member;capabilities=data.capabilities || {};
     $('hotOrderCreate').hidden=!capabilities.modules?.hot_orders || !capabilities.hot_orders?.can_create;
     $('hotOrderCreate').style.display=$('hotOrderCreate').hidden ? 'none' : '';pages();
+    if(!linkOpened && capabilities.modules?.hot_orders && new URLSearchParams(window.location?.search || '').get('view')==='hot_orders') {linkOpened=true;nav.click();}
     if(view.classList.contains('active') && capabilities.modules?.hot_orders) load(0);
   }
   $('hotOrderCreate').onclick=open;$('hotOrderClose').onclick=close;$('hotCancel').onclick=close;$('hotDescription').oninput=resize;

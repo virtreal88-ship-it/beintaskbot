@@ -7,6 +7,7 @@ from tenant_platform import _connect
 from tenant_policy import TenantPolicy
 from tenant_hot_order_policy import HotOrderPolicy
 from tenant_hot_order_schema import ensure_hot_order_schema
+from tenant_hot_order_notice_schema import enqueue_hot_order_notice
 
 
 class TenantHotOrderError(ValueError):
@@ -42,9 +43,12 @@ def public_row(row: dict, policy: HotOrderPolicy | None = None) -> dict:
 
 
 def audit(cur, profile: dict, order_id: str, action: str) -> None:
+    event_id = uuid.uuid4()
     cur.execute('''INSERT INTO saas_tenant_audit_events (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
         VALUES (%s,%s::uuid,%s,%s,'hot_order',%s,%s::jsonb)''',
-        (uuid.uuid4(), str(profile['tenant_id']), int(profile['telegram_id']), 'hot_order_' + action, order_id, '{}'))
+        (event_id, str(profile['tenant_id']), int(profile['telegram_id']), 'hot_order_' + action, order_id, '{}'))
+    if action in {'create','release'}:
+        enqueue_hot_order_notice(cur,str(profile['tenant_id']),order_id,str(event_id))
 
 
 def create_order(profile: dict, data: dict) -> dict:

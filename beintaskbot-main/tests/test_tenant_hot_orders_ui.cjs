@@ -25,7 +25,7 @@ async function fetch(url,options={}) {
   if(deferred) {const wait=deferred;deferred=null;return wait;}
   return reply({success:true,orders:[row(current.member.tenant_id,'<Client>')],total:75});
 }
-const context={window:{},document,fetch,Date,JSON,confirm:()=>true,crypto:{randomUUID:()=>`bbbbbbbb-bbbb-4bbb-bbbb-${String(++uuid).padStart(12,'0')}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}};
+const context={window:{},document,fetch,Date,JSON,URLSearchParams,confirm:()=>true,crypto:{randomUUID:()=>`bbbbbbbb-bbbb-4bbb-bbbb-${String(++uuid).padStart(12,'0')}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}};
 const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-hot-orders.js'),'utf8');vm.runInNewContext(source,context);
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{

@@ -21,6 +21,9 @@ def send_push(item: dict, private_key: str, claims: dict) -> None:
         raise ValueError('Push device identity mismatch')
     payload={'title':'CRM Smart Assistant','body':'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
              'url':'/app','tag':'crm-task-approval'}
+    if item.get('event')=='hot_order_available':
+        payload={'title':'CRM Smart Assistant','body':'Yeni isti sifariş var. Kabinetdə yoxlayın.',
+                 'url':'/app?view=hot_orders','tag':'crm-hot-order','kind':'hot_order'}
     with NoRedirectSession() as session:
         result=webpush(subscription_info=subscription,data=json.dumps(payload),vapid_private_key=private_key,
                        vapid_claims=dict(claims),requests_session=session,timeout=15,ttl=300)

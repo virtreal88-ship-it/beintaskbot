@@ -38,7 +38,8 @@ class QueueTests(unittest.TestCase):
         insert=self.cur.execute.call_args_list[0]
         self.assertEqual(insert.args[1][0],'company-a');self.assertEqual(insert.args[1][-1],20)
         self.assertIn('ON CONFLICT (tenant_id,created_by,request_id) DO NOTHING',insert.args[0])
-        self.assertIn('saas_tenant_audit_events',self.cur.execute.call_args.args[0])
+        self.assertIn('saas_tenant_audit_events',self.cur.execute.call_args_list[1].args[0])
+        self.assertIn('saas_hot_order_events',self.cur.execute.call_args.args[0])
         self.conn.commit.assert_called_once();self.assertEqual(result['id'],self.order['id'])
 
     def test_duplicate_create_returns_same_order_without_second_audit(self):

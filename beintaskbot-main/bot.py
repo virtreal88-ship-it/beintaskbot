@@ -61,6 +61,7 @@ from tenant_task_completion import complete_task as complete_tenant_task
 from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
 from tenant_push_worker import deliver_push_notifications
+from tenant_hot_order_notification_worker import deliver_hot_order_notifications
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -20863,6 +20864,13 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
         logger.error('Tenant push notification queue failed')
 
 
+async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await deliver_hot_order_notifications(context.bot,VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
+    except Exception:
+        logger.error('Tenant hot-order notification queue unavailable')
+
+
 async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await run_sync_batch(_tenant_kommo_request, logger)
@@ -24633,6 +24641,8 @@ def main():
     # Background jobs
     job_queue = app.job_queue
     job_queue.run_repeating(check_tenant_approval_notifications, interval=60, first=30,
+                            job_kwargs={'max_instances': 1, 'coalesce': True})
+    job_queue.run_repeating(check_tenant_hot_order_notifications, interval=60, first=35,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_tenant_crm_sync, interval=15, first=10,
                             job_kwargs={'max_instances': 1, 'coalesce': True})

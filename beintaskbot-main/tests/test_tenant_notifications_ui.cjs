@@ -25,6 +25,6 @@ vm.runInContext('html=notificationEditor({notifications:{task_assigned:{telegram
 assert(context.html.includes('data-notification-channel="telegram"'));
 assert(context.html.includes('data-notification-channel="push"'));
 assert(context.html.includes('Digər hadisələr hələ qoşulmayıb'));
-assert(context.html.includes('təsdiq sorğuları Telegram və push vasitəsilə göndərilir'));
+assert(context.html.includes('tapşırıq təsdiqləri və uyğun xidmətlər üzrə isti sifarişlər Telegram və push vasitəsilə bildirilir'));
 assert(source.includes('notifications:readNotificationPreferences(card)'));
 console.log('PASS: employee notification matrix respects role/permissions and distinguishes active Telegram approvals from pending channels/events.');
