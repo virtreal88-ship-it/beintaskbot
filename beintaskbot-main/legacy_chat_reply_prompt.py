@@ -1,6 +1,14 @@
 """BeinSystems history reply only; never a shared SaaS or summary instruction."""
 from functools import lru_cache
+import os
 from pathlib import Path
+
+DEFAULT_HISTORY_REPLY_MODEL = 'gpt-4.1-2025-04-14'
+
+
+def history_reply_model() -> str:
+    """A dedicated model: global mini settings must not override chat replies."""
+    return str(os.environ.get('OPENAI_HISTORY_REPLY_MODEL') or '').strip() or DEFAULT_HISTORY_REPLY_MODEL
 
 BOUNDARIES = '''Sən BeinSystems satış menecerinə cavab qaralaması hazırlayırsan.
 Tarixçədə “Müştəri” yalnız daxil olan mesajdır; “Satış meneceri” yalnız bizim çıxan mesajımızdır.

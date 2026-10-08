@@ -72,7 +72,7 @@ from tenant_news_api import news_handler as tenant_news_handler
 from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from tenant_chat_ai_api import handler as tenant_chat_ai_handler
-from legacy_chat_reply_prompt import history_reply_instructions
+from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -18257,7 +18257,7 @@ def _history_message_is_incoming(item: dict) -> bool:
     return False
 
 
-async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple[list[str], int, int]:
+async def _ai_history_lines(rows: list[dict], lead: dict | None = None, *, reply_context: bool = False) -> tuple[list[str], int, int]:
     """Use the complete recent 30-message context for both reply and summary.
 
     Audio is processed in order and persisted after the first transcription.
@@ -18267,16 +18267,17 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
     lines: list[str] = []
     transcribed = 0
     unavailable_voice = 0
-    for item in rows[-30:]:
-        if not isinstance(item, dict):
-            continue
+    recent = [item for item in rows if isinstance(item, dict)][-30:]
+    for item in recent:
         text = str(item.get("text") or "").strip()
         # This is deliberately independent from the visible author field:
         # customer messages are always inbound; every outbound row is the
         # sales manager's message, even when Kommo did not return a name.
         who = "Müştəri" if _history_message_is_incoming(item) else "Satış meneceri"
         if text:
-            lines.append(f"{who}: {text[:400]}")
+            limit = 6000 if reply_context else 400
+            clipped = text[:limit] + (" [mətnin davamı ixtisar edilib]" if reply_context and len(text) > limit else "")
+            lines.append(f"{who}: {clipped}")
         if _is_history_audio(item):
             # Reuse text produced by the visible “Mətnə çevir” action when
             # it is present in the submitted 30-message context.  This avoids
@@ -18286,12 +18287,18 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None) -> tuple
                 transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
             if transcript:
                 label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
+                if reply_context and len(transcript) > 12000:
+                    transcript = transcript[:12000] + " [mətnin davamı ixtisar edilib]"
                 lines.append(f"{who} ({label}): {transcript}")
                 transcribed += 1
             else:
                 # Never silently present an incomplete voice context as if it
                 # had been included in the AI answer or summary.
                 unavailable_voice += 1
+                if reply_context:
+                    lines.append(f"{who}: [Səs yazısı var, mətnə çevirmək alınmadı; məzmunu məlum deyil.]")
+        elif reply_context and (item.get("media_url") or item.get("media") or item.get("file_uuid")):
+            lines.append(f"{who}: [Əlavə fayl var; faylın məzmunu təhlil edilməyib.]")
     return lines, transcribed, unavailable_voice
 
 
@@ -18332,8 +18339,10 @@ def _select_ai_reply_examples(lead: dict, history: str, draft: str = "") -> list
         context = str(row.get("context") or "").strip()
         if not reply or not context:
             continue
-        score = 20 if str(row.get("scope") or "") == scope else 0
-        score += len(requested.intersection(_ai_reply_tokens(context)))
+        overlap = len(requested.intersection(_ai_reply_tokens(context)))
+        if not overlap:
+            continue
+        score = (20 if str(row.get("scope") or "") == scope else 0) + overlap
         try:
             saved_at = int(row.get("saved_at") or 0)
         except (TypeError, ValueError):
@@ -18464,7 +18473,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         mode = "reply"
     # The same recent context powers both an AI reply and a summary.  A reply
     # must understand a voice note or call recording just as much as Xülasə.
-    lines, transcribed_count, untranscribed_voice_count = await _ai_history_lines(history_rows, lead)
+    lines, transcribed_count, untranscribed_voice_count = await _ai_history_lines(history_rows, lead, reply_context=mode == "reply")
     history = "\n".join(lines) or "Yazışma yoxdur."
     def _ai_error_message(exc: Exception) -> str:
         detail = str(exc or "").casefold()
@@ -18485,7 +18494,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             f"Son yazışma:\n{history}\n"
         )
         if draft:
-            user += f"\nMenecerin qeydi: {draft}\n"
+            user += f"\nMenecerin qeydi: {draft[:6000]}\n"
         if examples:
             user += "\nBəyənilmiş cavab nümunələri (üslubu öyrən, məlumatı uydurma):\n"
             for index, example in enumerate(examples, 1):
@@ -18494,7 +18503,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
         def _ask_reply() -> str:
             resp = llm_client.chat.completions.create(
-                model=LLM_MODEL,
+                model=history_reply_model(),
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 temperature=0.45,
                 max_tokens=1000,
@@ -18514,6 +18523,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             "text": suggestion,
             "transcribed_voice_count": transcribed_count,
             "untranscribed_voice_count": untranscribed_voice_count,
+            "model": history_reply_model(),
+            "context_message_count": min(30, sum(isinstance(row, dict) for row in history_rows)),
         })
 
     system = (
