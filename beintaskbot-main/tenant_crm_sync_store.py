@@ -50,7 +50,7 @@ def enqueue(tenant_id: str, resource: str, *, force_full: bool = False) -> dict:
                     (tenant_id,resource,run_id,connection_id,status,window_from,window_to,watermark,last_full_sync)
                     VALUES (%s::uuid,%s,%s::uuid,%s,'queued',%s,%s,%s,%s)
                     ON CONFLICT (tenant_id,resource) DO UPDATE SET run_id=EXCLUDED.run_id,
-                    connection_id=EXCLUDED.connection_id,status='queued',next_page=1,last_record_id=0,pages_done=0,
+                    connection_id=EXCLUDED.connection_id,status='queued',phase='active',next_page=1,last_record_id=0,pages_done=0,
                     window_from=EXCLUDED.window_from,window_to=EXCLUDED.window_to,watermark=EXCLUDED.watermark,
                     last_full_sync=EXCLUDED.last_full_sync,
                     records_saved=0,attempts=0,next_attempt_at=now(),started_at=now(),updated_at=now(),finished_at=NULL
@@ -120,7 +120,11 @@ class SyncPageStore:
 
     def save_page(self, snapshots: list[dict], *, done: bool) -> None:
         tenant, resource = str(self.row['tenant_id']), self.row['resource']
-        rows = (deal_rows if resource == 'leads' else task_rows)(tenant, snapshots, json.dumps)
+        deleted = resource == 'leads' and self.row.get('phase') == 'deleted'
+        rows = ([(tenant, int(item['kommo_lead_id']), item['deleted_at']) for item in snapshots]
+                if deleted else (deal_rows if resource == 'leads' else task_rows)(tenant, snapshots, json.dumps))
+        switch_phase = done and resource == 'leads' and not deleted
+        done = done and not switch_phase
         with self.conn.cursor() as cur:
             # Also fences an enqueue after reauthorization while this GET ran.
             cur.execute('''SELECT run_id FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s
@@ -137,7 +141,17 @@ class SyncPageStore:
                 self.conn.rollback()
                 self.fail(permanent=True)
                 return
-            if rows and resource == 'leads':
+            if rows and deleted:
+                # Store a tombstone even for a lead not previously cached, so
+                # a late historical page cannot reintroduce it as active.
+                cur.executemany('''INSERT INTO saas_crm_deals (tenant_id,kommo_lead_id,deleted_at)
+                    VALUES (%s::uuid,%s,%s::timestamptz)
+                    ON CONFLICT (tenant_id,kommo_lead_id) DO UPDATE SET deleted_at=EXCLUDED.deleted_at
+                    WHERE (saas_crm_deals.source_updated_at IS NULL OR
+                        saas_crm_deals.source_updated_at<=EXCLUDED.deleted_at)
+                    AND (saas_crm_deals.deleted_at IS NULL OR
+                        saas_crm_deals.deleted_at<=EXCLUDED.deleted_at)''', rows)
+            elif rows and resource == 'leads':
                 # CRM refresh must not erase chat previews or their timestamps.
                 cur.executemany('''INSERT INTO saas_crm_deals
                     (tenant_id,kommo_lead_id,pipeline_id,status_id,stage_name,name,contact_name,phone,
@@ -147,9 +161,11 @@ class SyncPageStore:
                     status_id=EXCLUDED.status_id,stage_name=EXCLUDED.stage_name,name=EXCLUDED.name,
                     contact_name=CASE WHEN EXCLUDED.contact_name='' THEN saas_crm_deals.contact_name ELSE EXCLUDED.contact_name END,
                     phone=CASE WHEN EXCLUDED.phone='' THEN saas_crm_deals.phone ELSE EXCLUDED.phone END,
-                    source_updated_at=EXCLUDED.source_updated_at,raw=EXCLUDED.raw,synced_at=now()
-                    WHERE saas_crm_deals.source_updated_at IS NULL OR
-                        EXCLUDED.source_updated_at>=saas_crm_deals.source_updated_at''', rows)
+                    source_updated_at=EXCLUDED.source_updated_at,raw=EXCLUDED.raw,synced_at=now(),deleted_at=NULL
+                    WHERE (saas_crm_deals.source_updated_at IS NULL OR
+                        EXCLUDED.source_updated_at>=saas_crm_deals.source_updated_at)
+                    AND (saas_crm_deals.deleted_at IS NULL OR
+                        EXCLUDED.source_updated_at>saas_crm_deals.deleted_at)''', rows)
             elif rows:
                 cur.executemany('''INSERT INTO saas_crm_tasks
                     (tenant_id,kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,raw)
@@ -178,6 +194,10 @@ class SyncPageStore:
                     (uuid.uuid4(), tenant, resource, json.dumps({'resource':resource,
                         'pages':int(self.row.get('pages_done') or 0)+1,
                         'records':int(self.row.get('records_saved') or 0)+len(rows)})))
+            if switch_phase:
+                cur.execute('''UPDATE saas_crm_sync_jobs SET phase='deleted',next_page=1,last_record_id=0
+                    WHERE tenant_id=%s::uuid AND resource=%s AND run_id=%s::uuid''',
+                    (tenant, resource, str(self.row['run_id'])))
         self.conn.commit()
 
     def fail(self, *, permanent: bool = False) -> None:

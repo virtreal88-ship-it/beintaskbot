@@ -6,6 +6,16 @@ from tenant_policy import positive_id
 PAGE_SIZE = 250
 
 
+def deleted_page(rows: list[dict]) -> list[dict]:
+    result = []
+    for item in rows:
+        record_id, updated = positive_id(item.get('id')), timestamp(item.get('updated_at'))
+        if not record_id or not updated or item.get('is_deleted') is not True:
+            raise ValueError('Unconfirmed CRM deletion')
+        result.append({'kommo_lead_id': record_id, 'deleted_at': updated})
+    return result
+
+
 def timestamp(value: object) -> str | None:
     try:
         number = int(value or 0)
@@ -43,6 +53,8 @@ def normalize_page(resource: str, rows: list[dict], stage_names: dict[int, str])
         if not record_id:
             raise ValueError('CRM record ID missing')
         if resource == 'leads':
+            if item.get('is_deleted') is True:
+                raise ValueError('Deleted lead in active CRM page')
             contacts = (item.get('_embedded') or {}).get('contacts') or []
             contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
             status = positive_id(item.get('status_id'))

@@ -20,6 +20,7 @@ import psycopg
 from psycopg.rows import dict_row
 from cryptography.fernet import Fernet, InvalidToken
 from tenant_policy import ROLE_PERMISSIONS, validate_workflow_patch
+from tenant_crm_deletion_schema import migrate_crm_deletions
 
 
 class TenantPlatformError(RuntimeError):
@@ -449,6 +450,7 @@ def _ensure_schema(conn) -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS saas_notifications_list_idx ON saas_tenant_notifications(tenant_id, telegram_id, read_at, created_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_project_idx ON crm_linear_news(project_key, done_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS crm_linear_news_expiry_idx ON crm_linear_news(expires_at)")
+            migrate_crm_deletions(cur)
         conn.commit()
         _schema_ready = True
 
@@ -1108,7 +1110,7 @@ def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] 
     """List only the selected tenant's cached deals, with DB-side filtering."""
     safe_limit = max(1, min(int(limit or 100), 200))
     safe_offset = max(0, int(offset or 0))
-    clauses = ["tenant_id = %s::uuid"]
+    clauses = ["tenant_id = %s::uuid", "deleted_at IS NULL"]
     values: list = [tenant_id]
     if scope is not None:
         scope_clauses = []
@@ -1152,7 +1154,7 @@ def get_crm_deal(*, tenant_id: str, kommo_lead_id: int) -> dict | None:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM saas_crm_deals WHERE tenant_id = %s::uuid AND kommo_lead_id = %s", (tenant_id, int(kommo_lead_id)))
+            cur.execute("SELECT * FROM saas_crm_deals WHERE tenant_id = %s::uuid AND kommo_lead_id = %s AND deleted_at IS NULL", (tenant_id, int(kommo_lead_id)))
             row = cur.fetchone()
     return _public_crm_row(row) if row else None
 
@@ -1161,7 +1163,9 @@ def get_crm_task(*, tenant_id: str, kommo_task_id: int) -> dict | None:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id=%s',
+            cur.execute('SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id=%s '
+                        'AND NOT EXISTS (SELECT 1 FROM saas_crm_deals d WHERE d.tenant_id=saas_crm_tasks.tenant_id '
+                        'AND d.kommo_lead_id=saas_crm_tasks.kommo_lead_id AND d.deleted_at IS NOT NULL)',
                         (tenant_id, int(kommo_task_id)))
             row = cur.fetchone()
     return _public_crm_row(row) if row else None
@@ -1192,6 +1196,8 @@ def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, scope: 
     if responsible_id == 0:
         return []
     clauses = ["tenant_id = %s::uuid"]
+    clauses.append('NOT EXISTS (SELECT 1 FROM saas_crm_deals deleted WHERE deleted.tenant_id=saas_crm_tasks.tenant_id '
+                   'AND deleted.kommo_lead_id=saas_crm_tasks.kommo_lead_id AND deleted.deleted_at IS NOT NULL)')
     values: list = [tenant_id]
     if scope is not None:
         kind = scope.get('kind')

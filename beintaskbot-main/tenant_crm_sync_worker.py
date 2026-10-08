@@ -2,7 +2,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from tenant_crm_sync_data import PAGE_SIZE, page_items, normalize_page
+from tenant_crm_sync_data import PAGE_SIZE, page_items, normalize_page, deleted_page
 from tenant_crm_sync_store import SyncPageStore
 from tenant_policy import positive_id
 from tenant_crm_sync_windows import window_params
@@ -27,7 +27,8 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
         await store_call(store.fail, permanent=True)
         return
     stage_names = {}
-    if resource == 'leads':
+    deleted = resource == 'leads' and row.get('phase') == 'deleted'
+    if resource == 'leads' and not deleted:
         catalog = await request(tenant, 'GET', 'leads/pipelines')
         pipelines = page_catalog(catalog)
         for pipeline in pipelines:
@@ -36,13 +37,13 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
     params = {'limit': PAGE_SIZE, 'page': int(row['next_page']), 'order[id]': 'asc'}
     params.update(window_params(row))
     if resource == 'leads':
-        params['with'] = 'contacts'
+        params['with'] = 'only_deleted' if deleted else 'contacts'
     payload = await request(tenant, 'GET', resource, params=params)
     items = page_items(payload, resource)
     ids = [positive_id(item.get('id')) for item in items]
     if ids and (min(ids) <= int(row.get('last_record_id') or 0) or ids != sorted(set(ids))):
         raise ValueError('CRM page did not advance in ID order')
-    snapshots = normalize_page(resource, items, stage_names)
+    snapshots = deleted_page(items) if deleted else normalize_page(resource, items, stage_names)
     # A full page always probes another page, regardless of HAL links. Never
     # follow a provider-supplied URL (host and credentials stay server-owned).
     await store_call(store.save_page, snapshots, done=len(items) < PAGE_SIZE)

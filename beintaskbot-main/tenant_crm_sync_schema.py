@@ -3,6 +3,7 @@ from threading import Lock
 
 from tenant_platform import _ensure_schema
 from tenant_crm_sync_incremental_schema import migrate_incremental_sync
+from tenant_crm_deletion_schema import migrate_deletion_scan
 
 _ready = False
 _lock = Lock()
@@ -39,5 +40,6 @@ def ensure_sync_schema(conn) -> None:
                 ON saas_crm_sync_jobs(next_attempt_at, updated_at)
                 WHERE status IN ('queued','running')''')
             migrate_incremental_sync(cur)
+            migrate_deletion_scan(cur)
         conn.commit()
         _ready = True
