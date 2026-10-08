@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 from tenant_policy import positive_id
+from crm_stage_labels import stage_display_name
 
 PAGE_SIZE = 250
 
@@ -59,7 +60,7 @@ def normalize_page(resource: str, rows: list[dict], stage_names: dict[int, str])
             contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
             status = positive_id(item.get('status_id'))
             result.append({'kommo_lead_id': record_id, 'pipeline_id': positive_id(item.get('pipeline_id')),
-                'status_id': status, 'stage_name': stage_names.get(status, 'Mərhələ göstərilməyib'),
+                'status_id': status, 'stage_name': stage_display_name(status,stage_names.get(status, 'Mərhələ göstərilməyib')),
                 'name': str(item.get('name') or 'Adsız sövdələşmə'),
                 'contact_name': str(contact.get('name') or ''), 'phone': phone(contact),
                 'source_updated_at': timestamp(item.get('updated_at')), 'raw': item})

@@ -50,6 +50,7 @@ from telegram.ext import (
 from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
+from crm_stage_labels import stage_display_name
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -202,8 +203,8 @@ RUFAT_STAGE_NAMES = {
     110897344: "görüşlər",
     111109084: "quraşdırma",
     111109104: "müzakirə",
-    142: "Успешно реализовано",
-    143: "Закрыто и не реализовано",
+    142: "Uğurla tamamlandı",
+    143: "İmtina olundu",
 }
 ADMIN_CHAT_ID = 1628569350
 ADMIN_KOMMO_USER_ID = 10932455
@@ -238,8 +239,8 @@ HUSEYN_STAGE_NAMES = {
     110904792: "quraşdırma",
     111702228: "gözləmə",
     111702232: "müzakirə",
-    142: "Успешно реализовано",
-    143: "Закрыто и не реализовано",
+    142: "Uğurla tamamlandı",
+    143: "İmtina olundu",
 }
 RASIM_STAGES = {
     "nerazobrannoye": 111700780,
@@ -262,8 +263,8 @@ RASIM_STAGE_NAMES = {
     111702376: "görüş",
     111702380: "quraşdırma",
     111702384: "müzakirə",
-    142: "Успешно реализовано",
-    143: "Закрыто и не реализовано",
+    142: "Uğurla tamamlandı",
+    143: "İmtina olundu",
 }
 NIZAMI_STAGES = {
     "nerazobrannoye": 109988180,
@@ -284,8 +285,8 @@ NIZAMI_STAGE_NAMES = {
     112086100: "yeni sifariş",
     110774676: "gözləmə",
     110722180: "Müzakirə",
-    142: "Успешно реализовано",
-    143: "Закрыто и не реализовано",
+    142: "Uğurla tamamlandı",
+    143: "İmtina olundu",
 }
 # Canonical task assignees.  Old account names deliberately do not appear here:
 # they may remain in historical Kommo task text, but can no longer receive work.
@@ -329,8 +330,8 @@ STAGE_NAMES = {
     108538104: "daxili müzakirə",
     108537896: "quraşdırma",
     108537976: "Düşünür",
-    142: "uğurlu sifariş",
-    143: "imtina olundu",
+    142: "Uğurla tamamlandı",
+    143: "İmtina olundu",
 }
 # Notify Admin only when a Sövdələşmələr deal moves to "Nömrə alınıb".
 # Kommo status ID verified from the pipeline configuration.
@@ -2253,7 +2254,7 @@ def _stage_maps_from_statuses(statuses: list) -> tuple[dict, dict, list]:
             sid = int(row.get("id"))
         except (TypeError, ValueError):
             continue
-        label = str(row.get("name") or sid)
+        label = stage_display_name(sid,row.get("name") or sid)
         key = _stage_key_from_kommo(label, sid)
         if key in used:
             key = f"{key}_{sid}"
@@ -6308,6 +6309,7 @@ def record_lead_pulse_event(
     wa_line: str = "",
     replaced_by: int = 0,
     external_id: str = "",
+    status_id: int = 0,
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
     global _inbox_pulse_rev
@@ -6336,6 +6338,10 @@ def record_lead_pulse_event(
                         cname = str(deal.get("contact_name") or "")
                     if not cphone:
                         cphone = str(deal.get("phone") or "")
+                    if not status_id:
+                        status_id = int(deal.get("status_id") or 0)
+                    if not stage_key:
+                        stage_key = str(deal.get("stage_key") or "")
                     break
             if pipe and cname:
                 break
@@ -6362,6 +6368,7 @@ def record_lead_pulse_event(
             "type": str(event_type or "deal_update"),
             "pipeline_id": pipe,
             "stage_key": str(stage_key or ""),
+            "status_id": int(status_id or 0),
             "contact_name": cname,
             "phone": cphone,
             "last_client_message": str(preview or ""),
@@ -6639,6 +6646,8 @@ def _apply_inbox_incoming(
     event_name = str(contact_name or "")
     event_phone = str(phone or "")
     event_queue_kind = ""
+    event_status = 0
+    event_stage = ""
     for overview in _personal_overview_cache.values():
         if not isinstance(overview, dict):
             continue
@@ -6675,6 +6684,8 @@ def _apply_inbox_incoming(
             event_name = str(deal.get("contact_name") or event_name or "")
             event_phone = str(deal.get("phone") or event_phone or "")
             event_queue_kind = str(deal.get("nizami_queue_kind") or event_queue_kind)
+            event_status = int(deal.get("status_id") or 0)
+            event_stage = str(deal.get("stage_key") or "")
             if _is_declined_deal(deal):
                 _mark_terminal_reentry(int(lead_id), int(created_at or 0))
             found = True
@@ -6694,6 +6705,8 @@ def _apply_inbox_incoming(
             "wa_line": _wa_line_for_pipeline(event_pipe) or str(wa_line or ""),
             "external_id": str(external_id or ""),
             "nizami_queue_kind": event_queue_kind,
+            "status_id": event_status,
+            "stage_key": event_stage,
             "needs_reply": needs_reply,
             "missing": bool(not found and channel != "whatsapp"),
             "refresh": False,
@@ -6925,7 +6938,9 @@ async def _hydrate_inbox_lead(
         talk_id=talk_id, message_id=message_id,
     )
     _invalidate_deal_chat_cache(int(lead_id))
-    record_lead_pulse_event(int(lead_id), "incoming_message", preview=preview, incoming_at=created_at)
+    record_lead_pulse_event(int(lead_id), "incoming_message", preview=preview, incoming_at=created_at,
+                           status_id=int((lead or {}).get('status_id') or 0),
+                           stage_key={142:'ugurlu',143:'imtina'}.get(int((lead or {}).get('status_id') or 0),''))
     notice_knock(int(lead_id), preview, pipe, name)
 
 
@@ -7025,8 +7040,15 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
     with _inbox_pulse_lock:
         rev = int(_inbox_pulse_rev)
         fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
+    successful_ids = {
+        int(deal.get('id') or 0)
+        for snapshot in _personal_overview_cache.values() if isinstance(snapshot,dict)
+        for deal in snapshot.get('deals') or [] if isinstance(deal,dict) and _is_successful_deal(deal)
+    }
+    successful_ids.update(int(row.get('lead_id') or 0) for row in fresh if _is_successful_deal(row))
     chats = []
     events = []
+    hidden_chat_ids: set[int] = set()
     seen_chats: set[int] = set()
     for row in reversed(fresh):
         try:
@@ -7038,7 +7060,8 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         deal = visible.get(lid) or {}
         # A completed customer is never a live chat lead, including when an
         # incoming webhook reaches the browser before its next full refresh.
-        if deal and _is_successful_deal(deal):
+        if lid in successful_ids or _is_successful_deal(deal) or _is_successful_deal(row):
+            hidden_chat_ids.add(lid)
             continue
         incoming_at = int(row.get("last_incoming_at") or deal.get("last_incoming_at") or 0)
         outgoing_at = int(row.get("last_outgoing_at") or deal.get("last_outgoing_at") or 0)
@@ -7069,7 +7092,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
                 "external_id": row.get("external_id") or "",
                 "needs_reply": bool(row.get("needs_reply") or deal.get("needs_reply") or _has_terminal_reentry(lid)),
                 "pipeline_id": int(deal.get("pipeline_id") or row.get("pipeline_id") or 0),
-                "status_id": int(deal.get("status_id") or 0),
+                "status_id": int(row.get("status_id") or deal.get("status_id") or 0),
                 "stage_key": str(deal.get("stage_key") or row.get("stage_key") or ""),
                 "stage_name": str(deal.get("stage_name") or ""),
                 "nizami_queue_kind": str(deal.get("nizami_queue_kind") or row.get("nizami_queue_kind") or ""),
@@ -7079,6 +7102,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
         "rev": rev,
         "chats": chats,
         "events": events,
+        "hidden_chat_ids": sorted(hidden_chat_ids),
         "seen": _get_user_seen_map(chat_id),
         "refresh": False,
     }

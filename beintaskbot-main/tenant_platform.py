@@ -1066,7 +1066,10 @@ def save_tenant_workflow_config(*, tenant_id: str, owner_id: int,
 
 def _public_crm_row(row: dict) -> dict:
     """Turn a PostgreSQL CRM snapshot into a JSON-safe browser payload."""
+    from crm_stage_labels import stage_display_name
     result = dict(row)
+    if 'stage_name' in result:
+        result['stage_name'] = stage_display_name(result.get('status_id'),result['stage_name'])
     for key in ("last_message_at", "source_updated_at", "synced_at", "due_at", "happened_at", "created_at"):
         if result.get(key):
             result[key] = result[key].isoformat()

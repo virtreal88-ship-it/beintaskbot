@@ -1981,7 +1981,7 @@ async function restoreSamilWorkspaceFromLocalDatabase() {
 function syncSamilStagesFromPayload(payload) {
     const incoming = Array.isArray(payload?.stages) ? payload.stages : [];
     if(!incoming.length) return;
-    const all = incoming.map(stage => [String(stage.key), String(stage.name || stage.key)]);
+    const all = incoming.map(stage => [String(stage.key), terminalStageLabel(stage.id,stage.key,stage.name || stage.key)]);
     const active = all.filter(([key]) => !['nerazobrannoye','ugurlu','imtina'].includes(key));
     SAMIL_ALL_STAGES.splice(0, SAMIL_ALL_STAGES.length, ...all);
     SAMIL_UI_STAGES.splice(0, SAMIL_UI_STAGES.length, ...active);
@@ -2276,6 +2276,11 @@ function applyPendingTaskMoves(taskList, gozlemeList) {
     });
 }
 
+function terminalStageLabel(status, key, original) {
+    if(Number(status)===142 || key==='ugurlu') return 'Uğurla tamamlandı';
+    if(Number(status)===143 || key==='imtina') return 'İmtina olundu';
+    return original || '';
+}
 function applySamilWorkspace(payload) {
     syncSamilStagesFromPayload(payload);
     mockTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
@@ -2287,13 +2292,13 @@ function applySamilWorkspace(payload) {
     const normalizeDeal = deal => {
         const dealName = String(deal?.name || '').trim();
         const contactName = String(deal?.contact_name || '').trim();
-        return {...deal, name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || '', last_incoming_at: Math.max(Number(deal.last_incoming_at || 0), Number(prevIncoming[String(deal.id)] || 0))};
+        return {...deal, stage_name:terminalStageLabel(deal.status_id,deal.stage_key,deal.stage_name), name: dealName, contact_name: contactName || '—', contact_avatar: deal.contact_avatar || prevAvatars[String(deal.id)] || '', last_incoming_at: Math.max(Number(deal.last_incoming_at || 0), Number(prevIncoming[String(deal.id)] || 0))};
     };
     if(payload.pipeline_id) CURRENT_PIPELINE_ID = Number(payload.pipeline_id) || CURRENT_PIPELINE_ID;
     if(Array.isArray(payload.pipelines) && payload.pipelines.length) KOMMO_PIPELINES = payload.pipelines;
     if(Array.isArray(payload.ui_stages) && payload.ui_stages.length) {
-        SAMIL_ALL_STAGES = payload.ui_stages;
-        SAMIL_UI_STAGES = payload.ui_stages.filter(([key]) => key !== 'ugurlu' && key !== 'imtina' && key !== 'nerazobrannoye');
+        SAMIL_ALL_STAGES = payload.ui_stages.map(([key,label])=>[key,terminalStageLabel(0,key,label)]);
+        SAMIL_UI_STAGES = SAMIL_ALL_STAGES.filter(([key]) => key !== 'ugurlu' && key !== 'imtina' && key !== 'nerazobrannoye');
         if(SAMIL_COMPLETION_PIPELINES.samil) {
             SAMIL_COMPLETION_PIPELINES.samil.stages = SAMIL_ALL_STAGES;
             SAMIL_COMPLETION_PIPELINES.samil.label = payload.funnel_owner || FUNNEL_OWNER_NAME || SAMIL_COMPLETION_PIPELINES.samil.label;
@@ -11750,6 +11755,11 @@ function dealByWaPhone(phone) {
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
+    if(isSuccessfulChatDeal(row)) {
+        if(deal) {deal.status_id=142;deal.stage_key='ugurlu';deal.stage_name='Uğurla tamamlandı';deal.needs_reply=false;}
+        return !!deal;
+    }
+    if(deal && isSuccessfulChatDeal(deal) && !row.status_id && !row.stage_key) return false;
     if(!deal && row.phone) deal = dealByWaPhone(row.phone);
     if(!deal) {
         if(row.wa_line && viewerWaLine() && row.wa_line !== viewerWaLine()) return false;
@@ -11994,6 +12004,9 @@ async function pollInboxPulse() {
             const rows = Array.isArray(payload.chats) ? payload.chats : [];
             let changed = false;
             rows.forEach(row => { if(applyInboxPulseRow(row)) changed = true; });
+            (Array.isArray(payload.hidden_chat_ids) ? payload.hidden_chat_ids : []).forEach(id => {
+                if(applyInboxPulseRow({id,status_id:142,stage_key:'ugurlu'})) changed=true;
+            });
 
             if(payload.seen && typeof payload.seen === 'object') {
                 const localSeen = getChatsSeen();
