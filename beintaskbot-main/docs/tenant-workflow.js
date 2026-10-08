@@ -117,6 +117,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
         ${check('creation_requires_admin','Tapşırıq yaradılmasını təsdiqləmək',settings.creation_requires_admin ?? rules.task_approval?.creation_requires_admin)}
         ${check('completion_requires_admin','Tapşırıq tamamlanmasını təsdiqləmək',settings.completion_requires_admin ?? rules.task_approval?.completion_requires_admin)}
         ${check('deal_completion_requires_admin','Sövdələşmə tamamlanmasını təsdiqləmək',settings.deal_completion_requires_admin ?? rules.deal_completion?.requires_admin)}
+        ${window.tenantHotOrderSettings.memberEditor(settings,rules.hot_orders || {})}
         ${notificationEditor(settings)}
         <p class="wf-hint">İcraçı yalnız öz tapşırıqlarını görür. Usta yalnız isti sifarişlərlə işləyir. Vərəq istifadəçisi təyin edilmiş vərəqləri görür.</p></details>`;
     }).join('');
@@ -136,10 +137,12 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
     $('wf-rules').innerHTML=`<h3>Modullar</h3><div class="wf-grid" data-wf-modules>${Object.entries(modules).filter(([key])=>!['settings','employees','integrations'].includes(key)).map(([key,label])=>check(key,label,defaults[key])).join('')}</div>
       <h3>Tapşırıq təsdiqləri</h3><div data-task-rules>${check('creation_requires_admin','Yaradılarkən təsdiq tələb olunur',rules.task_approval?.creation_requires_admin)}${check('completion_requires_admin','Tamamlanarkən təsdiq tələb olunur',rules.task_approval?.completion_requires_admin)}${check('self_created_exempt','Özünə yaradılmış tapşırıq təsdiq tələb etmir',rules.task_approval?.self_created_exempt !== false)}</div>
       <h3>Sövdələşmələr</h3><div data-deal-rules>${check('requires_admin','Tamamlanarkən təsdiq tələb olunur',rules.deal_completion?.requires_admin)}</div>
+      <div data-hot-rules>${window.tenantHotOrderSettings.render(rules.hot_orders || {})}</div>
       <h3>Şirkətin bildiriş məhdudiyyətləri</h3><div data-notifications>${Object.entries({...Object.fromEntries((session.capabilities?.notification_events || []).map(event=>[event.key,true])),telegram:true,push:true,...session.member.notification_rules,...rules.notifications}).map(([key,on])=>check(key,({telegram:'Telegram kanalı',push:'Push kanalı'})[key] || (session.capabilities?.notification_events || []).find(event=>event.key === key)?.label || key,on)).join('')}</div>
       <p class="wf-hint">SaaS tapşırıq təsdiqləri üçün Telegram xidməti qoşulub. Digər bildiriş hadisələri və push növbəti mərhələdə qoşulacaq.</p>`;
     const refreshNotificationChoices=()=>{$('wf-members').querySelectorAll('[data-member]').forEach(card=>constrainNotifications(card,card.querySelector('[data-role]').value,session.capabilities?.notification_events || [],flags($('wf-rules').querySelector('[data-wf-modules]'))));};
     $('wf-rules').querySelectorAll('[data-wf-modules] input').forEach(input=>{input.onchange=refreshNotificationChoices;});
+    window.tenantHotOrderSettings.install($('wf-rules').querySelector('[data-hot-rules]'));
     refreshNotificationChoices();
   }
   const flags = root => Object.fromEntries([...root.querySelectorAll('input[data-wf]')].map(input => [input.dataset.wf,input.checked]));
@@ -162,6 +165,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
         const role=card.querySelector('[data-role]').value;
         const confirmationFlags=Object.fromEntries(['creation_requires_admin','completion_requires_admin','deal_completion_requires_admin'].map(key=>[key,card.querySelector(`[data-wf="${key}"]`).checked]));
         nextRules.members[card.dataset.member]={...(nextRules.members[card.dataset.member] || {}),...confirmationFlags,notifications:readNotificationPreferences(card),pipeline_ids:role === 'manager' ? [...card.querySelector('[data-member-pipelines]').selectedOptions].map(option=>option.value) : []};
+        nextRules.members[card.dataset.member]=window.tenantHotOrderSettings.readMember(card,nextRules.members[card.dataset.member]);
         delete nextRules.members[card.dataset.member].kommo_user_id;
         if(role !== 'owner') nextMembers.push({telegram_id:member.telegram_id,display_name:member.display_name,role,permissions:[...card.querySelectorAll('[data-permissions] input:checked')].map(input=>input.dataset.wf)});
       });
@@ -172,6 +176,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
       nextRules.modules=flags($('wf-rules').querySelector('[data-wf-modules]'));
       nextRules.task_approval=flags($('wf-rules').querySelector('[data-task-rules]'));
       nextRules.deal_completion=flags($('wf-rules').querySelector('[data-deal-rules]'));
+      nextRules.hot_orders=window.tenantHotOrderSettings.read($('wf-rules').querySelector('[data-hot-rules]'),nextRules.hot_orders || {});
       nextRules.notifications=flags($('wf-rules').querySelector('[data-notifications]'));
       config=await api('/api/platform/workflow',{pipelines:nextPipelines,stages:nextStages,policies:nextRules,members:nextMembers});
       session=await api('/api/platform/me');

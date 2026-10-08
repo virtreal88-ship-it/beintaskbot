@@ -80,6 +80,7 @@
   (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}if(state.capabilities.modules?.tasks)await loadTasks(true);if(state.capabilities.modules?.deals||state.capabilities.modules?.customers)await loadDeals(false);renderProfile(state.me);if(state.me.role==='owner')loadSettings()})();
 })();
 </script>
+<script src="/assets/tenant-hot-order-settings.js"></script>
 <script src="/assets/tenant-workflow.js"></script>
 <script src="/assets/tenant-crm-sync.js"></script>
 <script src="/assets/tenant-task-approvals.js"></script>

@@ -1,6 +1,7 @@
 """Company workflow decisions, independent of Telegram names and integrations."""
 from dataclasses import dataclass
 from tenant_notifications import notification_catalog, validate_notification_preferences
+from tenant_hot_order_policy import HotOrderPolicy, validate_hot_order_settings
 
 
 ROLE_PERMISSIONS = {
@@ -161,6 +162,7 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+                'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),
                 'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
@@ -212,3 +214,4 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
     for key in ('task_approval', 'deal_completion', 'modules', 'notifications'):
         if any(not isinstance(v, bool) for v in ((policies or {}).get(key) or {}).values()):
             raise ValueError('Qayda üçün aktiv/deaktiv seçin.')
+    validate_hot_order_settings((policies or {}).get('hot_orders') or {}, (policies or {}).get('members') or {})
