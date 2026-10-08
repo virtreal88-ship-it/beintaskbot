@@ -51,6 +51,7 @@ from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
 from crm_stage_labels import stage_display_name
+from kommo_deal_tags import public_tags, tag_list, tags_handler
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -3807,6 +3808,7 @@ def attach_utm_and_partner(deals: list[dict], lead_by_id: dict, contacts: dict) 
         except (TypeError, ValueError):
             continue
         lead = lead_by_id.get(lead_id) or {}
+        deal["tags"] = public_tags(lead)
         contact_id = None
         rows = deal.get("contacts") or []
         if rows and isinstance(rows[0], dict) and rows[0].get("id"):
@@ -3989,7 +3991,7 @@ def execute_tool_search_contact(phone: str) -> str:
         results.append(format_contact_info(full_contact, notes, tasks))
     return "\n\n".join(results)
 
-def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None, status_id: int = None) -> int | None:
+def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None, status_id: int = None, *, tags: list | None = None) -> int | None:
     """Create a deal linked to a contact in the requested pipeline."""
     payload = {
         "name": contact_name or str(contact_id),
@@ -3998,6 +4000,8 @@ def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int
     }
     if status_id:
         payload["status_id"] = int(status_id)
+    if tags:
+        payload["_embedded"]["tags"] = tags
     headers = {
         "Authorization": f"Bearer {KOMMO_TOKEN}",
         "Content-Type": "application/json",
@@ -7701,10 +7705,6 @@ async def handle_api_action(request: web.Request) -> web.Response:
                     _routed_stages, _routed_names, _routed_ui = load_pipeline_stage_maps(routed_pipeline)
                     stage_name = str(_routed_names.get(routed_status) or "")
                     stage_key = next((key for key, status_id in _routed_stages.items() if int(status_id) == routed_status), "")
-                partner_name = str(data.get("partner") or "").strip()
-                if partner_name:
-                    set_deal_partner(lead_id, partner_name, chat_id)
-                    add_partner_for_chat(chat_id, partner_name)
                 invalidate_rufat_overview_cache()
                 record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=routed_pipeline, stage_key=stage_key)
                 return web.json_response({
@@ -7733,15 +7733,9 @@ async def handle_api_action(request: web.Request) -> web.Response:
             if stage_key not in stages:
                 return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
             source_label = str(data.get("source") or data.get("menbe") or "").strip()
-            partner_name = str(data.get("partner") or "").strip()
             if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
                 return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
-            if "partner" in data:
-                set_deal_partner(lead_id, partner_name, chat_id)
-                if partner_name:
-                    add_partner_for_chat(chat_id, partner_name)
-                invalidate_rufat_overview_cache()
-            elif source_label:
+            if source_label:
                 contacts = (lead.get("_embedded") or {}).get("contacts") or []
                 contact_id = int(contacts[0]["id"]) if contacts and contacts[0].get("id") else None
                 apply_menbe(contact_id, lead_id, source_label, overwrite=True)
@@ -7757,11 +7751,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 "partners": get_partner_list_for_chat(chat_id),
             })
         elif action == "add_partner":
-            name = str(data.get("name") or data.get("partner") or "").strip()
-            if not name:
-                return web.json_response({"success": False, "error": "Partner adını daxil edin."})
-            partners = add_partner_for_chat(chat_id, name)
-            return web.json_response({"success": True, "partners": partners, "partner": name})
+            return web.json_response({"success": False, "error": "Partner sahəsi ləğv edildi. Kommo teqlərindən istifadə edin."}, status=410)
         elif action == "deal_add_note":
             lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
             if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
@@ -8359,7 +8349,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 }
                 if stage_key not in stages or (working_keys and stage_key not in working_keys):
                     return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
-            partner_name = str(data.get("partner") or "").strip()
+            try:
+                selected_tags = tag_list(data.get("tags", []))
+            except ValueError as exc:
+                return web.json_response({"success": False, "error": str(exc)}, status=400)
             utm_blob = " ".join((
                 str(data.get("utm_source") or ""),
                 str(data.get("utm_medium") or ""),
@@ -8382,13 +8375,10 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
             if not contact_id:
                 return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
-            lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key])
+            lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key], tags=selected_tags)
             if not lead_id:
                 return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
             applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
-            if partner_name:
-                set_deal_partner(int(lead_id), partner_name, chat_id)
-                add_partner_for_chat(chat_id, partner_name)
             if note_text:
                 add_note(int(lead_id), note_text, "leads")
             invalidate_rufat_overview_cache()
@@ -8398,7 +8388,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
                 "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
                 "lead_id": int(lead_id),
                 "stage_key": stage_key,
-                "partner": partner_name,
+                "tags": selected_tags,
                 "utm": applied_utm,
                 "partners": get_partner_list_for_chat(chat_id),
                 "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
@@ -13106,6 +13096,7 @@ def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str
         "phone": phones[0] if phones else "",
         "phones": phones,
         "contacts": [{"id": _ids[0], "name": contact_name, "phones": phones}] if _ids else [],
+        "tags": public_tags(lead),
         "source": "",
         "menbe": "",
         "created_at": created,
@@ -13333,6 +13324,7 @@ def _overview_nizami_stage_deal(
         "phone": phones[0] if phones else "",
         "phones": phones,
         "contacts": [{"id": contact_ids[0], "name": contact_name, "phones": phones}] if contact_ids else [],
+        "tags": public_tags(lead),
         "source": "",
         "menbe": "",
         "created_at": created_at,
@@ -13522,6 +13514,7 @@ def _overview_deal_from_cloud_lead(lead: dict, preview: str, ts: int) -> dict:
     return {
         "id": lid,
         "pipeline_id": int(RUFAT_PIPELINE_ID),
+        "tags": public_tags(lead),
         "stage_key": status_to_key.get(status_id, ""),
         "stage_name": names.get(status_id, ""),
         "contact_name": contact_name,
@@ -15675,6 +15668,7 @@ def build_deal_view_payload(lead_id: int, lead: dict | None = None, *, require_p
         "phones": all_phones,
         "contacts": contact_rows,
         "partner": partner,
+        "tags": public_tags(lead),
         "utm": utm,
         "utm_tag": utm,
         "source": utm,
@@ -22416,6 +22410,11 @@ async def serve_tenant_finance_script(request: web.Request) -> web.Response:
                             headers={'Cache-Control':'no-cache'})
 
 
+async def serve_deal_tags_script(request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-tags.js'),
+                            headers={'Cache-Control': 'no-cache'})
+
+
 async def handle_platform_hot_orders(request: web.Request) -> web.Response:
     """SaaS queue only; legacy Telegram sessions/tables cannot authorize it."""
     headers = {'Cache-Control': 'no-store'}
@@ -23713,6 +23712,12 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/finance',tenant_finance_handler)
     app_web.router.add_post('/api/platform/finance',tenant_finance_handler)
     app_web.router.add_get('/assets/tenant-finance.js',serve_tenant_finance_script)
+    app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
+    deal_tags_api = tags_handler(identify=_deal_request_user, authorize=_authorized_deal_lead,
+                                http=_http, base_url=KOMMO_BASE_URL, headers=HEADERS,
+                                update=update_lead_kommo, invalidate=invalidate_rufat_overview_cache, logger=logger)
+    app_web.router.add_get('/api/deal/tags', deal_tags_api)
+    app_web.router.add_post('/api/deal/tags', deal_tags_api)
     app_web.router.add_get("/api/platform/crm/tasks/options", handle_platform_task_options)
     app_web.router.add_post("/api/platform/crm/tasks", handle_platform_task_create)
     app_web.router.add_get("/register", serve_platform_onboarding)
