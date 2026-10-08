@@ -69,6 +69,8 @@ from tenant_linear_api import linear_handler
 from tenant_linear_tasks_api import tasks_handler as tenant_linear_tasks_handler
 from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
 from tenant_news_api import news_handler as tenant_news_handler
+from tenant_news_telegram_api import handler as tenant_news_telegram_handler
+from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -20908,6 +20910,13 @@ async def check_tenant_linear_observer(context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error('Tenant Linear observer unavailable')
 
 
+async def check_tenant_news_telegram(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await deliver_tenant_news_telegram(context.bot,logger)
+    except Exception:
+        logger.error('Tenant news Telegram queue unavailable')
+
+
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Observe external Linear transitions even while nobody opens the board."""
     try:
@@ -23735,6 +23744,17 @@ async def start_webhook_server():
     news_ai_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, ai=True)
     app_web.router.add_get('/api/platform/news/ai', news_ai_api)
     app_web.router.add_post('/api/platform/news/ai', news_ai_api)
+    news_channel_api=tenant_news_telegram_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
+        lambda: _bot_app.bot if _bot_app else None,logger,configuration=True)
+    app_web.router.add_get('/api/platform/news/telegram/settings',news_channel_api)
+    app_web.router.add_post('/api/platform/news/telegram/settings',news_channel_api)
+    news_delivery_api=tenant_news_telegram_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
+        lambda: _bot_app.bot if _bot_app else None,logger)
+    app_web.router.add_get('/api/platform/news/telegram',news_delivery_api)
+    app_web.router.add_post('/api/platform/news/telegram',news_delivery_api)
+    app_web.router.add_get('/assets/tenant-news-telegram-settings.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-telegram-settings.js'),
+        headers={'Cache-Control':'no-cache'}))
     app_web.router.add_get('/api/platform/news/public/{company}',
         tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, public=True))
     app_web.router.add_get('/updates/{company}', lambda request: web.FileResponse(
@@ -24737,6 +24757,8 @@ def main():
     job_queue.run_repeating(check_tenant_hot_order_notifications, interval=60, first=35,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_tenant_linear_observer, interval=60, first=40,
+                            job_kwargs={'max_instances': 1, 'coalesce': True})
+    job_queue.run_repeating(check_tenant_news_telegram, interval=60, first=45,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_tenant_crm_sync, interval=15, first=10,
                             job_kwargs={'max_instances': 1, 'coalesce': True})

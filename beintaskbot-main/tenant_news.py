@@ -1,11 +1,11 @@
-"""Company-owned news review. Publishing writes the website only, never Telegram."""
+"""Company-owned news review. Optional Telegram intent is enqueued atomically."""
 import hashlib
 import json
 import uuid
 from tenant_platform import _connect, _read_tenant_workflow
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import identifier, TenantLinearError
-from tenant_news_ai_schema import ensure_ai_schema as ensure_observer_schema
+from tenant_news_telegram_schema import ensure_schema as ensure_observer_schema
 from tenant_news_policy import fields, public, cursor, position
 
 
@@ -39,11 +39,11 @@ def listing(session: dict, *, status: str = 'pending', after: str | None = None)
         with conn.cursor() as cur:
             tenant, user = access(cur, session)
             condition = ' AND (created_at,id)<(%s,%s::uuid)' if point else ''
-            cur.execute('SELECT * FROM saas_linear_news WHERE tenant_id=%s::uuid AND status=%s'
-                " AND COALESCE(published_at,created_at)>=now()-interval '90 days'" + condition +
-                ' ORDER BY created_at DESC,id DESC LIMIT 31', (tenant, status, *(point or ())))
+            cur.execute('SELECT n.*,q.status AS telegram_status FROM saas_linear_news n LEFT JOIN saas_news_telegram_queue q ON q.tenant_id=n.tenant_id AND q.news_id=n.id WHERE n.tenant_id=%s::uuid AND n.status=%s'
+                " AND COALESCE(n.published_at,n.created_at)>=now()-interval '90 days'" + condition.replace('created_at,id','n.created_at,n.id') +
+                ' ORDER BY n.created_at DESC,n.id DESC LIMIT 31', (tenant, status, *(point or ())))
             rows = cur.fetchall()
-    return {'tenant_id': tenant, 'user_id': user, 'news': [{**public(r), 'classification': (r.get('source') or {}).get('_news_ai', {})} for r in rows[:30]],
+    return {'tenant_id': tenant, 'user_id': user, 'news': [{**public(r), 'telegram_status':r.get('telegram_status',''), 'classification': (r.get('source') or {}).get('_news_ai', {})} for r in rows[:30]],
         'after': cursor(rows[29], 'created_at') if len(rows) > 30 else None}
 
 
@@ -99,8 +99,12 @@ def command(session: dict, data: dict) -> dict:
                       reviewed_by=%s,published_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid RETURNING *''',
                       (content['title'], content['summary'], content['project_name'], content['url'], user, tenant, key))
                     row = cur.fetchone()
+            telegram_status=None
+            if data.get('confirm_telegram') is True:
+                from tenant_news_telegram_queue import enqueue
+                telegram_status=enqueue(cur,tenant,user,row,data)
         conn.commit()
-    return {'tenant_id': tenant, 'user_id': user, 'news': public(row)}
+    return {'tenant_id': tenant, 'user_id': user, 'news': public(row),'telegram_status':telegram_status}
 
 
 def published(tenant: str, *, after: str | None = None) -> dict:

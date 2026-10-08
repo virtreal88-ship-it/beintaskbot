@@ -29,7 +29,7 @@
       <div id="tlStates"></div><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
       <label style="display:flex"><input id="tlNewsEnabled" type="checkbox" style="width:auto">Tamamlanmış əsas tapşırıqlardan xəbər qaralamaları hazırla</label>
       <p>Fon sinxronizasiyasını da aktiv edin və layihələri / tamamlanmış statusları seçin. «Xəbərlər» səhifəsində yoxlayıb dərc edin. AI emalı ayrıca «Xəbərlər üçün AI» ayarlarında aktiv edilir; onsuz mənbə fraqmenti saxlanılır.</p>
-      <label>Telegram xəbər kanalı (gələcək göndəriş üçün)<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
+      <label>Əvvəlki kanal qeydi (göndəriş üçün ayrıca «Telegram xəbər kanalı» bölməsində yoxlayın)<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
       <p>Yalnız əsas tapşırıqlar, 90 günlük saxlama və dərcdən əvvəl əl ilə təsdiq. Kanalın yazılması mesaj göndərmir. Account/Operator mövcud Linear dəyərləridir; yeni parametr yaradılmır.</p>
       <button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
     $('tlLoad').onclick=()=>perform(load);

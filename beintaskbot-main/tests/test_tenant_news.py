@@ -48,7 +48,7 @@ class Storage(unittest.TestCase):
         self.connect=MagicMock();self.conn=self.connect.return_value.__enter__.return_value
         self.cur=self.conn.cursor.return_value.__enter__.return_value
         self.service=loaders.load('tenant_news',{'_connect':self.connect,'_read_tenant_workflow':Mock(return_value={}),
-            'ensure_observer_schema':Mock()}, {'tenant_platform','tenant_news_ai_schema'})
+            'ensure_observer_schema':Mock()}, {'tenant_platform','tenant_news_telegram_schema'})
         self.cur.fetchone.side_effect=[profile(),{'metadata':{}}]
 
     def test_review_requires_live_member_and_explicit_right_not_admin_role(self):
@@ -124,6 +124,28 @@ class Storage(unittest.TestCase):
         self.cur.fetchone.side_effect=[None]
         with self.assertRaises(TenantLinearError) as caught:self.service.published(TENANT)
         self.assertEqual(caught.exception.status,404)
+
+    def test_optional_telegram_intent_is_committed_with_publication(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        self.cur.fetchone.side_effect=[profile(),None,row(),row(status='published',published_at=STAMP)]
+        def enqueue(cur,tenant,user,record,data):
+            self.conn.commit.assert_not_called();self.assertEqual(record['status'],'published');self.assertEqual(tenant,TENANT)
+            return 'pending'
+        hook=Mock(side_effect=enqueue)
+        with patch.dict(sys.modules,{'tenant_news_telegram_queue':SimpleNamespace(enqueue=hook)}):
+            result=self.service.command(SESSION,{**CONTENT,'action':'publish','id':OTHER,'expected_updated_at':str(STAMP),'confirm_publication':True,'confirm_telegram':True})
+        self.assertEqual(result['telegram_status'],'pending');hook.assert_called_once();self.conn.commit.assert_called_once()
+
+    def test_channel_conflict_does_not_commit_half_publication(self):
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        self.cur.fetchone.side_effect=[profile(),None,row(),row(status='published',published_at=STAMP)]
+        with patch.dict(sys.modules,{'tenant_news_telegram_queue':SimpleNamespace(enqueue=Mock(side_effect=TenantLinearError('Changed',409)))}):
+            with self.assertRaises(TenantLinearError):self.service.command(SESSION,{**CONTENT,'action':'publish','id':OTHER,'expected_updated_at':str(STAMP),'confirm_publication':True,'confirm_telegram':True})
+        self.conn.commit.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()
