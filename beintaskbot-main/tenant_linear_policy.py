@@ -22,7 +22,7 @@ def identifier(value):
 
 
 def settings(value):
-    if not isinstance(value, dict) or set(value) - {'team_id', 'done_state_ids', 'members', 'news'}:
+    if not isinstance(value, dict) or set(value) - {'team_id', 'done_state_ids', 'members', 'news', 'workflow'}:
         raise TenantLinearError('Linear ayarları düzgün deyil.')
     team = identifier(value['team_id']) if value.get('team_id') else ''
     states = value.get('done_state_ids', [])
@@ -35,7 +35,7 @@ def settings(value):
     for key, binding in members.items():
         if not isinstance(key, str) or not key.isascii() or not key.isdecimal() or int(key) <= 0 or str(int(key)) != key:
             raise TenantLinearError('Əməkdaş ID-si düzgün deyil.')
-        if not isinstance(binding, dict) or set(binding) - {'account', 'operator', 'can_create', 'can_edit', 'can_review_news'}:
+        if not isinstance(binding, dict) or set(binding) - {'account', 'operator', 'assignee_id', 'can_create', 'can_edit', 'can_review_news', 'can_view_all', 'can_change_status', 'button_ids'}:
             raise TenantLinearError('Əməkdaş ayarları düzgün deyil.')
         row = {}
         for field in ('account', 'operator'):
@@ -43,11 +43,16 @@ def settings(value):
             if not isinstance(text, str) or len(text) > 160 or any(ord(c) < 32 for c in text):
                 raise TenantLinearError('Account/Operator düzgün deyil.')
             row[field] = text.strip()
-        for field in ('can_create', 'can_edit', 'can_review_news'):
+        for field in ('can_create', 'can_edit', 'can_review_news', 'can_view_all', 'can_change_status'):
             flag = binding.get(field, False)
             if not isinstance(flag, bool):
                 raise TenantLinearError('İcazə boolean olmalıdır.')
             row[field] = flag
+        row['assignee_id'] = identifier(binding['assignee_id']) if binding.get('assignee_id') else ''
+        button_ids = binding.get('button_ids', [])
+        if not isinstance(button_ids, list) or len(button_ids) > 20 or any(not isinstance(b, str) for b in button_ids):
+            raise TenantLinearError('Düymə icazələri düzgün deyil.')
+        row['button_ids'] = list(dict.fromkeys(button_ids))
         normalized[key] = row
     news = value.get('news', {})
     if not isinstance(news, dict) or set(news) - {'channel', 'projects', 'manual_approval', 'main_issues_only', 'retention_days'}:
@@ -65,7 +70,11 @@ def settings(value):
     if not isinstance(projects, list) or len(projects) > 50:
         raise TenantLinearError('Layihə siyahısı düzgün deyil.')
     # Safety invariants are server-owned, never configurable auto-publication flags.
-    return {'team_id': team, 'done_state_ids': list(dict.fromkeys(identifier(s) for s in states)),
+    from tenant_linear_runtime_policy import workflow_settings
+    workflow = workflow_settings(value.get('workflow', {}))
+    if any(not set(m['button_ids']) <= {b['id'] for b in workflow['buttons']} for m in normalized.values()):
+        raise TenantLinearError('Naməlum düymə icazəsi.')
+    return {'team_id': team, 'done_state_ids': list(dict.fromkeys(identifier(s) for s in states)), 'workflow': workflow,
             'members': normalized, 'news': {'channel': channel,
             'projects': list(dict.fromkeys(identifier(p) for p in projects)),
             'manual_approval': True, 'main_issues_only': True, 'retention_days': 90}}

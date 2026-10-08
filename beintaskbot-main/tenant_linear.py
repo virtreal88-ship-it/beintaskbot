@@ -16,7 +16,7 @@ def public(row):
     row = row or {}
     metadata = row.get('metadata') if isinstance(row.get('metadata'), dict) else {}
     return {'status': row.get('status', 'not_connected'), 'settings': metadata.get('settings', {}),
-            'updated_at': str(row.get('updated_at') or ''), 'runtime_enabled': False}
+            'updated_at': str(row.get('updated_at') or ''), 'runtime_enabled': row.get('status') == 'connected' and bool(metadata.get('settings', {}).get('workflow', {}).get('enabled'))}
 
 
 def read(profile):
@@ -59,6 +59,8 @@ def choices(profile, team_id='', after=None):
         result = team_catalog(key, identifier(team_id))
         if not result:
             raise TenantLinearError('Komanda tapılmadı.', 404)
+        from tenant_linear_tasks_provider import team_members
+        result['members'] = team_members(key, identifier(team_id))
         return {'team': result}
     if after is not None and (not isinstance(after, str) or len(after) > 512):
         raise TenantLinearError('Səhifə kursoru düzgün deyil.')
@@ -83,8 +85,23 @@ def command(profile, data):
             projects = {p['id'] for p in team['projects']['nodes']}
             if not set(config['done_state_ids']) <= states or not set(config['news']['projects']) <= projects:
                 raise TenantLinearError('Seçilmiş status/layihə bu komandaya aid deyil.')
+            state_ids = {s['id'] for s in team['states']['nodes']}
+            required = {config['workflow']['creation_state_id']} - {''}
+            for button in config['workflow']['buttons']:
+                required.update(button['from_state_ids']); required.add(button['to_state_id'])
+            if not required <= state_ids:
+                raise TenantLinearError('İş qaydasının statusları bu komandaya aid deyil.')
+            if any(m['assignee_id'] for m in config['members'].values()):
+                from tenant_linear_tasks_provider import team_members
+                people = team.get('members') or team_members(credential(profile), config['team_id'])
+                if people['pageInfo']['hasNextPage']:
+                    raise TenantLinearError('İcraçı kataloqu tam deyil. Səhifələmə tələb olunur.')
+                if not {m['assignee_id'] for m in config['members'].values() if m['assignee_id']} <= {m['id'] for m in people['nodes']}:
+                    raise TenantLinearError('İcraçı bu komandaya aid deyil.')
         elif config['done_state_ids'] or config['news']['projects']:
             raise TenantLinearError('Əvvəlcə komandanı seçin.')
+        if config['workflow']['enabled'] and not config['team_id']:
+            raise TenantLinearError('İş qaydaları üçün komandanı seçin.')
     elif action != 'disconnect':
         raise TenantLinearError('Əməliyyat düzgün deyil.')
     with _connect() as conn:
