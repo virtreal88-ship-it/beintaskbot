@@ -1,4 +1,4 @@
-"""Completion and review commands: local transactions, no balance mutations."""
+"""Completion, review and snapshotted rewards in one local transaction."""
 import hashlib
 import json
 import uuid
@@ -8,6 +8,7 @@ from tenant_platform import _connect
 from tenant_hot_orders import authorize,identity,public_row,TenantHotOrderError
 from tenant_hot_order_schema import ensure_hot_order_schema
 from tenant_hot_order_completion_schema import enqueue_completion_notice
+from tenant_hot_order_rewards import accrue_reward
 
 
 def completion_command(profile: dict, data: dict) -> dict:
@@ -63,6 +64,9 @@ def completion_command(profile: dict, data: dict) -> dict:
             changed = cur.fetchone()
             if not changed:
                 raise TenantHotOrderError('Sifariş artıq dəyişib.',409)
+            reward_entry = accrue_reward(cur, profile, changed)
+            if reward_entry:
+                changed['reward_entry_id'] = reward_entry
             result = public_row(changed,policy)
             cur.execute('''INSERT INTO saas_hot_order_commands (tenant_id,actor_id,request_id,order_id,fingerprint,result)
                 VALUES (%s::uuid,%s,%s::uuid,%s::uuid,%s,%s::jsonb)''',(tenant,user,request_id,order_id,fingerprint,json.dumps(result)))

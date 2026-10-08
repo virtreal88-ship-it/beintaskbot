@@ -10,7 +10,7 @@ from tenant_policy import positive_id
 
 def public_entry(row: dict) -> dict:
     result={key:value for key,value in row.items() if key not in {'fingerprint','request_id'}}
-    for key in ('id','tenant_id','reverses_id','created_at'):
+    for key in ('id','tenant_id','reverses_id','created_at','hot_order_id'):
         if result.get(key) is not None:
             result[key]=result[key].isoformat() if hasattr(result[key],'isoformat') else str(result[key])
     result['amount']=money_text(int(result.pop('amount_minor')))

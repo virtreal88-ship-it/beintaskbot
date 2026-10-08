@@ -1,6 +1,7 @@
 """Tenant hot-order decisions; no legacy storage or transport dependencies."""
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from tenant_hot_order_reward_policy import reward_amount
 
 if TYPE_CHECKING:
     from tenant_policy import TenantPolicy
@@ -29,6 +30,7 @@ def validate_hot_order_settings(company: dict, members: dict) -> None:
                 not isinstance(service.get('active', True), bool)):
             raise ValueError('Xidmət ID-si, adı və aktivliyi düzgün deyil.')
         seen.add(key)
+        reward_amount(service.get('reward_amount', '0.00'))
     for settings in members.values():
         for key in ('hot_order_create', 'hot_order_claim','hot_order_completion_requires_admin'):
             if key in settings and not isinstance(settings[key], bool):

@@ -1,4 +1,4 @@
-/* Completion/review UI. Commands are durable; no polling or financial side effects. */
+/* Completion/review UI. Durable commands; server settles the reward atomically. */
 (() => {
   const $=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let profile,capabilities={},scope='',generation=0,busy=false,loading=false,rows=[],total=0,payload=null,selected=null;
@@ -15,7 +15,7 @@
     const body=await response.json();if(!response.ok||!body.success){const error=Error(body.error||'Sorğu alınmadı.');error.status=response.status;throw error;}return body;
   }
   function render() {
-    $('hotApprovalList').innerHTML=rows.map(row=>`<article class="hot-card"><h2>${esc(row.client_name)}</h2><p>${esc(row.service_name)}</p><p class="hot-text">${esc(row.description)}</p><h3>Nəticə</h3><p class="hot-text">${esc(row.result_text)}</p><div class="hot-actions">${row.actions?.approve?`<button class="primary" data-review="approve" data-id="${esc(row.id)}">Təsdiq et</button>`:''}${row.actions?.reject?`<button class="outline" data-review="reject" data-id="${esc(row.id)}">Düzəlişə qaytar</button>`:''}</div></article>`).join('')||'<div class="empty">Təsdiq gözləyən sifariş yoxdur.</div>';
+    $('hotApprovalList').innerHTML=rows.map(row=>`<article class="hot-card"><h2>${esc(row.client_name)}</h2><p>${esc(row.service_name)}</p><p class="badge">İcraçının xidmət haqqı: ${esc(row.reward_amount || '0.00')} AZN</p><p class="hot-text">${esc(row.description)}</p><h3>Nəticə</h3><p class="hot-text">${esc(row.result_text)}</p><div class="hot-actions">${row.actions?.approve?`<button class="primary" data-review="approve" data-id="${esc(row.id)}">Təsdiq et</button>`:''}${row.actions?.reject?`<button class="outline" data-review="reject" data-id="${esc(row.id)}">Düzəlişə qaytar</button>`:''}</div></article>`).join('')||'<div class="empty">Təsdiq gözləyən sifariş yoxdur.</div>';
     $('hotApprovalMore').hidden=rows.length>=total;
   }
   async function load(append=false) {
@@ -31,7 +31,7 @@
     try{payload=JSON.parse(sessionStorage.getItem(key())||'null');}catch{}
     if(payload&&(payload.order_id!==row.id||payload.action!==action)){notice('hotApprovalNotice','Əvvəlki əməliyyatı tamamlayın.');return;}
     $('hotCompletionTitle').textContent={complete:'Sifarişi tamamla',approve:'Tamamlanmanı təsdiq et',reject:'Düzəlişə qaytar'}[action];
-    $('hotCompletionResult').textContent=row.result_text||'';$('hotCompletionLabel').hidden=action==='approve';
+    $('hotCompletionResult').textContent=(row.result_text||'')+(action==='approve' ? '\nİcraçının balansına yazılacaq: '+(row.reward_amount!==undefined ? row.reward_amount+' AZN' : 'sifarişin əvvəlcədən sabitlənmiş xidmət haqqı') : '');$('hotCompletionLabel').hidden=action==='approve';
     const field=$('hotCompletionText');field.value=payload?.result_text||payload?.reason||'';field.required=action!=='approve';field.disabled=!!payload;
     notice('hotCompletionNotice',payload?'Əvvəlki sorğunu yenidən yoxlayın.':'');modal.classList.add('show');resize();
   }

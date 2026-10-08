@@ -3,6 +3,8 @@ from threading import Lock
 from tenant_platform import _ensure_schema
 from tenant_hot_order_notice_schema import migrate_hot_order_notices
 from tenant_hot_order_completion_schema import migrate_hot_order_completion
+from tenant_finance_schema import ensure_finance_schema
+from tenant_hot_order_reward_schema import migrate_hot_order_rewards
 
 _ready = False
 _lock = Lock()
@@ -16,6 +18,7 @@ def ensure_hot_order_schema(conn) -> None:
     with _lock:
         if _ready:
             return
+        ensure_finance_schema(conn)
         with conn.cursor() as cur:
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-hot-order-schema',))
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_hot_orders (
@@ -44,5 +47,6 @@ def ensure_hot_order_schema(conn) -> None:
                 ON saas_hot_orders(tenant_id,claimed_by,created_at DESC,id)''')
             migrate_hot_order_notices(cur)
             migrate_hot_order_completion(cur)
+            migrate_hot_order_rewards(cur)
         conn.commit()
         _ready = True

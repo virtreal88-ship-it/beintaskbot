@@ -124,7 +124,8 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(len(self.cur.execute.call_args_list),1)
 
     def test_schema_is_additive_and_has_composite_identity_and_request_deduplication(self):
-        schema=load('tenant_hot_order_schema',{'_ensure_schema':Mock()},{'tenant_platform'})
+        schema=load('tenant_hot_order_schema',{'_ensure_schema':Mock(),'ensure_finance_schema':Mock()},
+                    {'tenant_platform','tenant_finance_schema'})
         schema.ensure_hot_order_schema(self.conn)
         sql=' '.join(c.args[0] for c in self.cur.execute.call_args_list)
         self.assertIn('PRIMARY KEY (tenant_id,id)',sql);self.assertIn('UNIQUE (tenant_id,created_by,request_id)',sql)

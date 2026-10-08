@@ -8,6 +8,8 @@ from tenant_policy import TenantPolicy
 from tenant_hot_order_policy import HotOrderPolicy
 from tenant_hot_order_schema import ensure_hot_order_schema
 from tenant_hot_order_notice_schema import enqueue_hot_order_notice
+from tenant_hot_order_reward_policy import service_reward
+from decimal import Decimal
 
 
 class TenantHotOrderError(ValueError):
@@ -40,6 +42,7 @@ def public_row(row: dict, policy: HotOrderPolicy | None = None) -> dict:
                            row.get('claimed_by') == policy.policy.profile.get('telegram_id'))}
         result['service_name'] = next((service['name'] for service in policy.settings.get('services', [])
                                        if service['id'] == row.get('service_id')), row.get('service_id',''))
+    result['reward_amount'] = format(Decimal(int(result.pop('reward_minor', 0)))/100, '.2f')
     return result
 
 
@@ -75,11 +78,12 @@ def create_order(profile: dict, data: dict) -> dict:
         ensure_hot_order_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''INSERT INTO saas_hot_orders
-                (tenant_id,id,request_id,fingerprint,status,service_id,client_name,description,phone,address,priority,created_by)
-                VALUES (%s::uuid,%s::uuid,%s::uuid,%s,'open',%s,%s,%s,%s,%s,%s,%s)
+                (tenant_id,id,request_id,fingerprint,status,service_id,client_name,description,phone,address,priority,reward_minor,created_by)
+                VALUES (%s::uuid,%s::uuid,%s::uuid,%s,'open',%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (tenant_id,created_by,request_id) DO NOTHING RETURNING *''',
                 (tenant, order_id, request_id, fingerprint, payload['service_id'], payload['client_name'],
-                 payload['description'], payload['phone'], payload['address'], payload['priority'], user))
+                 payload['description'], payload['phone'], payload['address'], payload['priority'],
+                 service_reward(policy.settings, payload['service_id']), user))
             row = cur.fetchone()
             if row:
                 audit(cur, profile, order_id, 'create')

@@ -1,4 +1,4 @@
-/* Tenant-only queue. No polling, no legacy API, no payout mutations. */
+/* Tenant-only queue. Rewards are server-side ledger entries, never bank payouts. */
 (() => {
   const $=id=>document.getElementById(id), view=$('view-hot_orders');
   const nav=document.querySelector('[data-view="hot_orders"]');
@@ -32,7 +32,8 @@
   function date(value) {const d=new Date(value);return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('az-AZ',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});}
   function render() {
     const action=(row,type,label)=>row.actions?.[type] ? `<button class="outline ${type==='cancel' ? 'danger' : ''}" data-hot-action="${type}" data-hot-id="${esc(row.id)}" ${busy ? 'disabled' : ''}>${label}</button>` : '';
-    $('hotOrderList').innerHTML=rows.map(row=>`<article class="hot-card"><header><h2>${esc(row.client_name)}</h2><span class="badge">${esc(labels[row.status] || row.status)}</span></header><div class="hot-actions"><span class="badge">${esc(row.service_name || row.service_id)}</span>${row.priority==='urgent' ? '<span class="badge hot-urgent">Təcili</span>' : ''}</div><p class="hot-text">${esc(row.description)}</p>${row.result_text?`<p class="hot-text"><strong>Nəticə:</strong> ${esc(row.result_text)}</p>`:''}${row.review_reason?`<p class="hot-text"><strong>Düzəliş səbəbi:</strong> ${esc(row.review_reason)}</p>`:''}<div class="hot-details">${row.phone ? `<span>Telefon: ${esc(row.phone)}</span>` : ''}${row.address ? `<span>Ünvan: ${esc(row.address)}</span>` : ''}<span>Yaradılıb: ${esc(date(row.created_at))}</span>${row.claimed_by ? `<span>İcraçı: ${String(row.claimed_by)===String(profile.telegram_id) ? 'Mən' : 'Əməkdaş #'+esc(row.claimed_by)}</span>` : ''}</div><div class="hot-actions">${action(row,'claim','Qəbul et')}${action(row,'release','Geri qaytar')}${action(row,'cancel','Ləğv et')}${action(row,'complete','Tamamla')}${action(row,'approve','Təsdiq et')}${action(row,'reject','Düzəlişə qaytar')}</div></article>`).join('') || '<div class="panel empty">Sifariş yoxdur.</div>';
+    const reward=row=>`<span class="badge">Xidmət haqqı: ${esc(row.reward_amount || '0.00')} AZN${row.reward_entry_id ? ' · Balansa yazılıb' : ''}</span>`;
+    $('hotOrderList').innerHTML=rows.map(row=>`<article class="hot-card"><header><h2>${esc(row.client_name)}</h2><span class="badge">${esc(labels[row.status] || row.status)}</span></header><div class="hot-actions"><span class="badge">${esc(row.service_name || row.service_id)}</span>${reward(row)}${row.priority==='urgent' ? '<span class="badge hot-urgent">Təcili</span>' : ''}</div><p class="hot-text">${esc(row.description)}</p>${row.result_text?`<p class="hot-text"><strong>Nəticə:</strong> ${esc(row.result_text)}</p>`:''}${row.review_reason?`<p class="hot-text"><strong>Düzəliş səbəbi:</strong> ${esc(row.review_reason)}</p>`:''}<div class="hot-details">${row.phone ? `<span>Telefon: ${esc(row.phone)}</span>` : ''}${row.address ? `<span>Ünvan: ${esc(row.address)}</span>` : ''}<span>Yaradılıb: ${esc(date(row.created_at))}</span>${row.claimed_by ? `<span>İcraçı: ${String(row.claimed_by)===String(profile.telegram_id) ? 'Mən' : 'Əməkdaş #'+esc(row.claimed_by)}</span>` : ''}</div><div class="hot-actions">${action(row,'claim','Qəbul et')}${action(row,'release','Geri qaytar')}${action(row,'cancel','Ləğv et')}${action(row,'complete','Tamamla')}${action(row,'approve','Təsdiq et')}${action(row,'reject','Düzəlişə qaytar')}</div></article>`).join('') || '<div class="panel empty">Sifariş yoxdur.</div>';
     pages();
   }
   async function load(target=0) {
@@ -52,7 +53,7 @@
     if(busy || !capabilities.hot_orders?.can_create) return;
     $('hotOrderForm').reset();pending=null;
     try {pending=JSON.parse(sessionStorage.getItem(key(profile)) || 'null');} catch {}
-    $('hotService').innerHTML=(capabilities.hot_orders?.services || []).map(service=>`<option value="${esc(service.id)}">${esc(service.name)}</option>`).join('');
+    $('hotService').innerHTML=(capabilities.hot_orders?.services || []).map(service=>`<option value="${esc(service.id)}">${esc(service.name)} · ${esc(service.reward_amount ?? '0.00')} AZN</option>`).join('');
     if(pending) {
       if(!(capabilities.hot_orders.services || []).some(service=>service.id===pending.service_id)) $('hotService').insertAdjacentHTML('beforeend',`<option value="${esc(pending.service_id)}">Əvvəlki xidmət</option>`);
       for(const [id,field] of Object.entries({hotService:'service_id',hotClient:'client_name',hotPhone:'phone',hotAddress:'address',hotDescription:'description',hotPriority:'priority'})) $(id).value=pending[field];

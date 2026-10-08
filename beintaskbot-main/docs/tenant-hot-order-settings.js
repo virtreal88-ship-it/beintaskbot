@@ -4,10 +4,10 @@
   const roleNames = {owner:'Şirkət sahibi',admin:'Administrator',manager:'Vərəq istifadəçisi',worker:'İcraçı',master:'Usta'};
   const roles = (action, selected) => `<label>${action === 'create' ? 'Yarada bilən rollar' : 'Qəbul edə bilən rollar'}<select multiple data-hot-roles="${action}">${Object.entries(roleNames).map(([id,name])=>`<option value="${id}" ${selected.includes(id) ? 'selected' : ''}>${name}</option>`).join('')}</select></label>`;
   function serviceRow(service) {
-    return `<div class="wf-card" data-hot-service="${esc(service.id)}"><label>Xidmətin adı<input data-hot-name maxlength="120" value="${esc(service.name)}" required></label><label class="wf-check"><input type="checkbox" data-hot-active ${service.active !== false ? 'checked' : ''}>Aktivdir</label></div>`;
+    return `<div class="wf-card" data-hot-service="${esc(service.id)}"><label>Xidmətin adı<input data-hot-name maxlength="120" value="${esc(service.name)}" required></label><label>İcraçının xidmət haqqı (AZN)<input data-hot-reward inputmode="decimal" maxlength="20" value="${esc(service.reward_amount ?? '0.00')}" required></label><label class="wf-check"><input type="checkbox" data-hot-active ${service.active !== false ? 'checked' : ''}>Aktivdir</label></div>`;
   }
   function render(settings) {
-    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">Bildiriş yalnız ümumi mətn və kabinet linkidir. Ödənişlər hələ qoşulmayıb.</p><label class="wf-check"><input type="checkbox" data-hot-completion ${settings.completion_requires_admin!==false ? 'checked' : ''}>Tamamlanma administrator tərəfindən təsdiqlənsin</label><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
+    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">Xidmət haqqı sifariş yarananda sabitlənir və yalnız tamamlanma təsdiqlənəndə icraçının daxili balansına yazılır. Təsdiq tələb olunmursa, tamamlama zamanı yazılır. 0.00 — hesablanmır. Bank köçürməsi edilmir. Köhnə sifarişlər dəyişmir. Bildiriş yalnız ümumi mətn və kabinet linkidir.</p><label class="wf-check"><input type="checkbox" data-hot-completion ${settings.completion_requires_admin!==false ? 'checked' : ''}>Tamamlanma administrator tərəfindən təsdiqlənsin</label><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
   }
   function install(root) {
     root.querySelector('[data-hot-add]').onclick = () => {
@@ -20,8 +20,10 @@
   function read(root, previous) {
     const services = [...root.querySelectorAll('[data-hot-service]')].map(row=>({
       ...(previous.services || []).find(service=>service.id === row.dataset.hotService),
-      id:row.dataset.hotService,name:row.querySelector('[data-hot-name]').value.trim(),active:row.querySelector('[data-hot-active]').checked}));
+      id:row.dataset.hotService,name:row.querySelector('[data-hot-name]').value.trim(),active:row.querySelector('[data-hot-active]').checked,
+      reward_amount:row.querySelector('[data-hot-reward]').value.trim()}));
     if(services.some(service=>!service.name)) throw new Error('Xidmətin adını yazın.');
+    if(services.some(service=>!/^\d{1,9}(\.\d{1,2})?$/.test(service.reward_amount))) throw new Error('Xidmət haqqını 0.00 və ya müsbət AZN məbləği kimi yazın.');
     return {...previous,services,completion_requires_admin:root.querySelector('[data-hot-completion]').checked,...Object.fromEntries(['create','claim'].map(action=>[
       action+'_roles',[...root.querySelector(`[data-hot-roles="${action}"]`).selectedOptions].map(option=>option.value)]))};
   }
