@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from legacy_chat_reply_media import reply_media_content
 
 TREE = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
 
@@ -38,6 +39,10 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
             'history_reply_instructions': lambda: 'Sales instructions',
             'history_reply_model': lambda: 'gpt-4.1-2025-04-14',
             '_select_ai_reply_examples': lambda *args: [], 'llm_client': client,
+            'reply_media_content': reply_media_content,
+            '_summary_audio_source': lambda row: '',
+            '_is_allowed_kommo_media_url': lambda source: False,
+            '_history_message_is_incoming': lambda row: False,
             'web': SimpleNamespace(json_response=lambda value, **kwargs: value),
         }
         exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[])), '<reply request>', 'exec'), namespace)
@@ -45,7 +50,7 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request['model'], 'gpt-4.1-2025-04-14')
         self.assertEqual(request['messages'][0]['content'], 'Sales instructions')
-        self.assertIn(namespace['history'], request['messages'][1]['content'])
+        self.assertIn(namespace['history'], request['messages'][1]['content'][0]['text'])
         self.assertEqual(result['context_message_count'], 2)
         self.assertEqual(result['transcribed_voice_count'], 1)
 
@@ -101,7 +106,7 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
         build, _ = context_builder()
         lines, count, failed = await build([{'incoming': True, 'message_type': 'voice'}, {'incoming': True, 'media_url': 'photo.jpg'}], reply_context=True)
         self.assertIn('məzmunu məlum deyil', lines[0])
-        self.assertIn('təhlil edilməyib', lines[1])
+        self.assertIn('ayrıca təqdim edilibsə', lines[1])
         self.assertEqual((count, failed), (0, 1))
 
     async def test_oversized_text_is_bounded_and_marked(self):

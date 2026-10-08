@@ -73,6 +73,7 @@ from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from tenant_chat_ai_api import handler as tenant_chat_ai_handler
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
+from legacy_chat_reply_media import reply_media_content
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -18298,7 +18299,7 @@ async def _ai_history_lines(rows: list[dict], lead: dict | None = None, *, reply
                 if reply_context:
                     lines.append(f"{who}: [Səs yazısı var, mətnə çevirmək alınmadı; məzmunu məlum deyil.]")
         elif reply_context and (item.get("media_url") or item.get("media") or item.get("file_uuid")):
-            lines.append(f"{who}: [Əlavə fayl var; faylın məzmunu təhlil edilməyib.]")
+            lines.append(f"{who}: [Əlavə fayl var; məzmunu yalnız aşağıda ayrıca təqdim edilibsə məlumdur.]")
     return lines, transcribed, unavailable_voice
 
 
@@ -18501,10 +18502,17 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
                 user += f"\nNümunə {index}:\n{example['context']}\nMenecer: {example['reply']}\n"
         user += "\nNövbəti cavabı yaz."
 
+        content, media_counts = await asyncio.to_thread(
+            reply_media_content, user, history_rows,
+            resolve_image=_summary_audio_source,
+            image_headers=lambda source: {"Authorization": f"Bearer {KOMMO_TOKEN}"} if _is_allowed_kommo_media_url(source) else {},
+            incoming=_history_message_is_incoming,
+        )
+
         def _ask_reply() -> str:
             resp = llm_client.chat.completions.create(
                 model=history_reply_model(),
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
                 temperature=0.45,
                 max_tokens=1000,
             )
@@ -18525,6 +18533,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             "untranscribed_voice_count": untranscribed_voice_count,
             "model": history_reply_model(),
             "context_message_count": min(30, sum(isinstance(row, dict) for row in history_rows)),
+            **media_counts,
         })
 
     system = (

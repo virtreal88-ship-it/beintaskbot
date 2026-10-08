@@ -8565,6 +8565,9 @@ async function requestDealAiReply() {
             persistOpenChatDraft();
         }
         toast('AI cavab hazırdır');
+        if(Number(d.unavailable_image_count || 0) + Number(d.unavailable_link_count || 0) > 0) {
+            toast('Bəzi foto və ya keçidlər AI üçün oxunmadı.', true);
+        }
         if(Number(d.untranscribed_voice_count || 0) > 0) {
             toast(`${d.untranscribed_voice_count} səs yazısı AI üçün mətnə çevrilmədi.`, true);
         }
