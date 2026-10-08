@@ -65,6 +65,7 @@ from tenant_notification_worker import deliver_approval_notifications
 from tenant_push_worker import deliver_push_notifications
 from tenant_hot_order_notification_worker import deliver_hot_order_notifications
 from tenant_finance_api import finance_handler
+from tenant_linear_api import linear_handler
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -23712,6 +23713,12 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/finance',tenant_finance_handler)
     app_web.router.add_post('/api/platform/finance',tenant_finance_handler)
     app_web.router.add_get('/assets/tenant-finance.js',serve_tenant_finance_script)
+    tenant_linear_handler = linear_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get('/api/platform/linear/settings', tenant_linear_handler)
+    app_web.router.add_post('/api/platform/linear/settings', tenant_linear_handler)
+    app_web.router.add_get('/assets/tenant-linear-settings.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-settings.js'),
+        headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
     deal_tags_api = tags_handler(identify=_deal_request_user, authorize=_authorized_deal_lead,
                                 http=_http, base_url=KOMMO_BASE_URL, headers=HEADERS,
