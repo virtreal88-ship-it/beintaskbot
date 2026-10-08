@@ -97,6 +97,20 @@ class OutboxTests(unittest.TestCase):
         self.assertIn('LIMIT 100',sql);self.assertIn('m.active=TRUE',sql)
         self.assertEqual(params,('company-a',40,None,None))
 
+    def test_completion_requests_only_reach_company_reviewers_with_opt_in(self):
+        p=person();p['role']='admin'
+        p['workflow']['policies']['members']['20']['notifications']['hot_order_completion_requested']={'telegram':True}
+        order=fixtures.order(status='submitted',claimed_by=21)
+        self.assertTrue(self.module.eligible(p,order,'telegram','hot_order_completion_requested'))
+        p['role']='master';self.assertFalse(self.module.eligible(p,order,'telegram','hot_order_completion_requested'))
+
+    def test_completion_decision_only_reaches_target_claimant(self):
+        p=person();p['workflow']['policies']['members']['20']['notifications']['hot_order_completion_decided']={'telegram':True}
+        order=fixtures.order(status='claimed',claimed_by=20)
+        self.assertTrue(self.module.eligible(p,order,'telegram','hot_order_completion_decided',20))
+        self.assertFalse(self.module.eligible(p,order,'telegram','hot_order_completion_decided',21))
+        self.assertFalse(self.module.eligible(p,{**order,'tenant_id':'foreign'},'telegram','hot_order_completion_decided',20))
+
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

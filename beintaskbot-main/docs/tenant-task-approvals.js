@@ -1,6 +1,6 @@
 /* Creation review queue in /app; legacy confirmations are not modified. */
 (() => {
-  const host = document.getElementById('view-tasks');
+  const host = document.getElementById('systemApprovalsHost') || document.getElementById('view-tasks');
   const panel = document.createElement('section');
   panel.className = 'panel'; panel.hidden = true; panel.style.marginTop = '20px';
   panel.innerHTML = '<div style="display:flex;gap:12px;align-items:center;justify-content:space-between"><h2>Tapşırıq təsdiqləri</h2><button type="button" class="outline">Yenilə</button></div><p class="sub">Tapşırıqların yaradılması və tamamlanması üçün administrator təsdiqi gözləyən sorğular.</p><div class="approval-notice" role="status"></div><div class="approval-list"></div><button type="button" class="outline approval-more" style="margin-top:16px" hidden>Daha çox göstər</button>';

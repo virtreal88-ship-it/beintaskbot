@@ -4,7 +4,7 @@
   const nav=document.querySelector('[data-view="hot_orders"]');
   const esc=value=>String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let profile, capabilities={}, scope='', epoch=0, offset=0, total=0, loading=false, busy=false, rows=[], pending=null;
-  const PAGE=50, labels={open:'Açıq',claimed:'Qəbul edilib',cancelled:'Ləğv edilib'};
+  const PAGE=50, labels={open:'Açıq',claimed:'Qəbul edilib',cancelled:'Ləğv edilib',submitted:'Təsdiq gözləyir',completed:'Tamamlanıb'};
   let linkOpened=false;
   const key=person=>`crm-hot-order:${person.tenant_id}:${person.telegram_id}`;
   const notice=(id,text)=>{$(id).textContent=text || '';$(id).classList.toggle('show',!!text);};
@@ -32,7 +32,7 @@
   function date(value) {const d=new Date(value);return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('az-AZ',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});}
   function render() {
     const action=(row,type,label)=>row.actions?.[type] ? `<button class="outline ${type==='cancel' ? 'danger' : ''}" data-hot-action="${type}" data-hot-id="${esc(row.id)}" ${busy ? 'disabled' : ''}>${label}</button>` : '';
-    $('hotOrderList').innerHTML=rows.map(row=>`<article class="hot-card"><header><h2>${esc(row.client_name)}</h2><span class="badge">${esc(labels[row.status] || row.status)}</span></header><div class="hot-actions"><span class="badge">${esc(row.service_name || row.service_id)}</span>${row.priority==='urgent' ? '<span class="badge hot-urgent">Təcili</span>' : ''}</div><p class="hot-text">${esc(row.description)}</p><div class="hot-details">${row.phone ? `<span>Telefon: ${esc(row.phone)}</span>` : ''}${row.address ? `<span>Ünvan: ${esc(row.address)}</span>` : ''}<span>Yaradılıb: ${esc(date(row.created_at))}</span>${row.claimed_by ? `<span>İcraçı: ${String(row.claimed_by)===String(profile.telegram_id) ? 'Mən' : 'Əməkdaş #'+esc(row.claimed_by)}</span>` : ''}</div><div class="hot-actions">${action(row,'claim','Qəbul et')}${action(row,'release','Geri qaytar')}${action(row,'cancel','Ləğv et')}</div></article>`).join('') || '<div class="panel empty">Sifariş yoxdur.</div>';
+    $('hotOrderList').innerHTML=rows.map(row=>`<article class="hot-card"><header><h2>${esc(row.client_name)}</h2><span class="badge">${esc(labels[row.status] || row.status)}</span></header><div class="hot-actions"><span class="badge">${esc(row.service_name || row.service_id)}</span>${row.priority==='urgent' ? '<span class="badge hot-urgent">Təcili</span>' : ''}</div><p class="hot-text">${esc(row.description)}</p>${row.result_text?`<p class="hot-text"><strong>Nəticə:</strong> ${esc(row.result_text)}</p>`:''}${row.review_reason?`<p class="hot-text"><strong>Düzəliş səbəbi:</strong> ${esc(row.review_reason)}</p>`:''}<div class="hot-details">${row.phone ? `<span>Telefon: ${esc(row.phone)}</span>` : ''}${row.address ? `<span>Ünvan: ${esc(row.address)}</span>` : ''}<span>Yaradılıb: ${esc(date(row.created_at))}</span>${row.claimed_by ? `<span>İcraçı: ${String(row.claimed_by)===String(profile.telegram_id) ? 'Mən' : 'Əməkdaş #'+esc(row.claimed_by)}</span>` : ''}</div><div class="hot-actions">${action(row,'claim','Qəbul et')}${action(row,'release','Geri qaytar')}${action(row,'cancel','Ləğv et')}${action(row,'complete','Tamamla')}${action(row,'approve','Təsdiq et')}${action(row,'reject','Düzəlişə qaytar')}</div></article>`).join('') || '<div class="panel empty">Sifariş yoxdur.</div>';
     pages();
   }
   async function load(target=0) {
@@ -81,7 +81,9 @@
   };
   $('hotOrderList').onclick=async event=>{
     const button=event.target.closest('[data-hot-action]');if(!button || busy || loading) return;
-    const action=button.dataset.hotAction;if(action!=='claim' && !confirm(action==='cancel' ? 'Sifariş ləğv edilsin?' : 'Sifariş geri qaytarılsın?')) return;
+    const action=button.dataset.hotAction;
+    if(['complete','approve','reject'].includes(action)){document.dispatchEvent(new CustomEvent('tenant-hot-order-command',{detail:{action,row:rows.find(row=>row.id===button.dataset.hotId)}}));return;}
+    if(action!=='claim' && !confirm(action==='cancel' ? 'Sifariş ləğv edilsin?' : 'Sifariş geri qaytarılsın?')) return;
     const version=epoch;busy=true;const text=button.textContent;button.disabled=true;button.innerHTML='<i class="spinner"></i>Gözləyin…';pages();
     try {
       await api('/api/platform/hot-orders',{action,order_id:button.dataset.hotId,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id});
@@ -107,5 +109,6 @@
   $('hotOrderRefresh').onclick=()=>load(0);$('hotOrderPrev').onclick=()=>load(Math.max(0,offset-PAGE));$('hotOrderNext').onclick=()=>load(offset+PAGE);
   nav.addEventListener('click',()=>load(0));
   document.addEventListener('tenant-profile',event=>apply(event.detail));
+  document.addEventListener('tenant-hot-order-changed',()=>load(offset));
   const initialEpoch=epoch;api('/api/platform/me').then(data=>{if(epoch===initialEpoch) apply(data);}).catch(()=>{});
 })();

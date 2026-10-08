@@ -35,6 +35,7 @@ def public_row(row: dict, policy: HotOrderPolicy | None = None) -> dict:
             for key, value in row.items() if key not in {'fingerprint', 'request_id'}}
     if policy:
         result['actions'] = {'claim':policy.can_claim(row), 'cancel':policy.can_edit(row),
+            'complete':policy.can_complete(row),'approve':policy.can_review(row),'reject':policy.can_review(row),
             'release':bool(policy.owns_tenant(row) and row.get('status') == 'claimed' and
                            row.get('claimed_by') == policy.policy.profile.get('telegram_id'))}
         result['service_name'] = next((service['name'] for service in policy.settings.get('services', [])
@@ -92,11 +93,15 @@ def create_order(profile: dict, data: dict) -> dict:
     return public_row(row, policy)
 
 
-def list_orders(profile: dict, *, limit: int = 50, offset: int = 0) -> dict:
+def list_orders(profile: dict, *, limit: int = 50, offset: int = 0, approvals_only: bool = False) -> dict:
     policy = authorize(profile)
     limit, offset = max(1, min(int(limit), 100)), max(0, min(int(offset), 100000))
     tenant, user = str(profile['tenant_id']), int(profile['telegram_id'])
     where, values = 'tenant_id=%s::uuid', [tenant]
+    if approvals_only:
+        if not policy.policy.privileged:
+            raise TenantHotOrderError('Təsdiq üçün icazəniz yoxdur.',403)
+        where += " AND status='submitted'"
     if not policy.policy.privileged:
         services = [row['id'] for row in policy.services() if policy.allowed('claim') and policy.matches_service(row['id'])]
         where += " AND (created_by=%s OR claimed_by=%s OR (status='open' AND service_id=ANY(%s)))"

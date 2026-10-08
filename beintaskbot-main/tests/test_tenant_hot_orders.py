@@ -3,10 +3,11 @@ import ast
 import asyncio
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 
 from tenant_policy import TenantPolicy
 import test_tenant_hot_order_policy as fixtures
@@ -100,10 +101,10 @@ class QueueTests(unittest.TestCase):
     def test_server_actions_follow_status_and_rights(self):
         policy=self.service.authorize(fixtures.person())
         result=self.service.public_row(self.order,policy)
-        self.assertEqual(result['actions'],{'claim':True,'cancel':False,'release':False})
+        self.assertEqual(result['actions'],{'claim':True,'cancel':False,'release':False,'complete':False,'approve':False,'reject':False})
         self.assertEqual(result['service_name'],'Təmir')
         result=self.service.public_row({**self.order,'status':'claimed','claimed_by':20},policy)
-        self.assertEqual(result['actions'],{'claim':False,'cancel':False,'release':True})
+        self.assertEqual(result['actions'],{'claim':False,'cancel':False,'release':True,'complete':True,'approve':False,'reject':False})
 
     def test_creator_cannot_cancel_or_release_order_accepted_by_another_employee(self):
         self.cur.fetchone.return_value={**self.order,'created_by':20,'status':'claimed','claimed_by':21}
@@ -127,7 +128,8 @@ class QueueTests(unittest.TestCase):
         schema.ensure_hot_order_schema(self.conn)
         sql=' '.join(c.args[0] for c in self.cur.execute.call_args_list)
         self.assertIn('PRIMARY KEY (tenant_id,id)',sql);self.assertIn('UNIQUE (tenant_id,created_by,request_id)',sql)
-        self.assertNotIn('ALTER TABLE hot_orders',sql);self.assertNotIn('DROP',sql)
+        self.assertNotIn('ALTER TABLE hot_orders',sql);self.assertNotIn('DROP TABLE',sql)
+        self.assertIn("pg_get_constraintdef(oid) NOT LIKE '%submitted%'",sql)
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
@@ -144,14 +146,27 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                  'logger':Mock(),'web':SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,**kw:{'data':data,**kw})}
         exec(compile(tree,'<hot-api>','exec'),self.ns)
 
-    async def request(self, data=None, method='POST', origin='https://crm.pro.az'):
+    async def request(self, data=None, method='POST', origin='https://crm.pro.az', query=None):
         async def read():return data
         return await self.ns['handle_platform_hot_orders'](SimpleNamespace(method=method,content_type='application/json',
-            headers={'Origin':origin},json=read,rel_url=SimpleNamespace(query={})))
+            headers={'Origin':origin},json=read,rel_url=SimpleNamespace(query=query or {})))
 
     async def test_get_uses_only_current_membership(self):
         result=await self.request(method='GET');self.assertTrue(result['data']['success'])
         self.list.assert_called_once_with(self.profile,limit=50,offset=0)
+
+    async def test_get_review_queue_passes_filter_to_tenant_service(self):
+        await self.request(method='GET',query={'approvals':'1'})
+        self.list.assert_called_once_with(self.profile,limit=50,offset=0,approvals_only=True)
+
+    async def test_completion_routes_through_same_session_and_origin_checks(self):
+        command=Mock(return_value={'status':'submitted'})
+        with patch.dict(sys.modules,{'tenant_hot_order_completion':SimpleNamespace(completion_command=command)}):
+            for action in ('complete','approve','reject'):
+                data={'action':action,'expected_tenant_id':'company-a','expected_user_id':20}
+                response=await self.request(data)
+                self.assertTrue(response['data']['success']);command.assert_called_with(self.profile,data)
+        self.create.assert_not_called();self.change.assert_not_called()
 
     async def test_cross_origin_and_switched_company_are_rejected(self):
         self.assertEqual((await self.request({},origin='https://evil.invalid'))['status'],403)

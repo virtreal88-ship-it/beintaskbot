@@ -13,7 +13,7 @@ class Element {
 }
 const host=new Element(), refresh=new Element('button'), listeners={}, calls=[];
 refresh.click=()=>{refresh.clicked=true;};
-const document={getElementById:id=>id==='view-tasks'?host:refresh,createElement:tag=>new Element(tag),
+const document={getElementById:id=>id==='systemApprovalsHost'?host:id==='view-tasks'?null:refresh,createElement:tag=>new Element(tag),
   addEventListener:(type,callback)=>{listeners[type]=callback;}};
 let approvals=[{creator_id:20,request_id:'request',creator_name:'Employee',executor_name:'Worker',
   step:'waiting_approval',task:{text:'<script>unsafe</script>',executor_id:20,due_at:'2030-01-01T12:00:00Z'}}];

@@ -2,6 +2,7 @@
 from threading import Lock
 from tenant_platform import _ensure_schema
 from tenant_hot_order_notice_schema import migrate_hot_order_notices
+from tenant_hot_order_completion_schema import migrate_hot_order_completion
 
 _ready = False
 _lock = Lock()
@@ -42,5 +43,6 @@ def ensure_hot_order_schema(conn) -> None:
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_hot_orders_worker_idx
                 ON saas_hot_orders(tenant_id,claimed_by,created_at DESC,id)''')
             migrate_hot_order_notices(cur)
+            migrate_hot_order_completion(cur)
         conn.commit()
         _ready = True

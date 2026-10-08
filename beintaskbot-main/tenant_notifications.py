@@ -10,6 +10,8 @@ EVENTS = {
     'task_completion_requested': {'label': 'Tapşırıq tamamlanması üçün təsdiq', 'module': 'tasks', 'roles': ('owner', 'admin')},
     'task_approval_decided': {'label': 'Tapşırıq təsdiqinin nəticəsi', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'worker')},
     'hot_order_available': {'label': 'Yeni isti sifariş', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'worker', 'master')},
+    'hot_order_completion_requested': {'label': 'İsti sifarişin tamamlanması üçün təsdiq', 'module': 'hot_orders', 'roles': ('owner', 'admin')},
+    'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'worker', 'master')},
     'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'worker')},
 }
 

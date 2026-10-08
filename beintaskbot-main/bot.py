@@ -22381,6 +22381,11 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
+async def serve_tenant_hot_order_completion_script(request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-hot-order-completion.js'),
+                            headers={'Cache-Control':'no-cache'})
+
+
 async def handle_platform_hot_orders(request: web.Request) -> web.Response:
     """SaaS queue only; legacy Telegram sessions/tables cannot authorize it."""
     headers = {'Cache-Control': 'no-store'}
@@ -22389,8 +22394,9 @@ async def handle_platform_hot_orders(request: web.Request) -> web.Response:
         if not profile or not TenantPolicy(profile).allows('hot_orders'):
             return web.json_response({'success':False,'error':'İcazə yoxdur.'},status=403,headers=headers)
         if request.method == 'GET':
+            filters = {'approvals_only':True} if request.rel_url.query.get('approvals')=='1' else {}
             result = await asyncio.to_thread(list_tenant_hot_orders, profile,
-                limit=int(request.rel_url.query.get('limit','50')), offset=int(request.rel_url.query.get('offset','0')))
+                limit=int(request.rel_url.query.get('limit','50')), offset=int(request.rel_url.query.get('offset','0')), **filters)
             return web.json_response({'success':True,**result},headers=headers)
         if (request.content_type != 'application/json' or
                 request.headers.get('Origin','').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
@@ -22406,6 +22412,9 @@ async def handle_platform_hot_orders(request: web.Request) -> web.Response:
             order = await asyncio.to_thread(create_tenant_hot_order,profile,data)
         elif action in {'claim','release','cancel'}:
             order = await asyncio.to_thread(change_tenant_hot_order,profile,order_id=data.get('order_id'),action=action)
+        elif action in {'complete','approve','reject'}:
+            from tenant_hot_order_completion import completion_command
+            order = await asyncio.to_thread(completion_command,profile,data)
         else:
             raise TenantHotOrderError('Əməliyyat düzgün deyil.')
         return web.json_response({'success':True,'order':order},headers=headers)
@@ -23693,6 +23702,7 @@ async def start_webhook_server():
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get('/assets/tenant-hot-order-settings.js', serve_tenant_hot_order_settings)
     app_web.router.add_get('/assets/tenant-hot-orders.js', serve_tenant_hot_orders_script)
+    app_web.router.add_get('/assets/tenant-hot-order-completion.js', serve_tenant_hot_order_completion_script)
     app_web.router.add_get('/assets/tenant-crm-sync.js', serve_tenant_crm_sync_script)
     app_web.router.add_get("/assets/tenant-tasks.js", serve_tenant_tasks_script)
     app_web.router.add_get("/", serve_landing_page)

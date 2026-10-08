@@ -24,6 +24,11 @@ def send_push(item: dict, private_key: str, claims: dict) -> None:
     if item.get('event')=='hot_order_available':
         payload={'title':'CRM Smart Assistant','body':'Yeni isti sifariş var. Kabinetdə yoxlayın.',
                  'url':'/app?view=hot_orders','tag':'crm-hot-order','kind':'hot_order'}
+    if item.get('event') in {'hot_order_completion_requested','hot_order_completion_decided'}:
+        requested=item['event']=='hot_order_completion_requested'
+        payload={'title':'CRM Smart Assistant','body':'İsti sifariş üzrə yenilik var. Kabinetdə yoxlayın.',
+                 'url':'/app?view=approvals' if requested else '/app?view=hot_orders',
+                 'tag':'crm-hot-order-review','kind':'hot_order_review' if requested else 'hot_order_decided'}
     with NoRedirectSession() as session:
         result=webpush(subscription_info=subscription,data=json.dumps(payload),vapid_private_key=private_key,
                        vapid_claims=dict(claims),requests_session=session,timeout=15,ttl=300)

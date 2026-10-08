@@ -5,14 +5,15 @@ const ui=context.window.tenantHotOrderSettings;
 const rendered=ui.render({services:[{id:'stable',name:'<unsafe>',active:false}],create_roles:[],claim_roles:[]});
 assert.ok(rendered.includes('&lt;unsafe&gt;'));assert.ok(rendered.includes('hələ qoşulmayıb'));
 assert.ok(!rendered.includes('selected'),'Explicit empty roles must remain empty');
+assert.ok(rendered.includes('data-hot-completion checked'));
 const selectors={
   '[data-hot-member-services]':{selectedOptions:[{value:'stable'}]},
-  '[data-hot-member="create"]':{value:'inherit'},'[data-hot-member="claim"]':{value:'false'}
+  '[data-hot-member="create"]':{value:'inherit'},'[data-hot-member="claim"]':{value:'false'},'[data-hot-member="completion_requires_admin"]':{value:'inherit'}
 };
 const member=ui.readMember({querySelector:key=>selectors[key]},{hot_order_create:true,unrelated:'keep'});
 assert.ok(!('hot_order_create' in member));assert.equal(member.hot_order_claim,false);assert.equal(member.unrelated,'keep');
 const row={dataset:{hotService:'stable'},querySelector:key=>key==='[data-hot-name]' ? {value:' Renamed '} : {checked:false}};
-const root={querySelectorAll:()=>[row],querySelector:()=>({selectedOptions:[]})};
+const root={querySelectorAll:()=>[row],querySelector:()=>({selectedOptions:[],checked:false})};
 const next=ui.read(root,{services:[{id:'stable',name:'Before',custom:'keep'}],unrelated:true});
 assert.equal(next.services[0].id,'stable');assert.equal(next.services[0].name,'Renamed');
 assert.equal(next.services[0].active,false);assert.equal(next.services[0].custom,'keep');assert.equal(next.unrelated,true);

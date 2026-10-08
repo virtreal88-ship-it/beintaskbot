@@ -9,6 +9,8 @@ ROLES = {'owner', 'admin', 'manager', 'worker', 'master'}
 
 
 def validate_hot_order_settings(company: dict, members: dict) -> None:
+    if 'completion_requires_admin' in company and not isinstance(company['completion_requires_admin'],bool):
+        raise ValueError('Tamamlama təsdiqi üçün aktiv/deaktiv seçin.')
     for key in ('create_roles', 'claim_roles'):
         value = company.get(key)
         if key in company and (not isinstance(value, list) or
@@ -28,7 +30,7 @@ def validate_hot_order_settings(company: dict, members: dict) -> None:
             raise ValueError('Xidmət ID-si, adı və aktivliyi düzgün deyil.')
         seen.add(key)
     for settings in members.values():
-        for key in ('hot_order_create', 'hot_order_claim'):
+        for key in ('hot_order_create', 'hot_order_claim','hot_order_completion_requires_admin'):
             if key in settings and not isinstance(settings[key], bool):
                 raise ValueError('İsti sifariş hüququ üçün aktiv/deaktiv seçin.')
         skills = settings.get('hot_order_services', [])
@@ -84,5 +86,17 @@ class HotOrderPolicy:
 
     def capabilities(self) -> dict:
         return {'settings_only': False, 'api_available': True, 'can_create': self.allowed('create'), 'can_claim': self.allowed('claim'),
+                'completion_requires_admin':self.requires_completion_approval(),
                 'services': self.services(),
                 'assigned_services': [row['id'] for row in self.services() if self.matches_service(row['id'])]}
+
+    def requires_completion_approval(self) -> bool:
+        return self.policy.member_settings.get('hot_order_completion_requires_admin',
+                    self.settings.get('completion_requires_admin',True)) is True
+
+    def can_complete(self, order: dict) -> bool:
+        return bool(self.owns_tenant(order) and order.get('status')=='claimed' and
+                    order.get('claimed_by')==self.policy.profile.get('telegram_id'))
+
+    def can_review(self, order: dict) -> bool:
+        return bool(self.owns_tenant(order) and self.policy.privileged and order.get('status')=='submitted')

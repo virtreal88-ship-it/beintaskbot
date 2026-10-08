@@ -42,7 +42,7 @@ class NotificationPreferencesTests(unittest.TestCase):
         self.assertEqual(self.channels(profile, 'task_completion_requested'), [])
 
     def test_worker_and_master_have_different_event_catalogs(self):
-        self.assertEqual(available_notification_events(TenantPolicy(person('master'))), ['hot_order_available'])
+        self.assertEqual(available_notification_events(TenantPolicy(person('master'))), ['hot_order_available','hot_order_completion_decided'])
         events=available_notification_events(TenantPolicy(person('worker')))
         self.assertIn('task_assigned', events)
         self.assertNotIn('incoming_message', events)

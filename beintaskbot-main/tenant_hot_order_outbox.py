@@ -8,11 +8,16 @@ from tenant_notifications import notification_channels
 EVENT = 'hot_order_available'
 
 
-def eligible(profile: dict, order: dict, channel: str) -> bool:
+def eligible(profile: dict, order: dict, channel: str, event: str = EVENT, target: int | None = None) -> bool:
     policy = TenantPolicy(profile)
+    hot = HotOrderPolicy(policy)
+    authorized = hot.can_claim(order) if event==EVENT else (
+        hot.can_review(order) if event=='hot_order_completion_requested' else
+        event=='hot_order_completion_decided' and target==profile.get('telegram_id')
+        and order.get('status') in {'claimed','completed'} and hot.can_view(order))
     return (profile.get('tenant_status') in {'active','onboarding','ready_for_integration'}
-            and HotOrderPolicy(policy).can_claim(order)
-            and channel in notification_channels(policy,event=EVENT,tenant_id=str(order['tenant_id'])))
+            and authorized
+            and channel in notification_channels(policy,event=event,tenant_id=str(order['tenant_id'])))
 
 
 def profiles(cur, tenant: str, *, after: int = 0, recipient: int | None = None) -> list[dict]:
@@ -30,21 +35,21 @@ def expand_events() -> int:
     with _connect() as conn:
         ensure_hot_order_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT e.*,o.status,o.service_id,o.updated_at AS current_version
+            cur.execute('''SELECT e.*,o.status,o.service_id,o.claimed_by,o.updated_at AS current_version
                 FROM saas_hot_order_events e JOIN saas_hot_orders o ON o.tenant_id=e.tenant_id AND o.id=e.order_id
                 WHERE e.expanded=FALSE ORDER BY e.created_at LIMIT 10 FOR UPDATE OF e SKIP LOCKED''')
             events = cur.fetchall()
             for event in events:
                 tenant = str(event['tenant_id'])
-                order = {'tenant_id':tenant,'status':event['status'],'service_id':event['service_id']}
+                order = {'tenant_id':tenant,'status':event['status'],'service_id':event['service_id'],'claimed_by':event.get('claimed_by')}
                 candidates = profiles(cur,tenant,after=event['recipient_cursor']) if (
-                    event['status']=='open' and event['current_version']==event['order_version']) else []
+                    event['current_version']==event['order_version']) else []
                 for profile in candidates:
                     user = profile['telegram_id']
-                    if eligible(profile,order,'telegram'):
+                    if eligible(profile,order,'telegram',event.get('event',EVENT),event.get('target_recipient')):
                         cur.execute('''INSERT INTO saas_hot_order_deliveries (tenant_id,event_id,recipient_id,channel)
                             VALUES (%s::uuid,%s::uuid,%s,'telegram') ON CONFLICT DO NOTHING''',(tenant,event['id'],user))
-                    if eligible(profile,order,'push'):
+                    if eligible(profile,order,'push',event.get('event',EVENT),event.get('target_recipient')):
                         cur.execute('''INSERT INTO saas_hot_order_deliveries
                             (tenant_id,event_id,recipient_id,channel,endpoint_hash)
                             SELECT %s::uuid,%s::uuid,b.telegram_id,'push',b.endpoint_hash
@@ -71,7 +76,7 @@ def claim_delivery(channel: str) -> dict | None:
         with conn.cursor() as cur:
             cur.execute('''UPDATE saas_hot_order_deliveries SET status='unknown',updated_at=now()
                 WHERE channel=%s AND status='sending' AND updated_at<now()-interval '5 minutes' ''',(channel,))
-            cur.execute('''SELECT d.*,e.order_version,o.status AS order_status,o.service_id,o.updated_at AS current_version,
+            cur.execute('''SELECT d.*,e.order_version,e.event,e.target_recipient,o.claimed_by,o.status AS order_status,o.service_id,o.updated_at AS current_version,
                 p.subscription,p.owner_telegram_id,b.active AS device_active
                 FROM saas_hot_order_deliveries d
                 JOIN saas_hot_order_events e ON e.tenant_id=d.tenant_id AND e.id=d.event_id
@@ -86,16 +91,16 @@ def claim_delivery(channel: str) -> dict | None:
                 conn.commit()
                 return None
             tenant = str(item['tenant_id'])
-            order = {'tenant_id':tenant,'status':item['order_status'],'service_id':item['service_id']}
+            order = {'tenant_id':tenant,'status':item['order_status'],'service_id':item['service_id'],'claimed_by':item.get('claimed_by')}
             candidates = profiles(cur,tenant,recipient=item['recipient_id'])
-            allowed = bool(candidates and item['current_version']==item['order_version'] and eligible(candidates[0],order,channel))
+            allowed = bool(candidates and item['current_version']==item['order_version'] and eligible(candidates[0],order,channel,item.get('event',EVENT),item.get('target_recipient')))
             if channel=='push':
                 allowed = bool(allowed and item['device_active'] is True and item['subscription']
                                and item['owner_telegram_id']==item['recipient_id'])
             cur.execute('''UPDATE saas_hot_order_deliveries SET status=%s,updated_at=now()
                 WHERE tenant_id=%s::uuid AND event_id=%s::uuid AND recipient_id=%s AND channel=%s AND endpoint_hash=%s''',
                 ('sending' if allowed else 'skipped',*delivery_key(item)))
-            item['send'],item['event'],item['tenant_id'] = allowed,EVENT,tenant
+            item['send'],item['event'],item['tenant_id'] = allowed,item.get('event',EVENT),tenant
         conn.commit()
     return item
 

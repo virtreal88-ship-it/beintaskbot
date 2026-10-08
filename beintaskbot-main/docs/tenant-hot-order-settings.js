@@ -7,7 +7,7 @@
     return `<div class="wf-card" data-hot-service="${esc(service.id)}"><label>Xidmətin adı<input data-hot-name maxlength="120" value="${esc(service.name)}" required></label><label class="wf-check"><input type="checkbox" data-hot-active ${service.active !== false ? 'checked' : ''}>Aktivdir</label></div>`;
   }
   function render(settings) {
-    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">SaaS isti sifariş bildirişləri aktivdir: əməkdaş hüquqlarında xidmətləri və Yeni isti sifariş üçün Telegram/Push seçin. Bildiriş yalnız ümumi mətn və kabinet linkidir. Ödənişlər hələ qoşulmayıb. Mövcud şirkətin sifarişləri dəyişmir.</p><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
+    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">Bildiriş yalnız ümumi mətn və kabinet linkidir. Ödənişlər hələ qoşulmayıb.</p><label class="wf-check"><input type="checkbox" data-hot-completion ${settings.completion_requires_admin!==false ? 'checked' : ''}>Tamamlanma administrator tərəfindən təsdiqlənsin</label><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
   }
   function install(root) {
     root.querySelector('[data-hot-add]').onclick = () => {
@@ -22,16 +22,16 @@
       ...(previous.services || []).find(service=>service.id === row.dataset.hotService),
       id:row.dataset.hotService,name:row.querySelector('[data-hot-name]').value.trim(),active:row.querySelector('[data-hot-active]').checked}));
     if(services.some(service=>!service.name)) throw new Error('Xidmətin adını yazın.');
-    return {...previous,services,...Object.fromEntries(['create','claim'].map(action=>[
+    return {...previous,services,completion_requires_admin:root.querySelector('[data-hot-completion]').checked,...Object.fromEntries(['create','claim'].map(action=>[
       action+'_roles',[...root.querySelector(`[data-hot-roles="${action}"]`).selectedOptions].map(option=>option.value)]))};
   }
   function memberEditor(settings, company) {
     const permission = (action, label) => `<label>${label}<select data-hot-member="${action}"><option value="inherit">Rol qaydası</option><option value="true" ${settings['hot_order_'+action] === true ? 'selected' : ''}>Aktiv</option><option value="false" ${settings['hot_order_'+action] === false ? 'selected' : ''}>Deaktiv</option></select></label>`;
-    return `<h3>İsti sifarişlər</h3><div class="wf-grid">${permission('create','Yaratmaq')}${permission('claim','Qəbul etmək')}<label>Xidmətlər<select multiple data-hot-member-services>${(company.services || []).map(service=>`<option value="${esc(service.id)}" ${(settings.hot_order_services || []).includes(service.id) ? 'selected' : ''}>${esc(service.name)}${service.active === false ? ' (deaktiv)' : ''}</option>`).join('')}</select></label></div><p class="wf-hint">Qəbul etmək üçün həm səhifə hüququ, həm aktiv xidmət seçilməlidir. Yeni xidmət əlavə etdikdən sonra saxlayın və ayarları yeniləyin.</p>`;
+    return `<h3>İsti sifarişlər</h3><div class="wf-grid">${permission('create','Yaratmaq')}${permission('claim','Qəbul etmək')}${permission('completion_requires_admin','Tamamlanma üçün admin təsdiqi')}<label>Xidmətlər<select multiple data-hot-member-services>${(company.services || []).map(service=>`<option value="${esc(service.id)}" ${(settings.hot_order_services || []).includes(service.id) ? 'selected' : ''}>${esc(service.name)}${service.active === false ? ' (deaktiv)' : ''}</option>`).join('')}</select></label></div><p class="wf-hint">Qəbul etmək üçün həm səhifə hüququ, həm aktiv xidmət seçilməlidir. Yeni xidmət əlavə etdikdən sonra saxlayın və ayarları yeniləyin.</p>`;
   }
   function readMember(card, previous) {
     const result={...previous,hot_order_services:[...card.querySelector('[data-hot-member-services]').selectedOptions].map(option=>option.value)};
-    for(const action of ['create','claim']) {
+    for(const action of ['create','claim','completion_requires_admin']) {
       const value=card.querySelector(`[data-hot-member="${action}"]`).value;
       if(value === 'inherit') delete result['hot_order_'+action];
       else result['hot_order_'+action]=value === 'true';
