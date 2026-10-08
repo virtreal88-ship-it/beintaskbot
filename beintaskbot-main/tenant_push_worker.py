@@ -21,6 +21,9 @@ def send_push(item: dict, private_key: str, claims: dict) -> None:
         raise ValueError('Push device identity mismatch')
     payload={'title':'CRM Smart Assistant','body':'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
              'url':'/app','tag':'crm-task-approval'}
+    if item.get('event') in {'linear_done','linear_status_changed'}:
+        payload={'title':'CRM Smart Assistant','body':'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.',
+                 'url':'/app?view=linear','tag':'crm-linear','kind':'linear'}
     if item.get('event')=='hot_order_available':
         payload={'title':'CRM Smart Assistant','body':'Yeni isti sifariş var. Kabinetdə yoxlayın.',
                  'url':'/app?view=hot_orders','tag':'crm-hot-order','kind':'hot_order'}

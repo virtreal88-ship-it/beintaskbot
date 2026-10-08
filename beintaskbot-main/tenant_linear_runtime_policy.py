@@ -4,12 +4,18 @@ from tenant_linear_policy import identifier, TenantLinearError
 
 
 def workflow_settings(value):
-    if not isinstance(value, dict) or set(value) - {'enabled', 'visibility_mode', 'account_prefix', 'operator_prefix', 'creation_state_id', 'buttons', 'required_fields'}:
+    if not isinstance(value, dict) or set(value) - {'enabled', 'visibility_mode', 'account_prefix', 'operator_prefix', 'creation_state_id', 'buttons', 'required_fields', 'sync_enabled', 'notification_state_ids'}:
         raise TenantLinearError('Linear iş qaydaları düzgün deyil.')
     enabled = value.get('enabled', False)
     if not isinstance(enabled, bool) or value.get('visibility_mode', 'any') not in {'any', 'all'}:
         raise TenantLinearError('Görünüş qaydası düzgün deyil.')
     result = {'enabled': enabled, 'visibility_mode': value.get('visibility_mode', 'any')}
+    sync = value.get('sync_enabled', False)
+    selected = value.get('notification_state_ids', [])
+    if not isinstance(sync, bool) or not isinstance(selected, list) or len(selected) > 50:
+        raise TenantLinearError('Sinxronizasiya/bildiriş ayarları düzgün deyil.')
+    result['sync_enabled'] = sync
+    result['notification_state_ids'] = list(dict.fromkeys(identifier(s) for s in selected))
     required = value.get('required_fields', ['account', 'operator', 'project', 'body'])
     if not isinstance(required, list) or any(not isinstance(f, str) or f not in {'account', 'operator', 'project', 'body'} for f in required):
         raise TenantLinearError('Məcburi sahələr düzgün deyil.')

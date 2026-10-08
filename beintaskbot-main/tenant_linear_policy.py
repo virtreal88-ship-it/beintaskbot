@@ -55,8 +55,10 @@ def settings(value):
         row['button_ids'] = list(dict.fromkeys(button_ids))
         normalized[key] = row
     news = value.get('news', {})
-    if not isinstance(news, dict) or set(news) - {'channel', 'projects', 'manual_approval', 'main_issues_only', 'retention_days'}:
+    if not isinstance(news, dict) or set(news) - {'channel', 'projects', 'manual_approval', 'main_issues_only', 'retention_days', 'enabled'}:
         raise TenantLinearError('Xəbər ayarları düzgün deyil.')
+    if not isinstance(news.get('enabled', False), bool):
+        raise TenantLinearError('Xəbər seçimi boolean olmalıdır.')
     for field in ('manual_approval', 'main_issues_only'):
         if field in news and news[field] is not True:
             raise TenantLinearError('Xəbərlər üçün əl ilə təsdiq və əsas tapşırıq məcburidir.')
@@ -75,6 +77,6 @@ def settings(value):
     if any(not set(m['button_ids']) <= {b['id'] for b in workflow['buttons']} for m in normalized.values()):
         raise TenantLinearError('Naməlum düymə icazəsi.')
     return {'team_id': team, 'done_state_ids': list(dict.fromkeys(identifier(s) for s in states)), 'workflow': workflow,
-            'members': normalized, 'news': {'channel': channel,
+            'members': normalized, 'news': {'channel': channel, 'enabled': news.get('enabled', False),
             'projects': list(dict.fromkeys(identifier(p) for p in projects)),
             'manual_approval': True, 'main_issues_only': True, 'retention_days': 90}}

@@ -67,6 +67,7 @@ from tenant_hot_order_notification_worker import deliver_hot_order_notifications
 from tenant_finance_api import finance_handler
 from tenant_linear_api import linear_handler
 from tenant_linear_tasks_api import tasks_handler as tenant_linear_tasks_handler
+from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -20899,6 +20900,13 @@ async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error('Tenant CRM background sync unavailable')
 
 
+async def check_tenant_linear_observer(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        await observe_tenant_linear(context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)
+    except Exception:
+        logger.error('Tenant Linear observer unavailable')
+
+
 async def check_linear_status_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Observe external Linear transitions even while nobody opens the board."""
     try:
@@ -24709,6 +24717,8 @@ def main():
     job_queue.run_repeating(check_tenant_approval_notifications, interval=60, first=30,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_tenant_hot_order_notifications, interval=60, first=35,
+                            job_kwargs={'max_instances': 1, 'coalesce': True})
+    job_queue.run_repeating(check_tenant_linear_observer, interval=60, first=40,
                             job_kwargs={'max_instances': 1, 'coalesce': True})
     job_queue.run_repeating(check_tenant_crm_sync, interval=15, first=10,
                             job_kwargs={'max_instances': 1, 'coalesce': True})

@@ -87,6 +87,7 @@ def command(profile, data):
                 raise TenantLinearError('Seçilmiş status/layihə bu komandaya aid deyil.')
             state_ids = {s['id'] for s in team['states']['nodes']}
             required = {config['workflow']['creation_state_id']} - {''}
+            required.update(config['workflow']['notification_state_ids'])
             for button in config['workflow']['buttons']:
                 required.update(button['from_state_ids']); required.add(button['to_state_id'])
             if not required <= state_ids:

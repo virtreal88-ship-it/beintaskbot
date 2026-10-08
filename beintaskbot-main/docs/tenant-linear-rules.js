@@ -8,6 +8,9 @@
     const rules=config.workflow||{};
     document.getElementById('tlRules').innerHTML=`<h3>Linear iş qaydaları</h3>
       <label style="display:flex"><input id="tlEnabled" type="checkbox" style="width:auto" ${rules.enabled?'checked':''}>Kabinetdə Linear tapşırıqlarını aktiv et</label>
+      <label style="display:flex"><input id="tlSyncEnabled" type="checkbox" style="width:auto" ${rules.sync_enabled?'checked':''}>Fon sinxronizasiyasını aktiv et</label>
+      <label>Bildiriş göndərilən statuslar<select id="tlNoticeStates" multiple style="min-height:100px">${states.map(row=>option(row,rules.notification_state_ids||[])).join('')}</select></label>
+      <p>İlk sinxronizasiya köhnə hadisələr üçün bildiriş göndərmir. Əməkdaşın bildiriş ayarlarında Linear hadisəsini və Telegram / Push kanalını ayrıca aktiv edin. Mesajda məxfi mətn deyil, kabinetə keçid göstərilir.</p>
       <label>Görünüş şərti<select id="tlVisibility"><option value="any">Account / Operator / İcraçı — ən azı biri</option><option value="all">Təyin edilmiş bütün şərtlər uyğun olmalıdır</option></select></label>
       <label>Account sətrinin başlığı<input id="tlAccountPrefix" value="${esc(rules.account_prefix||'Account')}"></label>
       <label>Operator sətrinin başlığı<input id="tlOperatorPrefix" value="${esc(rules.operator_prefix||'Operator')}"></label>
@@ -42,7 +45,8 @@
       delete select.dataset.selected;select.innerHTML=buttons.map(row=>option({id:row.id,name:row.label},selected)).join('');
     });
   }
-  function read(){return {enabled:document.getElementById('tlEnabled').checked,visibility_mode:document.getElementById('tlVisibility').value,
+  function read(){return {enabled:document.getElementById('tlEnabled').checked,sync_enabled:document.getElementById('tlSyncEnabled').checked,
+    notification_state_ids:[...document.getElementById('tlNoticeStates').selectedOptions].map(o=>o.value),visibility_mode:document.getElementById('tlVisibility').value,
     account_prefix:document.getElementById('tlAccountPrefix').value,operator_prefix:document.getElementById('tlOperatorPrefix').value,
     creation_state_id:document.getElementById('tlCreationState').value,
     required_fields:[...document.getElementById('tlRequired').selectedOptions].map(o=>o.value),

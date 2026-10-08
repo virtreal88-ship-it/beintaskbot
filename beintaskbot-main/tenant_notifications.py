@@ -13,6 +13,7 @@ EVENTS = {
     'hot_order_completion_requested': {'label': 'İsti sifarişin tamamlanması üçün təsdiq', 'module': 'hot_orders', 'roles': ('owner', 'admin')},
     'hot_order_completion_decided': {'label': 'İsti sifariş təsdiqinin nəticəsi', 'module': 'hot_orders', 'roles': ('owner', 'admin', 'manager', 'worker', 'master')},
     'linear_done': {'label': 'Linear tapşırığı tamamlandı', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'worker')},
+    'linear_status_changed': {'label': 'Linear seçilmiş statusa keçdi', 'module': 'linear', 'roles': ('owner', 'admin', 'manager', 'worker')},
 }
 
 

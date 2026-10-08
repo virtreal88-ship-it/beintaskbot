@@ -40,7 +40,7 @@
       workflow:window.TenantLinearRules.read(),
       members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
         Object.fromEntries([...row.querySelectorAll('[data-field]')].map(i=>[i.dataset.field,i.multiple?[...i.selectedOptions].map(o=>o.value):i.type==='checkbox'?i.checked:i.value]))])),
-      news:{channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
+      news:{enabled:snapshot.settings?.news?.enabled===true,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
       await write('settings',{settings:config});if(current===generation)await load(current);});
   }
   async function write(action,extra={}){if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
