@@ -72,6 +72,7 @@ from tenant_news_api import news_handler as tenant_news_handler
 from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from tenant_chat_ai_api import handler as tenant_chat_ai_handler
+from legacy_chat_reply_prompt import history_reply_instructions
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -18477,13 +18478,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)
-        system = (
-            "Sən Bein Systems satış menecerisən. Azərbaycan dilində qısa, təbii WhatsApp cavabı yaz. "
-            "Məqsəd: söhbəti irəli aparmaq, etirazı yumşaq bağlamaq, növbəti addımı təklif etmək. "
-            "Tarixçədə ‘Müştəri’ yalnız qarşı tərəfin daxil olan mesajıdır; ‘Satış meneceri’ yalnız bizim çıxan mesajımızdır. "
-            "Bu rolları heç vaxt qarışdırma və müştərinin artıq dediyini menecerin sözü kimi təkrar etmə. "
-            "Yalnız göndəriləcək mesajın mətnini qaytar. Dırnaq, başlıq və izah yazma."
-        )
+        system = history_reply_instructions()
         user = (
             f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
             f"Sövdələşmə: {lead.get('name') or '—'}\n"
@@ -18502,7 +18497,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
                 model=LLM_MODEL,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 temperature=0.45,
-                max_tokens=350,
+                max_tokens=1000,
             )
             return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
 
