@@ -18,9 +18,10 @@
 <body>
 <div class="shell">
   <aside><div><div class="brand"><span class="mark">C</span> CRM Smart Assistant</div><div id="company" class="company">Yüklənir…</div></div>
-    <nav class="nav"><button class="active" data-view="tasks"><span>☷</span> Tapşırıqlar</button><button data-view="customers"><span>◉</span> Müştərilər</button><button data-view="deals"><span>▣</span> Sövdələşmələr</button><button class="settings" data-view="settings"><span>⚙</span> Tənzimləmələr</button><button data-view="profile"><span>◌</span> Profil</button></nav>
+    <nav class="nav"><button class="active" data-view="tasks"><span>☷</span> Tapşırıqlar</button><button data-view="customers"><span>◉</span> Müştərilər</button><button data-view="deals"><span>▣</span> Sövdələşmələr</button><button data-view="hot_orders" hidden style="display:none"><span>♨</span> İsti sifarişlər</button><button class="settings" data-view="settings"><span>⚙</span> Tənzimləmələr</button><button data-view="profile"><span>◌</span> Profil</button></nav>
   </aside>
   <main>
+    <section class="view" id="view-hot_orders"><div class="top"><div><div class="eyebrow">ŞİRKƏT SİFARİŞLƏRİ</div><h1>İsti sifarişlər</h1><p id="hotOrderCount">Siyahını yeniləyin.</p></div><div class="hot-buttons"><button class="primary" id="hotOrderCreate" hidden>+ Sifariş</button><button class="refresh" id="hotOrderRefresh"><i class="spinner"></i>Yenilə</button></div></div><div id="hotOrderNotice" class="notice" role="status"></div><div id="hotOrderList" class="hot-list"></div><div class="hot-pages"><button class="outline" id="hotOrderPrev" disabled>← Əvvəlki</button><span id="hotOrderPage"></span><button class="outline" id="hotOrderNext" disabled>Növbəti →</button></div></section>
     <section class="view active" id="view-tasks"><div class="top"><div><div class="eyebrow">İŞ PLANI</div><h1>Tapşırıqlar</h1><p>Kommo-dan seçilmiş vərəqlərin açıq tapşırıqları.</p></div><button class="refresh" id="tasksRefresh"><i class="spinner"></i>Yenilə</button></div><div id="tasksNotice" class="notice"></div><div id="tasksList" class="table"><div class="empty">Tapşırıqlar yüklənir…</div></div></section>
     <section class="view" id="view-customers"><div class="top"><div><div class="eyebrow">KOMMO MÜŞTƏRİLƏRİ</div><h1>Müştərilər</h1><p id="customerCount">Seçilmiş mərhələlərdəki müştərilər.</p></div><button class="refresh" id="customersRefresh"><i class="spinner"></i>Yenilə</button></div><div class="toolbar"><input id="customerSearch" class="search" placeholder="Ad, telefon və ya mərhələ üzrə axtarın"></div><div id="customersNotice" class="notice"></div><div id="customersList" class="table"><div class="empty">Müştərilər yüklənir…</div></div></section>
     <section class="view" id="view-deals"><div class="top"><div><div class="eyebrow">KOMMO</div><h1>Sövdələşmələr</h1><p id="dealCount">Yüklənir…</p></div><button class="refresh" id="dealsRefresh"><i class="spinner"></i>Yenilə</button></div><div class="toolbar"><input id="dealSearch" class="search" placeholder="Sövdələşmə, müştəri və ya mərhələ axtarın"></div><div id="dealsNotice" class="notice"></div><div id="dealsList" class="table"><div class="empty">Sövdələşmələr yüklənir…</div></div></section>
@@ -49,7 +50,7 @@
       button.style.display=button.hidden?'none':'';
     });
     if(!modules[state.view]&&state.view!=='profile'){
-      state.view=['tasks','customers','deals','settings'].find(key=>modules[key])||'profile';
+      state.view=['tasks','customers','deals','hot_orders','settings'].find(key=>modules[key])||'profile';
       document.querySelectorAll('.nav [data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===state.view));
       document.querySelectorAll('.view').forEach(el=>el.classList.toggle('active',el.id==='view-'+state.view));
     }
@@ -81,6 +82,7 @@
 })();
 </script>
 <script src="/assets/tenant-hot-order-settings.js"></script>
+<script src="/assets/tenant-hot-orders.js"></script>
 <script src="/assets/tenant-workflow.js"></script>
 <script src="/assets/tenant-crm-sync.js"></script>
 <script src="/assets/tenant-task-approvals.js"></script>

@@ -22697,6 +22697,11 @@ async def serve_tenant_hot_order_settings(_request: web.Request) -> web.Response
                             headers={'Cache-Control': 'no-store'})
 
 
+async def serve_tenant_hot_orders_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-hot-orders.js'),
+                            headers={'Cache-Control': 'no-store'})
+
+
 async def serve_tenant_push_script(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push.js'),headers={'Cache-Control':'no-store'})
 
@@ -23679,6 +23684,7 @@ async def start_webhook_server():
     app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get('/assets/tenant-hot-order-settings.js', serve_tenant_hot_order_settings)
+    app_web.router.add_get('/assets/tenant-hot-orders.js', serve_tenant_hot_orders_script)
     app_web.router.add_get('/assets/tenant-crm-sync.js', serve_tenant_crm_sync_script)
     app_web.router.add_get("/assets/tenant-tasks.js", serve_tenant_tasks_script)
     app_web.router.add_get("/", serve_landing_page)

@@ -66,9 +66,9 @@ class HotOrderPolicyTests(unittest.TestCase):
         self.assertTrue(self.policy().can_edit(order(created_by=20)))
         self.assertTrue(self.policy(person('admin')).can_edit(order()))
 
-    def test_capabilities_are_settings_only_and_fresh(self):
+    def test_capabilities_enable_api_and_are_fresh(self):
         p=person();before=copy.deepcopy(p);cap=self.policy(p).capabilities()
-        self.assertTrue(cap['settings_only']);self.assertEqual(cap['assigned_services'],['repair'])
+        self.assertFalse(cap['settings_only']);self.assertTrue(cap['api_available']);self.assertEqual(cap['assigned_services'],['repair'])
         cap['services'][0]['name']='Changed';self.assertEqual(p,before)
 
     def test_validation_rejects_bad_rules_and_references(self):

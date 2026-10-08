@@ -29,9 +29,16 @@ def authorize(profile: dict) -> HotOrderPolicy:
     return policy
 
 
-def public_row(row: dict) -> dict:
-    return {key: (value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value)
+def public_row(row: dict, policy: HotOrderPolicy | None = None) -> dict:
+    result = {key: (value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value)
             for key, value in row.items() if key not in {'fingerprint', 'request_id'}}
+    if policy:
+        result['actions'] = {'claim':policy.can_claim(row), 'cancel':policy.can_edit(row),
+            'release':bool(policy.owns_tenant(row) and row.get('status') == 'claimed' and
+                           row.get('claimed_by') == policy.policy.profile.get('telegram_id'))}
+        result['service_name'] = next((service['name'] for service in policy.settings.get('services', [])
+                                       if service['id'] == row.get('service_id')), row.get('service_id',''))
+    return result
 
 
 def audit(cur, profile: dict, order_id: str, action: str) -> None:
@@ -78,7 +85,7 @@ def create_order(profile: dict, data: dict) -> dict:
                 if not row or row['fingerprint'] != fingerprint:
                     raise TenantHotOrderError('Bu sorğu ID-si başqa sifariş üçün istifadə edilib.', 409)
         conn.commit()
-    return public_row(row)
+    return public_row(row, policy)
 
 
 def list_orders(profile: dict, *, limit: int = 50, offset: int = 0) -> dict:
@@ -98,7 +105,7 @@ def list_orders(profile: dict, *, limit: int = 50, offset: int = 0) -> dict:
             cur.execute('SELECT * FROM saas_hot_orders WHERE ' + where +
                         ' ORDER BY created_at DESC,id DESC LIMIT %s OFFSET %s', [*values,limit,offset])
             rows = cur.fetchall()
-    return {'orders':[public_row(row) for row in rows], 'total':total, 'limit':limit, 'offset':offset}
+    return {'orders':[public_row(row, policy) for row in rows], 'total':total, 'limit':limit, 'offset':offset}
 
 
 def change_order(profile: dict, *, order_id: str, action: str) -> dict:
@@ -117,7 +124,7 @@ def change_order(profile: dict, *, order_id: str, action: str) -> dict:
             if not row or not policy.can_view(row):
                 raise TenantHotOrderError('Sifariş tapılmadı.', 404)
             if action == 'claim' and row['status'] == 'claimed' and row['claimed_by'] == user:
-                return public_row(row)
+                return public_row(row, policy)
             if action == 'claim':
                 permitted = policy.can_claim(row)
                 target, claimant = 'claimed', user
@@ -139,4 +146,4 @@ def change_order(profile: dict, *, order_id: str, action: str) -> dict:
                 raise TenantHotOrderError('Sifariş artıq dəyişib.', 409)
             audit(cur, profile, order_id, action)
         conn.commit()
-    return public_row(result)
+    return public_row(result, policy)
