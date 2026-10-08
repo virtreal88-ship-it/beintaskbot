@@ -114,6 +114,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
         <div class="wf-grid"><label>Əməkdaş növü<select data-role ${owner ? 'disabled' : ''}>${Object.entries(roles).filter(([key]) => key !== 'owner' || owner).map(([key,label]) => `<option value="${key}" ${key === member.role ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
         <label>İcazəli vərəqlər<select multiple data-member-pipelines>${rows.map(row => `<option value="${escape(row.pipeline_id)}" ${(settings.pipeline_ids || []).map(String).includes(String(row.pipeline_id)) ? 'selected' : ''}>${escape(row.name)}</option>`).join('')}</select></label></div>
         <div class="wf-grid" data-permissions>${Object.entries(modules).map(([key,label]) => check(key,label,(member.permissions || []).includes(key))).join('')}</div>
+        ${check('ai_enabled','Çat AI: cavab, xülasə və transkripsiya',settings.ai_enabled === true)}
         ${check('creation_requires_admin','Tapşırıq yaradılmasını təsdiqləmək',settings.creation_requires_admin ?? rules.task_approval?.creation_requires_admin)}
         ${check('completion_requires_admin','Tapşırıq tamamlanmasını təsdiqləmək',settings.completion_requires_admin ?? rules.task_approval?.completion_requires_admin)}
         ${check('deal_completion_requires_admin','Sövdələşmə tamamlanmasını təsdiqləmək',settings.deal_completion_requires_admin ?? rules.deal_completion?.requires_admin)}
@@ -164,7 +165,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
       $('wf-members').querySelectorAll('[data-member]').forEach(card => {
         const member=session.members.find(m=>String(m.telegram_id)===card.dataset.member);
         const role=card.querySelector('[data-role]').value;
-        const confirmationFlags=Object.fromEntries(['creation_requires_admin','completion_requires_admin','deal_completion_requires_admin'].map(key=>[key,card.querySelector(`[data-wf="${key}"]`).checked]));
+        const confirmationFlags=Object.fromEntries(['creation_requires_admin','completion_requires_admin','deal_completion_requires_admin','ai_enabled'].map(key=>[key,card.querySelector(`[data-wf="${key}"]`).checked]));
         nextRules.members[card.dataset.member]={...(nextRules.members[card.dataset.member] || {}),...confirmationFlags,notifications:readNotificationPreferences(card),pipeline_ids:role === 'manager' ? [...card.querySelector('[data-member-pipelines]').selectedOptions].map(option=>option.value) : []};
         nextRules.members[card.dataset.member]=window.tenantHotOrderSettings.readMember(card,nextRules.members[card.dataset.member]);
         delete nextRules.members[card.dataset.member].kommo_user_id;

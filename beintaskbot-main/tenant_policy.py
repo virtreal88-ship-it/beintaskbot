@@ -162,11 +162,16 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+                'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),
                 'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
+
+    def can_use_chat_ai(self) -> bool:
+        return (self.profile.get('active') is not False and (self.allows('deals') or self.allows('customers'))
+                and (self.profile.get('role') == 'owner' or self.member_settings.get('ai_enabled') is True))
 
 
 def validate_workflow_patch(pipelines: object, stages: object, policies: object) -> None:
@@ -206,7 +211,7 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
             raise ValueError('Əməkdaşın vərəqləri düzgün deyil.')
         if item.get('kommo_user_id') and not positive_id(item['kommo_user_id']):
             raise ValueError('Kommo istifadəçi ID-si düzgün deyil.')
-        for flag in ('creation_requires_admin', 'completion_requires_admin', 'deal_completion_requires_admin'):
+        for flag in ('creation_requires_admin', 'completion_requires_admin', 'deal_completion_requires_admin', 'ai_enabled'):
             if flag in item and not isinstance(item[flag], bool):
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
         if 'notifications' in item:

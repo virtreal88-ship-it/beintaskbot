@@ -1,0 +1,18 @@
+const fs=require('fs'),path=require('path'),assert=require('assert'),vm=require('vm');
+const root=path.resolve(__dirname,'..');
+const ai=fs.readFileSync(path.join(root,'docs/tenant-chat-ai.js'),'utf8');
+const settings=fs.readFileSync(path.join(root,'docs/tenant-chat-ai-settings.js'),'utf8');
+const app=fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8');
+const workflow=fs.readFileSync(path.join(root,'docs/tenant-workflow.js'),'utf8');
+new vm.Script(ai);new vm.Script(settings);
+assert(app.includes('/assets/tenant-chat-ai.js')&&app.includes('/assets/tenant-chat-ai-settings.js'));
+assert(workflow.includes("check('ai_enabled'")&&workflow.includes("'deal_completion_requires_admin','ai_enabled'"));
+assert(ai.includes('expected_tenant_id')&&ai.includes('expected_user_id')&&ai.includes('current!==epoch'));
+assert(ai.includes('crypto.randomUUID()')&&ai.includes('execute(pending)')&&ai.includes('sessionStorage'));
+assert(ai.includes('tc-ai-spinner')&&ai.includes('missing_audio')&&ai.includes('text.value=result.text'));
+assert(!ai.includes('result.text</')&&!ai.includes('/chat/send'));
+assert(settings.includes('type="password"')&&settings.includes('expected_updated_at:version'));
+assert(settings.includes("next.role!=='owner'")&&settings.includes('media_hosts'));
+assert(app.includes('revision!==chatRevision||identity!==chatIdentity()'));
+assert(app.includes('tenant-chat-open')&&app.includes('tenant-chat-loaded')&&app.includes('data-chat-audio'));
+console.log('PASS: company chat AI consent, scoped late replies, employee rights, editable drafts, audio warnings and exact-request recovery.');

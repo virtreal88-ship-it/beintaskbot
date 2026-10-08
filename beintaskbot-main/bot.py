@@ -71,6 +71,7 @@ from tenant_linear_observer_worker import observe_and_notify as observe_tenant_l
 from tenant_news_api import news_handler as tenant_news_handler
 from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
+from tenant_chat_ai_api import handler as tenant_chat_ai_handler
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -22289,15 +22290,19 @@ def _tenant_talk_channel(talk: dict) -> str:
 def _tenant_normalize_talk_message(message: dict, channel: str) -> dict:
     nested = message.get("message") if isinstance(message.get("message"), dict) else {}
     direction_raw = nested.get("direction") or message.get("direction") or nested.get("type") or message.get("type") or ""
-    incoming = str(direction_raw).casefold() in {"incoming", "in", "inbound"} or bool(nested.get("incoming") or message.get("incoming"))
+    direction = {"incoming": "incoming", "in": "incoming", "inbound": "incoming",
+                 "outgoing": "outgoing", "out": "outgoing", "outbound": "outgoing"}.get(str(direction_raw).casefold(), "unknown")
+    incoming_flag = nested.get("incoming", message.get("incoming"))
+    if type(incoming_flag) is bool:
+        direction = "incoming" if incoming_flag else "outgoing"
     text = nested.get("text") or message.get("text") or nested.get("caption") or message.get("caption") or ""
     attachment = nested.get("attachment") if isinstance(nested.get("attachment"), dict) else message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
     media = attachment.get("link") or attachment.get("url") or attachment.get("file_url") or ""
-    message_type = nested.get("type") or message.get("type") or attachment.get("type") or "text"
+    message_type = attachment.get("type") or nested.get("type") or message.get("type") or "text"
     created = nested.get("created_at") or message.get("created_at") or nested.get("timestamp") or message.get("timestamp")
     external = nested.get("msgid") or nested.get("id") or message.get("msgid") or message.get("id") or ""
     return {
-        "external_id": str(external), "direction": "incoming" if incoming else "outgoing", "channel": channel,
+        "external_id": str(external), "direction": direction, "channel": channel,
         "author_name": str(nested.get("author") or message.get("author") or ""), "body": str(text),
         "message_type": str(message_type), "media_url": str(media), "happened_at": _tenant_kommo_timestamp(created), "raw": message,
     }
@@ -23744,6 +23749,14 @@ async def start_webhook_server():
     news_ai_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, ai=True)
     app_web.router.add_get('/api/platform/news/ai', news_ai_api)
     app_web.router.add_post('/api/platform/news/ai', news_ai_api)
+    chat_ai_settings_api = tenant_chat_ai_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, settings=True)
+    app_web.router.add_get('/api/platform/chat/ai/settings', chat_ai_settings_api)
+    app_web.router.add_post('/api/platform/chat/ai/settings', chat_ai_settings_api)
+    app_web.router.add_post('/api/platform/chat/ai', tenant_chat_ai_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
+    app_web.router.add_get('/assets/tenant-chat-ai.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-ai.js'), headers={'Cache-Control': 'no-cache'}))
+    app_web.router.add_get('/assets/tenant-chat-ai-settings.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-ai-settings.js'), headers={'Cache-Control': 'no-cache'}))
     news_channel_api=tenant_news_telegram_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
         lambda: _bot_app.bot if _bot_app else None,logger,configuration=True)
     app_web.router.add_get('/api/platform/news/telegram/settings',news_channel_api)

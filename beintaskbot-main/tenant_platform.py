@@ -1263,11 +1263,14 @@ def list_crm_messages(*, tenant_id: str, kommo_lead_id: int, limit: int = 120) -
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT external_id, direction, channel, author_name, body, message_type, media_url, happened_at, created_at
-                FROM saas_crm_messages
-                WHERE tenant_id = %s::uuid AND kommo_lead_id = %s
-                ORDER BY happened_at ASC NULLS LAST, created_at ASC
-                LIMIT %s
+                SELECT * FROM (
+                    SELECT external_id, direction, channel, author_name, body, message_type, media_url, happened_at, created_at
+                    FROM saas_crm_messages
+                    WHERE tenant_id = %s::uuid AND kommo_lead_id = %s
+                    ORDER BY COALESCE(happened_at,created_at) DESC, external_id DESC
+                    LIMIT %s
+                ) recent
+                ORDER BY COALESCE(happened_at,created_at) ASC, external_id ASC
             """, (tenant_id, int(kommo_lead_id), max(1, min(int(limit or 120), 300))))
             rows = cur.fetchall()
     return [_public_crm_row(row) for row in rows]

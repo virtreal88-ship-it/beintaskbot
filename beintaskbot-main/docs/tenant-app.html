@@ -68,9 +68,39 @@
   async function loadTasks(refresh=false){const b=$('tasksRefresh');if(refresh)setLoading(b,true);try{const d=await api('/api/platform/crm/tasks'+(refresh?'?refresh=1':''));state.tasks=d.tasks||[];$('tasksList').innerHTML=state.tasks.length?state.tasks.map(t=>`<div class="row"><div><div class="deal-title">${esc((t.text||'Tapşırıq').replace(/\n?\[CRM:[a-f0-9]{32}\]/g,''))}</div><div class="sub">${t.kommo_lead_id?'Sövdələşmə #'+esc(t.kommo_lead_id):'Sövdələşməsiz'}</div>${!t.completed?`<button type="button" class="outline" style="margin-top:8px" data-task-complete="${esc(t.kommo_task_id)}">Tamamla</button>`:''}</div><div class="hide-mobile sub">Tapşırıq #${esc(t.kommo_task_id)}</div><div class="hide-mobile"><span class="badge">${t.completed?'Tamamlandı':'Açıq'}</span></div><div class="sub">${date(t.due_at)}</div></div>`).join(''):'<div class="empty">Açıq tapşırıq yoxdur.</div>';notice('tasksNotice',d.warning);if(refresh&&!d.warning)window.tenantCrmSyncWatch?.()}catch(e){notice('tasksNotice',e.message)}finally{setLoading(b,false)}}
   function filterDeals(value,target,customer){const q=value.trim().toLocaleLowerCase();const rows=!q?state.deals:state.deals.filter(d=>[d.name,d.contact_name,d.phone,d.stage_name].join(' ').toLocaleLowerCase().includes(q));renderDeals(target,rows,customer)}
   document.addEventListener('tenant-crm-sync-complete',e=>{if(e.detail.tenant_id!==state.me?.tenant_id)return;const modules=state.capabilities.modules||{};if(e.detail.resources.includes('leads')&&(modules.deals||modules.customers))loadDeals(false);if(e.detail.resources.includes('tasks')&&modules.tasks)loadTasks(false)});
-  function chatLine(m){const outgoing=m.direction==='outgoing';return `<div style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div>${esc(m.body||'Media mesajı')}</div><small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`}
-  async function loadChat(id){const box=$('chatRows');if(!box)return;box.innerHTML='<div class="sub">Tarixçə yüklənir…</div>';try{const d=await api('/api/platform/crm/chat?lead_id='+encodeURIComponent(id)+'&refresh=1');box.innerHTML=(d.messages||[]).map(chatLine).join('')||'<div class="sub">Bu sövdələşmə üçün çat tarixçəsi tapılmadı.</div>';if(d.warning)box.insertAdjacentHTML('afterbegin',`<div class="notice show">${esc(d.warning)}</div>`)}catch(e){box.innerHTML=`<div class="notice show">${esc(e.message)}</div>`}}
-  async function openDeal(id){try{const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id));const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';$('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>Kommo ID</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:vertical;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;$('dealModal').classList.add('show');$('sendChat').onclick=async()=>{const b=$('sendChat'),text=$('chatText').value.trim();if(!text)return;b.disabled=true;try{await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify({lead_id:x.kommo_lead_id,text})});$('chatText').value='';await loadChat(x.kommo_lead_id)}catch(e){alert(e.message)}finally{b.disabled=false}};loadChat(x.kommo_lead_id)}catch(e){alert(e.message)}}
+  let chatRevision=0;
+  const chatIdentity=()=>state.me?.tenant_id+':'+state.me?.telegram_id;
+  function chatLine(m){
+    const outgoing=m.direction==='outgoing',audio=['voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
+    return `<div style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''} style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div>${esc(m.body||'Media mesajı')}</div><small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`;
+  }
+  async function loadChat(id){
+    const box=$('chatRows'),revision=chatRevision,identity=chatIdentity();if(!box)return;
+    box.innerHTML='<div class="sub">Tarixçə yüklənir…</div>';
+    try{
+      const d=await api('/api/platform/crm/chat?lead_id='+encodeURIComponent(id)+'&refresh=1');
+      if(revision!==chatRevision||identity!==chatIdentity()||box!==$('chatRows'))return;
+      box.innerHTML=(d.messages||[]).map(chatLine).join('')||'<div class="sub">Bu sövdələşmə üçün çat tarixçəsi tapılmadı.</div>';
+      if(d.warning)box.insertAdjacentHTML('afterbegin',`<div class="notice show">${esc(d.warning)}</div>`);
+      document.dispatchEvent(new CustomEvent('tenant-chat-loaded',{detail:{lead_id:id}}));
+    }catch(e){if(revision===chatRevision&&identity===chatIdentity()&&box===$('chatRows'))box.innerHTML=`<div class="notice show">${esc(e.message)}</div>`;}
+  }
+  async function openDeal(id){
+    const revision=++chatRevision,identity=chatIdentity();
+    try{
+      const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id));
+      if(revision!==chatRevision||identity!==chatIdentity())return;
+      const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';
+      $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>Kommo ID</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
+      $('dealModal').classList.add('show');
+      document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
+      $('sendChat').onclick=async()=>{
+        const b=$('sendChat'),input=$('chatText'),text=input.value.trim();if(!text)return;b.disabled=true;
+        try{await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify({lead_id:x.kommo_lead_id,text})});if(revision!==chatRevision||identity!==chatIdentity())return;input.value='';await loadChat(x.kommo_lead_id);}catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}finally{b.disabled=false;}
+      };
+      loadChat(x.kommo_lead_id);
+    }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}
+  }
   function renderProfile(member){if(!member)return;const roles={owner:'Administrator',manager:'Menecer',worker:'İcraçı'};$('profileName').textContent=member.display_name||'İstifadəçi';$('profileCompany').textContent=member.tenant_name||'—';$('profileRole').textContent=roles[member.role]||member.role||'—';$('company').textContent=member.tenant_name||'Şirkət'}
   async function loadProfile(){try{const d=await api('/api/platform/me');state.me=d.member;renderProfile(d.member)}catch(e){alert(e.message)}}
   async function loadSettings(){try{const d=await api('/api/platform/me');state.me=d.member;renderProfile(d.member);const k=(d.integrations||[]).find(x=>x.provider==='kommo');const w=(d.integrations||[]).find(x=>x.provider==='waba');$('integrationInfo').textContent=(k&&k.status==='connected'?`Kommo qoşulub: ${k.account_domain}`:'Kommo hələ qoşulmayıb.')+' · '+(w&&w.status==='connected'?'WABA qoşulub':'WABA aktiv deyil');if(d.member.role!=='owner')document.querySelectorAll('.owner-only').forEach(x=>x.remove());else{const members=d.members||[];$('members').innerHTML=members.map(m=>`<div class="member"><div><b>${esc(m.display_name||'Adsız')}</b><small>${esc(m.role)} · ${m.active?'Aktiv':'Deaktiv'} · Telegram ${m.telegram_id?'qoşulub':'qoşulmayıb'}</small></div></div>`).join('')||'<span class="sub">Əməkdaş yoxdur.</span>';loadRequests()}}catch(e){$('integrationInfo').textContent=e.message}}
@@ -97,6 +127,8 @@
 <script src="/assets/tenant-news.js"></script>
 <script src="/assets/tenant-news-ai-settings.js"></script>
 <script src="/assets/tenant-news-telegram-settings.js"></script>
+<script src="/assets/tenant-chat-ai-settings.js"></script>
+<script src="/assets/tenant-chat-ai.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
 <script src="/assets/tenant-push.js"></script>
