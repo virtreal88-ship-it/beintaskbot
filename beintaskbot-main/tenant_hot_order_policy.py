@@ -83,6 +83,6 @@ class HotOrderPolicy:
                 str(order.get('created_by')) == user or self.can_claim(order))
 
     def capabilities(self) -> dict:
-        return {'settings_only': True, 'can_create': self.allowed('create'), 'can_claim': self.allowed('claim'),
+        return {'settings_only': True, 'api_available': True, 'can_create': self.allowed('create'), 'can_claim': self.allowed('claim'),
                 'services': self.services(),
                 'assigned_services': [row['id'] for row in self.services() if self.matches_service(row['id'])]}

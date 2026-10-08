@@ -51,6 +51,10 @@ from aiohttp import web
 from pywebpush import webpush, WebPushException
 from gh_storage import read_json, write_json
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
+from tenant_hot_orders import (
+    TenantHotOrderError, create_order as create_tenant_hot_order,
+    list_orders as list_tenant_hot_orders, change_order as change_tenant_hot_order,
+)
 from tenant_tasks import create_task as create_tenant_task
 from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approval_page
 from tenant_task_completion import complete_task as complete_tenant_task
@@ -22369,6 +22373,43 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
+async def handle_platform_hot_orders(request: web.Request) -> web.Response:
+    """SaaS queue only; legacy Telegram sessions/tables cannot authorize it."""
+    headers = {'Cache-Control': 'no-store'}
+    try:
+        profile = _tenant_member_from_request(request)
+        if not profile or not TenantPolicy(profile).allows('hot_orders'):
+            return web.json_response({'success':False,'error':'İcazə yoxdur.'},status=403,headers=headers)
+        if request.method == 'GET':
+            result = await asyncio.to_thread(list_tenant_hot_orders, profile,
+                limit=int(request.rel_url.query.get('limit','50')), offset=int(request.rel_url.query.get('offset','0')))
+            return web.json_response({'success':True,**result},headers=headers)
+        if (request.content_type != 'application/json' or
+                request.headers.get('Origin','').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
+            return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403,headers=headers)
+        data = await request.json()
+        if not isinstance(data, dict):
+            raise TenantHotOrderError('Sorğu düzgün deyil.')
+        if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id']) or
+                str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
+            return web.json_response({'success':False,'error':'Kabinet dəyişib. Səhifəni yeniləyin.'},status=409,headers=headers)
+        action = data.get('action')
+        if action == 'create':
+            order = await asyncio.to_thread(create_tenant_hot_order,profile,data)
+        elif action in {'claim','release','cancel'}:
+            order = await asyncio.to_thread(change_tenant_hot_order,profile,order_id=data.get('order_id'),action=action)
+        else:
+            raise TenantHotOrderError('Əməliyyat düzgün deyil.')
+        return web.json_response({'success':True,'order':order},headers=headers)
+    except TenantHotOrderError as exc:
+        return web.json_response({'success':False,'error':str(exc)},status=exc.status,headers=headers)
+    except ValueError:
+        return web.json_response({'success':False,'error':'Sorğu düzgün deyil.'},status=400,headers=headers)
+    except Exception:
+        logger.error('Tenant hot-order API failed')
+        return web.json_response({'success':False,'error':'Sifariş əməliyyatı tamamlanmadı.'},status=503,headers=headers)
+
+
 async def handle_platform_push_devices(request: web.Request) -> web.Response:
     """Tenant device API; never use global legacy push subscriptions."""
     profile = _tenant_member_from_request(request)
@@ -23614,6 +23655,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
     app_web.router.add_get("/api/platform/crm/tasks", handle_platform_crm_tasks)
+    app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
+    app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_get("/api/platform/crm/tasks/options", handle_platform_task_options)
     app_web.router.add_post("/api/platform/crm/tasks", handle_platform_task_create)
     app_web.router.add_get("/register", serve_platform_onboarding)

@@ -7,7 +7,7 @@
     return `<div class="wf-card" data-hot-service="${esc(service.id)}"><label>Xidmətin adı<input data-hot-name maxlength="120" value="${esc(service.name)}" required></label><label class="wf-check"><input type="checkbox" data-hot-active ${service.active !== false ? 'checked' : ''}>Aktivdir</label></div>`;
   }
   function render(settings) {
-    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">Bu mərhələdə yalnız ayarlar saxlanılır. SaaS sifariş siyahısı və bildiriş göndərilməsi hələ qoşulmayıb. Mövcud şirkətin sifarişləri dəyişmir.</p><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
+    return `<h3>İsti sifariş qaydaları</h3><p class="wf-hint">SaaS sifariş API-si hazırdır. Sifariş səhifəsi və bildiriş göndərilməsi hələ qoşulmayıb. Mövcud şirkətin sifarişləri dəyişmir.</p><div class="wf-grid">${roles('create',settings.create_roles ?? ['owner','admin'])}${roles('claim',settings.claim_roles ?? ['master'])}</div><div data-hot-services>${(settings.services || []).map(serviceRow).join('')}</div><button type="button" class="outline" data-hot-add>+ Xidmət</button>`;
   }
   function install(root) {
     root.querySelector('[data-hot-add]').onclick = () => {
