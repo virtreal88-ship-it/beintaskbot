@@ -3,6 +3,7 @@ import asyncio
 from tenant_linear_observer import sync_one
 from tenant_linear_notice_outbox import expand_events, claim_delivery, finish_delivery
 from tenant_linear_observer_cleanup import cleanup
+from tenant_news_ai_worker import process_one as process_news_ai
 from tenant_push_worker import send_push
 
 MESSAGE = 'Linear tapşırığının statusu dəyişib. Məlumatları şirkətinizin kabinetində yoxlayın.\n\nhttps://crm.pro.az/app?view=linear'
@@ -15,6 +16,10 @@ async def observe_and_notify(bot, private_key: str, claims: dict, logger) -> Non
             await asyncio.to_thread(operation)
         except Exception:
             logger.warning('Tenant Linear observer phase unavailable')
+    try:
+        await asyncio.to_thread(process_news_ai, logger)
+    except Exception:
+        logger.warning('Tenant news AI queue unavailable')
     for channel in ('telegram', 'push'):
         if channel == 'push' and not private_key:
             continue

@@ -68,6 +68,7 @@ from tenant_finance_api import finance_handler
 from tenant_linear_api import linear_handler
 from tenant_linear_tasks_api import tasks_handler as tenant_linear_tasks_handler
 from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
+from tenant_news_api import news_handler as tenant_news_handler
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -23728,6 +23729,23 @@ async def start_webhook_server():
     linear_tasks_api = tenant_linear_tasks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get('/api/platform/linear/tasks', linear_tasks_api)
     app_web.router.add_post('/api/platform/linear/tasks', linear_tasks_api)
+    news_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get('/api/platform/news', news_api)
+    app_web.router.add_post('/api/platform/news', news_api)
+    news_ai_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, ai=True)
+    app_web.router.add_get('/api/platform/news/ai', news_ai_api)
+    app_web.router.add_post('/api/platform/news/ai', news_ai_api)
+    app_web.router.add_get('/api/platform/news/public/{company}',
+        tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, public=True))
+    app_web.router.add_get('/updates/{company}', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-public.html'),
+        headers={'Cache-Control': 'no-cache'}))
+    app_web.router.add_get('/assets/tenant-news.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news.js'),
+        headers={'Cache-Control': 'no-cache'}))
+    app_web.router.add_get('/assets/tenant-news-ai-settings.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-ai-settings.js'),
+        headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/tenant-linear-settings.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-settings.js'),
         headers={'Cache-Control': 'no-cache'}))

@@ -135,8 +135,8 @@ class Worker(unittest.IsolatedAsyncioTestCase):
         sync=Mock(side_effect=RuntimeError('private provider details'));expand=Mock();cleanup=Mock()
         claim=Mock(side_effect=[{'send':True,'recipient_id':20,'channel':'telegram'},None]);finish=Mock()
         service=loaders.load('tenant_linear_observer_worker',{'sync_one':sync,'expand_events':expand,'cleanup':cleanup,
-            'claim_delivery':claim,'finish_delivery':finish,'send_push':Mock()},
-            {'tenant_linear_observer','tenant_linear_observer_cleanup','tenant_linear_notice_outbox','tenant_push_worker'})
+            'claim_delivery':claim,'finish_delivery':finish,'send_push':Mock(),'process_news_ai':Mock()},
+            {'tenant_linear_observer','tenant_linear_observer_cleanup','tenant_linear_notice_outbox','tenant_push_worker','tenant_news_ai_worker'})
         bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=7)));logger=Mock()
         await service.observe_and_notify(bot,'',{},logger)
         expand.assert_called_once();cleanup.assert_called_once();finish.assert_called_once()
@@ -147,8 +147,8 @@ class Worker(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_send_is_not_retried_in_tick(self):
         item={'send':True,'recipient_id':20,'channel':'telegram'};claim=Mock(side_effect=[item,None]);finish=Mock()
         service=loaders.load('tenant_linear_observer_worker',{'sync_one':Mock(),'expand_events':Mock(),'cleanup':Mock(),
-            'claim_delivery':claim,'finish_delivery':finish,'send_push':Mock()},
-            {'tenant_linear_observer','tenant_linear_observer_cleanup','tenant_linear_notice_outbox','tenant_push_worker'})
+            'claim_delivery':claim,'finish_delivery':finish,'send_push':Mock(),'process_news_ai':Mock()},
+            {'tenant_linear_observer','tenant_linear_observer_cleanup','tenant_linear_notice_outbox','tenant_push_worker','tenant_news_ai_worker'})
         bot=SimpleNamespace(send_message=AsyncMock(side_effect=TimeoutError('private details')))
         await service.observe_and_notify(bot,'',{},Mock())
         bot.send_message.assert_awaited_once();self.assertEqual(finish.call_args.args[1],'unknown')

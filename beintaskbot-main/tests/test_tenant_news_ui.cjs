@@ -1,0 +1,17 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
+const ui=read('docs/tenant-news.js'),html=read('docs/tenant-news-public.html'),settings=read('docs/tenant-linear-settings.js');
+const ai=read('docs/tenant-news-ai-settings.js');new vm.Script(ai);
+assert.match(ai,/expected_tenant_id:profile\.tenant_id/);assert.match(ai,/current!==epoch/);
+assert.match(ai,/type="password"/);assert.match(ai,/consent:\$\('tnAiConsent'\)\.checked/);
+assert.doesNotMatch(ai,/OPENAI_API_KEY|api\.openai\.com/);
+new vm.Script(ui);for(const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Script(script[1]);
+assert.match(ui,/expected_tenant_id:profile\.tenant_id/);assert.match(ui,/expected_user_id:profile\.telegram_id/);
+assert.match(ui,/current!==epoch/);assert.match(ui,/expected_updated_at:row\?\.updated_at/);
+assert.match(ui,/sessionStorage\.setItem/);assert.match(ui,/if\(!sending\)/);assert.match(ui,/crypto\.randomUUID/);
+assert.match(ui,/scrollHeight/);assert.match(ui,/max-height:85dvh;overflow:auto/);
+assert.doesNotMatch(ui,/tnModal'\)\.onclick|setInterval|akul\.az|dine\.az|type="file"/);
+assert.match(ui,/tnConfirm/);assert.match(ui,/confirm_publication:true/);
+assert.match(html,/esc\(row\.title\)/);assert.match(html,/credentials:'omit'/);assert.match(html,/noopener noreferrer/);
+assert.match(settings,/enabled:\$\('tlNewsEnabled'\)\.checked/);assert.match(read('docs/tenant-app.html'),/tenant-news\.js/);
+console.log('PASS: news editor scopes responses, requires confirmation, grows fields and retries exact commands; public feed escapes content.');

@@ -21,13 +21,15 @@
     generation++;profile={...next,identity};snapshot=null;busy=false;catalogComplete=true;$('tenantLinearPanel')?.remove();
     if(next.role!=='owner')return;
     $('view-settings').insertAdjacentHTML('beforeend',`<article class="panel" id="tenantLinearPanel" style="margin-top:16px">
-      <h2>Linear və xəbərlər</h2><p>Şirkətə məxsus bağlantı, görünüş və iş qaydaları. Linear tapşırıqları üçün qaydaları aktiv edin; xəbər sinxronizasiyası növbəti mərhələdir. Köhnə kabinet dəyişmir.</p>
+      <h2>Linear və xəbərlər</h2><p>Şirkətə məxsus bağlantı, görünüş və iş qaydaları. Xəbərlər ayrıca yoxlanılır və təsdiqlənir. Köhnə kabinet dəyişmir.</p>
       <button class="outline" id="tlLoad">Ayarları yüklə</button><div id="tlBody" hidden>
       <p id="tlStatus"></p><label>Linear API açarı<input id="tlKey" type="password" autocomplete="new-password" placeholder="Yeni açar (saxlanmış açar göstərilmir)"></label>
       <button class="outline" id="tlConnect">Yoxla və qoş</button> <button class="outline danger" id="tlDisconnect">Bağlantını ayır</button>
       <label>Komanda<select id="tlTeam"><option value="">Seçin</option></select></label><button class="outline" id="tlMore" hidden>Daha çox komanda</button>
       <div id="tlStates"></div><div id="tlProjects"></div><div id="tlRules"></div><div id="tlMembers"></div>
-      <label>Telegram xəbər kanalı<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
+      <label style="display:flex"><input id="tlNewsEnabled" type="checkbox" style="width:auto">Tamamlanmış əsas tapşırıqlardan xəbər qaralamaları hazırla</label>
+      <p>Fon sinxronizasiyasını da aktiv edin və layihələri / tamamlanmış statusları seçin. «Xəbərlər» səhifəsində yoxlayıb dərc edin. AI emalı ayrıca «Xəbərlər üçün AI» ayarlarında aktiv edilir; onsuz mənbə fraqmenti saxlanılır.</p>
+      <label>Telegram xəbər kanalı (gələcək göndəriş üçün)<input id="tlChannel" placeholder="@kanal və ya -100…"></label>
       <p>Yalnız əsas tapşırıqlar, 90 günlük saxlama və dərcdən əvvəl əl ilə təsdiq. Kanalın yazılması mesaj göndərmir. Account/Operator mövcud Linear dəyərləridir; yeni parametr yaradılmır.</p>
       <button class="primary" id="tlSave">Ayarları saxla</button></div><p id="tlMessage" role="status" aria-live="polite"></p></article>`);
     $('tlLoad').onclick=()=>perform(load);
@@ -40,7 +42,7 @@
       workflow:window.TenantLinearRules.read(),
       members:Object.fromEntries([...$('tlMembers').querySelectorAll('[data-member]')].map(row=>[row.dataset.member,
         Object.fromEntries([...row.querySelectorAll('[data-field]')].map(i=>[i.dataset.field,i.multiple?[...i.selectedOptions].map(o=>o.value):i.type==='checkbox'?i.checked:i.value]))])),
-      news:{enabled:snapshot.settings?.news?.enabled===true,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
+      news:{enabled:$('tlNewsEnabled').checked,channel:$('tlChannel').value.trim(),projects:[...$('tlProjects').querySelectorAll('input:checked')].map(i=>i.value)}};
       await write('settings',{settings:config});if(current===generation)await load(current);});
   }
   async function write(action,extra={}){if(!snapshot)throw new Error('Əvvəlcə ayarları yükləyin.');
@@ -61,13 +63,13 @@
   }
   async function load(current){const result=await api();if(current!==generation)return;snapshot=result;$('tlBody').hidden=false;$('tlKey').value='';
     $('tlStatus').textContent=result.status==='connected'?(result.runtime_enabled?'Linear tapşırıqları aktivdir':'Linear qoşulub · iş qaydalarını aktiv edin'):'Linear qoşulmayıb';
-    const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';
+    const config=result.settings||{};catalogComplete=!config.team_id;$('tlChannel').value=config.news?.channel||'';$('tlNewsEnabled').checked=config.news?.enabled===true;
     $('tlMembers').innerHTML='<h3>Əməkdaşların Linear qaydaları</h3>'+result.members.map(member=>{
       const binding=config.members?.[member.telegram_id]||{};
       return `<details style="margin:12px 0" data-member="${esc(member.telegram_id)}"><summary>${esc(member.display_name||'Əməkdaş')}</summary>`+
         ['account','operator'].map(field=>`<label>${field==='account'?'Account':'Operator'}<input data-field="${field}" value="${esc(binding[field]||'')}"></label>`).join('')+
         '<label>Linear icraçısı<select data-field="assignee_id"><option value="">Təyin edilməyib</option></select></label>'+
-        [['can_view_all','Komandanın bütün tapşırıqlarını görmək'],['can_create','Tapşırıq yaratmaq'],['can_edit','Tapşırıq redaktəsi'],['can_change_status','Sərbəst status dəyişmək'],['can_review_news','Xəbərləri təsdiqləmək (növbəti mərhələ)']].map(([field,label])=>`<label style="display:flex"><input style="width:auto" type="checkbox" data-field="${field}" ${binding[field]?'checked':''}>${label}</label>`).join('')+
+        [['can_view_all','Komandanın bütün tapşırıqlarını görmək'],['can_create','Tapşırıq yaratmaq'],['can_edit','Tapşırıq redaktəsi'],['can_change_status','Sərbəst status dəyişmək'],['can_review_news','Xəbərləri təsdiqləmək və dərc etmək']].map(([field,label])=>`<label style="display:flex"><input style="width:auto" type="checkbox" data-field="${field}" ${binding[field]?'checked':''}>${label}</label>`).join('')+
         '<label>İcazəli keçid düymələri<select data-field="button_ids" multiple style="min-height:80px"></select></label><p>Linear səhifəsi şirkət modullarında və əməkdaşın səhifə icazələrində də açıq olmalıdır.</p></details>';
     }).join('');
     $('tlTeam').innerHTML='<option value="">Seçin</option>';$('tlStates').innerHTML='';$('tlProjects').innerHTML='';$('tlMore').hidden=true;
