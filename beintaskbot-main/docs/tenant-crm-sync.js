@@ -2,6 +2,27 @@
 (() => {
   let profile, timer, generation = 0, watching = false;
   const boxes = {};
+  const fullButtons = [];
+  for (const [id, resource] of [['tasksRefresh','tasks'],['dealsRefresh','deals'],['customersRefresh','deals']]) {
+    const anchor = document.getElementById(id);
+    if (!anchor) continue;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'outline'; button.textContent = 'Tam yenilə'; button.hidden = true;
+    anchor.after(button); fullButtons.push(button);
+    button.onclick = async () => {
+      const epoch = generation;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/platform/crm/${resource}?refresh=1&full=1`, {credentials:'same-origin'});
+        const data = await response.json();
+        if (epoch !== generation) return;
+        if (!response.ok || !data.success || data.warning) throw new Error('full sync unavailable');
+        start();
+      } catch (_) {
+        if (epoch === generation) display(resource === 'tasks' ? 'tasks':'leads', 'Tam sinxronizasiya başlamadı. Kommo bağlantısını yoxlayın.');
+      } finally { button.disabled = false; }
+    };
+  }
   for (const [resource, ids] of Object.entries({leads:['dealsNotice','customersNotice'], tasks:['tasksNotice']})) {
     boxes[resource] = ids.map(id => {
       const anchor = document.getElementById(id);
@@ -59,6 +80,7 @@
   document.addEventListener('tenant-profile', event => {
     generation++; clearTimeout(timer); watching = false;
     profile = event.detail.member;
+    for (const button of fullButtons) button.hidden = !['owner','admin'].includes(profile?.role);
     for (const resource of Object.keys(boxes)) display(resource, '');
     const modules = event.detail.capabilities?.modules || {};
     if (modules.tasks || modules.deals || modules.customers) start();

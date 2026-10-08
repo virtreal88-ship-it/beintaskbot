@@ -26,7 +26,7 @@ function setup() {
   const reply = jobs => ({ok:true,json:async()=>({success:true,jobs})});
   return {context, document, requests, listeners, events, boxes, timers, reply,
     push(value) {responses.push(value);},
-    profile(tenant) {listeners['tenant-profile']({detail:{member:{tenant_id:tenant},capabilities:{modules:{tasks:true}}}});}}
+    profile(tenant,role='worker') {listeners['tenant-profile']({detail:{member:{tenant_id:tenant,role},capabilities:{modules:{tasks:true}}}});}}
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 (async()=>{
@@ -40,6 +40,14 @@ const flush = () => new Promise(resolve=>setImmediate(resolve));
   assert.equal(s.events[0].detail.tenant_id,'company-a');
   assert.equal(s.events[0].detail.resources[0],'tasks');
   assert(s.requests.every(r=>r.url==='/api/platform/crm/sync' && !r.options.method));
+  assert(s.boxes.filter(box=>box.type==='button').every(button=>button.hidden));
+
+  const admin = setup();admin.push(admin.reply([]));admin.profile('company-a','admin');await flush();
+  const full = admin.boxes.find(box=>box.type==='button');assert(full&&!full.hidden);
+  admin.push(admin.reply([]));admin.push(admin.reply([{resource:'tasks',status:'queued'}]));
+  await full.onclick();await flush();
+  assert(admin.requests.some(r=>r.url==='/api/platform/crm/tasks?refresh=1&full=1'));
+  assert(!full.disabled);
 
   const race = setup();let release;
   race.push(new Promise(resolve=>{release=resolve;}));race.profile('old-company');

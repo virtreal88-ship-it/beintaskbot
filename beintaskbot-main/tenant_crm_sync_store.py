@@ -1,10 +1,12 @@
 """Durable CRM read-job queue and atomic snapshot/page checkpoints."""
 import json
 import uuid
+import time
 
 from tenant_platform import _connect, TenantPlatformError
 from tenant_crm_snapshots import deal_rows, task_rows
 from tenant_crm_sync_schema import ensure_sync_schema
+from tenant_crm_sync_windows import choose_window
 
 
 def connection_id(cur, tenant_id: str) -> str:
@@ -20,7 +22,7 @@ def public_job(row: dict) -> dict:
                 'resource', 'status', 'pages_done', 'started_at', 'updated_at', 'finished_at'}}
 
 
-def enqueue(tenant_id: str, resource: str) -> dict:
+def enqueue(tenant_id: str, resource: str, *, force_full: bool = False) -> dict:
     if resource not in {'leads', 'tasks'}:
         raise ValueError('Invalid CRM resource')
     with _connect() as conn:
@@ -37,17 +39,22 @@ def enqueue(tenant_id: str, resource: str) -> dict:
             row = cur.fetchone()
             if row and row['connection_id'] == current_connection and row['status'] in {'queued', 'running'}:
                 return public_job(row)
-            if row and row['connection_id'] == current_connection and row['status'] == 'failed':
+            if not force_full and row and row['connection_id'] == current_connection and row['status'] == 'failed':
                 cur.execute('''UPDATE saas_crm_sync_jobs SET status='queued', attempts=0,
                     next_attempt_at=now(),updated_at=now(),finished_at=NULL
                     WHERE tenant_id=%s::uuid AND resource=%s RETURNING *''', (tenant_id, resource))
             else:
-                cur.execute('''INSERT INTO saas_crm_sync_jobs (tenant_id,resource,run_id,connection_id,status)
-                    VALUES (%s::uuid,%s,%s::uuid,%s,'queued')
+                prior = row if row and row['connection_id'] == current_connection else None
+                window = choose_window(prior, int(time.time()), force_full=force_full)
+                cur.execute('''INSERT INTO saas_crm_sync_jobs
+                    (tenant_id,resource,run_id,connection_id,status,window_from,window_to,watermark,last_full_sync)
+                    VALUES (%s::uuid,%s,%s::uuid,%s,'queued',%s,%s,%s,%s)
                     ON CONFLICT (tenant_id,resource) DO UPDATE SET run_id=EXCLUDED.run_id,
                     connection_id=EXCLUDED.connection_id,status='queued',next_page=1,last_record_id=0,pages_done=0,
+                    window_from=EXCLUDED.window_from,window_to=EXCLUDED.window_to,watermark=EXCLUDED.watermark,
+                    last_full_sync=EXCLUDED.last_full_sync,
                     records_saved=0,attempts=0,next_attempt_at=now(),started_at=now(),updated_at=now(),finished_at=NULL
-                    RETURNING *''', (tenant_id, resource, str(uuid.uuid4()), current_connection))
+                    RETURNING *''', (tenant_id, resource, str(uuid.uuid4()), current_connection, *window))
             result = public_job(cur.fetchone())
         conn.commit()
     return result
@@ -157,11 +164,13 @@ class SyncPageStore:
             cur.execute('''UPDATE saas_crm_sync_jobs SET status=%s,next_page=next_page+1,pages_done=pages_done+1,last_record_id=%s,
                 records_saved=records_saved+%s,attempts=0,next_attempt_at=now(),updated_at=now(),
                 finished_at=CASE WHEN %s THEN now() ELSE NULL END
+                ,watermark=CASE WHEN %s AND window_to>0 THEN window_to ELSE watermark END
+                ,last_full_sync=CASE WHEN %s AND window_from=0 AND window_to>0 THEN window_to ELSE last_full_sync END
                 WHERE tenant_id=%s::uuid AND resource=%s AND run_id=%s::uuid''',
                 ('done' if done else 'queued',
                  max((int(item[1]) for item in rows),
                      default=int(self.row.get('last_record_id') or 0)),
-                 len(rows), done, tenant, resource, str(self.row['run_id'])))
+                 len(rows), done, done, done, tenant, resource, str(self.row['run_id'])))
             if done:
                 cur.execute('''INSERT INTO saas_tenant_audit_events
                     (id,tenant_id,action,entity_type,entity_id,payload)

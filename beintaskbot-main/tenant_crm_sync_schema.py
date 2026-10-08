@@ -2,6 +2,7 @@
 from threading import Lock
 
 from tenant_platform import _ensure_schema
+from tenant_crm_sync_incremental_schema import migrate_incremental_sync
 
 _ready = False
 _lock = Lock()
@@ -37,5 +38,6 @@ def ensure_sync_schema(conn) -> None:
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_crm_sync_jobs_pending_idx
                 ON saas_crm_sync_jobs(next_attempt_at, updated_at)
                 WHERE status IN ('queued','running')''')
+            migrate_incremental_sync(cur)
         conn.commit()
         _ready = True

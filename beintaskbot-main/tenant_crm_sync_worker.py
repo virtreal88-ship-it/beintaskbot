@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from tenant_crm_sync_data import PAGE_SIZE, page_items, normalize_page
 from tenant_crm_sync_store import SyncPageStore
 from tenant_policy import positive_id
+from tenant_crm_sync_windows import window_params
 
 KommoRead = Callable[..., Awaitable[dict]]
 
@@ -33,6 +34,7 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
             for stage in (pipeline.get('_embedded') or {}).get('statuses') or []:
                 stage_names[int(stage['id'])] = str(stage.get('name') or '')
     params = {'limit': PAGE_SIZE, 'page': int(row['next_page']), 'order[id]': 'asc'}
+    params.update(window_params(row))
     if resource == 'leads':
         params['with'] = 'contacts'
     payload = await request(tenant, 'GET', resource, params=params)

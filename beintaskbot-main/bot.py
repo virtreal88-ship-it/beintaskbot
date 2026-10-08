@@ -22139,14 +22139,17 @@ def _tenant_kommo_phone(contact: dict) -> str:
     return ""
 
 
-async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False) -> dict:
+async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False, force_full: bool = False) -> dict:
     """Compatibility entry point: enqueue reads; never wait for Kommo in HTTP."""
     jobs = []
     policy = TenantPolicy(profile)
+    if force_full and not policy.privileged:
+        raise TenantPlatformError('Tam sinxronizasiya üçün administrator icazəsi lazımdır.')
+    options = {'force_full': True} if force_full else {}
     if policy.allows('deals') or policy.allows('customers') or policy.task_scope().get('kind') == 'pipelines':
-        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'leads'))
+        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'leads', **options))
     if include_tasks and policy.allows('tasks'):
-        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'tasks'))
+        jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'tasks', **options))
     return {'jobs': jobs}
 
 
@@ -22176,7 +22179,8 @@ async def handle_platform_crm_deals(request: web.Request) -> web.Response:
     sync_error = ""
     if should_refresh:
         try:
-            await _sync_tenant_crm(profile, include_tasks=False)
+            await _sync_tenant_crm(profile, include_tasks=False,
+                                   force_full=str(request.rel_url.query.get('full') or '') == '1')
         except TenantPlatformError as exc:
             sync_error = str(exc)
         except Exception:
@@ -22353,7 +22357,8 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
     sync_error = ""
     if should_refresh:
         try:
-            await _sync_tenant_crm(profile, include_tasks=True)
+            await _sync_tenant_crm(profile, include_tasks=True,
+                                   force_full=str(request.rel_url.query.get('full') or '') == '1')
         except TenantPlatformError as exc:
             sync_error = str(exc)
         except Exception:
