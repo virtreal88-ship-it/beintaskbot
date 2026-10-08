@@ -215,3 +215,5 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
         if any(not isinstance(v, bool) for v in ((policies or {}).get(key) or {}).values()):
             raise ValueError('Qayda üçün aktiv/deaktiv seçin.')
     validate_hot_order_settings((policies or {}).get('hot_orders') or {}, (policies or {}).get('members') or {})
+    from tenant_finance_policy import validate_finance_settings
+    validate_finance_settings((policies or {}).get('finance',{}))

@@ -63,6 +63,7 @@ from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
 from tenant_push_worker import deliver_push_notifications
 from tenant_hot_order_notification_worker import deliver_hot_order_notifications
+from tenant_finance_api import finance_handler
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -22410,6 +22411,11 @@ async def serve_tenant_hot_order_completion_script(request: web.Request) -> web.
                             headers={'Cache-Control':'no-cache'})
 
 
+async def serve_tenant_finance_script(request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-finance.js'),
+                            headers={'Cache-Control':'no-cache'})
+
+
 async def handle_platform_hot_orders(request: web.Request) -> web.Response:
     """SaaS queue only; legacy Telegram sessions/tables cannot authorize it."""
     headers = {'Cache-Control': 'no-store'}
@@ -23703,6 +23709,10 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/tasks", handle_platform_crm_tasks)
     app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)
+    tenant_finance_handler=finance_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,logger)
+    app_web.router.add_get('/api/platform/finance',tenant_finance_handler)
+    app_web.router.add_post('/api/platform/finance',tenant_finance_handler)
+    app_web.router.add_get('/assets/tenant-finance.js',serve_tenant_finance_script)
     app_web.router.add_get("/api/platform/crm/tasks/options", handle_platform_task_options)
     app_web.router.add_post("/api/platform/crm/tasks", handle_platform_task_create)
     app_web.router.add_get("/register", serve_platform_onboarding)

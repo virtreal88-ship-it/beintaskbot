@@ -138,6 +138,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
       <h3>Tapşırıq təsdiqləri</h3><div data-task-rules>${check('creation_requires_admin','Yaradılarkən təsdiq tələb olunur',rules.task_approval?.creation_requires_admin)}${check('completion_requires_admin','Tamamlanarkən təsdiq tələb olunur',rules.task_approval?.completion_requires_admin)}${check('self_created_exempt','Özünə yaradılmış tapşırıq təsdiq tələb etmir',rules.task_approval?.self_created_exempt !== false)}</div>
       <h3>Sövdələşmələr</h3><div data-deal-rules>${check('requires_admin','Tamamlanarkən təsdiq tələb olunur',rules.deal_completion?.requires_admin)}</div>
       <div data-hot-rules>${window.tenantHotOrderSettings.render(rules.hot_orders || {})}</div>
+      <h3>Maliyyə</h3><p class="wf-hint">Valyuta: AZN. Əməliyyatlar real bank köçürməsi deyil. Köhnə balanslar dəyişmir.</p><div data-finance-rules>${check('allow_negative_balances','Mənfi balansa icazə ver',rules.finance?.allow_negative_balances===true)}</div>
       <h3>Şirkətin bildiriş məhdudiyyətləri</h3><div data-notifications>${Object.entries({...Object.fromEntries((session.capabilities?.notification_events || []).map(event=>[event.key,true])),telegram:true,push:true,...session.member.notification_rules,...rules.notifications}).map(([key,on])=>check(key,({telegram:'Telegram kanalı',push:'Push kanalı'})[key] || (session.capabilities?.notification_events || []).find(event=>event.key === key)?.label || key,on)).join('')}</div>
       <p class="wf-hint">SaaS tapşırıq təsdiqləri və isti sifarişlər üçün Telegram/Push qoşulub. Əməkdaşın kanal seçimi ayrıca olmalıdır; digər hadisələr hələ qoşulmayıb.</p>`;
     const refreshNotificationChoices=()=>{$('wf-members').querySelectorAll('[data-member]').forEach(card=>constrainNotifications(card,card.querySelector('[data-role]').value,session.capabilities?.notification_events || [],flags($('wf-rules').querySelector('[data-wf-modules]'))));};
@@ -177,6 +178,7 @@ return `<h3>Bildirişlər</h3><div class="wf-notifications"><div class="wf-notif
       nextRules.task_approval=flags($('wf-rules').querySelector('[data-task-rules]'));
       nextRules.deal_completion=flags($('wf-rules').querySelector('[data-deal-rules]'));
       nextRules.hot_orders=window.tenantHotOrderSettings.read($('wf-rules').querySelector('[data-hot-rules]'),nextRules.hot_orders || {});
+      nextRules.finance={...(nextRules.finance || {}),currency:'AZN',...flags($('wf-rules').querySelector('[data-finance-rules]'))};
       nextRules.notifications=flags($('wf-rules').querySelector('[data-notifications]'));
       config=await api('/api/platform/workflow',{pipelines:nextPipelines,stages:nextStages,policies:nextRules,members:nextMembers});
       session=await api('/api/platform/me');
