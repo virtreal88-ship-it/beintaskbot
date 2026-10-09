@@ -1627,6 +1627,7 @@
 </div>
 
 <script src="/assets/deal-tags.js"></script>
+<script src="/assets/deal-phone-duplicates.js"></script>
 <script>
 const tg = window.Telegram?.WebApp || {};
 
@@ -8470,6 +8471,7 @@ function dealInfoBodyHtml(deal, readonly) {
         </div>
         ${readonly ? '' : dealPipelineStageFieldsHtml(deal)}
         ${dealUnreachableButtonHtml(deal, readonly)}
+        ${readonly ? '' : `<button type="button" class="tag-action" data-duplicate-search="${Number(deal.id)}" data-duplicate-phone="${escapeHtml(phone)}">Dublikatları tap</button>`}
         <h3>Tapşırıq</h3>
         ${readonly ? '' : '<button type="button" id="deal-task-plus" class="deal-task-create" title="Tapşırıq yarat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg><span>Tapşırıq yarat</span></button>'}
         <div id="deal-tasks-list">${dealTasksListHtml(deal, readonly)}</div>

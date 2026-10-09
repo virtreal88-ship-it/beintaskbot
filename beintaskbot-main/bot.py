@@ -22378,6 +22378,11 @@ async def handle_platform_crm_chat_history(request: web.Request) -> web.Response
     return await handler(_tenant_member_from_request, logger)(request)
 
 
+async def handle_platform_crm_chat_attachment(request: web.Request) -> web.Response:
+    from tenant_chat_attachment_api import handler
+    return await handler(_tenant_member_from_request, _tenant_kommo_request, logger)(request)
+
+
 async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
     from tenant_chat_import_api import handler
     return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
@@ -22438,6 +22443,17 @@ async def serve_tenant_finance_script(request: web.Request) -> web.Response:
 async def serve_deal_tags_script(request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-tags.js'),
                             headers={'Cache-Control': 'no-cache'})
+
+
+async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
+    from kommo_phone_duplicates_api import handler
+    return await handler(_deal_request_user, _authorized_deal_lead, _user_can_view_personal_lead,
+                         _http, KOMMO_BASE_URL, HEADERS, logger)(request)
+
+
+async def handle_platform_deal_duplicates(request: web.Request) -> web.Response:
+    from kommo_phone_duplicates_api import tenant_handler
+    return await tenant_handler(_tenant_member_from_request, _tenant_kommo_request, logger)(request)
 
 
 async def handle_platform_hot_orders(request: web.Request) -> web.Response:
@@ -23739,11 +23755,14 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
     app_web.router.add_get("/api/platform/crm/chat/history", handle_platform_crm_chat_history)
+    app_web.router.add_get("/api/platform/crm/chat/attachment", handle_platform_crm_chat_attachment)
     app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
     app_web.router.add_get('/assets/tenant-chat-import.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-import.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/tenant-chat-history.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-history.js'), headers={'Cache-Control': 'no-cache'}))
+    app_web.router.add_get('/assets/tenant-chat-attachments.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-attachments.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get("/api/platform/crm/chat/receipts", handle_platform_crm_chat_review)
     app_web.router.add_post("/api/platform/crm/chat/receipts", handle_platform_crm_chat_review)
     app_web.router.add_get('/assets/tenant-chat-review.js', lambda request: web.FileResponse(
@@ -23807,6 +23826,10 @@ async def start_webhook_server():
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-rules.js'),
         headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
+    app_web.router.add_get('/assets/deal-phone-duplicates.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-phone-duplicates.js'), headers={'Cache-Control': 'no-cache'}))
+    app_web.router.add_get('/api/deal/duplicates', handle_api_deal_duplicates)
+    app_web.router.add_get('/api/platform/crm/deals/duplicates', handle_platform_deal_duplicates)
     deal_tags_api = tags_handler(identify=_deal_request_user, authorize=_authorized_deal_lead,
                                 http=_http, base_url=KOMMO_BASE_URL, headers=HEADERS,
                                 update=update_lead_kommo, invalidate=invalidate_rufat_overview_cache, logger=logger)
