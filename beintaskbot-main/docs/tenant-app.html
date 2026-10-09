@@ -39,7 +39,7 @@
   const api=async(url,opt)=>{
     const r=await fetch(url,{credentials:'same-origin',...opt,headers:{'Content-Type':'application/json',...(opt&&opt.headers||{})}});
     const d=await r.json().catch(()=>({success:false,error:'Server cavabı oxunmadı.'}));
-    if(!r.ok||!d.success)throw new Error(d.error||'Sorğu alınmadı.');
+    if(!r.ok||!d.success){const e=new Error(d.error||'Sorğu alınmadı.');e.keepRequest=d.keep_request!==false;throw e;}
     if(url==='/api/platform/me') applyCapabilities(d);
     return d;
   };
@@ -93,10 +93,16 @@
       const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';
       $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>Kommo ID</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
       $('dealModal').classList.add('show');
+      try{if(sessionStorage.getItem('tenant-chat-send:'+identity+':'+x.kommo_lead_id))$('sendChat').textContent='Vəziyyəti yoxla'}catch(e){$('sendChat').disabled=true;}
       document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
       $('sendChat').onclick=async()=>{
-        const b=$('sendChat'),input=$('chatText'),text=input.value.trim();if(!text)return;b.disabled=true;
-        try{await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify({lead_id:x.kommo_lead_id,text})});if(revision!==chatRevision||identity!==chatIdentity())return;input.value='';await loadChat(x.kommo_lead_id);}catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}finally{b.disabled=false;}
+        const b=$('sendChat'),input=$('chatText'),key='tenant-chat-send:'+identity+':'+x.kommo_lead_id;
+        let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null')}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
+        const text=input.value.trim();if(!pending&&!text)return;
+        if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
+        if(!pending){pending={lead_id:x.kommo_lead_id,text,request_id:crypto.randomUUID(),expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id};try{sessionStorage.setItem(key,JSON.stringify(pending))}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
+        b.disabled=true;b.classList.add('loading');
+        try{const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});sessionStorage.removeItem(key);if(revision!==chatRevision||identity!==chatIdentity())return;if(input.value.trim()===pending.text)input.value='';b.textContent='Göndər';alert('Mesaj Kommo tərəfindən qəbul edildi. Çat tarixçəsində çatdırılmanı yoxlayın.');await loadChat(x.kommo_lead_id);}catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(revision===chatRevision&&identity===chatIdentity()){b.textContent=e.keepRequest===false?'Göndər':'Vəziyyəti yoxla';alert(e.message)}}finally{b.disabled=false;b.classList.remove('loading');}
       };
       loadChat(x.kommo_lead_id);
     }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}

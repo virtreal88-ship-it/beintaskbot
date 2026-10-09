@@ -22381,43 +22381,9 @@ async def handle_platform_crm_chat(request: web.Request) -> web.Response:
 
 
 async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not _tenant_has_module(profile, "deals"):
-        return web.json_response({"success": False, "error": "Mesaj göndərmək üçün icazəniz yoxdur."}, status=403)
-    try:
-        data = await request.json()
-        lead_id = int((data or {}).get("lead_id") or 0)
-    except (TypeError, ValueError):
-        lead_id = 0
-        data = {}
-    text = str((data or {}).get("text") or "").strip()
-    if lead_id <= 0 or not text:
-        return web.json_response({"success": False, "error": "Sövdələşmə və mesaj mətni lazımdır."}, status=400)
-    if len(text) > 8000:
-        return web.json_response({"success": False, "error": "Mesaj çox uzundur."}, status=400)
-    tenant_id = str(profile["tenant_id"])
-    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
-    if not TenantPolicy(profile).can_access_deal(deal):
-        return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
-    try:
-        talks_payload = await _tenant_kommo_request(tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50})
-        talks = ((talks_payload.get("_embedded") or {}).get("talks") or [])
-        talks = [talk for talk in talks if isinstance(talk, dict) and _tenant_talk_id(talk)]
-        talks.sort(key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
-        if not talks:
-            raise TenantPlatformError("Bu sövdələşmə üçün aktiv Kommo çatı tapılmadı.")
-        talk = talks[0]
-        await _tenant_kommo_request(tenant_id, "POST", f"talks/{_tenant_talk_id(talk)}/send_message", json_body={"text": text})
-        await asyncio.to_thread(upsert_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id, messages=[{
-            "external_id": f"local-{uuid.uuid4()}", "direction": "outgoing", "channel": _tenant_talk_channel(talk),
-            "author_name": profile.get("display_name") or "", "body": text, "message_type": "text",
-            "happened_at": datetime.now(timezone.utc).isoformat(), "raw": {"local": True},
-        }])
-        await asyncio.to_thread(append_tenant_audit_event, tenant_id=tenant_id, actor_telegram_id=int(profile["telegram_id"]),
-                                action="chat_message_sent", entity_type="lead", entity_id=str(lead_id), payload={"channel": _tenant_talk_channel(talk)})
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True})
+    from tenant_chat_send_api import handler
+    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
+                         _tenant_kommo_request, _wait_for_tenant_kommo_slot, logger)(request)
 
 
 async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
