@@ -20903,6 +20903,11 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
         await deliver_push_notifications(VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
     except Exception:
         logger.error('Tenant push notification queue failed')
+    try:
+        from tenant_task_decision_worker import deliver
+        await deliver(context.bot,VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
+    except Exception:
+        logger.error('Tenant task decision queue unavailable')
 
 
 async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -40,6 +40,11 @@ class TaskCommandStore:
     def save(self, state: dict) -> None:
         # Keep the review envelope through provider checkpoints and retries.
         state = {**{key: self.state[key] for key in ('approval', 'task_input', 'completion_input') if key in self.state}, **state}
+        from tenant_task_decision_policy import outcome
+        decision = outcome(state) if self.state.get('step') not in {'done', 'rejected'} else None
+        if decision:
+            from tenant_task_decision_schema import ensure_schema
+            ensure_schema(self.conn)
         with self.conn.cursor() as cur:
             cur.execute('''UPDATE saas_task_commands SET state=%s::jsonb, updated_at=now()
                            WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''',
@@ -51,6 +56,9 @@ class TaskCommandStore:
                                (tenant_id, actor_id, request_id, event)
                                VALUES (%s::uuid, %s, %s::uuid, %s) ON CONFLICT DO NOTHING''',
                             (*self.key, event))
+            if decision:
+                cur.execute('''INSERT INTO saas_task_decision_events(tenant_id,actor_id,request_id,outcome)
+                  VALUES(%s::uuid,%s,%s::uuid,%s) ON CONFLICT DO NOTHING''', (*self.key, decision))
         self.conn.commit()
         self.state = state
 
