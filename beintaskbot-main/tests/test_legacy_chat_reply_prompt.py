@@ -21,7 +21,7 @@ class HistoryReply(unittest.TestCase):
         handler = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == 'handle_api_deal_chat_suggest')
         reply = next(node for node in handler.body if isinstance(node, ast.If) and ast.unparse(node.test) == "mode == 'reply'")
         dedicated = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'history_reply_model']
-        self.assertEqual(len(dedicated), 2)
+        self.assertEqual(len(dedicated), 1)
         self.assertTrue(all(node in list(ast.walk(reply)) for node in dedicated))
         summary = next(node for node in handler.body if isinstance(node, ast.FunctionDef) and node.name == '_ask_summary')
         self.assertIn('model=LLM_MODEL', ast.unparse(summary))

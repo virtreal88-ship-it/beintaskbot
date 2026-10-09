@@ -73,6 +73,7 @@ from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from tenant_chat_ai_api import handler as tenant_chat_ai_handler
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
+from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
@@ -18509,19 +18510,14 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             incoming=_history_message_is_incoming,
         )
 
-        def _ask_reply() -> str:
-            resp = llm_client.chat.completions.create(
-                model=history_reply_model(),
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
-                temperature=0.45,
-                max_tokens=1000,
-            )
-            return str((resp.choices[0].message.content if resp.choices else "") or "").strip()
+        def _ask_reply() -> tuple[str, str]:
+            return generate_history_reply(llm_client.chat.completions, history_reply_model(),
+                [{"role": "system", "content": system}, {"role": "user", "content": content}], logger)
 
         try:
-            suggestion = await asyncio.to_thread(_ask_reply)
+            suggestion, used_model = await asyncio.to_thread(_ask_reply)
         except Exception as exc:
-            logger.error("Deal AI reply failed: %s", exc)
+            log_history_reply_failure(logger, exc)
             return web.json_response({"success": False, "error": _ai_error_message(exc)}, status=502)
         if not suggestion:
             return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
@@ -18531,7 +18527,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             "text": suggestion,
             "transcribed_voice_count": transcribed_count,
             "untranscribed_voice_count": untranscribed_voice_count,
-            "model": history_reply_model(),
+            "model": used_model,
             "context_message_count": min(30, sum(isinstance(row, dict) for row in history_rows)),
             **media_counts,
         })

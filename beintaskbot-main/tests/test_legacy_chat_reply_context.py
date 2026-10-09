@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 from legacy_chat_reply_media import reply_media_content
+from legacy_chat_reply_provider import generate, log_failure
 
 TREE = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
 
@@ -38,6 +39,7 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
             'transcribed_count': 1, 'untranscribed_voice_count': 0,
             'history_reply_instructions': lambda: 'Sales instructions',
             'history_reply_model': lambda: 'gpt-4.1-2025-04-14',
+            'generate_history_reply': generate, 'log_history_reply_failure': log_failure, 'logger': Mock(),
             '_select_ai_reply_examples': lambda *args: [], 'llm_client': client,
             'reply_media_content': reply_media_content,
             '_summary_audio_source': lambda row: '',
@@ -53,6 +55,13 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
         self.assertIn(namespace['history'], request['messages'][1]['content'][0]['text'])
         self.assertEqual(result['context_message_count'], 2)
         self.assertEqual(result['transcribed_voice_count'], 1)
+        unavailable=RuntimeError('model_not_found')
+        unavailable.status_code=404;unavailable.body={'code':'model_not_found'}
+        client.chat.completions.create.side_effect=[unavailable, SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='Salam.'))])]
+        result=await namespace['reply']()
+        self.assertEqual(result['model'],'gpt-4.1')
+        self.assertEqual(result['transcribed_voice_count'],1)
+        self.assertIn(namespace['history'],client.chat.completions.create.call_args.kwargs['messages'][1]['content'][0]['text'])
 
     async def test_unrelated_saved_examples_are_not_sent(self):
         function = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == '_select_ai_reply_examples')
