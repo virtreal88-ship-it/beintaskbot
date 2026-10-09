@@ -1,6 +1,8 @@
 """Telegram transport for new SaaS task approval requests only."""
 import asyncio
 from tenant_notification_outbox import expand_events, claim_delivery, finish_delivery
+from tenant_notice_text import message_parts
+from tenant_notice_transport import attempt
 
 
 def approval_message(item: dict) -> str:
@@ -22,23 +24,6 @@ def approval_message(item: dict) -> str:
     return '\n\n'.join(lines)
 
 
-def message_parts(text: str) -> list[str]:
-    """Keep full task/results; conservatively bound Telegram UTF-16 length."""
-    chunks = []
-    current = []
-    size = 0
-    for char in text:
-        units = 2 if ord(char) > 0xffff else 1
-        if size + units > 3600:
-            chunks.append(''.join(current)); current = []; size = 0
-        current.append(char); size += units
-    if current:
-        chunks.append(''.join(current))
-    if len(chunks) <= 1:
-        return chunks
-    return [f'({index}/{len(chunks)})\n{part}' for index, part in enumerate(chunks, 1)]
-
-
 async def deliver_approval_notifications(bot, logger) -> None:
     await asyncio.to_thread(expand_events)
     for _ in range(10):
@@ -47,16 +32,11 @@ async def deliver_approval_notifications(bot, logger) -> None:
             break
         if not item['send']:
             continue
-        try:
-            message_id = None
-            for text in message_parts(approval_message(item)):
-                message = await bot.send_message(chat_id=item['recipient_id'], text=text,
-                                                 parse_mode=None, disable_web_page_preview=True)
-                message_id = message.message_id
-        except Exception:
+        result = await attempt(item, 'telegram', bot, text=approval_message, parts=message_parts)
+        if result.status != 'delivered':
             # Never log private task/result text or Telegram error bodies.
             logger.warning('Tenant approval notice result unknown: tenant=%s request=%s recipient=%s',
                            item['tenant_id'], item['request_id'], item['recipient_id'])
             await asyncio.to_thread(finish_delivery, item, status='unknown')
         else:
-            await asyncio.to_thread(finish_delivery, item, status='delivered', message_id=message_id)
+            await asyncio.to_thread(finish_delivery, item, status='delivered', message_id=result.message_id)

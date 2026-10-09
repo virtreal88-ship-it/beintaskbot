@@ -1,7 +1,8 @@
 """Own approval results: full Telegram text, neutral push payload."""
 import asyncio
 from tenant_task_decision_outbox import expand_events, claim_delivery, finish_delivery
-from tenant_notification_worker import message_parts
+from tenant_notice_text import message_parts
+from tenant_notice_transport import attempt
 from tenant_push_worker import send_push
 
 
@@ -28,16 +29,8 @@ async def deliver(bot, private_key: str, claims: dict, logger) -> None:
             item=await asyncio.to_thread(claim_delivery,channel)
             if item is None: break
             if not item['send']: continue
-            status,message_id='delivered',None
-            try:
-                if channel=='telegram':
-                    for text in message_parts(message(item)):
-                        sent=await bot.send_message(chat_id=item['recipient_id'],text=text,parse_mode=None,disable_web_page_preview=True)
-                        message_id=sent.message_id
-                else:
-                    await asyncio.to_thread(send_push,item,private_key,claims)
-            except Exception as error:
-                code=getattr(getattr(error,'response',None),'status_code',None)
-                status='expired' if channel=='push' and code in {404,410} else 'unknown'
-                logger.warning('Tenant task decision delivery result=%s channel=%s',status,channel)
-            await asyncio.to_thread(finish_delivery,item,status,message_id)
+            result=await attempt(item,channel,bot,text=message,parts=message_parts,
+                                 push_sender=send_push,private_key=private_key,claims=claims)
+            if result.status!='delivered':
+                logger.warning('Tenant task decision delivery result=%s channel=%s',result.status,channel)
+            await asyncio.to_thread(finish_delivery,item,result.status,result.message_id)

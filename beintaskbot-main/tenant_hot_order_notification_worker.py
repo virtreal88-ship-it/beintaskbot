@@ -2,6 +2,7 @@
 import asyncio
 from tenant_hot_order_outbox import expand_events, claim_delivery, finish_delivery
 from tenant_push_worker import send_push
+from tenant_notice_transport import attempt
 
 MESSAGE = 'Yeni isti sifariş var. Məlumatları şirkətinizin kabinetində yoxlayın.\n\nhttps://crm.pro.az/app?view=hot_orders'
 MESSAGES = {
@@ -21,16 +22,8 @@ async def deliver_hot_order_notifications(bot, private_key: str, claims: dict, l
                 break
             if not item['send']:
                 continue
-            status,message_id = 'delivered',None
-            try:
-                if channel=='telegram':
-                    message = await bot.send_message(chat_id=item['recipient_id'],text=MESSAGES.get(item.get('event'),MESSAGE),
-                                                     parse_mode=None,disable_web_page_preview=True)
-                    message_id = message.message_id
-                else:
-                    await asyncio.to_thread(send_push,item,private_key,claims)
-            except Exception as exc:
-                code = getattr(getattr(exc,'response',None),'status_code',None)
-                status = 'expired' if channel=='push' and code in {404,410} else 'unknown'
-                logger.warning('Tenant hot-order notice result=%s channel=%s',status,channel)
-            await asyncio.to_thread(finish_delivery,item,status,message_id)
+            result=await attempt(item,channel,bot,text=lambda row:MESSAGES.get(row.get('event'),MESSAGE),
+                                 parts=lambda text:[text],push_sender=send_push,private_key=private_key,claims=claims)
+            if result.status!='delivered':
+                logger.warning('Tenant hot-order notice result=%s channel=%s',result.status,channel)
+            await asyncio.to_thread(finish_delivery,item,result.status,result.message_id)

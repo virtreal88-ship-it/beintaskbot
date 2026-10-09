@@ -5,6 +5,7 @@ from tenant_linear_notice_outbox import expand_events, claim_delivery, finish_de
 from tenant_linear_observer_cleanup import cleanup
 from tenant_news_ai_worker import process_one as process_news_ai
 from tenant_push_worker import send_push
+from tenant_notice_transport import attempt
 
 MESSAGE = 'Linear tapşırığının statusu dəyişib. Məlumatları şirkətinizin kabinetində yoxlayın.\n\nhttps://crm.pro.az/app?view=linear'
 
@@ -33,15 +34,8 @@ async def observe_and_notify(bot, private_key: str, claims: dict, logger) -> Non
                 break
             if not item['send']:
                 continue
-            status, message_id = 'delivered', None
-            try:
-                if channel == 'telegram':
-                    result = await bot.send_message(chat_id=item['recipient_id'], text=MESSAGE, parse_mode=None, disable_web_page_preview=True)
-                    message_id = result.message_id
-                else:
-                    await asyncio.to_thread(send_push, item, private_key, claims)
-            except Exception as error:
-                code = getattr(getattr(error, 'response', None), 'status_code', None)
-                status = 'expired' if channel == 'push' and code in {404, 410} else 'unknown'
-                logger.warning('Tenant Linear notice result=%s channel=%s', status, channel)
-            await asyncio.to_thread(finish_delivery, item, status, message_id)
+            result = await attempt(item, channel, bot, text=lambda row:MESSAGE, parts=lambda text:[text],
+                                   push_sender=send_push, private_key=private_key, claims=claims)
+            if result.status != 'delivered':
+                logger.warning('Tenant Linear notice result=%s channel=%s', result.status, channel)
+            await asyncio.to_thread(finish_delivery, item, result.status, result.message_id)
