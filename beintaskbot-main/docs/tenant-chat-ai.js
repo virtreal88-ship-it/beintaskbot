@@ -29,5 +29,6 @@
   document.addEventListener('tenant-profile',event=>install(event.detail));
   document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;$('tcAiResult')?.remove();render();});
   document.addEventListener('tenant-chat-loaded',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
+  document.addEventListener('tenant-chat-history-added',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   const initial=epoch;fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});
 })();

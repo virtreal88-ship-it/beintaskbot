@@ -39,7 +39,7 @@
   const api=async(url,opt)=>{
     const r=await fetch(url,{credentials:'same-origin',...opt,headers:{'Content-Type':'application/json',...(opt&&opt.headers||{})}});
     const d=await r.json().catch(()=>({success:false,error:'Server cavabı oxunmadı.'}));
-    if(!r.ok||!d.success){const e=new Error(d.error||'Sorğu alınmadı.');e.keepRequest=d.keep_request!==false;throw e;}
+    if(!r.ok||!d.success){const e=new Error(d.error||'Sorğu alınmadı.');e.status=r.status;e.keepRequest=d.keep_request!==false;throw e;}
     if(url==='/api/platform/me') applyCapabilities(d);
     return d;
   };
@@ -76,13 +76,16 @@
   }
   async function loadChat(id){
     const box=$('chatRows'),revision=chatRevision,identity=chatIdentity();if(!box)return;
+    document.dispatchEvent(new CustomEvent('tenant-chat-history-reset',{detail:{lead_id:id}}));
     box.innerHTML='<div class="sub">Tarixçə yüklənir…</div>';
     try{
       const d=await api('/api/platform/crm/chat?lead_id='+encodeURIComponent(id)+'&refresh=1');
       if(revision!==chatRevision||identity!==chatIdentity()||box!==$('chatRows'))return;
+      try{const history=await api('/api/platform/crm/chat/history?'+new URLSearchParams({lead_id:id,expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id}));Object.assign(d,history);}catch(error){if(error.status&&error.status<500)throw error;d.warning=[d.warning,error.message].filter(Boolean).join(' ');}
+      if(revision!==chatRevision||identity!==chatIdentity()||box!==$('chatRows'))return;
       box.innerHTML=(d.messages||[]).map(chatLine).join('')||'<div class="sub">Bu sövdələşmə üçün çat tarixçəsi tapılmadı.</div>';
       if(d.warning)box.insertAdjacentHTML('afterbegin',`<div class="notice show">${esc(d.warning)}</div>`);
-      document.dispatchEvent(new CustomEvent('tenant-chat-loaded',{detail:{lead_id:id}}));
+      document.dispatchEvent(new CustomEvent('tenant-chat-loaded',{detail:{lead_id:id,messages:d.messages||[],next_cursor:d.next_cursor,render_message:chatLine}}));
     }catch(e){if(revision===chatRevision&&identity===chatIdentity()&&box===$('chatRows'))box.innerHTML=`<div class="notice show">${esc(e.message)}</div>`;}
   }
   async function openDeal(id){
@@ -136,6 +139,7 @@
 <script src="/assets/tenant-chat-ai-settings.js"></script>
 <script src="/assets/tenant-chat-ai.js"></script>
 <script src="/assets/tenant-chat-review.js"></script>
+<script src="/assets/tenant-chat-history.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
 <script src="/assets/tenant-push.js"></script>
