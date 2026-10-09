@@ -102,7 +102,7 @@
         if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
         if(!pending){pending={lead_id:x.kommo_lead_id,text,request_id:crypto.randomUUID(),expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id};try{sessionStorage.setItem(key,JSON.stringify(pending))}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
         b.disabled=true;b.classList.add('loading');
-        try{const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});sessionStorage.removeItem(key);if(revision!==chatRevision||identity!==chatIdentity())return;if(input.value.trim()===pending.text)input.value='';b.textContent='Göndər';alert('Mesaj Kommo tərəfindən qəbul edildi. Çat tarixçəsində çatdırılmanı yoxlayın.');await loadChat(x.kommo_lead_id);}catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(revision===chatRevision&&identity===chatIdentity()){b.textContent=e.keepRequest===false?'Göndər':'Vəziyyəti yoxla';alert(e.message)}}finally{b.disabled=false;b.classList.remove('loading');}
+        try{const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});sessionStorage.removeItem(key);if(revision!==chatRevision||identity!==chatIdentity())return;if(input.value.trim()===pending.text)input.value='';b.textContent='Göndər';alert(sent.manual_review?'Administrator mesajı Kommo-da tapdığını qeyd edib. Mesaj təkrar göndərilmədi.':'Mesaj Kommo tərəfindən qəbul edildi. Çat tarixçəsində çatdırılmanı yoxlayın.');await loadChat(x.kommo_lead_id);}catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(revision===chatRevision&&identity===chatIdentity()){b.textContent=e.keepRequest===false?'Göndər':'Vəziyyəti yoxla';alert(e.message)}}finally{b.disabled=false;b.classList.remove('loading');}
       };
       loadChat(x.kommo_lead_id);
     }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}
@@ -135,6 +135,7 @@
 <script src="/assets/tenant-news-telegram-settings.js"></script>
 <script src="/assets/tenant-chat-ai-settings.js"></script>
 <script src="/assets/tenant-chat-ai.js"></script>
+<script src="/assets/tenant-chat-review.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
 <script src="/assets/tenant-push.js"></script>

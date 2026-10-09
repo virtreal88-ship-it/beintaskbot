@@ -41,6 +41,8 @@ def reserve(session, command):
                 if row['input_hash'] != fingerprint(command):
                     raise TenantLinearError('Eyni sorğu kodu ilə fərqli mesaj göndərilib.', 409)
                 if row['state'] == 'accepted':
+                    if row.get('resolution'):
+                        return {'cached_result': {'state': 'accepted', 'message_id': row['message_id'], 'manual_review': True}}
                     return {'cached_result': {'state': 'accepted', 'message_id': row['message_id']}}
                 error = TenantLinearError('Bu sorğu təkrarlanmır. Göndərilmə vəziyyətini Kommo-da yoxlayın.', 409)
                 error.keep_request = row['state'] != 'blocked'
