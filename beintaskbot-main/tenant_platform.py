@@ -1072,156 +1072,56 @@ def _public_crm_row(row: dict) -> dict:
 
 def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
     """Persist a tenant's Kommo deal snapshot without touching legacy data."""
-    from tenant_crm_snapshots import deal_rows
-    rows = deal_rows(tenant_id, deals, _json)
-    if not rows:
-        return 0
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            # Psycopg 3 pipelines executemany internally: one transaction,
-            # without a separate network round trip for every snapshot.
-            cur.executemany("""
-                    INSERT INTO saas_crm_deals
-                    (tenant_id, kommo_lead_id, pipeline_id, status_id, stage_name, name, contact_name, phone,
-                     channel, last_message, last_message_at, source_updated_at, raw, synced_at)
-                    VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s::timestamptz, %s::timestamptz, %s::jsonb, now())
-                    ON CONFLICT (tenant_id, kommo_lead_id) DO UPDATE SET
-                        pipeline_id = EXCLUDED.pipeline_id, status_id = EXCLUDED.status_id,
-                        stage_name = EXCLUDED.stage_name, name = EXCLUDED.name,
-                        contact_name = EXCLUDED.contact_name, phone = EXCLUDED.phone,
-                        channel = EXCLUDED.channel, last_message = EXCLUDED.last_message,
-                        last_message_at = EXCLUDED.last_message_at,
-                        source_updated_at = EXCLUDED.source_updated_at, raw = EXCLUDED.raw, synced_at = now()
-                """, rows)
-        conn.commit()
-    return len(rows)
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, serialize=_json).upsert_deals(
+        tenant_id=tenant_id, deals=deals)
 
 
 def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] | None = None,
                    status_ids: list[int] | None = None, limit: int = 100, offset: int = 0,
                    scope: list[dict] | None = None) -> tuple[list[dict], int]:
     """List only the selected tenant's cached deals, with DB-side filtering."""
-    safe_limit = max(1, min(int(limit or 100), 200))
-    safe_offset = max(0, int(offset or 0))
-    from tenant_crm_queries import deal_filters
-    where, values = deal_filters(tenant_id=tenant_id, search=search, pipeline_ids=pipeline_ids,
-                                status_ids=status_ids, scope=scope)
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT count(*) AS total FROM saas_crm_deals WHERE {where}", values)
-            total = int((cur.fetchone() or {}).get("total") or 0)
-            cur.execute(
-                f"SELECT * FROM saas_crm_deals WHERE {where} "
-                "ORDER BY last_message_at DESC NULLS LAST, source_updated_at DESC NULLS LAST, synced_at DESC "
-                "LIMIT %s OFFSET %s",
-                [*values, safe_limit, safe_offset],
-            )
-            rows = cur.fetchall()
-    return [_public_crm_row(row) for row in rows], total
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).list_deals(
+        tenant_id=tenant_id, search=search, pipeline_ids=pipeline_ids,
+        status_ids=status_ids, limit=limit, offset=offset, scope=scope)
 
 
 def get_crm_deal(*, tenant_id: str, kommo_lead_id: int) -> dict | None:
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM saas_crm_deals WHERE tenant_id = %s::uuid AND kommo_lead_id = %s AND deleted_at IS NULL", (tenant_id, int(kommo_lead_id)))
-            row = cur.fetchone()
-    return _public_crm_row(row) if row else None
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).get_deal(
+        tenant_id=tenant_id, kommo_lead_id=kommo_lead_id)
 
 
 def get_crm_task(*, tenant_id: str, kommo_task_id: int) -> dict | None:
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute('SELECT * FROM saas_crm_tasks WHERE tenant_id=%s::uuid AND kommo_task_id=%s '
-                        'AND NOT EXISTS (SELECT 1 FROM saas_crm_deals d WHERE d.tenant_id=saas_crm_tasks.tenant_id '
-                        'AND d.kommo_lead_id=saas_crm_tasks.kommo_lead_id AND d.deleted_at IS NOT NULL)',
-                        (tenant_id, int(kommo_task_id)))
-            row = cur.fetchone()
-    return _public_crm_row(row) if row else None
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).get_task(
+        tenant_id=tenant_id, kommo_task_id=kommo_task_id)
 
 
 def upsert_crm_tasks(*, tenant_id: str, tasks: list[dict]) -> int:
-    from tenant_crm_snapshots import task_rows
-    rows = task_rows(tenant_id, tasks, _json)
-    if not rows:
-        return 0
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.executemany("""
-                    INSERT INTO saas_crm_tasks
-                    (tenant_id, kommo_task_id, kommo_lead_id, text, due_at, responsible_id, completed, raw, synced_at)
-                    VALUES (%s::uuid, %s, %s, %s, %s::timestamptz, %s, %s, %s::jsonb, now())
-                    ON CONFLICT (tenant_id, kommo_task_id) DO UPDATE SET
-                        kommo_lead_id = EXCLUDED.kommo_lead_id, text = EXCLUDED.text, due_at = EXCLUDED.due_at,
-                        responsible_id = EXCLUDED.responsible_id, completed = EXCLUDED.completed,
-                        raw = EXCLUDED.raw, synced_at = now()
-                """, rows)
-        conn.commit()
-    return len(rows)
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, serialize=_json).upsert_tasks(
+        tenant_id=tenant_id, tasks=tasks)
 
 
 def list_crm_tasks(*, tenant_id: str, responsible_id: int | None = None, scope: dict | None = None, limit: int = 100) -> list[dict]:
-    if responsible_id == 0:
-        return []
-    from tenant_crm_queries import task_filters
-    where, values = task_filters(tenant_id=tenant_id, responsible_id=responsible_id, scope=scope)
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT * FROM saas_crm_tasks WHERE {where} "
-                "ORDER BY completed ASC, due_at ASC NULLS LAST, synced_at DESC LIMIT %s",
-                [*values, max(1, min(int(limit or 100), 200))],
-            )
-            rows = cur.fetchall()
-    return [_public_crm_row(row) for row in rows]
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).list_tasks(
+        tenant_id=tenant_id, responsible_id=responsible_id, scope=scope, limit=limit)
 
 
 def upsert_crm_messages(*, tenant_id: str, kommo_lead_id: int, messages: list[dict]) -> int:
     """Store a compact per-tenant chat snapshot; no messages cross tenants."""
-    from tenant_message_snapshots import message_rows
-    rows = message_rows(tenant_id, kommo_lead_id, messages, _json, uuid.uuid4)
-    if not rows:
-        return 0
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.executemany("""
-                    INSERT INTO saas_crm_messages
-                    (id, tenant_id, kommo_lead_id, external_id, direction, channel, author_name,
-                     body, message_type, media_url, happened_at, raw)
-                    VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s::timestamptz, %s::jsonb)
-                    ON CONFLICT (tenant_id, external_id) DO UPDATE SET
-                        direction = EXCLUDED.direction, channel = EXCLUDED.channel,
-                        author_name = EXCLUDED.author_name, body = EXCLUDED.body,
-                        message_type = EXCLUDED.message_type, media_url = EXCLUDED.media_url,
-                        happened_at = EXCLUDED.happened_at, raw = EXCLUDED.raw
-                """, rows)
-        conn.commit()
-    return len(rows)
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, serialize=_json, id_factory=uuid.uuid4).upsert_messages(
+        tenant_id=tenant_id, kommo_lead_id=kommo_lead_id, messages=messages)
 
 
 def list_crm_messages(*, tenant_id: str, kommo_lead_id: int, limit: int = 120) -> list[dict]:
-    with _connect() as conn:
-        _ensure_schema(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT * FROM (
-                    SELECT external_id, direction, channel, author_name, body, message_type, media_url, happened_at, created_at
-                    FROM saas_crm_messages
-                    WHERE tenant_id = %s::uuid AND kommo_lead_id = %s
-                    ORDER BY COALESCE(happened_at,created_at) DESC, external_id DESC
-                    LIMIT %s
-                ) recent
-                ORDER BY COALESCE(happened_at,created_at) ASC, external_id ASC
-            """, (tenant_id, int(kommo_lead_id), max(1, min(int(limit or 120), 300))))
-            rows = cur.fetchall()
-    return [_public_crm_row(row) for row in rows]
+    from tenant_crm_repository import CRMRepository
+    return CRMRepository(_connect, _ensure_schema, payload=_public_crm_row).list_messages(
+        tenant_id=tenant_id, kommo_lead_id=kommo_lead_id, limit=limit)
 
 
 def append_audit_event(*, tenant_id: str, action: str, actor_telegram_id: int | None = None,
