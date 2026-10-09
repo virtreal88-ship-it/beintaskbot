@@ -1,10 +1,10 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../docs/index.html'),'utf8');
-const names=['terminalStageLabel','isSuccessfulChatDeal','isDeclinedChatDeal','chatsInboxDeals','applyInboxPulseRow'];
+const names=['terminalStageLabel','isSuccessfulChatDeal','isDeclinedChatDeal','isNizamiHiddenChatStage','chatsInboxDeals','applyInboxPulseRow'];
 const code=names.map(name=>source.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0]).join('\n');
 const won={id:1,status_id:142,stage_key:'ugurlu',needs_reply:true,last_client_message:'New'};
 const lost={id:2,status_id:143,stage_key:'imtina',needs_reply:true};const active={id:3,status_id:555};
-const context={samilDeals:[won,lost,active],_chatsListFilter:'all',_chatsAssigneeFilter:'all',_chatsStageFilters:new Set(),isAdmin:false,
+const context={CURRENT_PIPELINE_ID:0,NIZAMI_PIPELINE_ID:14243944,SOVDELESMELER_PIPELINE_ID:8329347,samilDeals:[won,lost,active],_chatsListFilter:'all',_chatsAssigneeFilter:'all',_chatsStageFilters:new Set(),isAdmin:false,
  document:{getElementById:()=>({value:''})},chatInboxSourceDeals:()=>context.samilDeals,dealLastClientMessage:()=>'',
  chatBelongsToViewer:()=>true,chatsIsUnanswered:()=>true,chatsFollowupState:()=>null,isChatPinned:()=>false,chatsListAt:()=>0,
  dealByWaPhone:()=>active,viewerWaLine:()=>'',showLivePreviewInOpenChat:()=>{throw Error('Successful message must not be displayed');}};

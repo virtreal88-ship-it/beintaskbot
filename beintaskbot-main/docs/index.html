@@ -10847,6 +10847,7 @@ function viewerWaLine() {
     return '';
 }
 function chatBelongsToViewer(deal) {
+    if(isNizamiHiddenChatStage(deal)) return false;
     if(isAdmin && !adminChatDealsLoaded && !isNizamiQueueDeal(deal)) return false;
     if(!isAdmin && CURRENT_PIPELINE_ID && Number(deal && deal.pipeline_id || 0) && Number(deal.pipeline_id) !== Number(CURRENT_PIPELINE_ID)) return false;
     const channel = String((deal && (deal.chat_channel || deal.inbox_channel)) || '').toLowerCase();
@@ -10868,6 +10869,14 @@ const NIZAMI_CHAT_FILTER_STAGES = [
     ['muzakire','Müzakirə',110722180]
 ];
 const SOVDELESMELER_PIPELINE_ID = 8329347;
+function isNizamiHiddenChatStage(deal) {
+    // Personal inbox rule only; never changes deals/tasks or other viewers.
+    if(Number(CURRENT_PIPELINE_ID) !== NIZAMI_PIPELINE_ID || !deal || Number(deal.pipeline_id) !== SOVDELESMELER_PIPELINE_ID) return false;
+    const kind = String(deal.nizami_queue_kind || '');
+    if(kind) return kind === 'new_request';
+    const label = String(deal.stage_name || deal.stage_key || '').toLocaleLowerCase('az').replace(/[əıöüğşç]/g, char => ({'ə':'e','ı':'i','ö':'o','ü':'u','ğ':'g','ş':'s','ç':'c'}[char] || char));
+    return label.includes('yeni') && (label.includes('muraciet') || label.includes('sorgu'));
+}
 function isSuccessfulChatDeal(deal) {
     const key = String((deal && deal.stage_key) || '').trim().toLowerCase();
     return key === 'ugurlu' || Number(deal && deal.status_id) === 142;
@@ -11710,6 +11719,12 @@ function dealByWaPhone(phone) {
 function applyInboxPulseRow(row) {
     if(!row || !row.id) return false;
     let deal = (samilDeals || []).find(item => String(item.id) === String(row.id));
+    if(isNizamiHiddenChatStage(row)) {
+        // Keep the existing deal in the workspace, but hide its chat and do
+        // not append the incoming preview to an already-open conversation.
+        if(deal) {deal.pipeline_id=row.pipeline_id;deal.nizami_queue_kind='new_request';if(row.status_id)deal.status_id=row.status_id;}
+        return !!deal;
+    }
     if(isSuccessfulChatDeal(row)) {
         if(deal) {deal.status_id=142;deal.stage_key='ugurlu';deal.stage_name='Uğurla tamamlandı';deal.needs_reply=false;}
         return !!deal;
