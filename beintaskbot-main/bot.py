@@ -22377,6 +22377,13 @@ async def handle_platform_crm_chat_history(request: web.Request) -> web.Response
     return await handler(_tenant_member_from_request, logger)(request)
 
 
+async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
+    from tenant_chat_import_api import handler
+    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
+                         _tenant_kommo_request, tenant_member, upsert_tenant_crm_messages,
+                         _tenant_normalize_talk_message, _tenant_talk_channel, logger)(request)
+
+
 async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
     from tenant_chat_send_api import handler
     return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
@@ -23709,6 +23716,9 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
     app_web.router.add_get("/api/platform/crm/chat/history", handle_platform_crm_chat_history)
+    app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
+    app_web.router.add_get('/assets/tenant-chat-import.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-import.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/tenant-chat-history.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-history.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get("/api/platform/crm/chat/receipts", handle_platform_crm_chat_review)
