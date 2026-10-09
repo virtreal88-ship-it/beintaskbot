@@ -20896,6 +20896,11 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
 
 async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
+        from tenant_crm_notice_worker import deliver as deliver_crm_notices
+        await deliver_crm_notices(context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)
+    except Exception:
+        logger.error('Tenant CRM notification queue unavailable')
+    try:
         await deliver_approval_notifications(context.bot, logger)
     except Exception:
         logger.exception('Tenant approval notification queue failed')
@@ -22384,6 +22389,20 @@ async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
                          _tenant_normalize_talk_message, _tenant_talk_channel, logger)(request)
 
 
+async def handle_platform_deal_complete(request: web.Request) -> web.Response:
+    from tenant_deal_completion_api import handler
+    from tenant_deal_completion_provider import provider
+    return await handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
+        provider(_tenant_kommo_request,_wait_for_tenant_kommo_slot),logger)(request)
+
+
+async def handle_platform_deal_approvals(request: web.Request) -> web.Response:
+    from tenant_deal_completion_api import handler
+    from tenant_deal_completion_provider import provider
+    return await handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
+        provider(_tenant_kommo_request,_wait_for_tenant_kommo_slot),logger,review=True)(request)
+
+
 async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
     from tenant_chat_send_api import handler
     return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
@@ -22739,6 +22758,11 @@ async def serve_tenant_task_approvals_script(_request: web.Request) -> web.Respo
 
 async def serve_tenant_task_completion_script(_request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-task-completion.js'),
+                            headers={'Cache-Control': 'no-store'})
+
+
+async def serve_tenant_deal_completion_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-deal-completion.js'),
                             headers={'Cache-Control': 'no-store'})
 
 
@@ -23694,6 +23718,9 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/tasks/complete', handle_platform_task_complete)
+    app_web.router.add_post('/api/platform/crm/deals/complete', handle_platform_deal_complete)
+    app_web.router.add_get('/api/platform/crm/deal-approvals', handle_platform_deal_approvals)
+    app_web.router.add_post('/api/platform/crm/deal-approvals', handle_platform_deal_approvals)
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
@@ -23809,6 +23836,7 @@ async def start_webhook_server():
     app_web.router.add_get("/documentation", serve_documentation_page)
     app_web.router.add_get('/assets/tenant-task-approvals.js', serve_tenant_task_approvals_script)
     app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
+    app_web.router.add_get('/assets/tenant-deal-completion.js', serve_tenant_deal_completion_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get('/assets/tenant-hot-order-settings.js', serve_tenant_hot_order_settings)
     app_web.router.add_get('/assets/tenant-hot-orders.js', serve_tenant_hot_orders_script)

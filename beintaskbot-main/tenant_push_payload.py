@@ -26,6 +26,14 @@ _PAYLOADS = {
         'url': '/app?view=hot_orders', 'tag': 'crm-hot-order-review', 'kind': 'hot_order_decided'},
 }
 _PAYLOADS['linear_status_changed'] = _PAYLOADS['linear_done']
+for _event, _body, _view in (
+    ('task_assigned', 'Yeni tapşırıq var. Kabinetdə yoxlayın.', 'tasks'),
+    ('task_overdue', 'Gecikmiş tapşırıq var. Kabinetdə yoxlayın.', 'tasks'),
+    ('new_lead', 'Yeni sövdələşmə var. Kabinetdə yoxlayın.', 'customers'),
+    ('incoming_message', 'Yeni mesaj var. Kabinetdə yoxlayın.', 'customers'),
+):
+    _PAYLOADS[_event] = {'title': 'CRM Smart Assistant', 'body': _body,
+                         'url': '/app?view=' + _view, 'tag': 'crm-' + _event, 'kind': 'crm_notice', 'event': _event}
 
 
 def payload_for(event: str | None) -> dict[str, str]:

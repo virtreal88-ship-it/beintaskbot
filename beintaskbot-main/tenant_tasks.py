@@ -161,7 +161,7 @@ async def create_task(profile: dict, data: dict, request: KommoRequest, *, revie
         await asyncio.to_thread(upsert_crm_tasks, tenant_id=tenant, tasks=[{
             'kommo_task_id': task_id, 'kommo_lead_id': lead_id, 'text': task_body['text'],
             'due_at': datetime.fromtimestamp(payload['complete_till'], timezone.utc).isoformat(),
-            'responsible_id': responsible, 'raw': {**task_body, **task}}])
+            'responsible_id': responsible, 'raw': {**task_body, 'created_at': int(time.time()), **task}}])
         await asyncio.to_thread(append_audit_event, tenant_id=tenant, actor_telegram_id=int(profile['telegram_id']),
                                action='task_created', entity_type='kommo_task', entity_id=str(task_id), payload=result)
         return result

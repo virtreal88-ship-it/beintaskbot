@@ -46,7 +46,7 @@
   function applyCapabilities(data){
     state.me=data.member;state.capabilities=data.capabilities||{};state.rolePermissions=data.role_permissions||{};
     const modules={...(state.capabilities.modules||{})};
-    modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders);
+    modules.approvals=['owner','admin'].includes(state.me.role)&&!!(modules.tasks||modules.hot_orders||modules.deals);
     document.querySelectorAll('.nav [data-view]').forEach(button=>{
       const key=button.dataset.view;
       button.hidden=key!=='profile'&&!modules[key];
@@ -143,5 +143,6 @@
 <script src="/assets/tenant-chat-import.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
+<script src="/assets/tenant-deal-completion.js"></script>
 <script src="/assets/tenant-push.js"></script>
 </body></html>

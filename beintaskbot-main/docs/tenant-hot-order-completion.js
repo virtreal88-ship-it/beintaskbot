@@ -58,8 +58,8 @@
   document.addEventListener('tenant-hot-order-command',event=>open(event.detail.row,event.detail.action));
   function apply(data){const next=JSON.stringify([data.member,data.capabilities]),changed=next!==scope;
     if(next!==scope){scope=next;generation++;busy=loading=false;rows=[];total=0;payload=selected=null;modal.classList.remove('show');$('hotApprovalList').innerHTML='';$('hotCompletionResult').textContent='';$('hotCompletionText').value='';notice('hotApprovalNotice','');notice('hotCompletionNotice','');$('hotCompletionSubmit').disabled=false;$('hotApprovalRefresh').disabled=false;}
-    profile=data.member;capabilities=data.capabilities||{};nav.hidden=!['owner','admin'].includes(profile.role)||!(capabilities.modules?.tasks||capabilities.modules?.hot_orders);nav.style.display=nav.hidden?'none':'';
-    $('hotApprovalTab').hidden=!canReview();$('systemApprovalTab').hidden=!capabilities.modules?.tasks;
+    profile=data.member;capabilities=data.capabilities||{};nav.hidden=!['owner','admin'].includes(profile.role)||!(capabilities.modules?.tasks||capabilities.modules?.hot_orders||capabilities.modules?.deals);nav.style.display=nav.hidden?'none':'';
+    $('hotApprovalTab').hidden=!canReview();$('systemApprovalTab').hidden=!(capabilities.modules?.tasks||capabilities.modules?.deals);
     if(changed&&capabilities.modules?.hot_orders){
       try{const saved=JSON.parse(sessionStorage.getItem(key())||'null');
         if(saved&&['complete','approve','reject'].includes(saved.action)&&String(saved.expected_tenant_id)===String(profile.tenant_id)&&String(saved.expected_user_id)===String(profile.telegram_id)&&
