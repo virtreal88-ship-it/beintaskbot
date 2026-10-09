@@ -3,6 +3,7 @@ import hashlib
 import json
 import uuid
 from tenant_linear_policy import TenantLinearError
+from tenant_chat_reader import read_conversations
 
 
 def command(data: dict) -> dict:
@@ -22,22 +23,12 @@ def fingerprint(value: dict) -> str:
 
 
 async def resolve_route(tenant: str, lead_id: int, request) -> dict:
-    payload = await request(tenant, 'GET', 'talks', params={'filter[entity_id][]': lead_id, 'filter[entity_type]': 'lead', 'limit': 50})
-    talks = (payload.get('_embedded') or {}).get('talks') or []
-    if (payload.get('_links') or {}).get('next') or not 0 < len(talks) <= 6:
-        raise TenantLinearError('Çat mənbəyi tam yoxlanmadı. Kommo-da cavab verin.', 409)
     incoming = []
-    for talk in talks:
-        if not isinstance(talk, dict) or int(talk.get('entity_id') or 0) != lead_id or talk.get('entity_type') not in {'lead', 'leads', 2, '2'}:
-            raise TenantLinearError('Çatın sövdələşmə ilə əlaqəsi təsdiqlənmədi.', 409)
+    for talk, rows in await read_conversations(tenant, lead_id, request):
         talk_id = int(talk.get('talk_id') or talk.get('id') or 0)
         chat_id = str(talk.get('chat_id') or '')
         if not talk_id or not chat_id:
             raise TenantLinearError('Çat identifikatoru yoxdur.', 409)
-        page = await request(tenant, 'GET', f'talks/{talk_id}/messages', params={'limit': 250, 'page': 1})
-        if (page.get('_links') or {}).get('next'):
-            raise TenantLinearError('Çat tarixçəsi natamamdır. Kommo-da cavab verin.', 409)
-        rows = (page.get('_embedded') or {}).get('messages') or page.get('messages') or []
         for row in rows:
             if not isinstance(row, dict):
                 continue

@@ -22313,45 +22313,27 @@ def _tenant_normalize_talk_message(message: dict, channel: str) -> dict:
     text = nested.get("text") or message.get("text") or nested.get("caption") or message.get("caption") or ""
     attachment = nested.get("attachment") if isinstance(nested.get("attachment"), dict) else message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
     media = attachment.get("link") or attachment.get("url") or attachment.get("file_url") or ""
-    message_type = attachment.get("type") or nested.get("type") or message.get("type") or "text"
+    message_type = attachment.get("type") or nested.get("message_type") or message.get("message_type") or nested.get("type") or message.get("type") or "text"
+    if str(message_type).casefold() in {"incoming", "outgoing"}:
+        message_type = "text"
     created = nested.get("created_at") or message.get("created_at") or nested.get("timestamp") or message.get("timestamp")
     external = nested.get("msgid") or nested.get("id") or message.get("msgid") or message.get("id") or ""
+    author = nested.get("author") or message.get("author") or ""
+    author_name = author.get("name") or "" if isinstance(author, dict) else str(author)
     return {
         "external_id": str(external), "direction": direction, "channel": channel,
-        "author_name": str(nested.get("author") or message.get("author") or ""), "body": str(text),
+        "author_name": str(author_name), "body": str(text),
         "message_type": str(message_type), "media_url": str(media), "happened_at": _tenant_kommo_timestamp(created), "raw": message,
     }
 
 
 async def _sync_tenant_chat(profile: dict, lead_id: int) -> list[dict]:
-    """Read one recent Talk and cache messages within that tenant only."""
-    tenant_id = str(profile["tenant_id"])
-    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=tenant_id, kommo_lead_id=lead_id)
-    if not TenantPolicy(profile).can_access_deal(deal):
-        raise TenantPlatformError("Sövdələşmə seçilmiş siyahıda deyil.")
-    payload = await _tenant_kommo_request(
-        tenant_id, "GET", "talks", params={"filter[entity_id][]": lead_id, "filter[entity_type]": "lead", "limit": 50},
-    )
-    talks = ((payload.get("_embedded") or {}).get("talks") or [])
-    talks = [talk for talk in talks if isinstance(talk, dict) and _tenant_talk_id(talk)]
-    talks.sort(key=lambda item: int(item.get("updated_at") or item.get("created_at") or 0), reverse=True)
-    if not talks:
-        return await asyncio.to_thread(list_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id)
-    talk = talks[0]
-    talk_id = _tenant_talk_id(talk)
-    messages_payload = await _tenant_kommo_request(
-        tenant_id, "GET", f"talks/{talk_id}/messages", params={"limit": 100, "page": 1, "order[created_at]": "desc"},
-    )
-    raw_messages = ((messages_payload.get("_embedded") or {}).get("messages") or messages_payload.get("messages") or [])
-    normalized = [_tenant_normalize_talk_message(item, _tenant_talk_channel(talk)) for item in raw_messages if isinstance(item, dict)]
-    if normalized:
-        await asyncio.to_thread(upsert_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id, messages=normalized)
-        latest = max(normalized, key=lambda item: item.get("happened_at") or "")
-        await asyncio.to_thread(upsert_tenant_crm_deals, tenant_id=tenant_id, deals=[{
-            **deal, "last_message": latest.get("body") or "", "last_message_at": latest.get("happened_at"),
-            "channel": latest.get("channel") or "", "raw": deal.get("raw") or {},
-        }])
-    return await asyncio.to_thread(list_tenant_crm_messages, tenant_id=tenant_id, kommo_lead_id=lead_id)
+    """Compatibility wrapper; bounded reader and cache service live separately."""
+    from tenant_chat_sync import sync
+    return await sync(profile, lead_id, _tenant_kommo_request, tenant_member,
+                      get_tenant_crm_deal, list_tenant_crm_messages,
+                      upsert_tenant_crm_messages, upsert_tenant_crm_deals,
+                      _tenant_normalize_talk_message, _tenant_talk_channel)
 
 
 async def handle_platform_crm_chat(request: web.Request) -> web.Response:

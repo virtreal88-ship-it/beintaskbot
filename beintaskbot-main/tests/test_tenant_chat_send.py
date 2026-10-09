@@ -42,10 +42,11 @@ class Routing(unittest.IsolatedAsyncioTestCase):
             provider = AsyncMock(side_effect=[{'_embedded': {'talks': conversations}}, messages])
             with self.assertRaises(TenantLinearError): await resolve_route(TENANT, 7, provider)
 
-    async def test_partial_catalog_or_history_blocks_instead_of_fallback(self):
-        for catalog, history in (({'_links': {'next': {}}, '_embedded': {'talks': [talk(1)]}}, page(1)), ({'_embedded': {'talks': [talk(1)]}}, {**page(1), '_links': {'next': {'href': 'more'}}})):
-            if catalog.get('_links'): catalog['_links']['next'] = {'href': 'more'}
-            with self.assertRaises(TenantLinearError): await resolve_route(TENANT, 7, AsyncMock(side_effect=[catalog, history]))
+    async def test_partial_catalog_or_repeated_history_blocks_instead_of_fallback(self):
+        catalog={'_links': {'next': {}}, '_embedded': {'talks': [talk(1)]}}
+        with self.assertRaises(TenantLinearError): await resolve_route(TENANT, 7, AsyncMock(return_value=catalog))
+        history={**page(1), '_links': {'next': {'href': 'more'}}}
+        with self.assertRaises(TenantLinearError): await resolve_route(TENANT, 7, AsyncMock(side_effect=[{'_embedded':{'talks':[talk(1)]}},history,history]))
 
     async def test_closed_latest_chat_not_replaced_with_other_channel(self):
         with self.assertRaises(TenantLinearError):

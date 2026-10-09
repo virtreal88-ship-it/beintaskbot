@@ -80,6 +80,9 @@ class Policy(unittest.TestCase):
         self.assertEqual(result['direction'],'incoming');self.assertEqual(result['message_type'],'audio')
         self.assertEqual(normalize({'type':'audio'},'other')['direction'],'unknown')
         self.assertEqual(normalize({'incoming':False},'other')['direction'],'outgoing')
+        official=normalize({'type':'incoming','message_type':'voice','author':{'name':'Customer'}},'instagram')
+        self.assertEqual(official['message_type'],'voice');self.assertEqual(official['author_name'],'Customer')
+        self.assertEqual(normalize({'type':'outgoing'},'other')['message_type'],'text')
 
     def test_visible_history_limits_recent_rows_then_orders_chronologically(self):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_platform.py').read_text(encoding='utf-8-sig'))
