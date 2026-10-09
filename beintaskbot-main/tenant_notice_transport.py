@@ -18,7 +18,7 @@ class DeliveryResult:
     message_id: int | None = None
 
 
-async def attempt(item: dict, channel: str, bot: TelegramBot, *,
+async def attempt(item: dict, channel: str, bot: TelegramBot | None, *,
                   text: Callable[[dict], str], parts: Callable[[str], list[str]],
                   push_sender: Callable[[dict, str, dict], None] | None = None,
                   private_key: str = '', claims: dict | None = None) -> DeliveryResult:
@@ -32,6 +32,8 @@ async def attempt(item: dict, channel: str, bot: TelegramBot, *,
     message_id = None
     try:
         if channel == 'telegram':
+            if bot is None:
+                raise ValueError('Telegram transport is not configured')
             for part in parts(text(item)):
                 sent = await bot.send_message(chat_id=item['recipient_id'], text=part,
                                               parse_mode=None, disable_web_page_preview=True)

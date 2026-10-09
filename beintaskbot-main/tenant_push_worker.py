@@ -1,12 +1,12 @@
 """Generic push alerts: no company/person/task identifiers in external payload."""
 import asyncio
-import hashlib
-import json
 import requests
 from pywebpush import webpush, WebPushException
 from tenant_platform import _fernet
 from tenant_push import normalize_subscription
 from tenant_push_outbox import claim_push, finish_push
+from tenant_push_provider import send as send_provider
+from tenant_notice_transport import attempt
 
 
 class NoRedirectSession(requests.Session):
@@ -16,30 +16,9 @@ class NoRedirectSession(requests.Session):
 
 
 def send_push(item: dict, private_key: str, claims: dict) -> None:
-    subscription=normalize_subscription(json.loads(_fernet().decrypt(bytes(item['subscription']))))
-    if hashlib.sha256(subscription['endpoint'].encode()).hexdigest()!=item['endpoint_hash']:
-        raise ValueError('Push device identity mismatch')
-    payload={'title':'CRM Smart Assistant','body':'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
-             'url':'/app','tag':'crm-task-approval'}
-    if item.get('event')=='task_approval_decided':
-        payload={'title':'CRM Smart Assistant','body':'Tapşırıq təsdiqinin nəticəsi hazırdır. Kabinetdə yoxlayın.',
-                 'url':'/app?view=tasks','tag':'crm-task-decision','kind':'task_decided'}
-    if item.get('event') in {'linear_done','linear_status_changed'}:
-        payload={'title':'CRM Smart Assistant','body':'Linear tapşırığının statusu dəyişib. Kabinetdə yoxlayın.',
-                 'url':'/app?view=linear','tag':'crm-linear','kind':'linear'}
-    if item.get('event')=='hot_order_available':
-        payload={'title':'CRM Smart Assistant','body':'Yeni isti sifariş var. Kabinetdə yoxlayın.',
-                 'url':'/app?view=hot_orders','tag':'crm-hot-order','kind':'hot_order'}
-    if item.get('event') in {'hot_order_completion_requested','hot_order_completion_decided'}:
-        requested=item['event']=='hot_order_completion_requested'
-        payload={'title':'CRM Smart Assistant','body':'İsti sifariş üzrə yenilik var. Kabinetdə yoxlayın.',
-                 'url':'/app?view=approvals' if requested else '/app?view=hot_orders',
-                 'tag':'crm-hot-order-review','kind':'hot_order_review' if requested else 'hot_order_decided'}
-    with NoRedirectSession() as session:
-        result=webpush(subscription_info=subscription,data=json.dumps(payload),vapid_private_key=private_key,
-                       vapid_claims=dict(claims),requests_session=session,timeout=15,ttl=300)
-        if not 200<=result.status_code<300:
-            raise WebPushException('Push rejected',response=result)
+    send_provider(item, private_key, claims, decrypt=_fernet().decrypt,
+                  normalize=normalize_subscription, session_factory=NoRedirectSession,
+                  webpush=webpush, rejection=WebPushException)
 
 
 async def deliver_push_notifications(private_key: str, claims: dict, logger) -> None:
@@ -51,12 +30,9 @@ async def deliver_push_notifications(private_key: str, claims: dict, logger) -> 
             break
         if not item['send']:
             continue
-        status='delivered'
-        try:
-            await asyncio.to_thread(send_push,item,private_key,claims)
-        except Exception as exc:
-            response=getattr(exc,'response',None)
-            code=getattr(response,'status_code',None)
-            status='expired' if code in {404,410} else 'unknown'
-            logger.warning('Tenant push result=%s tenant=%s request=%s',status,str(item['tenant_id']),str(item['request_id']))
-        await asyncio.to_thread(finish_push,item,status)
+        result = await attempt(item, 'push', None, text=lambda row: '', parts=lambda text: [],
+                               push_sender=send_push, private_key=private_key, claims=claims)
+        if result.status != 'delivered':
+            logger.warning('Tenant push result=%s tenant=%s request=%s',
+                           result.status, str(item['tenant_id']), str(item['request_id']))
+        await asyncio.to_thread(finish_push, item, result.status)

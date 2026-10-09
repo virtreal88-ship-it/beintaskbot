@@ -71,6 +71,13 @@ class Transport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.run_attempt('push',private_key='')).status,'unknown')
         self.push.assert_not_called()
 
+    async def test_push_requires_no_telegram_bot_and_missing_bot_is_unknown(self):
+        options = dict(text=self.text, parts=self.parts, push_sender=self.push,
+                       private_key='key', claims={})
+        self.assertEqual((await attempt(self.item, 'push', None, **options)).status, 'delivered')
+        self.assertEqual((await attempt(self.item, 'telegram', None, **options)).status, 'unknown')
+        self.text.assert_not_called()
+
     async def test_unclaimed_or_invalid_channel_rejected_before_provider(self):
         with self.assertRaises(ValueError):await self.run_attempt('email')
         self.item['send']=False
