@@ -57,7 +57,8 @@ def normalize_page(resource: str, rows: list[dict], stage_names: dict[int, str])
             if item.get('is_deleted') is True:
                 raise ValueError('Deleted lead in active CRM page')
             contacts = (item.get('_embedded') or {}).get('contacts') or []
-            contact = contacts[0] if contacts and isinstance(contacts[0], dict) else {}
+            contact = next((c for c in contacts if isinstance(c, dict) and c.get('is_main')),
+                           contacts[0] if contacts and isinstance(contacts[0], dict) else {})
             status = positive_id(item.get('status_id'))
             result.append({'kommo_lead_id': record_id, 'pipeline_id': positive_id(item.get('pipeline_id')),
                 'status_id': status, 'stage_name': stage_display_name(status,stage_names.get(status, 'Mərhələ göstərilməyib')),

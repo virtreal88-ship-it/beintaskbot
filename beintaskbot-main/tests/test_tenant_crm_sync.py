@@ -263,7 +263,8 @@ class TokenRefreshTests(unittest.TestCase):
 
     def test_regular_refresh_preserves_connection_identity_and_requires_same_active_account(self):
         self.ns['replace_kommo_tokens'](**self.args)
-        sql, values = self.cur.execute.call_args.args
+        sql, values = next(call.args for call in self.cur.execute.call_args_list
+                           if 'CASE WHEN %s THEN connected_at ELSE now() END' in call.args[0])
         self.assertIn('CASE WHEN %s THEN connected_at ELSE now() END', sql)
         self.assertIn("status = 'connected' AND account_domain = %s", sql)
         self.assertTrue(values[3]);self.assertTrue(values[5])
@@ -271,7 +272,8 @@ class TokenRefreshTests(unittest.TestCase):
 
     def test_new_oauth_connection_gets_new_identity(self):
         self.ns['save_kommo_oauth_tokens'](**self.args)
-        values = self.cur.execute.call_args.args[1]
+        values = next(call.args[1] for call in self.cur.execute.call_args_list
+                      if 'CASE WHEN %s THEN connected_at ELSE now() END' in call.args[0])
         self.assertFalse(values[3]);self.assertFalse(values[5])
 
 

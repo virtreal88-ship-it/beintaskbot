@@ -6,6 +6,7 @@ from tenant_crm_sync_data import PAGE_SIZE, page_items, normalize_page, deleted_
 from tenant_crm_sync_store import SyncPageStore
 from tenant_policy import positive_id
 from tenant_crm_sync_windows import window_params
+from tenant_crm_contacts import enrich_contacts
 
 KommoRead = Callable[..., Awaitable[dict]]
 
@@ -43,6 +44,8 @@ async def sync_one_page(store: SyncPageStore, request: KommoRead) -> None:
     ids = [positive_id(item.get('id')) for item in items]
     if ids and (min(ids) <= int(row.get('last_record_id') or 0) or ids != sorted(set(ids))):
         raise ValueError('CRM page did not advance in ID order')
+    if resource == 'leads' and not deleted:
+        items = await enrich_contacts(tenant, items, request)
     snapshots = deleted_page(items) if deleted else normalize_page(resource, items, stage_names)
     # A full page always probes another page, regardless of HAL links. Never
     # follow a provider-supplied URL (host and credentials stay server-owned).

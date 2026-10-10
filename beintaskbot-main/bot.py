@@ -23882,6 +23882,8 @@ async def start_webhook_server():
     app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
     app_web.router.add_get('/assets/tenant-deal-completion.js', serve_tenant_deal_completion_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
+    app_web.router.add_get('/assets/tenant-workspace.js', lambda request: web.FileResponse(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workspace.js')))
     app_web.router.add_get('/assets/tenant-hot-order-settings.js', serve_tenant_hot_order_settings)
     app_web.router.add_get('/assets/tenant-hot-orders.js', serve_tenant_hot_orders_script)
     app_web.router.add_get('/assets/tenant-hot-order-completion.js', serve_tenant_hot_order_completion_script)

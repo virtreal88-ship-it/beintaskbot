@@ -162,12 +162,30 @@ class TenantPolicy:
 
     def public_capabilities(self) -> dict:
         return {'modules': {key: self.allows(key) for key in ROLE_PERMISSIONS['owner']},
+                'deal_board': self.deal_board(),
                 'chat_ai': self.can_use_chat_ai(),
                 'hot_orders': HotOrderPolicy(self).capabilities(),
                 'notification_events': notification_catalog(),
                 'pipeline_scope': self.pipeline_scope(), 'task_scope': self.task_scope(),
                 'task_completion_requires_admin': self.requires_task_approval(creator_id=0, executor_id=0, completion=True),
                 'deal_completion_requires_admin': self.requires_deal_approval()}
+
+    def deal_board(self) -> list[dict]:
+        """Display metadata only for pipelines/stages this membership may read."""
+        if not (self.allows('deals') or self.allows('customers')):
+            return []
+        pipelines = {positive_id(p.get('pipeline_id')): p for p in self.config.get('pipelines', [])}
+        result = []
+        for scope in self.pipeline_scope():
+            pid = scope['pipeline_id']
+            stages = sorted((s for s in self.config.get('stages', [])
+                             if positive_id(s.get('pipeline_id')) == pid
+                             and positive_id(s.get('stage_id')) in scope['status_ids']),
+                            key=lambda s: (s.get('sort_order', 0), positive_id(s.get('stage_id'))))
+            result.append({'pipeline_id': pid, 'name': str(pipelines.get(pid, {}).get('name') or ''),
+                           'stages': [{'stage_id': positive_id(s.get('stage_id')), 'name': str(s.get('name') or '')}
+                                      for s in stages]})
+        return result
 
     def can_use_chat_ai(self) -> bool:
         return (self.profile.get('active') is not False and (self.allows('deals') or self.allows('customers'))
