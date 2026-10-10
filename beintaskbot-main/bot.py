@@ -22664,6 +22664,10 @@ async def serve_webapp(request: web.Request) -> web.Response:
 
 async def serve_landing_page(request: web.Request) -> web.Response:
     """Serve the public BeinSystems product landing page at the domain root."""
+    from public_integration_pages import localized_page
+    localized = localized_page(request, "site")
+    if localized is not None:
+        return localized
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = (
         os.path.join(base_dir, "docs", "landing.html"),
@@ -22831,6 +22835,10 @@ async def serve_deal_page(request: web.Request) -> web.Response:
 
 
 async def serve_privacy_policy(request: web.Request) -> web.Response:
+    from public_integration_pages import localized_page
+    localized = localized_page(request, "privacy")
+    if localized is not None:
+        return localized
     base_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(base_dir)
     candidates = (
