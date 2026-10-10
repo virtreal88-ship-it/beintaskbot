@@ -22662,6 +22662,17 @@ async def serve_webapp(request: web.Request) -> web.Response:
     return resp
 
 
+async def serve_moderation_login(request: web.Request) -> web.Response:
+    from moderation_demo_api import page
+    return await page(request)
+
+
+async def handle_moderation_login(request: web.Request) -> web.Response:
+    from moderation_demo_api import handler
+    return await handler(_make_tenant_session, _TENANT_SESSION_COOKIE,
+                         CANONICAL_WEB_ORIGIN, logger)(request)
+
+
 async def serve_landing_page(request: web.Request) -> web.Response:
     """Serve the public BeinSystems product landing page at the domain root."""
     from public_integration_pages import localized_page
@@ -23054,6 +23065,10 @@ def _tenant_session_identity(request: web.Request) -> tuple[str, int] | None:
         if int(expires_raw) < int(_time_module.time()):
             return None
         chat_id = int(chat_id_raw)
+        if chat_id <= 0:
+            from moderation_demo import identity_allowed
+            if not identity_allowed(tenant_id, chat_id):
+                return None
         return (tenant_id, chat_id) if chat_id else None
     except (TypeError, ValueError):
         return None
@@ -23857,6 +23872,8 @@ async def start_webhook_server():
     app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|alarm\\.wav}", serve_web_asset)
     app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
+    app_web.router.add_get("/moderation/login", serve_moderation_login)
+    app_web.router.add_post("/api/platform/moderation/login", handle_moderation_login)
     app_web.router.add_get("/privacy-policy.html", serve_privacy_policy)
     app_web.router.add_get("/nece-baslamaq", serve_getting_started_page)
     app_web.router.add_get("/news", serve_news_page)
@@ -24836,3 +24853,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
