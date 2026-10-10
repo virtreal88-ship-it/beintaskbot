@@ -1334,7 +1334,15 @@ def finalize_onboarding(*, tenant_id: str, owner_id: int) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("UPDATE saas_tenants SET status = 'ready_for_integration', updated_at = now() WHERE id = %s::uuid RETURNING *", (tenant_id,))
+            cur.execute("""
+                UPDATE saas_tenants t SET status = CASE
+                    WHEN t.status IN ('onboarding', 'ready_for_integration') THEN
+                        CASE WHEN EXISTS (SELECT 1 FROM saas_tenant_integrations i
+                            WHERE i.tenant_id=t.id AND i.provider='kommo' AND i.status='connected')
+                        THEN 'active' ELSE 'ready_for_integration' END
+                    ELSE t.status END, updated_at = now()
+                WHERE t.id = %s::uuid RETURNING t.*
+            """, (tenant_id,))
             row = cur.fetchone()
         conn.commit()
     return _tenant_payload(row)
@@ -1637,6 +1645,11 @@ def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payloa
                 RETURNING provider, status, account_domain, metadata, connected_at, updated_at
             """, (domain, _json(metadata), encrypted, refresh_only, tenant_id, refresh_only, domain))
             row = cur.fetchone()
+            if row:
+                # Setup may be completed before OAuth. Activate only that
+                # completed workspace; never revive a disabled company.
+                cur.execute("""UPDATE saas_tenants SET status='active', updated_at=now()
+                    WHERE id=%s::uuid AND status='ready_for_integration'""", (tenant_id,))
         conn.commit()
     if not row:
         raise TenantPlatformError("Kommo bağlantısı üçün quraşdırma tapılmadı.")
