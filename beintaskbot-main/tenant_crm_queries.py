@@ -3,12 +3,17 @@
 Values always remain separate from SQL. Explicit empty/unknown scopes deny
 access; a missing scope preserves the existing trusted caller contract.
 """
+from uuid import UUID
+
 from crm_stage_labels import stage_display_name
 
 
 def public_crm_row(row: dict) -> dict:
     """Serialize a snapshot without modifying the original database row."""
     result = dict(row)
+    for key, value in result.items():
+        if isinstance(value, UUID):
+            result[key] = str(value)
     if 'stage_name' in result:
         result['stage_name'] = stage_display_name(result.get('status_id'), result['stage_name'])
     for key in ('last_message_at', 'source_updated_at', 'synced_at', 'due_at', 'happened_at', 'created_at'):

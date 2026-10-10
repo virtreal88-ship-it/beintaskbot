@@ -1,10 +1,21 @@
 """Pure query contracts: isolation, scopes, parameters and serialization."""
 from datetime import datetime, timezone
 import unittest
+import json
+from uuid import uuid4
 from tenant_crm_queries import deal_filters, task_filters, public_crm_row
 
 
 class CRMQueries(unittest.TestCase):
+    def test_public_payload_serializes_database_uuid_without_mutating_row(self):
+        identity, tenant = uuid4(), uuid4()
+        row = {'id': identity, 'tenant_id': tenant, 'deleted_at': None, 'raw': {'id': 42}}
+        result = public_crm_row(row)
+        self.assertEqual(json.loads(json.dumps(result))['id'], str(identity))
+        self.assertEqual(result['tenant_id'], str(tenant))
+        self.assertIs(row['id'], identity)
+        self.assertEqual(result['raw'], {'id': 42})
+
     def test_every_query_starts_with_tenant_isolation(self):
         for builder in (deal_filters, task_filters):
             sql_a, values_a = builder(tenant_id='company-a')
