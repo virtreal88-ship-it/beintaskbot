@@ -30,7 +30,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             except context.platform_error:
                 ready = False
             return web.json_response({"success": True, "integration": integration, "oauth_ready": ready})
-    
+
         async def disconnect(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -50,7 +50,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             return web.json_response({"success": True, "integration": item})
-    
+
         async def start(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -68,7 +68,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             return web.json_response({"success": True, "authorize_url": "https://www.kommo.com/oauth?" + urlencode({
                 "client_id": client_id, "state": state, "mode": "popup"})})
-    
+
         async def callback(request: web.Request) -> web.Response:
             query = request.rel_url.query
             state = str(query.get("state") or "")
@@ -94,7 +94,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 client_id, client_secret, redirect_uri = client.settings()
                 if not code:
                     raise context.platform_error("Kommo təsdiq kodunu göndərmədi.")
-    
+
                 def exchange() -> dict:
                     response = requests.post(
                         f"https://{domain}/oauth2/access_token",
@@ -106,7 +106,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                         raise context.platform_error("Kommo bağlantısı təsdiqlənmədi. Yenidən cəhd edin.")
                     payload = response.json()
                     return payload if isinstance(payload, dict) else {}
-    
+
                 tokens = await asyncio.to_thread(exchange)
                 await asyncio.to_thread(context.save_tokens, tenant_id=tenant_id,
                                         account_domain=domain, token_payload=tokens)
@@ -117,7 +117,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 context.logger.exception("Kommo OAuth callback failed")
                 raise web.HTTPFound("/setup?kommo=error&reason=" + quote("Kommo bağlantısı tamamlanmadı.", safe=""))
             raise web.HTTPFound("/setup?kommo=connected")
-    
+
         async def pipelines(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -135,7 +135,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": True, "pipelines": [row for row in rows if row["id"]]})
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-    
+
         async def test(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -147,7 +147,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                     "subdomain": str(account.get("subdomain") or "")}})
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-    
+
         async def save_pipelines(request: web.Request) -> web.Response:
             profile = context.member(request, owner_only=True)
             if not profile:
@@ -209,8 +209,7 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": True, "tenant": tenant})
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
-    
+
         return {"request": request_connection, "disconnect": disconnect, "start": start,
                 "callback": callback, "pipelines": pipelines, "test": test,
                 "save_pipelines": save_pipelines}
-
