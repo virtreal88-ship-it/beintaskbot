@@ -54,6 +54,8 @@ from crm_stage_labels import stage_display_name
 from kommo_deal_tags import public_tags, tag_list, tags_handler
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_web_routes import TenantWebContext, register_feature_routes
+from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECONDS
+from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_web_assets import register_assets
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -21617,88 +21619,14 @@ async def handle_platform_workflow_catalog(request: web.Request) -> web.Response
     return web.json_response({'success': True, 'pipelines': pipelines, 'users': users, 'warnings': warnings})
 
 
-def _safe_platform_patch(value) -> dict:
-    if not isinstance(value, dict):
-        return {}
-    result = {}
-    for key in ("company_name", "industry", "team", "sources", "pipeline", "modules", "notifications", "notes", "completed_steps"):
-        if key in value:
-            result[key] = value[key]
-    return result
-
-
-def _platform_ai_fallback(message: str, current: dict | None = None) -> tuple[str, dict]:
-    """Keep the setup conversational even if the optional AI call is down."""
-    text = str(message or "").strip()
-    onboarding = current if isinstance(current, dict) else {}
-    if not onboarding.get("team"):
-        question = "Əla. Komandada kimlər işləyir: menecerlər, satış əməkdaşları və ya ustalar? Təxminən neçə nəfərdir?"
-    elif not onboarding.get("sources"):
-        question = "Müştəriləriniz əsasən haradan yazır: WhatsApp, Instagram, TikTok, sayt, telefon və ya başqa kanal?"
-    else:
-        question = "Başa düşdüm. Hansı müraciətləri daha tez görmək istəyirsiniz: yeni satış, təkrar müraciət, yoxsa təcili sifariş?"
-    return (
-        question,
-        {"notes": [text] if text else []},
+def _ask_tenant_onboarding(system: str, prompt: str) -> str:
+    response = llm_client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        temperature=0.25,
+        max_tokens=500,
     )
-
-
-async def handle_platform_ai_onboarding(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "Yalnız şirkət sahibi quraşdırmanı dəyişə bilər."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    message = str((data or {}).get("message") or "").strip()[:2500]
-    if not message:
-        return web.json_response({"success": False, "error": "Mesajı yazın."}, status=400)
-    current = profile.get("onboarding") if isinstance(profile.get("onboarding"), dict) else {}
-    system = (
-        "Sən CRM Smart Assistant üçün ilkin quraşdırma köməkçisisən. Azərbaycan dilində qısa, anlayışlı cavab ver. "
-        "İstifadəçinin sözlərindən yalnız bu JSON sahələrini təklif et: company_name, industry, team, sources, pipeline, "
-        "modules, notifications, notes, completed_steps. Heç vaxt giriş məlumatı, token və ya parol istəmə. "
-        "Cavabı yalnız JSON kimi qaytar: {\"reply\":\"...\",\"patch\":{...}}. Reply yalnız bir növbəti, qısa sual olsun; "
-        "bir cavabda çox sual vermə. İlk cavabdan company_name və industry-ni çıxarmağa çalış. "
-        "modules yalnız deals,tasks,customers,hot_orders,finance boolean açarlarından; notifications yalnız new_lead,incoming_message,task_assigned,task_overdue boolean açarlarından ibarət olsun."
-    )
-    prompt = f"Mövcud quraşdırma: {json.dumps(current, ensure_ascii=False)}\nİstifadəçinin cavabı: {message}"
-
-    def _ask() -> str:
-        response = llm_client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            temperature=0.25,
-            max_tokens=500,
-        )
-        return str((response.choices[0].message.content if response.choices else "") or "").strip()
-
-    reply, patch = _platform_ai_fallback(message, current)
-    try:
-        raw = await asyncio.to_thread(_ask)
-        parsed = json.loads(raw[raw.find("{"):raw.rfind("}") + 1]) if "{" in raw and "}" in raw else {}
-        if isinstance(parsed, dict):
-            reply = str(parsed.get("reply") or reply).strip()[:1200]
-            patch = _safe_platform_patch(parsed.get("patch")) or patch
-    except Exception as exc:
-        logger.warning("Platform onboarding AI fallback used: %s", exc)
-    try:
-        tenant = await asyncio.to_thread(update_onboarding, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]), patch=patch)
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True, "reply": reply, "patch": patch, "tenant": tenant})
-
-
-async def handle_platform_finish_onboarding(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        tenant = await asyncio.to_thread(finalize_onboarding, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]))
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True, "tenant": tenant})
+    return str((response.choices[0].message.content if response.choices else "") or "").strip()
 
 
 async def handle_platform_create_invite(request: web.Request) -> web.Response:
@@ -22826,8 +22754,8 @@ _WEB_SESSION_COOKIE = "bein_tg_session"
 # still signed and access is checked against the active employee record on
 # every API request, so deactivating an employee immediately revokes access.
 _WEB_SESSION_TTL_SEC = 30 * 24 * 60 * 60
-_TENANT_SESSION_COOKIE = "csa_tenant_session"
-_TENANT_SESSION_TTL_SEC = 8 * 60 * 60
+_TENANT_SESSION_COOKIE = COOKIE_NAME
+_TENANT_SESSION_TTL_SEC = TTL_SECONDS
 _TELEGRAM_INIT_MAX_AGE_SEC = 24 * 60 * 60
 _WEB_LOGIN_TTL_SEC = 10 * 60
 _PERMANENT_WEB_LOGIN_TTL_SEC = 365 * 24 * 60 * 60
@@ -22976,49 +22904,30 @@ def _web_session_user_id(request: web.Request) -> int | None:
         return None
 
 
+def _tenant_demo_identity_allowed(tenant_id: str, chat_id: int) -> bool:
+    from moderation_demo import identity_allowed
+    return identity_allowed(tenant_id, chat_id)
+
+
+_tenant_browser_session = TenantBrowserSession(
+    secret=lambda: TELEGRAM_TOKEN,
+    member=lambda tenant_id, chat_id: tenant_member(tenant_id, chat_id),
+    identity_allowed=_tenant_demo_identity_allowed,
+    membership_error=TenantPlatformError,
+    clock=lambda: _time_module.time(),
+)
+
+
 def _make_tenant_session(tenant_id: str, chat_id: int) -> str:
-    """Create a tenant-scoped browser session separate from the legacy CRM."""
-    expires_at = int(_time_module.time()) + _TENANT_SESSION_TTL_SEC
-    payload = f"{str(tenant_id)}.{int(chat_id)}.{expires_at}"
-    key = hashlib.sha256(f"tenant-session:{TELEGRAM_TOKEN}".encode("utf-8")).digest()
-    signature = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{payload}.{signature}"
+    return _tenant_browser_session.issue(tenant_id, chat_id)
 
 
 def _tenant_session_identity(request: web.Request) -> tuple[str, int] | None:
-    raw = str(request.cookies.get(_TENANT_SESSION_COOKIE) or "")
-    try:
-        tenant_id, chat_id_raw, expires_raw, received_signature = raw.rsplit(".", 3)
-        uuid.UUID(tenant_id)
-        payload = f"{tenant_id}.{chat_id_raw}.{expires_raw}"
-        key = hashlib.sha256(f"tenant-session:{TELEGRAM_TOKEN}".encode("utf-8")).digest()
-        expected_signature = hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected_signature, received_signature):
-            return None
-        if int(expires_raw) < int(_time_module.time()):
-            return None
-        chat_id = int(chat_id_raw)
-        if chat_id <= 0:
-            from moderation_demo import identity_allowed
-            if not identity_allowed(tenant_id, chat_id):
-                return None
-        return (tenant_id, chat_id) if chat_id else None
-    except (TypeError, ValueError):
-        return None
+    return _tenant_browser_session.identity(request)
 
 
 def _tenant_member_from_request(request: web.Request, *, owner_only: bool = False) -> dict | None:
-    identity = _tenant_session_identity(request)
-    if not identity:
-        return None
-    tenant_id, chat_id = identity
-    try:
-        profile = tenant_member(tenant_id, chat_id)
-    except TenantPlatformError:
-        return None
-    if not profile or (owner_only and profile.get("role") != "owner"):
-        return None
-    return profile
+    return _tenant_browser_session.profile(request, owner_only=owner_only)
 
 
 def _is_public_api_request(request: web.Request) -> bool:
@@ -23691,8 +23600,12 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
-    app_web.router.add_post("/api/platform/onboarding/assistant", handle_platform_ai_onboarding)
-    app_web.router.add_post("/api/platform/onboarding/finish", handle_platform_finish_onboarding)
+    onboarding_assistant, onboarding_complete = tenant_onboarding_handlers(
+        _tenant_member_from_request, _ask_tenant_onboarding, update_onboarding,
+        finalize_onboarding, TenantPlatformError, logger,
+    )
+    app_web.router.add_post("/api/platform/onboarding/assistant", onboarding_assistant)
+    app_web.router.add_post("/api/platform/onboarding/finish", onboarding_complete)
     app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
     app_web.router.add_post("/api/platform/invites/accept", handle_platform_accept_invite)
     app_web.router.add_get("/api/platform/access-requests", handle_platform_invite_requests)
