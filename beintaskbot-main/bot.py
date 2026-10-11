@@ -124,6 +124,18 @@ from legacy_kommo_chat_message_meta import (
 from legacy_kommo_chat_normalizer import (
     _format_chat_message, configure_chat_message_normalizer,
 )
+from legacy_kommo_chat_channels import (
+    CHAT_CHANNEL_LABELS, _channels_from_talks, _note_channel_key, _note_is_incoming,
+    _ranked_reply_talk_ids, _talk_blob, _talk_channel_key, _talk_chat_id,
+    _talk_has_digits, _talk_id_of, _talk_is_open, _talk_is_whatsapp_business,
+    _talk_reply_rank, configure_chat_channels,
+)
+from legacy_kommo_chat_resolver import (
+    _resolve_channel_talk, _resolve_channel_talk_id, configure_chat_resolver,
+)
+from legacy_kommo_chat_sender import (
+    _send_kommo_talk_message, _send_kommo_talk_text, configure_chat_sender,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1358,6 +1370,24 @@ configure_chat_message_normalizer(
     format_timestamp=lambda value: _deal_fmt_ts(value),
     origin_channel=lambda value: _origin_channel_key(value),
     allowed_media=lambda value: _is_allowed_media_url(value),
+)
+configure_chat_channels(
+    origin_channel_key=lambda value: _origin_channel_key(value),
+    channel_labels=CHAT_CHANNEL_LABELS,
+    display_number=lambda value: _wa_display_number(value),
+)
+configure_chat_resolver(
+    fetch_talks=lambda lead_id, contact_ids: _fetch_talks(lead_id, contact_ids),
+    lead_contact_ids=lambda lead: _lead_contact_ids(lead),
+    remembered_talk_id=lambda lead_id: _lead_open_talk.get(int(lead_id or 0), 0),
+)
+configure_chat_sender(
+    quote_bodies=lambda payload, reply_id, reply_text="": _kommo_quote_bodies(
+        payload, reply_id, reply_text,
+    ),
+    post_json=lambda url, body, headers=None: _post_kommo_json(url, body, headers),
+    error_detail=lambda response: _kommo_error_detail(response),
+    app_logger=logger,
 )
 
 
@@ -9199,27 +9229,9 @@ def _fetch_talks(lead_id: int, contact_ids: list[int] | None = None, *, include_
     return res
 
 
-def _talk_is_open(talk: dict) -> bool:
-    if not isinstance(talk, dict):
-        return False
-    if talk.get("is_closed") in {True, 1, "1", "true", "True"}:
-        return False
-    if talk.get("closed_at"):
-        return False
-    status = str(talk.get("status") or "").lower()
-    if status in {"2", "closed"}:
-        return False
-    return True
 
 
 NIZAMI_WHATSAPP_NUMBER = "994502072240"
-CHAT_CHANNEL_LABELS = {
-    "whatsapp": "WhatsApp",
-    "instagram": "Instagram",
-    "facebook": "Facebook",
-    "tiktok": "TikTok",
-    "telegram": "Telegram",
-}
 
 
 RUFAT_WHATSAPP_NUMBER = os.environ.get("RUFAT_WHATSAPP_NUMBER", "994102135105")
@@ -9275,48 +9287,12 @@ def _wa_display_number(digits: str) -> str:
     return f"+{clean}" if len(clean) >= 8 else ""
 
 
-def _talk_blob(talk: dict) -> str:
-    try:
-        return json.dumps(talk, ensure_ascii=False).lower()
-    except Exception:
-        return str(talk or "").lower()
 
 
-def _talk_is_whatsapp_business(talk: dict) -> bool:
-    """Return True for the legacy WhatsApp Business/WABA channel.
-
-    Customer chats are now handled only by the grey Kommo WhatsApp
-    integration.  Kommo still returns old WABA talks together with the grey
-    talks, so they must not be selected as a reply target (that is what
-    produced provider error 3136).  Keep this check limited to talk metadata;
-    message text is not part of the Talk object returned by the API.
-    """
-    blob = _talk_blob(talk)
-    if not blob:
-        return False
-    markers = (
-        "whatsapp business",
-        "whatsapp_business",
-        "whatsapp-business",
-        "whatsapp cloud",
-        "whatsapp_cloud",
-        "cloud api",
-        "cloud_api",
-        '"waba"',
-    )
-    return any(marker in blob for marker in markers)
 
 
-def _talk_has_digits(talk: dict, digits: str) -> bool:
-    wanted = re.sub(r"\D", "", str(digits or ""))
-    if len(wanted) < 8:
-        return False
-    blob = re.sub(r"\D", "", _talk_blob(talk))
-    return wanted in blob or wanted[-9:] in blob
 
 
-def _join_channel_fields(*parts) -> str:
-    return " ".join(str(part or "").strip() for part in parts if str(part or "").strip()).lower()
 
 
 def _origin_channel_key(blob: str) -> str:
@@ -9336,145 +9312,20 @@ def _origin_channel_key(blob: str) -> str:
     return ""
 
 
-def _talk_channel_key(talk: dict) -> str:
-    chat = talk.get("chat") if isinstance(talk.get("chat"), dict) else {}
-    origin = " ".join(
-        str(part or "")
-        for part in (
-            talk.get("origin"),
-            talk.get("source"),
-            chat.get("type"),
-            chat.get("origin"),
-            talk.get("entity_type"),
-        )
-    ).strip().lower()
-    key = _origin_channel_key(origin)
-    if key:
-        return key
-    # Kommo widgets do not use one uniform schema.  For example, Instagram
-    # and TikTok can be nested under an integration/chat metadata object
-    # instead of the top-level origin.  Looking through the safe serialized
-    # Talk makes the reply route follow the channel that the customer used.
-    key = _origin_channel_key(_talk_blob(talk))
-    if key:
-        return key
-    return "whatsapp" if origin in {"", "chat", "capi", "wa", "im"} or not origin.strip() else "other"
 
 
-def _note_is_incoming(note_type: str) -> bool:
-    text = str(note_type or "").lower()
-    if "outgoing" in text or text in {"sms_out", "call_out"}:
-        return False
-    return "incoming" in text or text in {"sms_in", "call_in"}
 
 
-def _note_channel_key(note: dict | None) -> str:
-    data = note if isinstance(note, dict) else {}
-    note_type = str(data.get("note_type") or data.get("type") or "").lower()
-    if note_type in {"sms_in", "sms_out", "amomail_message"}:
-        return ""
-    params = data.get("params") if isinstance(data.get("params"), dict) else {}
-    blob = _join_channel_fields(
-        note_type,
-        params.get("service"),
-        params.get("origin"),
-        params.get("source"),
-        params.get("messenger"),
-        params.get("type"),
-        params.get("provider"),
-        params.get("waba"),
-    )
-    key = _origin_channel_key(blob)
-    if key:
-        return key
-    if note_type in {"incoming_chat_message", "outgoing_chat_message"}:
-        return "whatsapp"
-    return ""
 
 
-def _talk_reply_rank(talk: dict) -> tuple:
-    channel = _talk_channel_key(talk)
-    wa = 1 if channel == "whatsapp" else 0
-    opened = 1 if _talk_is_open(talk) else 0
-    try:
-        updated = int(talk.get("updated_at") or talk.get("created_at") or 0)
-    except (TypeError, ValueError):
-        updated = 0
-    return (opened, wa, updated)
 
 
-def _channels_from_talks(talks: list[dict], sender_digits: str = "") -> list[dict]:
-    grouped: dict[str, list[dict]] = {}
-    for talk in talks or []:
-        key = _talk_channel_key(talk)
-        if key not in CHAT_CHANNEL_LABELS:
-            continue
-        # Never expose the retired WABA talk as a live customer chat.  The
-        # grey Kommo talk remains available and is the only valid sender.
-        if key == "whatsapp" and _talk_is_whatsapp_business(talk):
-            continue
-        grouped.setdefault(key, []).append(talk)
-    rows = []
-    order = ["whatsapp", "instagram", "facebook", "tiktok", "telegram"]
-    for key in order:
-        group = grouped.get(key) or []
-        if not group:
-            continue
-        if key == "whatsapp" and sender_digits:
-            matched = [talk for talk in group if _talk_has_digits(talk, sender_digits)]
-            if matched:
-                group = matched
-        group.sort(key=_talk_reply_rank, reverse=True)
-        talk = group[0]
-        rows.append({
-            "key": key,
-            "label": CHAT_CHANNEL_LABELS[key],
-            "talk_id": _talk_id_of(talk),
-            "chat_id": _talk_chat_id(talk),
-            "open": _talk_is_open(talk),
-            "sender_phone": _wa_display_number(sender_digits) if key == "whatsapp" else "",
-        })
-    return rows
 
 
-def _talk_chat_id(talk: dict) -> str:
-    if not isinstance(talk, dict):
-        return ""
-    for key in ("chat_id", "conversation_id"):
-        val = str(talk.get(key) or "").strip()
-        if val:
-            return val
-    origin = talk.get("origin")
-    if isinstance(origin, dict):
-        val = str(origin.get("chat_id") or origin.get("id") or "").strip()
-        if val:
-            return val
-    chat = talk.get("chat")
-    if isinstance(chat, dict):
-        val = str(chat.get("id") or chat.get("chat_id") or "").strip()
-        if val:
-            return val
-    return ""
 
 
-def _talk_id_of(talk: dict) -> int:
-    try:
-        return int(talk.get("talk_id") or talk.get("id") or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
-def _ranked_reply_talk_ids(talks: list[dict]) -> list[int]:
-    ranked = []
-    seen: set[int] = set()
-    for talk in talks or []:
-        talk_id = _talk_id_of(talk)
-        if not talk_id or talk_id in seen:
-            continue
-        seen.add(talk_id)
-        ranked.append((_talk_reply_rank(talk), talk_id))
-    ranked.sort(reverse=True)
-    return [item[1] for item in ranked]
 
 
 def _kommo_error_detail(resp) -> str:
@@ -9498,52 +9349,8 @@ def _kommo_error_detail(resp) -> str:
     return (resp.text or "")[:240]
 
 
-def _resolve_channel_talk(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> tuple[int, str]:
-    try:
-        hinted_id = int(hinted or 0)
-    except (TypeError, ValueError):
-        hinted_id = 0
-    try:
-        lid = int(lead.get("id") or 0)
-    except (TypeError, ValueError):
-        lid = 0
-    talks = _fetch_talks(lid, _lead_contact_ids(lead))
-    wanted = str(channel or "whatsapp").strip().lower() or "whatsapp"
-    channels = _channels_from_talks(talks, sender_digits)
-    row = next((item for item in channels if item.get("key") == wanted), None)
-
-    def is_requested_channel(actual: str) -> bool:
-        # The Instagram/TikTok widget can share one Kommo profile, but these
-        # are still distinct conversations.  Never cross-route between them:
-        # an answer belongs to the exact source of the last incoming message.
-        return str(actual or "").strip().lower() == wanted
-
-    if hinted_id:
-        hinted_talk = next((talk for talk in talks if _talk_id_of(talk) == hinted_id), None)
-        hinted_row = next((item for item in channels if int(item.get("talk_id") or 0) == hinted_id), None)
-        # The Talk stored on the visible incoming message is more precise than
-        # a previously opened chat in another browser tab.
-        if hinted_talk and not _talk_is_whatsapp_business(hinted_talk) and is_requested_channel(_talk_channel_key(hinted_talk)):
-            return hinted_id, _talk_chat_id(hinted_talk)
-        if hinted_row and is_requested_channel(str(hinted_row.get("key") or "")):
-            return hinted_id, str(hinted_row.get("chat_id") or "")
-    remembered_id = int(_lead_open_talk.get(lid) or 0)
-    if remembered_id:
-        remembered = next((talk for talk in talks if _talk_id_of(talk) == remembered_id), None)
-        remembered_channel = _talk_channel_key(remembered or {})
-        if remembered and not _talk_is_whatsapp_business(remembered) and is_requested_channel(remembered_channel):
-            return remembered_id, _talk_chat_id(remembered)
-    if row and row.get("talk_id"):
-        return int(row.get("talk_id") or 0), str(row.get("chat_id") or "")
-    # Never fall back to an arbitrary Talk.  In particular, selecting an old
-    # WhatsApp Business/WABA Talk is what caused Kommo error 3136.  The grey
-    # Kommo conversation must be resolved explicitly from its channel metadata.
-    return 0, ""
 
 
-def _resolve_channel_talk_id(lead: dict, channel: str, sender_digits: str = "", hinted: int = 0) -> int:
-    talk_id, _chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted)
-    return talk_id
 
 
 def _looks_chat_message_id(value: str) -> bool:
@@ -9628,138 +9435,10 @@ def _post_kommo_json(url: str, body: dict, extra_headers: dict | None = None):
     return _http.post(url, headers=headers, json=body, timeout=20)
 
 
-def _is_official_talk_send(url: str) -> bool:
-    text = str(url or "")
-    return "/api/v4/talks/" in text and text.endswith("/send_message")
 
 
-def _send_kommo_talk_message(
-    talk_id: int,
-    text: str,
-    attachment: dict | None = None,
-    reply_to: str = "",
-    chat_id: str = "",
-    reply_text: str = "",
-    plain_fallback: bool = True,
-) -> tuple[bool, str, int]:
-    # Official send_message is text/attachment only and silently drops reply_to.
-    # Native quotes go through amojo / ajax / talks messages only.
-    att_clean = dict(attachment) if isinstance(attachment, dict) else None
-    is_voice = bool(att_clean and att_clean.pop("is_voice", False))
-    payload: dict = {}
-    if text:
-        payload["text"] = text
-    elif att_clean:
-        if not is_voice:
-            payload["text"] = "Fayl"
-    if att_clean:
-        payload["attachment"] = att_clean
-    if not payload:
-        return False, "Mesaj boş ola bilməz", 0
-    reply_id = str(reply_to or "").strip()
-    talk_send = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/send_message"
-    talk_messages = f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages"
-    ajax_talk_send = f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/send_message"
-    ajax_talk_send_v2 = f"{KOMMO_BASE_URL}/ajax/v2/talks/{int(talk_id)}/send_message"
-    attempts: list[tuple[str, dict, dict]] = []
-    if reply_id:
-        quote_bodies = _kommo_quote_bodies(payload, reply_id, reply_text)
-        primary = quote_bodies[0]
-        msgid_only = {**payload, "reply_to": {"message": {"msgid": reply_id}}}
-        id_only = {**payload, "reply_to": {"message": {"id": reply_id}}}
-        ajax = {"X-Requested-With": "XMLHttpRequest"}
-        if chat_id:
-            amojo_body = {"text": payload.get("text", text or ""), "reply_to": {"message": {"id": reply_id, "msgid": reply_id}}}
-            if att_clean:
-                amojo_body["attachment"] = att_clean
-            if reply_text:
-                amojo_body["reply_to"]["message"]["type"] = "text"
-                amojo_body["reply_to"]["message"]["text"] = str(reply_text)[:200]
-            if is_voice and att_clean:
-                voice_amojo = dict(amojo_body)
-                voice_amojo["attachment"] = {**att_clean, "type": "voice"}
-                attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", voice_amojo, {}))
-            attempts.append((f"https://amojo.kommo.com/v2/chats/{chat_id}", amojo_body, {}))
-            if is_voice and att_clean:
-                voice_pri = {**primary, "attachment": {**att_clean, "type": "voice"}}
-                attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", voice_pri, ajax))
-                attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", voice_pri, ajax))
-            attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/send", primary, ajax))
-            attempts.append((f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/send", primary, ajax))
-        if is_voice and att_clean:
-            voice_pri = {**primary, "attachment": {**att_clean, "type": "voice"}}
-            attempts.append((talk_messages, voice_pri, {}))
-            attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", voice_pri, ajax))
-            attempts.append((ajax_talk_send, voice_pri, ajax))
-            attempts.append((ajax_talk_send_v2, voice_pri, ajax))
-        attempts.append((talk_messages, primary, {}))
-        attempts.append((talk_messages, msgid_only, {}))
-        attempts.append((talk_messages, id_only, {}))
-        attempts.append((f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages", primary, ajax))
-        attempts.append((ajax_talk_send, primary, ajax))
-        attempts.append((ajax_talk_send_v2, primary, ajax))
-        if plain_fallback:
-            if is_voice and att_clean and not text:
-                voice_att = {**att_clean, "type": "voice"}
-                audio_att = {**att_clean, "type": "audio"}
-                file_att = {**att_clean, "type": "file"}
-                attempts.append((talk_send, {"attachment": voice_att}, {}))
-                attempts.append((talk_send, {"text": "", "attachment": voice_att}, {}))
-                attempts.append((talk_send, {"attachment": audio_att}, {}))
-                attempts.append((talk_send, {"text": "", "attachment": audio_att}, {}))
-                attempts.append((talk_send, {"attachment": file_att}, {}))
-                attempts.append((talk_send, {"text": "", "attachment": file_att}, {}))
-            else:
-                attempts.append((talk_send, payload, {}))
-    if not reply_id:
-        if is_voice and att_clean and not text:
-            voice_att = {**att_clean, "type": "voice"}
-            audio_att = {**att_clean, "type": "audio"}
-            file_att = {**att_clean, "type": "file"}
-            ajax = {"X-Requested-With": "XMLHttpRequest"}
-            attempts.append((talk_send, {"attachment": voice_att}, {}))
-            attempts.append((talk_send, {"text": "", "attachment": voice_att}, {}))
-            attempts.append((ajax_talk_send, {"attachment": voice_att}, ajax))
-            attempts.append((ajax_talk_send_v2, {"attachment": voice_att}, ajax))
-            attempts.append((talk_send, {"attachment": audio_att}, {}))
-            attempts.append((talk_send, {"text": "", "attachment": audio_att}, {}))
-            attempts.append((talk_send, {"attachment": file_att}, {}))
-            attempts.append((talk_send, {"text": "", "attachment": file_att}, {}))
-        else:
-            attempts.append((talk_send, payload, {}))
-    last_detail = ""
-    last_body = ""
-    last_status = 0
-    for url, body, extra in attempts:
-        try:
-            resp = _post_kommo_json(url, body, extra)
-        except Exception as exc:
-            logger.warning("Talk send failed: %s", exc)
-            last_detail = "Kommo çata göndərmək alınmadı."
-            last_status = 0
-            continue
-        last_status = resp.status_code
-        if 200 <= resp.status_code < 300:
-            return True, "", resp.status_code
-        last_detail = _kommo_error_detail(resp)
-        last_body = (resp.text or "")[:400]
-        logger.warning("Talk send status %s %s: %s | %s", resp.status_code, url, last_detail, last_body)
-    if last_status == 403:
-        folded = f"{last_detail} {last_body}".lower()
-        if "external chat" in folded:
-            return False, "Kommo tokenində çat göndərmə hüququ yoxdur (Sending to external chats).", last_status
-        return False, "Kommo müvəqqəti icazə vermir. Bir azdan yenidən yoxlayın.", last_status
-    if last_status == 429:
-        return False, "Kommo sorğu limitini aşıb. Bir azdan yenidən yoxlayın.", last_status
-    if last_status == 422:
-        return False, "Çat bağlıdır. Kommo-da söhbəti açın.", last_status
-    if last_status == 402:
-        return False, "Kommo Chat API limiti bitib.", last_status
-    return False, last_detail or "Mesaj göndərilmədi.", last_status
 
 
-def _send_kommo_talk_text(talk_id: int, text: str) -> tuple[bool, str, int]:
-    return _send_kommo_talk_message(talk_id, text)
 
 
 _DRIVE_UUID_RE = re.compile(

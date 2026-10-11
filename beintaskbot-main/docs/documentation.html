@@ -435,5 +435,11 @@ policies.notifications — типы уведомлений</pre>
 <p><code>legacy_kommo_chat_message_meta.py</code> отдельно нормализует статусы sent/delivered/read/error и заменяет техническое имя канала на имя менеджера Kommo. Технические уведомления остановленного AI-агента и пустые placeholder-сообщения по-прежнему скрываются.</p>
 <p>Правила разрешённых media URL, извлечения файлов и определения типов файлов не продублированы: приложение передаёт существующие функции нормализатору при запуске. Благодаря этому текущая защита media proxy и формат API не изменились. Следующий блок — выбор Talk-канала и отправка ответа через Kommo.</p>
 </section>
+<section class="wrap card" id="legacy-kommo-chat-routing-refactor">
+<h2>Выбор канала и отправка Kommo Talk отделены от bot.py · 11 октября 2026</h2>
+<p><code>legacy_kommo_chat_channels.py</code> распознаёт WhatsApp, Instagram, Facebook, TikTok и Telegram, группирует Talk-диалоги и выбирает актуальный открытый разговор. Старые WhatsApp Business/WABA-диалоги исключаются из отправки, а WhatsApp-линия сопоставляется с номером сотрудника.</p>
+<p><code>legacy_kommo_chat_resolver.py</code> выбирает Talk только из запрошенного источника. Подсказка последнего входящего сообщения имеет приоритет, но Instagram никогда не подменяется TikTok и наоборот; сохранённый ранее Talk применяется только при совпадении канала. Произвольного fallback в чужой диалог нет.</p>
+<p><code>legacy_kommo_chat_sender.py</code> содержит отправку текста, файлов, голосовых и native reply. Сохранены официальный endpoint, прежние совместимые reply-маршруты и понятные ошибки прав, лимита, закрытого чата и Chat API. Сетевой транспорт и разбор ошибок передаются явно, токен модуль не хранит.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>
