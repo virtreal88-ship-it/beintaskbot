@@ -479,5 +479,15 @@ policies.notifications — типы уведомлений</pre>
 <p><code>legacy_kommo_media_linker.py</code> ищет файл на сервере по message ID, типу и ближайшему времени среди заметок и файлов сделки/контактов. Фото не подменяется голосовым, голосовое — изображением; миллисекундные timestamps нормализуются.</p>
 <p>Если Talk вернул только служебный placeholder без URL, лента связывает его с подходящим Kommo-файлом в пределах десяти минут. Кандидаты дедуплицируются по UUID/URL, а произвольный URL браузера не участвует в поиске.</p>
 </section>
+<section class="wrap card" id="legacy-bootstrap-refactor">
+<h2>Финальная композиция Telegram и фоновых jobs отделена от bot.py · 12 октября 2026</h2>
+<p><code>legacy_app_bootstrap.py</code> создаёт Telegram Application, регистрирует команды, callback/message handlers, периодические и ежедневные jobs, запускает polling и отдельный HTTP event loop. Конкретные функции и расписание по-прежнему объявляются в композиционном корне, поэтому модуль не знает бизнес-логику CRM.</p>
+<p>Сохранены сетевые таймауты 30 секунд, <code>drop_pending_updates=True</code>, все callback patterns, интервалы, coalesce/max_instances и ежедневные часы. HTTP остаётся в daemon-потоке, чтобы Telegram jobs не блокировали историю чатов.</p>
+</section>
+<section class="wrap card" id="legacy-inbox-pulse-refactor">
+<h2>Событийная очередь legacy-inbox отделена от bot.py · 12 октября 2026</h2>
+<p><code>legacy_inbox_pulse.py</code> владеет монотонной revision и последними 150 событиями клиентского списка. Запись и чтение защищены одним lock, выборка <code>since</code> не включает уже полученную revision, а вызывающий код получает копии записей.</p>
+<p>Webhook, ручное обновление, входящее сообщение и изменение сделки используют одну очередь. Фильтрация по сотруднику и воронке остаётся после чтения, поэтому перенос состояния не расширяет права и не меняет формат pulse API.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>

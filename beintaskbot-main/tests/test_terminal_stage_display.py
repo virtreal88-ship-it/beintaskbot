@@ -19,10 +19,13 @@ class TerminalStageTests(unittest.TestCase):
             '_stage_key_from_kommo','_stage_maps_from_statuses'
         })
         self.ns={'stage_display_name':stage_display_name,'_fold_stage_name':lambda value:str(value).lower(),'re':re,
-            '_personal_overview_cache':{},'_inbox_pulse_lock':threading.Lock(),'_inbox_pulse_rev':2,
+            '_personal_overview_cache':{},
             '_inbox_pulse_events':[],'is_admin':lambda user:True,'get_funnel_owner':lambda user:{'pipeline_id':1},
             '_pulse_event_visible':lambda *args,**kwargs:True,'_get_user_seen_map':lambda user:{},
             '_has_terminal_reentry':lambda lead:True}
+        self.ns['inbox_events_since']=lambda revision:(2,[
+            row for row in self.ns['_inbox_pulse_events'] if int(row.get('rev') or 0)>int(revision or 0)
+        ])
         exec(compile(tree,'<terminal-stages>','exec'),self.ns)
 
     def test_terminal_names_are_azerbaijani_for_numeric_or_string_ids(self):

@@ -92,6 +92,11 @@ from legacy_chat_ai_examples import (
     _ai_reply_example_scope, _select_ai_reply_examples,
     configure_ai_reply_examples, save_ai_reply_example,
 )
+from legacy_app_bootstrap import (
+    build_telegram_application, run_polling as run_telegram_polling,
+    start_http_thread,
+)
+from legacy_inbox_pulse import append_inbox_event, inbox_events_since
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
     _fold_stage_name, _pipeline_stage_cache, _stage_key_from_kommo, _stage_maps_from_statuses,
@@ -4711,9 +4716,6 @@ async def handle_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Kommo Webhook Handler ───────────────────────────────────────────────────
 _bot_app: Application = None
 
-_inbox_pulse_rev = 0
-_inbox_pulse_events: list[dict] = []
-_inbox_pulse_lock = threading.Lock()
 _terminal_reentry_leads: dict[int, int] = {}
 _terminal_reentry_lock = threading.Lock()
 
@@ -4847,7 +4849,6 @@ def record_lead_pulse_event(
     status_id: int = 0,
 ) -> None:
     """Record an incremental event into the pulse queue for browser polling."""
-    global _inbox_pulse_rev
     try:
         lid = int(lead_id)
     except (TypeError, ValueError):
@@ -4895,29 +4896,24 @@ def record_lead_pulse_event(
     else:
         event_outgoing_at = 0
 
-    with _inbox_pulse_lock:
-        _inbox_pulse_rev += 1
-        _inbox_pulse_events.append({
-            "rev": _inbox_pulse_rev,
-            "lead_id": lid,
-            "type": str(event_type or "deal_update"),
-            "pipeline_id": pipe,
-            "stage_key": str(stage_key or ""),
-            "status_id": int(status_id or 0),
-            "contact_name": cname,
-            "phone": cphone,
-            "last_client_message": str(preview or ""),
-            "last_incoming_at": event_incoming_at,
-            "last_outgoing_at": event_outgoing_at,
-            "chat_channel": str(channel or ""),
-            "wa_line": str(wa_line or ""),
-            "replaced_by": int(replaced_by or 0),
-            "external_id": str(external_id or ""),
-            "missing": bool(missing),
-            "refresh": bool(refresh),
-        })
-        if len(_inbox_pulse_events) > 150:
-            del _inbox_pulse_events[:-150]
+    append_inbox_event({
+        "lead_id": lid,
+        "type": str(event_type or "deal_update"),
+        "pipeline_id": pipe,
+        "stage_key": str(stage_key or ""),
+        "status_id": int(status_id or 0),
+        "contact_name": cname,
+        "phone": cphone,
+        "last_client_message": str(preview or ""),
+        "last_incoming_at": event_incoming_at,
+        "last_outgoing_at": event_outgoing_at,
+        "chat_channel": str(channel or ""),
+        "wa_line": str(wa_line or ""),
+        "replaced_by": int(replaced_by or 0),
+        "external_id": str(external_id or ""),
+        "missing": bool(missing),
+        "refresh": bool(refresh),
+    })
     try:
         _invalidate_deal_chat_cache(lid)
     except Exception:
@@ -5118,7 +5114,6 @@ def _apply_inbox_incoming(
     external_id: str = "",
 ) -> bool:
     """Update one cached chat from a Kommo incoming-message webhook. No funnel rebuild."""
-    global _inbox_pulse_rev
     channel = _origin_channel_key(origin)
     found = False
     event_pipe = int(pipeline_id or 0)
@@ -5169,29 +5164,24 @@ def _apply_inbox_incoming(
                 _mark_terminal_reentry(int(lead_id), int(created_at or 0))
             found = True
     needs_reply = _has_terminal_reentry(int(lead_id))
-    with _inbox_pulse_lock:
-        _inbox_pulse_rev += 1
-        _inbox_pulse_events.append({
-            "rev": _inbox_pulse_rev,
-            "lead_id": int(lead_id),
-            "type": "incoming_message",
-            "pipeline_id": event_pipe,
-            "contact_name": event_name,
-            "phone": event_phone,
-            "last_client_message": preview,
-            "last_incoming_at": int(created_at or 0),
-            "chat_channel": channel,
-            "wa_line": _wa_line_for_pipeline(event_pipe) or str(wa_line or ""),
-            "external_id": str(external_id or ""),
-            "nizami_queue_kind": event_queue_kind,
-            "status_id": event_status,
-            "stage_key": event_stage,
-            "needs_reply": needs_reply,
-            "missing": bool(not found and channel != "whatsapp"),
-            "refresh": False,
-        })
-        if len(_inbox_pulse_events) > 150:
-            del _inbox_pulse_events[:-150]
+    append_inbox_event({
+        "lead_id": int(lead_id),
+        "type": "incoming_message",
+        "pipeline_id": event_pipe,
+        "contact_name": event_name,
+        "phone": event_phone,
+        "last_client_message": preview,
+        "last_incoming_at": int(created_at or 0),
+        "chat_channel": channel,
+        "wa_line": _wa_line_for_pipeline(event_pipe) or str(wa_line or ""),
+        "external_id": str(external_id or ""),
+        "nizami_queue_kind": event_queue_kind,
+        "status_id": event_status,
+        "stage_key": event_stage,
+        "needs_reply": needs_reply,
+        "missing": bool(not found and channel != "whatsapp"),
+        "refresh": False,
+    })
     try:
         _invalidate_deal_chat_cache(int(lead_id))
     except Exception:
@@ -5200,18 +5190,12 @@ def _apply_inbox_incoming(
 
 
 def _flag_inbox_refresh(lead_id: int) -> None:
-    global _inbox_pulse_rev
-    with _inbox_pulse_lock:
-        _inbox_pulse_rev += 1
-        _inbox_pulse_events.append({
-            "rev": _inbox_pulse_rev,
-            "lead_id": int(lead_id),
-            "type": "deal_refresh",
-            "missing": True,
-            "refresh": True,
-        })
-        if len(_inbox_pulse_events) > 150:
-            del _inbox_pulse_events[:-150]
+    append_inbox_event({
+        "lead_id": int(lead_id),
+        "type": "deal_refresh",
+        "missing": True,
+        "refresh": True,
+    })
 
 
 def _minimal_inbox_deal(lead: dict, preview: str, created_at: int, channel: str) -> dict:
@@ -5516,9 +5500,7 @@ def _inbox_pulse_payload(chat_id: int, since_rev: int) -> dict:
             continue
         if lid:
             visible[lid] = deal
-    with _inbox_pulse_lock:
-        rev = int(_inbox_pulse_rev)
-        fresh = [row for row in _inbox_pulse_events if int(row.get("rev") or 0) > int(since_rev or 0)]
+    rev, fresh = inbox_events_since(since_rev)
     successful_ids = {
         int(deal.get('id') or 0)
         for snapshot in _personal_overview_cache.values() if isinstance(snapshot,dict)
@@ -20490,20 +20472,9 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
     avg_stars = round(summary.get('avg_kpi', 0) / 20, 1) if summary.get('avg_kpi') else 0
     return web.json_response({'success': True, 'employee_type': emp_type, 'balance': bal, 'avg_stars': avg_stars, **summary})
 
-def _run_http_server() -> None:
-    """Serve CRM HTTP on its own loop so Telegram jobs cannot freeze Tarixçə."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(start_webhook_server())
-        loop.run_forever()
-    except Exception as exc:
-        logger.error("HTTP server failed: %s", exc)
-
-
 def main():
     global _bot_app, _telegram_bot_username
-    threading.Thread(target=_run_http_server, name="http-server", daemon=True).start()
+    start_http_thread(start_webhook_server, logger)
     async def post_init(application: Application) -> None:
         remove_retired_employee_access()
         ensure_known_employee_registrations()
@@ -20529,53 +20500,53 @@ def main():
         except Exception as exc:
             logger.warning("Could not remove Telegram Mini App menu button: %s", exc)
 
-    app = Application.builder().token(TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).post_init(post_init).build()
+    app = build_telegram_application(
+        token=TELEGRAM_TOKEN,
+        post_init=post_init,
+        command_handlers=[("start", start_command), ("role", role_command)],
+        callback_handlers=[
+            ("^reg_", registration_type_callback),
+            ("^empreg_", employee_approval_callback),
+            ("^taskdl_", task_deadline_callback),
+            ("^conftr_", confirm_transition_callback),
+            ("^overdue_", overdue_task_callback),
+            ("^actconf_", action_confirm_callback),
+            ("^aitask_", ai_task_assign_callback),
+            ("^aitaskdl_", ai_task_deadline_callback),
+            ("^stgtask-", stage_task_assign_callback),
+            ("^stgdl-", stage_task_deadline_callback),
+            ("^cnftask-", confirm_task_callback),
+            ("^updtask-", update_task_confirm_callback),
+            ("^chgstg-", change_stage_button_callback),
+            ("^nstg-", next_stage_callback),
+            ("^partner_create_", partner_create_callback),
+            ("^btnflow_", btnflow_callback),
+            ("^btnflowdl_", btnflowdl_callback),
+        ],
+        message_handlers=[
+            (filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data),
+            (filters.CONTACT, handle_contact_message),
+            (filters.TEXT & ~filters.COMMAND, handle_free_text),
+        ],
+        repeating_jobs=[
+            (check_tenant_approval_notifications, 60, 30, {"max_instances": 1, "coalesce": True}),
+            (check_tenant_hot_order_notifications, 60, 35, {"max_instances": 1, "coalesce": True}),
+            (check_tenant_linear_observer, 60, 40, {"max_instances": 1, "coalesce": True}),
+            (check_tenant_news_telegram, 60, 45, {"max_instances": 1, "coalesce": True}),
+            (check_tenant_crm_sync, 15, 10, {"max_instances": 1, "coalesce": True}),
+            (check_linear_status_notifications, 60, 20, None),
+            (check_task_deadlines, 900, 60, None),
+            (tecili_alarm_check, 900, 120, None),
+        ],
+        daily_jobs=[
+            (morning_digest, datetime.strptime("05:00", "%H:%M").time()),
+            (check_stuck_deals, datetime.strptime("06:00", "%H:%M").time()),
+            (check_stuck_deals, datetime.strptime("09:00", "%H:%M").time()),
+            (check_stuck_deals, datetime.strptime("13:00", "%H:%M").time()),
+        ],
+    )
     _bot_app = app
-    # Command handlers
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("role", role_command))
-    # Callback handlers
-    app.add_handler(CallbackQueryHandler(registration_type_callback, pattern="^reg_"))
-    app.add_handler(CallbackQueryHandler(employee_approval_callback, pattern="^empreg_"))
-    app.add_handler(CallbackQueryHandler(task_deadline_callback, pattern="^taskdl_"))
-    app.add_handler(CallbackQueryHandler(confirm_transition_callback, pattern="^conftr_"))
-    app.add_handler(CallbackQueryHandler(overdue_task_callback, pattern="^overdue_"))
-    app.add_handler(CallbackQueryHandler(action_confirm_callback, pattern="^actconf_"))
-    app.add_handler(CallbackQueryHandler(ai_task_assign_callback, pattern="^aitask_"))
-    app.add_handler(CallbackQueryHandler(ai_task_deadline_callback, pattern="^aitaskdl_"))
-    app.add_handler(CallbackQueryHandler(stage_task_assign_callback, pattern="^stgtask-"))
-    app.add_handler(CallbackQueryHandler(stage_task_deadline_callback, pattern="^stgdl-"))
-    app.add_handler(CallbackQueryHandler(confirm_task_callback, pattern="^cnftask-"))
-    app.add_handler(CallbackQueryHandler(update_task_confirm_callback, pattern="^updtask-"))
-    app.add_handler(CallbackQueryHandler(change_stage_button_callback, pattern="^chgstg-"))
-    app.add_handler(CallbackQueryHandler(next_stage_callback, pattern="^nstg-"))
-    app.add_handler(CallbackQueryHandler(partner_create_callback, pattern="^partner_create_"))
-    app.add_handler(CallbackQueryHandler(btnflow_callback, pattern="^btnflow_"))
-    app.add_handler(CallbackQueryHandler(btnflowdl_callback, pattern="^btnflowdl_"))
-    # Message handlers
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data))
-    app.add_handler(MessageHandler(filters.CONTACT, handle_contact_message))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
-    # Background jobs
-    job_queue = app.job_queue
-    job_queue.run_repeating(check_tenant_approval_notifications, interval=60, first=30,
-                            job_kwargs={'max_instances': 1, 'coalesce': True})
-    job_queue.run_repeating(check_tenant_hot_order_notifications, interval=60, first=35,
-                            job_kwargs={'max_instances': 1, 'coalesce': True})
-    job_queue.run_repeating(check_tenant_linear_observer, interval=60, first=40,
-                            job_kwargs={'max_instances': 1, 'coalesce': True})
-    job_queue.run_repeating(check_tenant_news_telegram, interval=60, first=45,
-                            job_kwargs={'max_instances': 1, 'coalesce': True})
-    job_queue.run_repeating(check_tenant_crm_sync, interval=15, first=10,
-                            job_kwargs={'max_instances': 1, 'coalesce': True})
-    job_queue.run_repeating(check_linear_status_notifications, interval=60, first=20)
-    job_queue.run_repeating(check_task_deadlines, interval=900, first=60)
-    job_queue.run_repeating(tecili_alarm_check, interval=900, first=120)
-    job_queue.run_daily(morning_digest, time=datetime.strptime("05:00", "%H:%M").time())
-    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("06:00", "%H:%M").time())
-    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("09:00", "%H:%M").time())
-    job_queue.run_daily(check_stuck_deals, time=datetime.strptime("13:00", "%H:%M").time())
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    run_telegram_polling(app)
 
 if __name__ == "__main__":
     main()
