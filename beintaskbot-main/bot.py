@@ -61,6 +61,8 @@ from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, te
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
 from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
+from tenant_chat_api import ChatApiContext, handlers as tenant_chat_handlers
+from tenant_chat_import_api import handler as tenant_chat_import_handler
 from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handler
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
@@ -21448,11 +21450,6 @@ async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, param
 
 
 
-def _tenant_has_module(profile: dict, module: str) -> bool:
-    """Authorise the public CRM strictly from the tenant member record."""
-    return TenantPolicy(profile).allows(module)
-
-
 def _tenant_selected_pipeline_ids(profile: dict) -> tuple[list[int], dict[int, set[int]]]:
     scope = TenantPolicy(profile).pipeline_scope()
     return [item['pipeline_id'] for item in scope], {item['pipeline_id']: set(item['status_ids']) for item in scope}
@@ -21544,30 +21541,7 @@ async def _sync_tenant_chat(profile: dict, lead_id: int) -> list[dict]:
                       _tenant_normalize_talk_message, _tenant_talk_channel)
 
 
-async def handle_platform_crm_chat(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
-        return web.json_response({"success": False, "error": "Çat tarixçəsi üçün icazəniz yoxdur."}, status=403)
-    try:
-        lead_id = int(request.rel_url.query.get("lead_id") or 0)
-    except ValueError:
-        lead_id = 0
-    if lead_id <= 0:
-        return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
-    deal = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=profile['tenant_id'], kommo_lead_id=lead_id)
-    if not TenantPolicy(profile).can_access_deal(deal):
-        return web.json_response({'success': False, 'error': 'Sövdələşmə seçilmiş siyahıda deyil.'}, status=404)
-    warning = ""
-    if str(request.rel_url.query.get("refresh") or "").casefold() in {"1", "true", "yes"}:
-        try:
-            await _sync_tenant_chat(profile, lead_id)
-        except TenantPlatformError as exc:
-            warning = str(exc)
-        except Exception:
-            logger.exception("Tenant chat sync failed: tenant=%s lead=%s", profile["tenant_id"], lead_id)
-            warning = "Çat tarixçəsi yenilənmədi. Son saxlanmış tarixçə göstərilir."
-    rows = await asyncio.to_thread(list_tenant_crm_messages, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
-    return web.json_response({"success": True, "messages": rows, "stale": bool(warning), "warning": warning})
+# Tenant chat HTTP handling is composed in start_webhook_server.
 
 
 
@@ -21578,11 +21552,7 @@ async def handle_platform_crm_chat(request: web.Request) -> web.Response:
 
 
 
-async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
-    from tenant_chat_import_api import handler
-    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
-                         _tenant_kommo_request, tenant_member, upsert_tenant_crm_messages,
-                         _tenant_normalize_talk_message, _tenant_talk_channel, logger)(request)
+# Manual chat import is composed once in start_webhook_server.
 
 
 
@@ -22756,6 +22726,20 @@ async def start_webhook_server():
         platform_error=TenantPlatformError,
         logger=logger,
     ))
+    chat_api = tenant_chat_handlers(ChatApiContext(
+        member=_tenant_member_from_request,
+        policy=TenantPolicy,
+        get_deal=get_tenant_crm_deal,
+        list_messages=list_tenant_crm_messages,
+        sync_chat=_sync_tenant_chat,
+        platform_error=TenantPlatformError,
+        logger=logger,
+    ))
+    chat_import_api = tenant_chat_import_handler(
+        _tenant_member_from_request, CANONICAL_WEB_ORIGIN,
+        _tenant_kommo_request, tenant_member, upsert_tenant_crm_messages,
+        _tenant_normalize_talk_message, _tenant_talk_channel, logger,
+    )
     duplicate_api = tenant_duplicate_handler(
         _tenant_member_from_request, _tenant_kommo_request, logger)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
@@ -22800,8 +22784,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/deals", deal_api["deals"])
     app_web.router.add_get('/api/platform/crm/sync', deal_api["sync_status"])
     app_web.router.add_get("/api/platform/crm/deal", deal_api["deal"])
-    app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
-    app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
+    app_web.router.add_get("/api/platform/crm/chat", chat_api["chat"])
+    app_web.router.add_post('/api/platform/crm/chat/import-history', chat_import_api)
     app_web.router.add_get("/api/platform/crm/tasks", task_api["tasks"])
     app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)

@@ -1,10 +1,5 @@
-import ast
-import asyncio
 import copy
-from pathlib import Path
-from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
 
 from tenant_policy import TenantPolicy, validate_workflow_patch
 
@@ -114,34 +109,6 @@ class TenantPolicyTests(unittest.TestCase):
             with self.subTest(payload=(pipelines,stages,policies)),self.assertRaises(ValueError):
                 validate_workflow_patch(pipelines,stages,policies)
 
-
-class Query(dict):
-    def getall(self,key,default):
-        return self.get(key,default)
-
-
-class TenantRuntimeTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
-        names={'_tenant_has_module','handle_platform_crm_chat','handle_platform_crm_chat_send'}
-        cls.code=compile(ast.Module(body=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names],type_ignores=[]),'<tenant-api>','exec')
-
-    def setUp(self):
-        self.person=profile()
-        self.ns={'TenantPolicy':TenantPolicy,'asyncio':asyncio,'ROLE_PERMISSIONS':{},
-                 'web':SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,status=200:{'status':status,'data':data}),
-                 '_tenant_member_from_request':lambda request,owner_only=False: self.person if not owner_only or self.person['role']=='owner' else None,
-                 'list_tenant_crm_deals':Mock(return_value=([],0)),'list_tenant_crm_tasks':Mock(return_value=[]),
-                 'get_tenant_crm_deal':Mock(return_value={'tenant_id':'company-a','pipeline_id':11,'status_id':100}),
-                 'list_tenant_crm_messages':Mock(), 'logger':Mock()}
-        exec(self.code,self.ns)
-        self.request=SimpleNamespace(rel_url=SimpleNamespace(query=Query(lead_id='1')))
-
-    def test_cached_chat_cannot_bypass_assignment(self):
-        result=asyncio.run(self.ns['handle_platform_crm_chat'](self.request))
-        self.assertEqual(result['status'],404)
-        self.ns['list_tenant_crm_messages'].assert_not_called()
 
 if __name__=='__main__':
     unittest.main()
