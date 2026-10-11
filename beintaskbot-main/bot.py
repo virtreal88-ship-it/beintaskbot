@@ -165,6 +165,10 @@ from legacy_kommo_note_formatter import (
 from legacy_kommo_note_reader import (
     _fetch_entity_notes, _fetch_raw_notes, _find_raw_note, configure_note_reader,
 )
+from legacy_kommo_webhook_parser import (
+    _incoming_message_preview, _incoming_message_seen, _kommo_form_message_rows,
+    _lead_webhook_events, configure_webhook_parser,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1431,6 +1435,7 @@ configure_chat_sender(
 )
 configure_chat_merge(split_quote=lambda text: _split_quote_prefix(text))
 configure_ai_reply_examples(read_json=read_json, write_json=write_json)
+configure_webhook_parser(media_notice=lambda text: _is_media_notice_text(text))
 
 
 
@@ -5088,62 +5093,6 @@ async def _handle_kommo_task_webhook(data: dict):
                 pass
 
 
-def _kommo_form_message_rows(data: dict) -> list[dict]:
-    if not isinstance(data, dict):
-        return []
-    message = data.get("message")
-    if isinstance(message, dict) and isinstance(message.get("add"), list):
-        return [row for row in message["add"] if isinstance(row, dict)]
-    grouped: dict[int, dict] = {}
-    for key, value in data.items():
-        match = re.match(r"^message\[add\]\[(\d+)\]\[(.+)\]$", str(key))
-        if not match:
-            continue
-        grouped.setdefault(int(match.group(1)), {})[match.group(2)] = value
-    return [grouped[idx] for idx in sorted(grouped)]
-
-
-def _incoming_message_preview(text: str, message_type: str) -> str:
-    raw = str(text or "").strip()
-    if _is_media_notice_text(raw):
-        return "📷 Şəkil"
-    clean = " ".join(raw.split())[:140]
-    if clean:
-        return clean
-    kind = str(message_type or "").strip().lower()
-    if kind in {"picture", "image", "sticker"}:
-        return "Şəkil"
-    if kind in {"voice", "audio", "ptt"}:
-        return "Səs mesajı"
-    if kind == "video":
-        return "Video"
-    if kind in {"file", "document"}:
-        return "Fayl"
-    return "Yeni mesaj"
-
-
-_seen_incoming_ids: dict[str, float] = {}
-_seen_incoming_lock = threading.Lock()
-
-
-def _incoming_message_seen(message_id: str) -> bool:
-    """True when this Kommo message was already announced. Retries must not notify again."""
-    mid = str(message_id or "").strip()
-    if not mid:
-        return False
-    now = _time_module.time()
-    with _seen_incoming_lock:
-        prev = _seen_incoming_ids.get(mid)
-        if prev and now - prev < 86400:
-            return True
-        _seen_incoming_ids[mid] = now
-        if len(_seen_incoming_ids) > 4000:
-            cutoff = now - 86400
-            for old in [key for key, ts in _seen_incoming_ids.items() if ts < cutoff]:
-                _seen_incoming_ids.pop(old, None)
-        return False
-
-
 def _apply_inbox_incoming(
     lead_id: int,
     preview: str,
@@ -5662,39 +5611,17 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
         if not data:
             data = dict(await request.post())
         logger.info(f"Webhook received: {list(data.keys())[:10]}")
-        # Emit incremental pulse events for any lead events in webhook
-        for k in data:
-            m = re.match(r"^leads\[(status|update|add)\]\[(\d+)\]\[id\]$", str(k))
-            if m:
-                ev_kind = m.group(1)
-                try:
-                    wh_lid = int(data[k])
-                    wh_pipe = 0
-                    pipe_k = f"leads[{ev_kind}][{m.group(2)}][pipeline_id]"
-                    if pipe_k in data:
-                        try:
-                            wh_pipe = int(data[pipe_k])
-                        except:
-                            pass
-                    if ev_kind == "status":
-                        # Moving a deal to any stage closes a prior terminal re-entry.
-                        _clear_terminal_reentry(wh_lid)
-                        # The customer queue is cached briefly.  A stage move
-                        # into/out of Nizami's Sövdələşmələr stages must be
-                        # visible on the next poll, not after the cache TTL.
-                        invalidate_rufat_overview_cache()
-                    record_lead_pulse_event(wh_lid, f"deal_{ev_kind}", pipeline_id=wh_pipe)
-                    if ev_kind in {"status", "add"} and wh_pipe:
-                        old_pipe = 0
-                        old_key = f"leads[{ev_kind}][{m.group(2)}][old_pipeline_id]"
-                        if old_key in data:
-                            try:
-                                old_pipe = int(data[old_key])
-                            except (TypeError, ValueError):
-                                old_pipe = 0
-                        notice_deal_entered(wh_lid, wh_pipe, old_pipe)
-                except:
-                    pass
+        # Emit incremental pulse events for any lead events in webhook.
+        for event in _lead_webhook_events(data):
+            event_type = event["type"]
+            lead_id = event["lead_id"]
+            pipeline_id = event["pipeline_id"]
+            if event_type == "status":
+                _clear_terminal_reentry(lead_id)
+                invalidate_rufat_overview_cache()
+            record_lead_pulse_event(lead_id, f"deal_{event_type}", pipeline_id=pipeline_id)
+            if event_type in {"status", "add"} and pipeline_id:
+                notice_deal_entered(lead_id, pipeline_id, event["old_pipeline_id"])
         incoming_rows = [
             row for row in _kommo_form_message_rows(data)
             if str(row.get("type") or "incoming").strip().lower() != "outgoing"
