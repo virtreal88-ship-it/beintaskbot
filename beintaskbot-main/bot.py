@@ -158,6 +158,11 @@ from legacy_kommo_media_parser import (
     _looks_image_name, _looks_profile_photo, _sniff_media_type,
     _walk_media_urls,
 )
+from legacy_kommo_media_linker import (
+    _candidate_is_audio, _candidate_is_image, _candidate_is_video,
+    _deal_media_candidates, _find_click_media, _link_missing_chat_media,
+    _photo_placeholder_text, _unix_seconds, configure_media_linker,
+)
 from legacy_kommo_note_formatter import (
     _call_is_missed, _deal_fmt_ts, _format_deal_note, _is_chat_note_type,
     _note_recording_src, configure_note_formatter,
@@ -1436,6 +1441,13 @@ configure_chat_sender(
 configure_chat_merge(split_quote=lambda text: _split_quote_prefix(text))
 configure_ai_reply_examples(read_json=read_json, write_json=write_json)
 configure_webhook_parser(media_notice=lambda text: _is_media_notice_text(text))
+configure_media_linker(
+    fetch_notes=lambda entity_type, entity_id: _fetch_entity_notes(entity_type, entity_id),
+    fetch_files=lambda entity_type, entity_id: _fetch_entity_files_as_chat(entity_type, entity_id),
+    media_notice=lambda text: _is_media_notice_text(text),
+    looks_audio=lambda value: _looks_audio_name(value),
+    looks_image=lambda value: _looks_image_name(value),
+)
 
 
 
@@ -12113,177 +12125,6 @@ def _load_kommo_chat_fallback(lid: int, contact_ids: list[int], employee_name: s
             rows.append(f)
     return rows
 
-
-def _photo_placeholder_text(text: str) -> bool:
-    raw = str(text or "").strip().casefold()
-    if _is_media_notice_text(raw):
-        return True
-    return raw in {"şəkil", "📷 şəkil", "sekil", "picture", "image", "sticker"}
-
-
-def _candidate_is_image(cand: dict) -> bool:
-    kind = str(cand.get("message_type") or "").lower()
-    if kind in {"picture", "image", "sticker"}:
-        return True
-    if str(cand.get("content_type") or "").lower().startswith("image/"):
-        return True
-    return _looks_image_name(str(cand.get("file_name") or ""))
-
-
-def _candidate_is_audio(cand: dict) -> bool:
-    kind = str(cand.get("message_type") or "").lower()
-    if kind in {"audio", "voice", "ptt"}:
-        return True
-    blob = f"{cand.get('file_name') or ''} {cand.get('media_url') or ''}"
-    return _looks_audio_name(blob)
-
-
-def _candidate_is_video(cand: dict) -> bool:
-    kind = str(cand.get("message_type") or "").lower()
-    if kind == "video":
-        return True
-    if str(cand.get("content_type") or "").lower().startswith("video/"):
-        return True
-    blob = f"{cand.get('file_name') or ''} {cand.get('media_url') or ''}"
-    return bool(re.search(r"\.(mp4|mov|webm|3gp|mkv)(?:\?|$)", blob, re.IGNORECASE))
-
-
-def _unix_seconds(value) -> int:
-    try:
-        stamp = int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-    if stamp > 10_000_000_000:
-        stamp //= 1000
-    return stamp
-
-
-def _deal_media_candidates(lid: int, contact_ids: list[int]) -> list[dict]:
-    candidates: list[dict] = []
-    seen: set[str] = set()
-
-    def add(row: dict) -> None:
-        if not isinstance(row, dict):
-            return
-        if not (str(row.get("media_url") or "").strip() or str(row.get("file_uuid") or "").strip()):
-            return
-        key = str(row.get("file_uuid") or row.get("media_url") or row.get("id") or "")
-        if not key or key in seen:
-            return
-        seen.add(key)
-        candidates.append(row)
-
-    for note in _fetch_entity_notes("leads", lid):
-        add(note)
-    for cid in contact_ids:
-        for note in _fetch_entity_notes("contacts", int(cid)):
-            add(note)
-    for row in _fetch_entity_files_as_chat("leads", lid):
-        add(row)
-    for cid in contact_ids:
-        for row in _fetch_entity_files_as_chat("contacts", int(cid)):
-            add(row)
-    return candidates
-
-
-def _find_click_media(lid: int, contact_ids: list[int], created_at: int, kind: str, message_id: str) -> dict | None:
-    """One file for the bubble the user tapped. Nearest Kommo file of that kind."""
-    created_at = _unix_seconds(created_at)
-    message_id = str(message_id or "").strip()
-    if not created_at and not message_id:
-        return None
-    wanted_kind = str(kind or "").lower()
-    want_audio = wanted_kind in {"audio", "voice", "ptt"}
-    want_video = wanted_kind == "video"
-    best = None
-    best_rank = None
-    for cand in _deal_media_candidates(lid, contact_ids):
-        is_audio = _candidate_is_audio(cand)
-        if want_audio and not is_audio:
-            continue
-        if want_video and not _candidate_is_video(cand):
-            continue
-        if not want_audio and not want_video and is_audio:
-            continue
-        ident = " ".join(
-            str(cand.get(key) or "")
-            for key in ("id", "msgid", "external_id", "file_uuid", "file_name", "text")
-        )
-        if message_id and message_id in ident:
-            return cand
-        cand_ts = _unix_seconds(cand.get("created_at"))
-        if not created_at or not cand_ts:
-            continue
-        diff = abs(created_at - cand_ts)
-        if diff > 86400:
-            continue
-        type_rank = 0 if (want_audio or want_video or _candidate_is_image(cand)) else 1
-        rank = (type_rank, diff)
-        if best_rank is None or rank < best_rank:
-            best_rank = rank
-            best = cand
-    return best
-
-
-def _link_missing_chat_media(chat: list[dict], lid: int, contact_ids: list[int]) -> None:
-    needed = [
-        item for item in chat
-        if not str(item.get("media_url") or "").strip() and not str(item.get("file_uuid") or "").strip()
-        and (
-            _is_media_notice_text(str(item.get("text") or ""))
-            or _photo_placeholder_text(str(item.get("text") or ""))
-            or str(item.get("message_type") or "").lower() in {"picture", "image", "sticker", "audio", "video"}
-        )
-    ]
-    if not needed:
-        return
-
-    candidates: list[dict] = []
-    for note in _fetch_entity_notes("leads", lid):
-        if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "image", "sticker", "audio", "file", "video"}:
-            candidates.append(note)
-    for cid in contact_ids:
-        for note in _fetch_entity_notes("contacts", int(cid)):
-            if (note.get("media_url") or note.get("file_uuid")) and note.get("message_type") in {"picture", "image", "sticker", "audio", "file", "video"}:
-                candidates.append(note)
-    lead_files = _fetch_entity_files_as_chat("leads", lid)
-    candidates.extend([f for f in lead_files if f.get("file_uuid") or f.get("media_url")])
-    for cid in contact_ids:
-        c_files = _fetch_entity_files_as_chat("contacts", int(cid))
-        candidates.extend([f for f in c_files if f.get("file_uuid") or f.get("media_url")])
-
-    for item in needed:
-        text = str(item.get("text") or "")
-        match = re.search(r'(?:ID(?:\s+сообщения)?|ID):\s*([A-Za-z0-9_-]+)', text, re.IGNORECASE)
-        target_id = match.group(1).strip() if match else ""
-        item_ts = int(item.get("created_at") or 0)
-
-        best_cand = None
-        best_diff = 99999999
-
-        want_photo = _photo_placeholder_text(text) or str(item.get("message_type") or "").lower() in {"picture", "image", "sticker"}
-        for cand in candidates:
-            if want_photo and not _candidate_is_image(cand):
-                continue
-            cand_id = str(cand.get("id") or cand.get("msgid") or cand.get("external_id") or "").strip()
-            cand_text = str(cand.get("text") or "")
-            cand_name = str(cand.get("file_name") or "")
-            if target_id and (target_id in cand_id or target_id in cand_text or target_id in cand_name):
-                best_cand = cand
-                break
-            cand_ts = int(cand.get("created_at") or 0)
-            diff = abs(item_ts - cand_ts) if item_ts and cand_ts else 999999
-            if diff <= 600 and diff < best_diff:
-                best_diff = diff
-                best_cand = cand
-
-        if best_cand:
-            item["media_url"] = best_cand.get("media_url") or ""
-            item["file_uuid"] = best_cand.get("file_uuid") or ""
-            item["file_name"] = best_cand.get("file_name") or item.get("file_name") or ""
-            item["message_type"] = "picture" if _candidate_is_image(best_cand) else (best_cand.get("message_type") or "picture")
-            if _is_media_notice_text(text) or _photo_placeholder_text(text):
-                item["text"] = ""
 
 
 _WA_CHANNEL_CACHE: dict[int, tuple[float, list]] = {}
