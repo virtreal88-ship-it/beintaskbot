@@ -14,7 +14,6 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 import json
-import base64
 import math
 import hmac
 import hashlib
@@ -27,7 +26,6 @@ import traceback
 import asyncio
 import uuid
 import threading
-import collections
 import random
 import secrets
 import time as _time_module
@@ -86,6 +84,7 @@ from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
+from legacy_kommo_transport import install_legacy_kommo_transport
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
 from tenant_push import (
@@ -124,263 +123,34 @@ from tenant_platform import (
 # import sqlite3  # replaced by gh_storage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-def _required_env(name: str) -> str:
-    value = str(os.environ.get(name) or "").strip()
-    if not value:
-        raise RuntimeError(f"Missing required Railway variable: {name}")
-    return value
-
-
-TELEGRAM_TOKEN = _required_env("TELEGRAM_TOKEN")
-KOMMO_TOKEN = _required_env("KOMMO_TOKEN")
-KOMMO_DOMAIN = "texnikidestek50.kommo.com"
-KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
-BAKU_TZ = timezone(timedelta(hours=4))
-# Keep the model configurable per Railway environment.  This project key is
-# currently granted access to this stable, low-latency chat model.
-LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
-WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
-CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
-# Telegram buttons must never point at a deployment-specific Railway URL.
-# Keep one stable public address even if an old WEBAPP_PUBLIC_URL variable is
-# still present in Railway.
-WEB_APP_URL = f"{CANONICAL_WEB_ORIGIN}/webapp"
-LEGACY_RAILWAY_HOST = "worker-production-3e3e.up.railway.app"
-# The HTTP server has its own event loop. Keep this public value as state
-# populated by the Telegram polling loop; never call Bot methods from aiohttp.
-_telegram_bot_username = str(os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
-
-# VAPID keys for Web Push
-VAPID_PRIVATE_KEY = _required_env("VAPID_PRIVATE_KEY")
-VAPID_PUBLIC_KEY = _required_env("VAPID_PUBLIC_KEY")
-VAPID_CLAIMS = {"sub": "mailto:admin@beinsystems.com"}
-# Push subscriptions loaded from gh_storage on demand
-
-# OpenAI client
-llm_client = OpenAI(
-    api_key=_required_env("OPENAI_API_KEY"),
-    # This production workspace deliberately uses OpenAI directly.  Do not
-    # route chat or recordings through a gateway merely because an old Railway
-    # variable is still present.
-    base_url="https://api.openai.com/v1",
+from legacy_runtime_config import (
+    _required_env, TELEGRAM_TOKEN, KOMMO_TOKEN, KOMMO_DOMAIN,
+    KOMMO_BASE_URL, BAKU_TZ, LLM_MODEL, WEBHOOK_PORT,
+    CANONICAL_WEB_ORIGIN, WEB_APP_URL, LEGACY_RAILWAY_HOST, _telegram_bot_username,
+    VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_CLAIMS, LINEAR_API_KEY,
+    LINEAR_TEAM_ID, LINEAR_TESDIQ_STATE_ID, LINEAR_TRIAGE_STATE_ID, LINEAR_BACKLOG_STATE_ID,
+    LINEAR_TODO_STATE_ID, LINEAR_DISCUSSION_STATE_ID, LINEAR_NEWS_TELEGRAM_CHANNEL,
+    LINEAR_NEWS_TELEGRAM_ENABLED, LINEAR_NEWS_START_HOUR, LINEAR_NEWS_END_HOUR,
+    PIPELINE_ID, RUFAT_CHAT_ID, SAMIL_CHAT_ID, RUFAT_COMPAT_CHAT_IDS,
+    RUFAT_LOGIN_LINK, RUFAT_PIPELINE_ID, RUFAT_STAGES, RUFAT_STAGE_NAMES,
+    ADMIN_CHAT_ID, ADMIN_KOMMO_USER_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID,
+    TECHNICAL_SUPPORT_NAME, NIZAMI_PIPELINE_ID, SOVDELESMELER_PIPELINE_ID,
+    HUSEYN_PIPELINE_ID, RASIM_PIPELINE_ID, HUSEYN_STAGES, HUSEYN_STAGE_NAMES,
+    RASIM_STAGES, RASIM_STAGE_NAMES, NIZAMI_STAGES, NIZAMI_STAGE_NAMES,
+    KOMMO_TASK_RESPONSIBLE_USER_ID, ACTIVE_ASSIGNEES, _UPD_MARKER, STAGES,
+    STAGE_NAMES, NOTIFY_STAGE_ID, KOMMO_USERS, _STAGE_TASK_TEXTS, TASK_TYPE_NAMES,
 )
 
-# Linear confirmation queue for the owner.  Only the configured ``Təsdiq``
-# issues are exposed here; the owner may route a task to Triage/Backlog or
-# delete it.  The API key itself always remains in Railway, never in the UI.
-LINEAR_API_KEY = str(os.environ.get("LINEAR_API_KEY") or "").strip()
-LINEAR_TEAM_ID = str(os.environ.get("LINEAR_TEAM_ID") or "c4106f85-9a15-4f8b-8ec9-ef894ca746e4").strip()
-LINEAR_TESDIQ_STATE_ID = str(os.environ.get("LINEAR_TESDIQ_STATE_ID") or "dd221372-cd7a-4dfc-9361-214ef920ebc0").strip()
-LINEAR_TRIAGE_STATE_ID = str(os.environ.get("LINEAR_TRIAGE_STATE_ID") or "f115d79d-a711-40a1-996a-cac9a5790ea4").strip()
-LINEAR_BACKLOG_STATE_ID = str(os.environ.get("LINEAR_BACKLOG_STATE_ID") or "e3bd0665-1e8c-4e94-afe8-dae7d7c531e8").strip()
-LINEAR_TODO_STATE_ID = str(os.environ.get("LINEAR_TODO_STATE_ID") or "").strip()
-LINEAR_DISCUSSION_STATE_ID = str(os.environ.get("LINEAR_DISCUSSION_STATE_ID") or "").strip()
-# Public release channel. The bot must be an administrator there with the
-# permission to post messages. Keep it configurable for future tenants.
-LINEAR_NEWS_TELEGRAM_CHANNEL = str(os.environ.get("LINEAR_NEWS_TELEGRAM_CHANNEL") or "@beinecosystems").strip()
-# Publishing is enabled again by explicit product-owner request. Delivery is
-# still throttled to one item per synchronization cycle and deduplicated in DB.
-LINEAR_NEWS_TELEGRAM_ENABLED = str(os.environ.get("LINEAR_NEWS_TELEGRAM_ENABLED") or "true").strip().casefold() in {"1", "true", "yes", "on"}
-LINEAR_NEWS_START_HOUR = 9
-LINEAR_NEWS_END_HOUR = 19
+# Provider clients and mutable process caches remain runtime composition.
+llm_client = OpenAI(
+    api_key=_required_env("OPENAI_API_KEY"),
+    base_url="https://api.openai.com/v1",
+)
 _LINEAR_TESDIQ_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_TESDIQ_CACHE_TTL = 45.0
 _LINEAR_LAST_NOTIFIED_STATES: dict[str, str] = {}
 _LINEAR_PROJECTS_CACHE: dict[str, object] = {"at": 0.0, "items": []}
 _LINEAR_MEMBERS_CACHE: dict[str, object] = {"at": 0.0, "items": []}
-
-# ─── Pipeline & Users Configuration ─────────────────────────────────────────
-PIPELINE_ID = 8329347
-# Rüfət's current Telegram account is canonical. Do not let an old deployment
-# variable silently make the retired Şamil UID the primary account.
-RUFAT_CHAT_ID = 6824377548
-SAMIL_CHAT_ID = RUFAT_CHAT_ID  # Deprecated alias for old integrations
-# Historical web-app links used Şamil's Telegram UID.  Keep those links
-# working while the current employee account uses RUFAT_CHAT_ID.
-RUFAT_COMPAT_CHAT_IDS = {RUFAT_CHAT_ID}
-RUFAT_LOGIN_LINK = f"{WEB_APP_URL}?uid={RUFAT_CHAT_ID}"
-RUFAT_PIPELINE_ID = int(os.environ.get("RUFAT_PIPELINE_ID", os.environ.get("SAMIL_PIPELINE_ID", "14357580")))
-# Rüfət's current pipeline snapshot. Do not alter other pipeline mappings here.
-RUFAT_STAGES = {
-    "nerazobrannoye": 110897252,
-    "sorgular": 110897256,
-    "danisiqlar": 110897260,
-    "yeni_sifaris": 111109080,
-    "geri_donusler": 110897264,
-    "soyuq_zeng": 110897348,
-    "cavab_gozlenilir": 110897336,
-    "gorusler": 110897344,
-    "qurashdirma": 111109084,
-    "muzakire": 111109104,
-    "ugurlu": 142,
-    "imtina": 143,
-}
-RUFAT_STAGE_NAMES = {
-    110897252: "Неразобранное",
-    110897256: "sorgular",
-    110897260: "danişıqlar",
-    111109080: "yeni sifariş",
-    110897264: "geri donüşlər",
-    110897348: "soyuq zəng",
-    110897336: "cavab gözlənilir",
-    110897344: "görüşlər",
-    111109084: "quraşdırma",
-    111109104: "müzakirə",
-    142: "Uğurla tamamlandı",
-    143: "İmtina olundu",
-}
-ADMIN_CHAT_ID = 1628569350
-ADMIN_KOMMO_USER_ID = 10932455
-HUSEYN_CHAT_ID = 7329891614
-RASIM_CHAT_ID = 7920785774
-# Historical Kommo tasks can still contain this marker.  It is a label only,
-# not an active employee account, so resolving an old task never crashes the
-# notification scheduler.
-TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
-NIZAMI_PIPELINE_ID = 14243944
-# Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it, including NÖMRƏ ALINIB.
-SOVDELESMELER_PIPELINE_ID = 8329347
-HUSEYN_PIPELINE_ID = 14358480
-RASIM_PIPELINE_ID = 14461812
-# Live Kommo snapshots. Nizami's pipeline is still the shared Gözləmə board.
-HUSEYN_STAGES = {
-    "nerazobrannoye": 110904704,
-    "sorgular": 110904708,
-    "icra_olunur": 110904712,
-    "gorusler": 110904716,
-    "qurashdirma": 110904792,
-    "gozleme": 111702228,
-    "muzakire": 111702232,
-    "ugurlu": 142,
-    "imtina": 143,
-}
-HUSEYN_STAGE_NAMES = {
-    110904704: "Неразобранное",
-    110904708: "Yeni sorgu",
-    110904712: "icra olunur",
-    110904716: "görüş",
-    110904792: "quraşdırma",
-    111702228: "gözləmə",
-    111702232: "müzakirə",
-    142: "Uğurla tamamlandı",
-    143: "İmtina olundu",
-}
-RASIM_STAGES = {
-    "nerazobrannoye": 111700780,
-    "sorgular": 111700784,
-    "yeni_sifaris": 111700788,
-    "icra_olunur": 111700792,
-    "gozleme": 111702372,
-    "gorusler": 111702376,
-    "qurashdirma": 111702380,
-    "muzakire": 111702384,
-    "ugurlu": 142,
-    "imtina": 143,
-}
-RASIM_STAGE_NAMES = {
-    111700780: "Неразобранное",
-    111700784: "Sorgular",
-    111700788: "yeni sifariş",
-    111700792: "icra olunur",
-    111702372: "gözləmə",
-    111702376: "görüş",
-    111702380: "quraşdırma",
-    111702384: "müzakirə",
-    142: "Uğurla tamamlandı",
-    143: "İmtina olundu",
-}
-NIZAMI_STAGES = {
-    "nerazobrannoye": 109988180,
-    "sorgular": 109988196,
-    "danisiqlar": 112086092,
-    "telimat": 112086096,
-    "yeni_sifaris": 112086100,
-    "gozleme": 110774676,
-    "muzakire": 110722180,
-    "ugurlu": 142,
-    "imtina": 143,
-}
-NIZAMI_STAGE_NAMES = {
-    109988180: "Неразобранное",
-    109988196: "yeni sorgu",
-    112086092: "danışıqlar",
-    112086096: "təlimat",
-    112086100: "yeni sifariş",
-    110774676: "gözləmə",
-    110722180: "Müzakirə",
-    142: "Uğurla tamamlandı",
-    143: "İmtina olundu",
-}
-# Canonical task assignees.  Old account names deliberately do not appear here:
-# they may remain in historical Kommo task text, but can no longer receive work.
-KOMMO_TASK_RESPONSIBLE_USER_ID = 10932455
-ACTIVE_ASSIGNEES = {
-    # Employees work through personal funnels; Kommo stores the task under
-    # the active shared administrator. The legacy 15532668 is read-only
-    # historical metadata and is rejected by Kommo for new assignments.
-    "rufat": ("Rüfət Həsənzadə", "Rüfət", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "huseyn": ("Hüseyn Səfərov", "Hüseyn", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "rasim": ("Rasim Əsgərov", "Rasim", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "sermaye": ("Sərmayə Əhmədsoy", "Sərmayə", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "asya": ("Asya Agayeva", "Asya", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "nurane": ("Nuranə Şirinova", "Nuranə", KOMMO_TASK_RESPONSIBLE_USER_ID),
-    "admin": ("Nizami Qasımov", "Özüm", KOMMO_TASK_RESPONSIBLE_USER_ID),
-}
-_UPD_MARKER = {short: (name, user_id) for name, short, user_id in ACTIVE_ASSIGNEES.values()}
-
-STAGES = {
-    "nerazobrannoye": 66107683,
-    "danisiqlar": 108537924,
-    "qiymet_teklifi": 66107691,
-    "teqdimat": 66107699,
-    "teqdimat_olundu": 96880440,
-    "yeni_sifaris": 94525176,
-    "gorus": 108537892,
-    "daxili_muzakire": 108538104,
-    "qurashdirma": 108537896,
-    "dusunur": 108537976,
-    "ugurlu": 142,
-    "imtina": 143,
-}
-STAGE_NAMES = {
-    66107683: "Nerazobrannoye",
-    108537924: "danışıqlar",
-    66107691: "Qiymət təklifi",
-    66107699: "Təqdimat",
-    96880440: "Təqdimat olundu",
-    94525176: "yeni sifariş",
-    108537892: "görüş",
-    108538104: "daxili müzakirə",
-    108537896: "quraşdırma",
-    108537976: "Düşünür",
-    142: "Uğurla tamamlandı",
-    143: "İmtina olundu",
-}
-# Notify Admin only when a Sövdələşmələr deal moves to "Nömrə alınıb".
-# Kommo status ID verified from the pipeline configuration.
-NOTIFY_STAGE_ID = 108537924
-KOMMO_USERS = {
-    10932455: "Nizami Qasımov",
-    15532668: "Admin",
-}
-_STAGE_TASK_TEXTS = {
-    "qiymet_teklifi": "Qiymət təklifini göndər",
-    "teqdimat": "Müştəriyə təqdimat keçirmək",
-    "yeni_sifaris": "Yeni sifarişi rəsmiləşdirmək",
-    "gorus": "Müştəri ilə görüş keçirmək",
-    "qurashdirma": "Quraşdırmanı həyata keçirmək",
-}
-TASK_TYPE_NAMES = {
-    1: "Əlaqə saxla",
-    2: "Görüş",
-    3263995: "Təqdimat",
-    3263999: "Quraşdırma",
-    3267595: "Zəng et",
-    4229224: "Cavab gözlənilir",
-    4232112: "aktiv",
-    4232108: "Import",
-    4239844: "passiv",
-}
 
 # Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -1934,138 +1704,13 @@ def resolve_time_from_text(text: str) -> str | None:
     return None
 
 # ─── Kommo API Helpers ───────────────────────────────────────────────────────
-# Kommo strictly blocks the account above 7 requests per second.
-# We enforce a hard limit of 6 RPS globally across all threads, sessions,
-# webhooks, and background workers using:
-# 1) A sliding 1.05s window to ensure at most 6 requests within ANY rolling second.
-# 2) A minimum interval of 0.170s between consecutive requests.
-# 3) A global cooldown coordinator upon encountering HTTP 429 to pause all threads.
-KOMMO_MAX_RPS = 6
-KOMMO_WINDOW_SEC = 1.05
-KOMMO_MIN_GAP = max(0.170, 1.0 / KOMMO_MAX_RPS)
-
-_kommo_pace_lock = threading.Lock()
-_kommo_history = collections.deque()
-_kommo_next_at = 0.0
-_kommo_global_cooldown_until = 0.0
-
-def _is_kommo_url(url) -> bool:
-    try:
-        raw = str(url or "").strip().lower()
-        if "kommo.com" in raw or "amocrm.ru" in raw or "amocrm.com" in raw:
-            return True
-        host = (urlparse(raw).hostname or "").lower()
-        return (
-            host == "kommo.com" or host.endswith(".kommo.com")
-            or host == "amocrm.ru" or host.endswith(".amocrm.ru")
-            or host == "amocrm.com" or host.endswith(".amocrm.com")
-        )
-    except Exception:
-        return False
-
-def _kommo_engage_cooldown(seconds: float = 3.0) -> None:
-    """Pause all Kommo requests across all threads for a cooldown period."""
-    global _kommo_global_cooldown_until, _kommo_next_at
-    with _kommo_pace_lock:
-        now = _time_module.monotonic()
-        _kommo_global_cooldown_until = max(_kommo_global_cooldown_until, now + seconds)
-        _kommo_next_at = max(_kommo_next_at, _kommo_global_cooldown_until)
-        _kommo_history.clear()
-
-def _kommo_wait() -> None:
-    """Enforce strict global rate limiting (<= 6 RPS) across all threads."""
-    global _kommo_next_at, _kommo_global_cooldown_until
-    while True:
-        cooldown_delay = 0.0
-        with _kommo_pace_lock:
-            now = _time_module.monotonic()
-            if now < _kommo_global_cooldown_until:
-                cooldown_delay = _kommo_global_cooldown_until - now
-        if cooldown_delay > 0:
-            _time_module.sleep(cooldown_delay)
-            continue
-
-        with _kommo_pace_lock:
-            now = _time_module.monotonic()
-            if now < _kommo_global_cooldown_until:
-                continue
-            base = max(now, _kommo_next_at)
-            while _kommo_history and _kommo_history[0] <= base - KOMMO_WINDOW_SEC:
-                _kommo_history.popleft()
-            if len(_kommo_history) >= KOMMO_MAX_RPS:
-                slot = max(base, _kommo_history[0] + KOMMO_WINDOW_SEC)
-            else:
-                slot = base
-            _kommo_next_at = slot + KOMMO_MIN_GAP
-            _kommo_history.append(slot)
-
-        delay = slot - _time_module.monotonic()
-        interrupted = False
-        while delay > 0:
-            _time_module.sleep(min(delay, 0.05))
-            if _time_module.monotonic() < _kommo_global_cooldown_until:
-                interrupted = True
-                break
-            delay = slot - _time_module.monotonic()
-
-        if interrupted:
-            continue
-        return
-
-_orig_session_request = requests.Session.request
-
-def _paced_session_request(self, method, url, *args, **kwargs):
-    kommo = _is_kommo_url(url)
-    response = None
-    for attempt in range(3):
-        if kommo:
-            _kommo_wait()
-        response = _orig_session_request(self, method, url, *args, **kwargs)
-        if not kommo or getattr(response, "status_code", 0) != 429 or attempt >= 2:
-            return response
-        logger.warning("Kommo returned 429 on attempt %s; initiating global cooldown", attempt + 1)
-        _kommo_engage_cooldown(2.5 * (attempt + 1))
-    return response
-
-requests.Session.request = _paced_session_request
-
-def _token_has_scope(tok: str, scope: str) -> bool:
-    try:
-        parts = str(tok or "").split(".")
-        if len(parts) < 2:
-            return False
-        payload = parts[1]
-        payload += "=" * (-len(payload) % 4)
-        data = json.loads(base64.urlsafe_b64decode(payload))
-        return scope in (data.get("scopes") or [])
-    except Exception:
-        return False
-
-# Check Railway configuration at startup so an expired Kommo token is visible
-# in logs instead of silently falling back to a credential in source control.
-try:
-    _kommo_probe = requests.get(
-        f"{KOMMO_BASE_URL}/api/v4/account",
-        headers={"Authorization": f"Bearer {KOMMO_TOKEN}"},
-        timeout=10,
-    )
-    _kommo_probe_status = _kommo_probe.status_code
-except Exception as _kommo_probe_exc:
-    logger.warning("Kommo token probe failed: %s", _kommo_probe_exc)
-    _kommo_probe_status = 0
-if _kommo_probe_status != 200:
-    logger.error("Railway KOMMO_TOKEN check failed with HTTP %s", _kommo_probe_status)
-elif not _token_has_scope(KOMMO_TOKEN, "list_external_messages"):
-    logger.warning("Railway KOMMO_TOKEN does not advertise list_external_messages scope")
-
-HEADERS = {
-    "Authorization": f"Bearer {KOMMO_TOKEN}",
-    "Content-Type": "application/json",
-}
-# Reusable session with connection pooling for faster API calls
-_http = requests.Session()
-_http.headers.update(HEADERS)
-_http.mount('https://', requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=10))
+_legacy_kommo_runtime = install_legacy_kommo_transport(
+    token=KOMMO_TOKEN,
+    base_url=KOMMO_BASE_URL,
+    logger=logger,
+)
+HEADERS = _legacy_kommo_runtime.headers
+_http = _legacy_kommo_runtime.session
 
 def search_contact_by_phone(phone: str) -> list:
     digits = re.sub(r"[^\d]", "", phone)

@@ -11,10 +11,12 @@ from unittest.mock import Mock
 
 class KommoTaskCreationTests(unittest.TestCase):
     def setUp(self):
-        source = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
+        root = Path(__file__).resolve().parents[1]
+        sources = [ast.parse((root / filename).read_text(encoding="utf-8-sig"))
+                   for filename in ("legacy_runtime_config.py", "bot.py")]
         names = {"KOMMO_TASK_RESPONSIBLE_USER_ID", "ACTIVE_ASSIGNEES", "kommo_user_id_for_employee_funnel", "create_task", "handle_api_action"}
         selected = [
-            node for node in source.body
+            node for source in sources for node in source.body
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names)
             or (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in names for target in node.targets))
         ]
