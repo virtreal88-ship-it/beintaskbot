@@ -9,8 +9,13 @@ from unittest.mock import Mock, AsyncMock
 
 def load_functions():
     source = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
-    names = {'employee_has_permission', '_required_api_permission', 'handle_api_linear_news_review'}
+    access_source = ast.parse((Path(__file__).resolve().parents[1] / 'legacy_employee_access.py').read_text(encoding='utf-8-sig'))
+    names = {'_required_api_permission', 'handle_api_linear_news_review'}
     nodes = [node for node in source.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
+    nodes.extend(
+        node for node in access_source.body
+        if isinstance(node, ast.FunctionDef) and node.name == 'employee_has_permission'
+    )
     profile = {'active': True, 'permissions': ['waiting', 'approvals_news']}
     namespace = {
         'employee_access_profile': lambda _: profile,
@@ -75,7 +80,7 @@ class NewsPermissionTests(unittest.TestCase):
         publish.assert_not_called()
 
     def test_huseyn_grant_is_persisted_once_and_revocation_wins(self):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'legacy_employee_access.py').read_text(encoding='utf-8-sig'))
         node = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'employee_access_profile')
         records = {'7329891614': {'role': 'employee', 'active': True, 'permissions': ['tasks'], 'linear_create_permission_version': 1}}
         save = Mock(side_effect=lambda updated: records.update(updated))

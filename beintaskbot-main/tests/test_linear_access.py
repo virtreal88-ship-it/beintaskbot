@@ -20,6 +20,7 @@ MOVED_RUFAT = 8835096199
 
 def load_linear_functions():
     source = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
+    access_source = ast.parse((Path(__file__).resolve().parents[1] / "legacy_employee_access.py").read_text(encoding="utf-8-sig"))
     names = {
         "_LINEAR_ACCOUNT_ALIASES", "_LINEAR_OPERATOR_BY_CHAT", "_LINEAR_CREATE_ACCOUNT_BY_CHAT",
         "get_rufat_compat_chat_ids", "is_rufat_chat", "_linear_identity_chat_id",
@@ -33,6 +34,10 @@ def load_linear_functions():
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names)
         or (isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in names for target in node.targets))
     ]
+    selected.extend(
+        node for node in access_source.body
+        if isinstance(node, ast.FunctionDef) and node.name == "get_rufat_compat_chat_ids"
+    )
     permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear", "linear_create"}, HUSEYN: {"linear", "linear_create"}, RASIM: {"linear", "linear_create"}, MOVED_RUFAT: {"linear", "linear_create"}}
     web = types.SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {"status": status, "data": data})
     namespace = {
@@ -222,7 +227,7 @@ class LinearAccessTests(unittest.TestCase):
         self.assertEqual(self.call(Request(RASIM, "POST", {"action": "create"}))["status"], 403)
 
     def test_saved_create_switch_is_not_restored_by_migration(self):
-        tree = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "legacy_employee_access.py").read_text(encoding="utf-8-sig"))
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "employee_access_profile")
         record = {"role": "Əməkdaş", "active": True, "permissions": ["linear"]}
         ns = dict(self.ns, _load_employee_access_records=lambda: {str(RASIM): record},
