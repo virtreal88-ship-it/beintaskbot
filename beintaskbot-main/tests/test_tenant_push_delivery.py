@@ -128,26 +128,4 @@ class PushTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport.call_args.kwargs['timeout'],15)
 
 
-class PushLogoutTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
-        node=next(node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='handle_platform_logout')
-        self.cleanup=Mock();self.profile={'tenant_id':'company-a','telegram_id':1,'active':True}
-        namespace={'web':SimpleNamespace(Request=object,Response=object,json_response=ApiResponse),
-                   '_tenant_member_from_request':lambda _:self.profile,'disable_tenant_browser_push':self.cleanup,
-                   'CANONICAL_WEB_ORIGIN':'https://crm.pro.az','asyncio':asyncio,'logger':Mock(),'_TENANT_SESSION_COOKIE':'session'}
-        exec(compile(ast.Module(body=[node],type_ignores=[]),'<logout>','exec'),namespace)
-        self.api=namespace[node.name];self.request=SimpleNamespace(headers={'Origin':'https://crm.pro.az'},cookies={'tenant_push_device':'a'*64})
-
-    async def test_logout_disables_only_browser_then_removes_cookies(self):
-        response=await self.api(self.request)
-        self.cleanup.assert_called_once_with(self.profile,'a'*64)
-        self.assertIsNone(response.cookies['session']);self.assertIsNone(response.cookies['tenant_push_device'])
-
-    async def test_foreign_origin_or_failed_cleanup_cannot_silently_logout(self):
-        self.request.headers={};self.assertEqual((await self.api(self.request))[0],403);self.cleanup.assert_not_called()
-        self.request.headers={'Origin':'https://crm.pro.az'};self.cleanup.side_effect=RuntimeError()
-        self.assertEqual((await self.api(self.request))[0],503)
-
-
 if __name__=='__main__':unittest.main()

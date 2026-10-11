@@ -57,6 +57,7 @@ from tenant_web_routes import TenantWebContext, register_feature_routes
 from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECONDS
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
+from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
 from tenant_web_assets import register_assets
@@ -21394,136 +21395,6 @@ async def handle_telegram_login(request: web.Request) -> web.Response:
     return response
 
 
-def _telegram_display_name(payload: dict) -> str:
-    parts = [str(payload.get(key) or "").strip() for key in ("first_name", "last_name")]
-    return " ".join(part for part in parts if part)[:120] or "İstifadəçi"
-
-
-async def handle_platform_register(request: web.Request) -> web.Response:
-    """Register a new company only after Telegram proves the owner's identity."""
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    telegram = data.get("telegram") if isinstance(data.get("telegram"), dict) else {}
-    chat_id = _telegram_login_user_id(telegram)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
-    try:
-        # The first screen should not make a future customer fill a CRM
-        # questionnaire.  Telegram creates a private draft workspace; the AI
-        # asks for the company details after Kommo is safely connected.
-        existing = await asyncio.to_thread(tenants_for_user, chat_id)
-        tenant = next((item for item in existing if item.get("role") == "owner" and item.get("status") == "onboarding"), None)
-        if tenant is None:
-            tenant = await asyncio.to_thread(
-                create_tenant,
-                name=str(data.get("company_name") or "Yeni şirkət"),
-                industry=str(data.get("industry") or ""),
-                owner_telegram_id=chat_id,
-                owner_name=_telegram_display_name(telegram),
-            )
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    except Exception:
-        logger.exception("Platform tenant registration failed")
-        return web.json_response({"success": False, "error": "Qeydiyyat zamanı xəta baş verdi."}, status=500)
-    response = web.json_response({"success": True, "tenant": tenant, "redirect": "/setup"})
-    response.set_cookie(_TENANT_SESSION_COOKIE, _make_tenant_session(tenant["id"], chat_id), max_age=_TENANT_SESSION_TTL_SEC,
-                        httponly=True, secure=True, samesite="Lax", path="/")
-    return response
-
-
-async def handle_platform_me(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile:
-        return web.json_response({"success": False, "error": "Platforma girişi tələb olunur."}, status=401)
-    try:
-        integrations = await asyncio.to_thread(list_tenant_integrations, tenant_id=profile["tenant_id"], telegram_id=int(profile["telegram_id"]))
-        companies = await asyncio.to_thread(tenants_for_user, int(profile["telegram_id"]))
-        members = await asyncio.to_thread(
-            list_tenant_members, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"])
-        ) if profile.get("role") == "owner" else []
-    except Exception:
-        logger.exception("Platform session lookup failed")
-        return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
-    safe_profile = {key: value for key, value in profile.items() if key != 'workflow'}
-    return web.json_response({"success": True, "member": safe_profile, "capabilities": TenantPolicy(profile).public_capabilities(),
-                              "role_permissions": ROLE_PERMISSIONS, "integrations": integrations, "companies": companies, "members": members})
-
-
-async def handle_platform_login(request: web.Request) -> web.Response:
-    """Sign a tenant-scoped browser session after Telegram identity proof.
-
-    Access is not granted merely by knowing an ID. Telegram signs the callback,
-    then the database checks that this exact ID is an active employee card.
-    """
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    telegram = data.get("telegram") if isinstance(data.get("telegram"), dict) else {}
-    chat_id = _telegram_login_user_id(telegram)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
-    try:
-        companies = await asyncio.to_thread(tenants_for_user, chat_id)
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=503)
-    if not companies:
-        return web.json_response({"success": False, "error": "Bu Telegram hesabı üçün giriş icazəsi yoxdur. Administrator sizi əməkdaş kartına əlavə etməlidir."}, status=403)
-    requested_tenant = str(data.get("tenant_id") or "").strip()
-    if requested_tenant:
-        tenant = next((item for item in companies if str(item.get("id")) == requested_tenant), None)
-        if not tenant:
-            return web.json_response({"success": False, "error": "Bu şirkət üçün giriş icazəniz yoxdur."}, status=403)
-    elif len(companies) == 1:
-        tenant = companies[0]
-    else:
-        return web.json_response({
-            "success": True,
-            "select_company": True,
-            "companies": [{"id": item["id"], "name": item["name"]} for item in companies],
-        })
-    # A configured customer enters their isolated workspace directly.  A new
-    # owner remains in the wizard until the first setup is completed.
-    destination = "/app" if str(tenant.get("status") or "") not in {"", "onboarding"} else "/setup"
-    response = web.json_response({"success": True, "redirect": destination, "tenant": {"id": tenant["id"], "name": tenant["name"]}})
-    response.set_cookie(
-        _TENANT_SESSION_COOKIE, _make_tenant_session(str(tenant["id"]), chat_id),
-        max_age=_TENANT_SESSION_TTL_SEC, httponly=True, secure=True, samesite="Lax", path="/",
-    )
-    return response
-
-
-async def handle_platform_logout(_request: web.Request) -> web.Response:
-    """End only the tenant-platform browser session.
-
-    The legacy BeinSystems cookie is intentionally untouched so the two
-    products do not sign each other out.
-    """
-    if _request.headers.get('Origin','').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/'):
-        return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403)
-    profile = _tenant_member_from_request(_request)
-    device_id = _request.cookies.get('tenant_push_device')
-    if profile and device_id:
-        try:
-            await asyncio.to_thread(disable_tenant_browser_push,profile,device_id)
-        except ValueError:
-            pass
-        except Exception:
-            logger.error('Tenant browser push cleanup failed')
-            return web.json_response({'success':False,'error':'Push cihazını ayırmaq alınmadı. Yenidən yoxlayın.'},status=503)
-    response = web.json_response({"success": True},headers={'Cache-Control':'no-store'})
-    response.del_cookie('tenant_push_device',path='/')
-    response.del_cookie(_TENANT_SESSION_COOKIE, path="/")
-    return response
-
-
-
-
 async def handle_platform_workflow_config(request: web.Request) -> web.Response:
     """Owner API for tenant-specific pipelines, stages and workflow policies."""
     profile = _tenant_member_from_request(request, owner_only=True)
@@ -22151,54 +22022,6 @@ async def serve_documentation_page(request: web.Request) -> web.Response:
     response = web.FileResponse(html_path)
     response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
     return response
-
-
-async def serve_platform_onboarding(request: web.Request) -> web.Response:
-    """Serve public tenant registration, setup, and invitation pages.
-
-    This surface is deliberately separate from ``/webapp``: the latter is
-    the existing BeinSystems workspace, while the platform page uses only
-    tenant-scoped PostgreSQL records.
-    """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = (
-        os.path.join(base_dir, "docs", "onboarding.html"),
-        os.path.join(base_dir, "onboarding.html"),
-    )
-    html_path = next((path for path in candidates if os.path.isfile(path)), None)
-    if not html_path:
-        logger.error("Platform onboarding page not found; checked: %s", ", ".join(candidates))
-        return web.Response(status=404, text="Platform onboarding page not found")
-    response = web.FileResponse(html_path)
-    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-    return response
-
-
-async def redirect_platform_app(request: web.Request) -> web.Response:
-    """Serve the tenant-safe CRM workspace, never the legacy /webapp."""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = (
-        os.path.join(base_dir, "docs", "tenant-app.html"),
-        os.path.join(base_dir, "tenant-app.html"),
-    )
-    html_path = next((path for path in candidates if os.path.isfile(path)), None)
-    if not html_path:
-        logger.error("Tenant CRM page not found; checked: %s", ", ".join(candidates))
-        return web.Response(status=404, text="Tenant CRM page not found")
-    response = web.FileResponse(html_path)
-    response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-    return response
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -23131,15 +22954,27 @@ async def start_webhook_server():
         crm_request=_tenant_kommo_request, wait_slot=_wait_for_tenant_kommo_slot,
         bot=lambda: _bot_app.bot if _bot_app else None))
     register_assets(app_web)
-    app_web.router.add_post("/api/platform/register", handle_platform_register)
-    app_web.router.add_post("/api/platform/login", handle_platform_login)
-    app_web.router.add_post("/api/platform/logout", handle_platform_logout)
-    app_web.router.add_get("/api/platform/me", handle_platform_me)
+    auth_api = tenant_auth_handlers(AuthApiContext(
+        member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
+        issue_session=_make_tenant_session, tenants_for_user=tenants_for_user,
+        create_tenant=create_tenant, list_integrations=list_tenant_integrations,
+        list_members=list_tenant_members,
+        capabilities=lambda profile: TenantPolicy(profile).public_capabilities(),
+        disable_browser_push=disable_tenant_browser_push,
+        role_permissions=ROLE_PERMISSIONS, platform_error=TenantPlatformError,
+        origin=CANONICAL_WEB_ORIGIN, cookie_name=_TENANT_SESSION_COOKIE,
+        cookie_ttl=_TENANT_SESSION_TTL_SEC,
+        base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
+    ))
+    app_web.router.add_post("/api/platform/register", auth_api["register"])
+    app_web.router.add_post("/api/platform/login", auth_api["login"])
+    app_web.router.add_post("/api/platform/logout", auth_api["logout"])
+    app_web.router.add_get("/api/platform/me", auth_api["me"])
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     member_api = tenant_member_handlers(MemberApiContext(
         member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
-        telegram_name=_telegram_display_name, send_telegram=_send_telegram_text,
+        telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
         origin=CANONICAL_WEB_ORIGIN,
         list_members=list_tenant_members, upsert_member=upsert_tenant_member,
         deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
@@ -23194,14 +23029,14 @@ async def start_webhook_server():
     app_web.router.add_post('/api/deal/tags', deal_tags_api)
     app_web.router.add_get("/api/platform/crm/tasks/options", handle_platform_task_options)
     app_web.router.add_post("/api/platform/crm/tasks", handle_platform_task_create)
-    app_web.router.add_get("/register", serve_platform_onboarding)
-    app_web.router.add_get("/login", serve_platform_onboarding)
-    app_web.router.add_get("/setup", serve_platform_onboarding)
+    app_web.router.add_get("/register", auth_api["onboarding_page"])
+    app_web.router.add_get("/login", auth_api["onboarding_page"])
+    app_web.router.add_get("/setup", auth_api["onboarding_page"])
     # Also accept /invite?token=…; some mobile Telegram clients rewrite a
     # path-only link when opening it in the in-app browser.
-    app_web.router.add_get("/invite", serve_platform_onboarding)
-    app_web.router.add_get("/invite/{token}", serve_platform_onboarding)
-    app_web.router.add_get("/app", redirect_platform_app)
+    app_web.router.add_get("/invite", auth_api["onboarding_page"])
+    app_web.router.add_get("/invite/{token}", auth_api["onboarding_page"])
+    app_web.router.add_get("/app", auth_api["app_page"])
     app_web.router.add_get("/webapp", serve_webapp)
     app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|alarm\\.wav}", serve_web_asset)
     app_web.router.add_get("/deal.html", serve_deal_page)
