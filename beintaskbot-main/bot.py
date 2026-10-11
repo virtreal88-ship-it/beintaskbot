@@ -84,6 +84,14 @@ from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
+from legacy_chat_ai_context import (
+    _ai_history_lines as build_ai_history_lines,
+    _history_message_is_incoming, _is_history_audio,
+)
+from legacy_chat_ai_examples import (
+    _ai_reply_example_scope, _select_ai_reply_examples,
+    configure_ai_reply_examples, save_ai_reply_example,
+)
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
     _fold_stage_name, _pipeline_stage_cache, _stage_key_from_kommo, _stage_maps_from_statuses,
@@ -1422,6 +1430,7 @@ configure_chat_sender(
     app_logger=logger,
 )
 configure_chat_merge(split_quote=lambda text: _split_quote_prefix(text))
+configure_ai_reply_examples(read_json=read_json, write_json=write_json)
 
 
 
@@ -15458,140 +15467,6 @@ def _transcribe_summary_audio(item: dict, lead: dict | None = None) -> str:
                     pass
 
 
-def _is_history_audio(item: dict) -> bool:
-    kind = str(item.get("message_type") or item.get("type") or "").casefold()
-    source = " ".join(str(item.get(key) or "") for key in ("media_url", "media", "voice_url", "file_name"))
-    return kind in {"audio", "voice", "ptt", "call", "call_in", "call_out"} or bool(re.search(r"\.(ogg|opus|mp3|m4a|wav|aac)(\?|$)", source, re.I))
-
-
-def _history_message_is_incoming(item: dict) -> bool:
-    """Normalize Kommo's mixed direction fields for the AI conversation.
-
-    Different history sources represent booleans as actual booleans, integers,
-    or strings.  In particular, ``"false"`` is truthy in Python and used to
-    make an outgoing manager message look like a customer message to AI.
-    """
-    incoming = item.get("incoming")
-    if isinstance(incoming, bool):
-        return incoming
-    if isinstance(incoming, (int, float)):
-        return bool(incoming)
-    if isinstance(incoming, str):
-        normalized = incoming.strip().casefold()
-        if normalized in {"true", "1", "yes", "in", "incoming", "received", "client", "contact"}:
-            return True
-        if normalized in {"false", "0", "no", "out", "outgoing", "sent", "manager", "user"}:
-            return False
-
-    direction = str(item.get("direction") or item.get("message_direction") or "").strip().casefold()
-    if direction in {"in", "incoming", "received", "client", "contact"}:
-        return True
-    if direction in {"out", "outgoing", "sent", "manager", "user"}:
-        return False
-
-    outgoing = item.get("outgoing")
-    if isinstance(outgoing, bool):
-        return not outgoing
-    if isinstance(outgoing, (int, float)):
-        return not bool(outgoing)
-    return False
-
-
-async def _ai_history_lines(rows: list[dict], lead: dict | None = None, *, reply_context: bool = False) -> tuple[list[str], int, int]:
-    """Use the complete recent 30-message context for both reply and summary.
-
-    Audio is processed in order and persisted after the first transcription.
-    Sequential handling is intentional because the speech tool writes one
-    temporary transcript file and parallel calls could mix two conversations.
-    """
-    lines: list[str] = []
-    transcribed = 0
-    unavailable_voice = 0
-    recent = [item for item in rows if isinstance(item, dict)][-30:]
-    for item in recent:
-        text = str(item.get("text") or "").strip()
-        # This is deliberately independent from the visible author field:
-        # customer messages are always inbound; every outbound row is the
-        # sales manager's message, even when Kommo did not return a name.
-        who = "Müştəri" if _history_message_is_incoming(item) else "Satış meneceri"
-        if text:
-            limit = 6000 if reply_context else 400
-            clipped = text[:limit] + (" [mətnin davamı ixtisar edilib]" if reply_context and len(text) > limit else "")
-            lines.append(f"{who}: {clipped}")
-        if _is_history_audio(item):
-            # Reuse text produced by the visible “Mətnə çevir” action when
-            # it is present in the submitted 30-message context.  This avoids
-            # a second transcription request for the same recording.
-            transcript = str(item.get("transcript") or item.get("transcription") or "").strip()
-            if not transcript:
-                transcript = await asyncio.to_thread(_transcribe_summary_audio, item, lead)
-            if transcript:
-                label = "zəng yazısının mətni" if str(item.get("message_type") or item.get("type") or "").casefold() in {"call", "call_in", "call_out"} else "səsli mesajın mətni"
-                if reply_context and len(transcript) > 12000:
-                    transcript = transcript[:12000] + " [mətnin davamı ixtisar edilib]"
-                lines.append(f"{who} ({label}): {transcript}")
-                transcribed += 1
-            else:
-                # Never silently present an incomplete voice context as if it
-                # had been included in the AI answer or summary.
-                unavailable_voice += 1
-                if reply_context:
-                    lines.append(f"{who}: [Səs yazısı var, mətnə çevirmək alınmadı; məzmunu məlum deyil.]")
-        elif reply_context and (item.get("media_url") or item.get("media") or item.get("file_uuid")):
-            lines.append(f"{who}: [Əlavə fayl var; məzmunu yalnız aşağıda ayrıca təqdim edilibsə məlumdur.]")
-    return lines, transcribed, unavailable_voice
-
-
-_AI_REPLY_EXAMPLES_FILE = "ai_reply_examples.json"
-_ai_reply_examples_lock = threading.Lock()
-_AI_REPLY_EXAMPLES_LIMIT = 300
-
-
-def _ai_reply_example_scope(lead: dict) -> str:
-    try:
-        pipeline_id = int(lead.get("pipeline_id") or 0)
-    except (TypeError, ValueError):
-        pipeline_id = 0
-    try:
-        status_id = int(lead.get("status_id") or 0)
-    except (TypeError, ValueError):
-        status_id = 0
-    return f"{pipeline_id}:{status_id}"
-
-
-def _ai_reply_tokens(text: str) -> set[str]:
-    return {
-        token for token in re.findall(r"[\wəıöüçşğ]{3,}", str(text or "").casefold())
-        if token not in {"musteri", "müştəri", "menecer", "salam", "ucun", "üçün"}
-    }
-
-
-def _select_ai_reply_examples(lead: dict, history: str, draft: str = "") -> list[dict]:
-    data = read_json(_AI_REPLY_EXAMPLES_FILE) or []
-    rows = data if isinstance(data, list) else []
-    scope = _ai_reply_example_scope(lead)
-    requested = _ai_reply_tokens(f"{history}\n{draft}")
-    ranked: list[tuple[int, int, dict]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        reply = str(row.get("reply") or "").strip()
-        context = str(row.get("context") or "").strip()
-        if not reply or not context:
-            continue
-        overlap = len(requested.intersection(_ai_reply_tokens(context)))
-        if not overlap:
-            continue
-        score = (20 if str(row.get("scope") or "") == scope else 0) + overlap
-        try:
-            saved_at = int(row.get("saved_at") or 0)
-        except (TypeError, ValueError):
-            saved_at = 0
-        ranked.append((score, saved_at, {"context": context[:700], "reply": reply[:700]}))
-    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [item[2] for item in ranked[:4]]
-
-
 async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
     """Save an explicitly approved reply as a reusable writing example."""
     chat_id = _deal_request_user(request)
@@ -15639,14 +15514,9 @@ async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
         "saved_at": now,
         "saved_by": int(chat_id),
     }
-    with _ai_reply_examples_lock:
-        rows = read_json(_AI_REPLY_EXAMPLES_FILE) or []
-        rows = rows if isinstance(rows, list) else []
-        duplicate = next((item for item in rows if isinstance(item, dict) and item.get("lead_id") == lead_id and item.get("reply") == reply), None)
-        if duplicate:
-            return web.json_response({"success": True, "duplicate": True})
-        rows.append(row)
-        write_json(_AI_REPLY_EXAMPLES_FILE, rows[-_AI_REPLY_EXAMPLES_LIMIT:])
+    _saved, duplicate = save_ai_reply_example(row)
+    if duplicate:
+        return web.json_response({"success": True, "duplicate": True})
     return web.json_response({"success": True})
 
 
@@ -15713,7 +15583,12 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         mode = "reply"
     # The same recent context powers both an AI reply and a summary.  A reply
     # must understand a voice note or call recording just as much as Xülasə.
-    lines, transcribed_count, untranscribed_voice_count = await _ai_history_lines(history_rows, lead, reply_context=mode == "reply")
+    lines, transcribed_count, untranscribed_voice_count = await build_ai_history_lines(
+        history_rows,
+        lead,
+        reply_context=mode == "reply",
+        transcribe=_transcribe_summary_audio,
+    )
     history = "\n".join(lines) or "Yazışma yoxdur."
     def _ai_error_message(exc: Exception) -> str:
         detail = str(exc or "").casefold()

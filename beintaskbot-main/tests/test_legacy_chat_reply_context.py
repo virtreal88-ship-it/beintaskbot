@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from legacy_chat_ai_context import _ai_history_lines
+import legacy_chat_ai_examples as ai_examples
 from legacy_chat_reply_media import reply_media_content
 from legacy_chat_reply_provider import generate, log_failure
 
@@ -12,16 +14,17 @@ TREE = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(enco
 
 
 def context_builder(transcription=''):
-    function = next(node for node in TREE.body if isinstance(node, ast.AsyncFunctionDef) and node.name == '_ai_history_lines')
     transcribe = Mock(return_value=transcription)
-    namespace = {
-        'asyncio': asyncio,
-        '_history_message_is_incoming': lambda item: item.get('incoming', False),
-        '_is_history_audio': lambda item: item.get('message_type') in ('voice', 'call'),
-        '_transcribe_summary_audio': transcribe,
-    }
-    exec(compile(ast.Module(body=[function], type_ignores=[]), '<context builder>', 'exec'), namespace)
-    return namespace['_ai_history_lines'], transcribe
+
+    async def build(rows, lead=None, *, reply_context=False):
+        return await _ai_history_lines(
+            rows,
+            lead,
+            reply_context=reply_context,
+            transcribe=transcribe,
+        )
+
+    return build, transcribe
 
 
 class ReplyContext(unittest.IsolatedAsyncioTestCase):
@@ -64,17 +67,14 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
         self.assertIn(namespace['history'],client.chat.completions.create.call_args.kwargs['messages'][1]['content'][0]['text'])
 
     async def test_unrelated_saved_examples_are_not_sent(self):
-        function = next(node for node in TREE.body if isinstance(node, ast.FunctionDef) and node.name == '_select_ai_reply_examples')
-        namespace = {
-            '_AI_REPLY_EXAMPLES_FILE': 'unused', '_ai_reply_example_scope': lambda lead: 'pipeline',
-            '_ai_reply_tokens': lambda text: set(text.split()),
-            'read_json': lambda path: [
+        ai_examples.configure_ai_reply_examples(
+            read_json=lambda path: [
                 {'context': 'restaurant', 'reply': 'Restaurant example', 'scope': 'pipeline'},
                 {'context': 'warehouse', 'reply': 'Wrong topic', 'scope': 'pipeline'},
             ],
-        }
-        exec(compile(ast.Module(body=[function], type_ignores=[]), '<examples>', 'exec'), namespace)
-        selected = namespace['_select_ai_reply_examples']({}, 'restaurant')
+            write_json=lambda path, value: True,
+        )
+        selected = ai_examples._select_ai_reply_examples({}, 'restaurant')
         self.assertEqual([row['reply'] for row in selected], ['Restaurant example'])
 
     async def test_long_customer_message_and_manager_roles(self):
