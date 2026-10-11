@@ -22,6 +22,7 @@ async function test() {
     const context = {
         console, setTimeout, clearTimeout, AbortController, API_BASE: '', CURRENT_USER_ID: '6824377548', TELEGRAM_INIT_DATA: '',
         isAdmin: false, employeePermissions: new Set(), employeeLinearCanCreate: false,
+        canReviewNews: () => false,
         HAS_CHATS: false, taskTypeTab: 'tasks', localStorage: {setItem() {}},
         document: {
             getElementById(id) {
@@ -82,7 +83,7 @@ function testStaffCardActions() {
     const context = {isAdmin: false, hasEmployeePermission: () => true,
         escapeHtml: value => String(value || ''), Date};
     vm.createContext(context);
-    for(const name of ['isLinearDoneStatus', 'linearBoardPriorityStyle', 'linearBoardStatusStyle', 'linearBoardPriorityLabel', 'linearBoardCardHtml', 'bindLinearTaskCard', 'bindLinearColumnDrop']) {
+    for(const name of ['isLinearDoneStatus', 'linearBoardPriorityStyle', 'linearBoardStatusStyle', 'linearBoardPriorityLabel', 'formatLinearTimestamp', 'linearBoardCardHtml', 'bindLinearTaskCard', 'bindLinearColumnDrop']) {
         vm.runInContext(source(name), context);
     }
     const task = {source_id: 'id', title: 'Task', client: 'rufet', priority: 2, in_confirmation: true, status: {name: 'Triage'}};
@@ -103,5 +104,24 @@ function testStaffCardActions() {
     console.log('PASS: staff cards are read-only except Done testing; legacy edit rights cannot enable drag/drop.');
 }
 
+function testAdminConfirmationActions() {
+    const context = {isAdmin: true, hasEmployeePermission: () => true,
+        escapeHtml: value => String(value || ''), Date};
+    vm.createContext(context);
+    for(const name of ['linearIssueCardHtml', 'isLinearDoneStatus', 'linearBoardPriorityStyle', 'linearBoardStatusStyle', 'linearBoardPriorityLabel', 'formatLinearTimestamp', 'linearBoardCardHtml']) {
+        vm.runInContext(source(name), context);
+    }
+    const task = {id: 'BS-1', source_id: 'id', title: 'Task', client: 'rufet', priority: 2, in_confirmation: true, status: {name: 'Triage'}};
+    for(const card of [context.linearIssueCardHtml(task), context.linearBoardCardHtml(task)]) {
+        assert(card.includes("runLinearTesdiqAction('to_testiq'"));
+        assert(card.includes('>Təsdiq</button>'));
+        const menuStart = card.indexOf('<details');
+        const cancelAction = card.indexOf("openLinearCancelModal('id')");
+        assert(menuStart >= 0 && cancelAction > menuStart, 'İmtina must be inside the overflow menu');
+    }
+    console.log('PASS: admin cards show Təsdiq in the main row and keep İmtina inside the overflow menu.');
+}
+
 testStaffCardActions();
+testAdminConfirmationActions();
 test().catch(error => {console.error(error); process.exitCode = 1;});

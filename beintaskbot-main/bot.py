@@ -21147,7 +21147,7 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
         )
         if not can_write:
             return web.json_response({"success": False, "error": "Linear əməliyyatı üçün ayrıca icazə lazımdır."}, status=403)
-        allowed_actions = {"confirm", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create", "test_accept", "test_reject"}
+        allowed_actions = {"confirm", "to_testiq", "discussion", "priority", "delete", "edit", "cancel", "ai_rewrite", "status", "create", "test_accept", "test_reject"}
         if action not in allowed_actions or (action not in {"create", "ai_rewrite"} and not issue_id):
             return web.json_response({"success": False, "error": "Əməliyyat və tapşırıq seçin."}, status=400)
         try:
@@ -21173,6 +21173,10 @@ async def handle_api_linear_tesdiq(request: web.Request) -> web.Response:
                 target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TODO_STATE_ID, "Todo")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
                 return web.json_response({"success": True, "message": "Tapşırıq Todo mərhələsinə keçirildi.", "issue": moved})
+            if action == "to_testiq":
+                target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_TESDIQ_STATE_ID, "Testiq")
+                moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)
+                return web.json_response({"success": True, "message": "Tapşırıq Testiq mərhələsinə keçirildi.", "issue": moved})
             if action == "discussion":
                 target_state = await asyncio.to_thread(_linear_resolve_workflow_state_id, LINEAR_DISCUSSION_STATE_ID or LINEAR_BACKLOG_STATE_ID, "Discussion")
                 moved = await asyncio.to_thread(_linear_move_issue, issue_id, target_state)

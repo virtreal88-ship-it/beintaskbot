@@ -162,8 +162,17 @@ class LinearAccessTests(unittest.TestCase):
 
     def test_staff_legacy_edit_permission_cannot_change_status(self):
         self.permissions[RUFAT].add("linear_edit")
-        for action in ("status", "priority", "confirm", "discussion", "cancel", "delete", "edit"):
+        for action in ("status", "priority", "confirm", "to_testiq", "discussion", "cancel", "delete", "edit"):
             self.assertEqual(self.call(Request(RUFAT, "POST", {"action": action, "issue_id": "a"}))["status"], 403)
+
+    def test_admin_can_return_confirmation_issue_to_testiq(self):
+        resolve = self.ns["_linear_resolve_workflow_state_id"] = Mock(return_value="testiq-id")
+        move = self.ns["_linear_move_issue"] = Mock(return_value={"id": "a", "state": {"name": "Testiq"}})
+        result = self.call(Request(ADMIN, "POST", {"action": "to_testiq", "issue_id": "a"}))
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["data"]["message"], "Tapşırıq Testiq mərhələsinə keçirildi.")
+        resolve.assert_called_once_with("testiq", "Testiq")
+        move.assert_called_once_with("a", "testiq-id")
 
     def test_done_buttons_are_scoped_and_require_done(self):
         self.ns["_linear_resolve_named_state_id"] = Mock(return_value="accept")

@@ -3278,12 +3278,13 @@ function linearIssueCardHtml(item) {
     const statusBadge = `<span class="inline-flex rounded-full px-2 py-1 text-[10px] font-extrabold text-white" style="background:${statusColor}">${escapeHtml(status.name || 'Status yoxdur')}</span>`;
     const queueButtons = item.in_confirmation ? `
         <button type="button" onclick="runLinearTesdiqAction('confirm', '${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Təsdiq edirəm</button>
-        <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>` : '';
-    const actionButtons = sourceId ? `<div class="flex flex-wrap items-center gap-1.5">${queueButtons}<button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700 active:scale-[.98]">İmtina</button></div>` : '';
+        <button type="button" onclick="runLinearTesdiqAction('discussion', '${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800 active:scale-[.98]">Diskussiya</button>
+        <button type="button" onclick="runLinearTesdiqAction('to_testiq', '${sourceId}')" class="rounded-lg bg-violet-600 px-2 py-1.5 text-[10px] font-extrabold text-white active:scale-[.98]">Təsdiq</button>` : '';
+    const actionButtons = sourceId ? `<div class="flex flex-wrap items-center gap-1.5">${queueButtons}</div>` : '';
     const deleteButton = item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete', '${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : '';
-    const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${deleteButton}</div></details>` : '';
+    const actionsMenu = sourceId ? `<details class="relative shrink-0"><summary aria-label="Əlavə əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100 hover:text-slate-700">⋯</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">İmtina</button>${deleteButton}</div></details>` : '';
     return `<article data-linear-issue-id="${sourceId}" class="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
-        <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div></div>${priorityBadge}</div>
+        <div class="flex items-start justify-between gap-2"><div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] font-extrabold text-violet-500">${issueId}</span>${safeLink}${statusBadge}</div></div><div class="flex items-center gap-1">${priorityBadge}${actionsMenu}</div></div>
         <div class="mt-2 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5"><div class="text-[10px] font-extrabold uppercase tracking-wide text-violet-700">Başlıq</div><div class="mt-0.5 text-sm font-extrabold text-violet-950">${cardTitle}</div></div>
         <div class="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5"><span class="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">Müştəri</span><span class="ml-2 text-sm font-extrabold text-emerald-950">${client}</span></div>
         <dl class="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 text-[11px]">
@@ -3291,7 +3292,7 @@ function linearIssueCardHtml(item) {
             <div><dt class="text-slate-400">Son tarix</dt><dd class="font-semibold text-slate-700">${dueDate}</dd></div><div class="col-span-2"><dt class="sr-only">Etiketlər</dt><dd class="flex flex-wrap gap-1">${labels}</dd></div>
             ${createdDate ? `<div class="col-span-3 text-[10px] text-slate-400">Yaradılıb: ${escapeHtml(createdDate)}</div>` : ''}${date ? `<div class="col-span-3 text-[10px] text-slate-400">Yenilənib: ${escapeHtml(date)}</div>` : ''}
         </dl>
-        <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}${actionsMenu}</div>
+        <div class="mt-2 flex items-start justify-between gap-2">${actionButtons}</div>
         ${description ? `<details class="mt-2 border-t border-slate-100 pt-2"><summary class="cursor-pointer text-[11px] font-bold text-slate-500">Açıqlama</summary><div class="mt-1 whitespace-pre-line text-xs leading-5 text-slate-600">${description}</div></details>` : ''}
     </article>`;
 }
@@ -3472,10 +3473,10 @@ function linearBoardCardHtml(item) {
     const description = escapeHtml(bodyText);
     const link = /^https:\/\/linear\.app\//i.test(String(item.url || '')) ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" class="text-[10px] font-bold text-violet-700">Linear ↗</a>` : '';
     const canEditLinear = isAdmin;
-    const actionButtons = canEditLinear && item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="openLinearCancelModal('${sourceId}')" class="rounded-lg bg-rose-50 px-2 py-1.5 text-[10px] font-extrabold text-rose-700">İmtina</button></div>` : '';
+    const actionButtons = canEditLinear && item.in_confirmation ? `<div class="flex flex-wrap gap-1.5 mt-2"><button type="button" onclick="runLinearTesdiqAction('confirm','${sourceId}')" class="rounded-lg bg-emerald-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq edirəm</button><button type="button" onclick="runLinearTesdiqAction('discussion','${sourceId}')" class="rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-extrabold text-amber-800">Diskussiya</button><button type="button" onclick="runLinearTesdiqAction('to_testiq','${sourceId}')" class="rounded-lg bg-violet-600 px-2 py-1.5 text-[10px] font-extrabold text-white">Təsdiq</button></div>` : '';
 const testButtons = (isAdmin || hasEmployeePermission('linear')) && isLinearDoneStatus(status) ? `<div class="mt-2 flex flex-wrap gap-1.5"><button type="button" onclick="runLinearTestAction('accept','${sourceId}')" class="rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[10px] font-extrabold text-white">Test olundu</button><button type="button" onclick="openLinearTestFailModal('${sourceId}')" class="rounded-lg bg-rose-100 px-2.5 py-1.5 text-[10px] font-extrabold text-rose-700">Testdən keçmədi</button></div>` : '';
     const canEditIssue = isAdmin;
-    const menu = canEditIssue && sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
+    const menu = canEditIssue && sourceId ? `<details class="relative shrink-0"><summary aria-label="Əməliyyatlar" class="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg text-lg font-extrabold leading-none text-slate-400 hover:bg-slate-100">⋮</summary><div class="absolute right-0 z-20 mt-1 w-36 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button type="button" onclick="openLinearEditModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-50">Redaktə et</button>${item.in_confirmation ? `<button type="button" onclick="openLinearCancelModal('${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">İmtina</button><button type="button" onclick="runLinearTesdiqAction('delete','${sourceId}')" class="w-full rounded-lg px-2 py-2 text-left text-[11px] font-bold text-rose-600 hover:bg-rose-50">Sil</button>` : ''}</div></details>` : '';
     return `<article class="crm-task-card bg-white p-3 rounded-xl" draggable="${canEditLinear ? 'true' : 'false'}" data-linear-board-id="${sourceId}" data-linear-state-id="${escapeHtml(String(status.id || ''))}">
 <div class="flex items-start gap-2 mb-2">${isAdmin ? '<span class="deal-drag-handle mt-1" aria-hidden="true">⠿</span>' : ''}<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-2"><span class="text-[10px] text-violet-600 font-extrabold">${issueId}</span>${link}</div><div class="mt-1 text-base font-black leading-5 text-slate-950" title="${titleHtml}">${titleHtml}</div><div class="mt-1 inline-flex max-w-full rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-extrabold text-emerald-800">Hesab: <span class="ml-1 truncate">${client}</span></div></div>${menu}</div>
         <div class="space-y-1 text-[11px] text-gray-600"><div class="flex items-center justify-between gap-2"><span class="truncate">⭐ <b>Prioritet:</b> ${canEditLinear ? `<select aria-label="Prioritet" onchange="changeLinearBoardPriority(this,'${sourceId}',${Number(item.priority) || 0})" class="rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${priorityOptions}</select>` : `<span class="inline-flex rounded-md border px-1 py-0.5 text-[10px] font-extrabold" style="${priorityStyle}">${escapeHtml(linearBoardPriorityLabel(item.priority))}</span>`}</span><span class="inline-flex max-w-[48%] truncate rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold" style="${statusStyle}" title="${escapeHtml(status.name || '')}">● ${escapeHtml(status.name || 'Status')}</span></div><div class="truncate">📁 <b>Layihə:</b> ${project}</div><div class="truncate">👤 <b>Operator:</b> ${operator}</div><div class="truncate">🧑‍💻 <b>İcraçı:</b> ${assignee}</div><div class="text-gray-500">🕒 <b>Yaradılıb:</b> ${escapeHtml(created)}</div></div>
@@ -3602,6 +3603,7 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
     if(linearTesdiqActionPending || !issueId) return;
     const texts = {
         confirm: 'Bu tapşırıq Todo mərhələsinə keçirilsin?',
+        to_testiq: 'Bu tapşırıq Testiq mərhələsinə keçirilsin?',
         discussion: 'Bu tapşırıq Discussion mərhələsinə keçirilsin?',
         delete: 'Bu tapşırıq Linear-dan həmişəlik silinsin? Bu əməliyyat geri qaytarılmır.',
         priority: 'Tapşırığın prioriteti dəyişdirilsin?'
@@ -3620,15 +3622,23 @@ async function runLinearTesdiqAction(action, issueId, priority = null, select = 
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Linear tapşırığı dəyişdirilmədi.');
         toast(data.message || 'Hazırdır.');
-        if(action === 'confirm' || action === 'discussion' || action === 'delete' || action === 'cancel') {
+        if(action === 'to_testiq') {
+            const target = linearBoardStatuses.find(row => ['testiq','təstiq','təsdiq','tesdiq'].includes(String(row.name || '').trim().toLocaleLowerCase('az')))
+                || {id:'', name:'Testiq', color:'#7c3aed'};
+            [...linearQueueRows, ...linearTesdiqRows, ...linearBoardRows].forEach(row => {
+                if(String(row.source_id) === String(issueId)) { row.status = {...target}; row.in_confirmation = true; }
+            });
+            renderLinearIssues(linearQueueRows);
+            renderLinearBoard();
+        } else if(action === 'confirm' || action === 'discussion' || action === 'delete' || action === 'cancel') {
             linearQueueRows = linearQueueRows.filter(row => String(row.source_id) !== String(issueId));
             linearTesdiqRows = linearTesdiqRows.filter(row => String(row.source_id) !== String(issueId));
             document.querySelector(`[data-linear-issue-id="${issueId}"]`)?.remove();
             const boardItem = linearBoardRows.find(row => String(row.source_id) === String(issueId));
             if(boardItem) {
                 if(action === 'confirm') {
-                    const todo = linearBoardStatuses.find(row => String(row.name || '').trim().toLocaleLowerCase('az') === 'todo');
-                    if(todo) { boardItem.status = {...todo}; boardItem.in_confirmation = false; }
+                    const target = linearBoardStatuses.find(row => String(row.name || '').trim().toLocaleLowerCase('az') === 'todo');
+                    if(target) { boardItem.status = {...target}; boardItem.in_confirmation = false; }
                 } else {
                     linearBoardRows = linearBoardRows.filter(row => String(row.source_id) !== String(issueId));
                 }
