@@ -56,6 +56,9 @@ from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
 from tenant_web_routes import TenantWebContext, register_feature_routes
 from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECONDS
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
+from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
+from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
+from tenant_kommo_api import handlers as tenant_kommo_handlers
 from tenant_web_assets import register_assets
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -21519,43 +21522,6 @@ async def handle_platform_logout(_request: web.Request) -> web.Response:
     return response
 
 
-async def handle_platform_members(request: web.Request) -> web.Response:
-    """Owner-managed employee cards for direct Telegram-based access."""
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
-    if request.method == "GET":
-        try:
-            members = await asyncio.to_thread(list_tenant_members, tenant_id=tenant_id, owner_id=owner_id)
-        except TenantPlatformError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
-        return web.json_response({"success": True, "members": members})
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    action = str(data.get("action") or "upsert").strip().casefold()
-    try:
-        telegram_id = int(data.get("telegram_id") or 0)
-        if action == "deactivate":
-            await asyncio.to_thread(deactivate_tenant_member, tenant_id=tenant_id, owner_id=owner_id, telegram_id=telegram_id)
-        elif action == "upsert":
-            await asyncio.to_thread(
-                upsert_tenant_member,
-                tenant_id=tenant_id, owner_id=owner_id, telegram_id=telegram_id,
-                display_name=str(data.get("display_name") or ""), role=str(data.get("role") or "worker"),
-                permissions=data.get("permissions") if isinstance(data.get("permissions"), list) else [],
-            )
-        else:
-            raise TenantPlatformError("Naməlum əməliyyat.")
-        members = await asyncio.to_thread(list_tenant_members, tenant_id=tenant_id, owner_id=owner_id)
-    except (TypeError, ValueError):
-        return web.json_response({"success": False, "error": "Telegram ID düzgün deyil."}, status=400)
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True, "members": members})
 
 
 async def handle_platform_workflow_config(request: web.Request) -> web.Response:
@@ -21629,472 +21595,39 @@ def _ask_tenant_onboarding(system: str, prompt: str) -> str:
     return str((response.choices[0].message.content if response.choices else "") or "").strip()
 
 
-async def handle_platform_create_invite(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    try:
-        invite = await asyncio.to_thread(
-            create_tenant_invite, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]),
-            display_name=str(data.get("display_name") or ""), role=str(data.get("role") or "worker"),
-            permissions=data.get("permissions") if isinstance(data.get("permissions"), list) else [],
-        )
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True, "invite": {**invite, "url": f"{CANONICAL_WEB_ORIGIN}/invite/{invite['token']}"}})
 
 
-async def handle_platform_accept_invite(request: web.Request) -> web.Response:
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    telegram = data.get("telegram") if isinstance(data.get("telegram"), dict) else {}
-    chat_id = _telegram_login_user_id(telegram)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
-    try:
-        pending = await asyncio.to_thread(
-            request_tenant_invite_acceptance, token=str(data.get("token") or ""), telegram_id=chat_id,
-            display_name=_telegram_display_name(telegram),
-        )
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    if pending.get("status") == "pending":
-        _send_telegram_text(
-            pending.get("owner_id"),
-            f"🔐 Yeni giriş sorğusu\n\n👤 {pending.get('employee_name') or 'Əməkdaş'}\n"
-            f"📌 Kart: {pending.get('card_name') or 'Əməkdaş'}\n\n"
-            f"Təsdiqləmək üçün: {CANONICAL_WEB_ORIGIN}/app",
-        )
-    return web.json_response({"success": True, "pending": True, "message": "Sorğu administratora göndərildi. Təsdiqdən sonra /login səhifəsindən daxil olun."})
 
 
-async def handle_platform_invite_requests(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    tenant_id, owner_id = profile["tenant_id"], int(profile["telegram_id"])
-    if request.method == "GET":
-        try:
-            rows = await asyncio.to_thread(list_tenant_invite_requests, tenant_id=tenant_id, owner_id=owner_id)
-        except TenantPlatformError as exc:
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
-        return web.json_response({"success": True, "requests": rows})
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    data = data if isinstance(data, dict) else {}
-    try:
-        decided = await asyncio.to_thread(
-            decide_tenant_invite_request, tenant_id=tenant_id, owner_id=owner_id,
-            request_id=str(data.get("request_id") or ""), approve=str(data.get("action") or "").strip().casefold() == "approve",
-        )
-        rows = await asyncio.to_thread(list_tenant_invite_requests, tenant_id=tenant_id, owner_id=owner_id)
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    _send_telegram_text(decided["telegram_id"], "✅ Girişiniz təsdiqləndi. İndi crm.pro.az/login səhifəsindən daxil ola bilərsiniz." if decided["approved"] else "❌ Giriş sorğunuz təsdiqlənmədi.")
-    return web.json_response({"success": True, "requests": rows})
 
 
-async def handle_platform_request_kommo(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    try:
-        integration = await asyncio.to_thread(request_kommo_connection, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]), account_domain=str((data or {}).get("account_domain") or ""))
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    try:
-        _kommo_oauth_settings()
-        oauth_ready = True
-    except TenantPlatformError:
-        oauth_ready = False
-    return web.json_response({"success": True, "integration": integration, "oauth_ready": oauth_ready})
 
 
-async def handle_platform_disconnect_integration(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    try:
-        item = await asyncio.to_thread(
-            disconnect_tenant_integration, tenant_id=profile["tenant_id"], owner_id=int(profile["telegram_id"]),
-            provider=str((data or {}).get("provider") or ""),
-        )
-        await asyncio.to_thread(
-            append_tenant_audit_event, tenant_id=profile["tenant_id"], actor_telegram_id=int(profile["telegram_id"]),
-            action="integration_disconnected", entity_type="integration", entity_id=item["provider"], payload={},
-        )
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    return web.json_response({"success": True, "integration": item})
 
 
-def _kommo_oauth_settings() -> tuple[str, str, str]:
-    # Keep the canonical names first, but accept the names used by older
-    # Railway services and by Kommo's own terminology (integration ID/secret).
-    # This is deliberately server-side: the secret is never sent to the
-    # browser.  A deployment with a differently named variable must not make
-    # every new tenant see the generic "not active" error.
-    def _first_env(*names: str) -> str:
-        for name in names:
-            value = str(os.environ.get(name) or "").strip()
-            if value:
-                return value
-        return ""
-
-    client_id = _first_env(
-        "KOMMO_OAUTH_CLIENT_ID",
-        "KOMMO_CLIENT_ID",
-        "KOMMO_PUBLIC_CLIENT_ID",
-        "KOMMO_INTEGRATION_CLIENT_ID",
-        "KOMMO_INTEGRATION_ID",
-    )
-    client_secret = _first_env(
-        "KOMMO_OAUTH_CLIENT_SECRET",
-        "KOMMO_CLIENT_SECRET",
-        "KOMMO_PUBLIC_CLIENT_SECRET",
-        "KOMMO_INTEGRATION_CLIENT_SECRET",
-        "KOMMO_SECRET_KEY",
-    )
-    redirect_uri = _first_env(
-        "KOMMO_OAUTH_REDIRECT_URI",
-        "KOMMO_REDIRECT_URI",
-        "KOMMO_OAUTH_REDIRECT_URL",
-        "KOMMO_REDIRECT_URL",
-    ) or f"{CANONICAL_WEB_ORIGIN}/api/platform/integrations/kommo/callback"
-    if not client_id or not client_secret:
-        missing = []
-        if not client_id:
-            missing.append("KOMMO_OAUTH_CLIENT_ID")
-        if not client_secret:
-            missing.append("KOMMO_OAUTH_CLIENT_SECRET")
-        raise TenantPlatformError(
-            "Kommo bağlantısı hələ aktiv deyil. Railway-də public Kommo inteqrasiyasının "
-            f"{', '.join(missing)} dəyişənini əlavə edin və deploy edin."
-        )
-    return client_id, client_secret, redirect_uri
 
 
-async def handle_platform_start_kommo_oauth(request: web.Request) -> web.Response:
-    """Start a tenant-bound Kommo OAuth flow from the owner's setup portal."""
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    try:
-        client_id, _, _ = _kommo_oauth_settings()
-        state = await asyncio.to_thread(
-            begin_kommo_oauth,
-            tenant_id=profile["tenant_id"],
-            owner_id=int(profile["telegram_id"]),
-            account_domain=str((data or {}).get("account_domain") or ""),
-        )
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    authorize_url = "https://www.kommo.com/oauth?" + urlencode({
-        "client_id": client_id,
-        "state": state,
-        "mode": "popup",
-    })
-    return web.json_response({"success": True, "authorize_url": authorize_url})
 
 
-def _kommo_callback_domain(value: str) -> str:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        raise TenantPlatformError("Kommo hesab ünvanı cavabda yoxdur.")
-    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
-    domain = parsed.netloc or parsed.path
-    domain = domain.split("/", 1)[0]
-    if not domain.endswith(".kommo.com"):
-        raise TenantPlatformError("Kommo hesab ünvanı etibarlı deyil.")
-    return domain
 
 
-async def handle_platform_kommo_callback(request: web.Request) -> web.Response:
-    """Exchange Kommo's one-time code and persist encrypted tenant tokens."""
-    query = request.rel_url.query
-    state = str(query.get("state") or "")
-    if not state:
-        raise web.HTTPFound("/setup?kommo=invalid")
-    try:
-        oauth_context = await asyncio.to_thread(consume_kommo_oauth_state, state)
-        # ``consume_kommo_oauth_state`` returns the tenant-bound account
-        # domain saved before redirect. Kommo normally omits Referer from the
-        # callback, so relying on it made verified public integrations fail
-        # for new customers.
-        if isinstance(oauth_context, dict):
-            tenant_id = str(oauth_context.get("tenant_id") or "")
-            saved_domain = str(oauth_context.get("account_domain") or "")
-        else:  # backwards-compatible with an older helper during rolling deploy
-            tenant_id = str(oauth_context or "")
-            saved_domain = ""
-        if str(query.get("error") or ""):
-            raise TenantPlatformError("Kommo bağlantısına icazə verilmədi.")
-        code = str(query.get("code") or "").strip()
-        domain_hint = str(
-            query.get("account_domain") or query.get("referer") or query.get("referrer")
-            or query.get("account") or query.get("subdomain") or query.get("domain")
-            or saved_domain or ""
-        )
-        logger.info(
-            "Kommo OAuth callback received: query_keys=%s domain_source=%s saved_domain=%s",
-            sorted(str(key) for key in query.keys()),
-            "query" if domain_hint and domain_hint != saved_domain else "saved",
-            bool(saved_domain),
-        )
-        domain = _kommo_callback_domain(domain_hint)
-        client_id, client_secret, redirect_uri = _kommo_oauth_settings()
-        if not code:
-            raise TenantPlatformError("Kommo təsdiq kodunu göndərmədi.")
-
-        def _exchange_code() -> dict:
-            response = requests.post(
-                f"https://{domain}/oauth2/access_token",
-                json={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": redirect_uri,
-                },
-                timeout=15,
-            )
-            if response.status_code != 200:
-                logger.warning("Kommo OAuth exchange failed: status=%s body=%s", response.status_code, response.text[:300])
-                raise TenantPlatformError("Kommo bağlantısı təsdiqlənmədi. Yenidən cəhd edin.")
-            payload = response.json()
-            return payload if isinstance(payload, dict) else {}
-
-        tokens = await asyncio.to_thread(_exchange_code)
-        await asyncio.to_thread(save_kommo_oauth_tokens, tenant_id=tenant_id, account_domain=domain, token_payload=tokens)
-    except TenantPlatformError as exc:
-        logger.info("Kommo OAuth callback rejected: %s", exc)
-        reason = quote(str(exc)[:220], safe="")
-        raise web.HTTPFound(f"/setup?kommo=error&reason={reason}")
-    except Exception as exc:
-        logger.exception("Kommo OAuth callback failed")
-        reason = quote(str(exc)[:220] or "Naməlum xəta", safe="")
-        raise web.HTTPFound(f"/setup?kommo=error&reason={reason}")
-    raise web.HTTPFound("/setup?kommo=connected")
 
 
-def _kommo_token_is_expiring(value: str) -> bool:
-    try:
-        expires_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        return expires_at <= datetime.now(timezone.utc) + timedelta(minutes=3)
-    except (TypeError, ValueError):
-        return True
-
-
-_tenant_kommo_rate_lock = threading.Lock()
-_tenant_kommo_next_request: dict[str, float] = {}
 
 
 def _wait_for_tenant_kommo_slot(account_domain: str) -> None:
-    """Keep each customer below Kommo's published seven-request limit.
-
-    This limiter lives at the one server-side request gateway, so refreshes,
-    dashboard syncs and later chat sends cannot accidentally bypass it.
-    """
-    with _tenant_kommo_rate_lock:
-        now = _time_module.monotonic()
-        available_at = _tenant_kommo_next_request.get(account_domain, now)
-        interval = 1 / 6
-        _tenant_kommo_next_request[account_domain] = max(now, available_at) + interval
-    delay = max(0.0, available_at - now)
-    if delay:
-        _time_module.sleep(delay)
+    tenant_kommo_wait_slot(account_domain)
 
 
 async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, params: dict | None = None,
                                 json_body: dict | list | None = None) -> dict:
-    """Call one tenant's Kommo account and refresh OAuth tokens when needed.
-
-    Tokens are retrieved only on the server from encrypted PostgreSQL storage;
-    neither the browser nor a different tenant can see them.
-    """
-    client_id, client_secret, redirect_uri = _kommo_oauth_settings()
-
-    def _refresh(credentials: dict) -> dict:
-        response = requests.post(
-            f"https://{credentials['account_domain']}/oauth2/access_token",
-            json={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "grant_type": "refresh_token",
-                "refresh_token": credentials["refresh_token"],
-                "redirect_uri": redirect_uri,
-            },
-            timeout=15,
-        )
-        if response.status_code != 200:
-            logger.warning("Kommo OAuth refresh failed: status=%s body=%s", response.status_code, response.text[:300])
-            raise TenantPlatformError("Kommo bağlantısının vaxtı bitib. Yenidən qoşulun.")
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise TenantPlatformError("Kommo token cavabı düzgün deyil.")
-        replace_kommo_tokens(tenant_id=tenant_id, account_domain=credentials["account_domain"], token_payload=payload)
-        return kommo_credentials(tenant_id=tenant_id)
-
-    def _request() -> dict:
-        credentials = kommo_credentials(tenant_id=tenant_id)
-        if _kommo_token_is_expiring(credentials.get("token_expires_at") or ""):
-            credentials = _refresh(credentials)
-
-        def _send(active: dict):
-            _wait_for_tenant_kommo_slot(active["account_domain"])
-            return requests.request(
-                method.upper(),
-                f"https://{active['account_domain']}/api/v4/{path.lstrip('/')}",
-                params=params,
-                json=json_body,
-                headers={"Authorization": f"Bearer {active['access_token']}", "Accept": "application/json"},
-                timeout=20,
-            )
-
-        response = _send(credentials)
-        if response.status_code == 401:
-            credentials = _refresh(credentials)
-            response = _send(credentials)
-        if response.status_code >= 400:
-            logger.warning("Tenant Kommo request failed: tenant=%s status=%s path=%s", tenant_id, response.status_code, path)
-            raise TenantPlatformError("Kommo məlumatları yüklənmədi. Bir az sonra yenidən cəhd edin.")
-        if response.status_code == 204 or not response.content:
-            return {}
-        payload = response.json()
-        return payload if isinstance(payload, dict) else {}
-
-    return await asyncio.to_thread(_request)
+    return await _tenant_kommo_service.request(tenant_id, method, path, params=params, json_body=json_body)
 
 
-async def handle_platform_kommo_pipelines(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        payload = await _tenant_kommo_request(profile["tenant_id"], "GET", "leads/pipelines")
-        items = ((payload.get("_embedded") or {}).get("pipelines") or [])
-        pipelines = []
-        for pipeline in items[:100]:
-            stages = ((pipeline.get("_embedded") or {}).get("statuses") or [])
-            pipelines.append({
-                "id": int(pipeline.get("id") or 0),
-                "name": str(pipeline.get("name") or "Adsız vərəq"),
-                "stages": [
-                    {"id": int(stage.get("id") or 0), "name": str(stage.get("name") or "Adsız mərhələ")}
-                    for stage in stages[:100] if int(stage.get("id") or 0)
-                ],
-            })
-        return web.json_response({"success": True, "pipelines": [item for item in pipelines if item["id"]]})
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
 
 
-async def handle_platform_test_kommo_connection(request: web.Request) -> web.Response:
-    """Run one harmless authenticated request so an owner can verify OAuth."""
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        account = await _tenant_kommo_request(profile["tenant_id"], "GET", "account")
-        return web.json_response({
-            "success": True,
-            "message": "Kommo bağlantısı işləyir.",
-            "account": {
-                "id": account.get("id"),
-                "name": str(account.get("name") or "Kommo hesabı"),
-                "subdomain": str(account.get("subdomain") or ""),
-            },
-        })
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
 
 
-async def handle_platform_save_kommo_pipelines(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    selected = []
-    for item in (data or {}).get("pipelines", []) if isinstance((data or {}).get("pipelines", []), list) else []:
-        try:
-            pipeline_id = int(item.get("id") or 0)
-        except (AttributeError, TypeError, ValueError):
-            continue
-        stage_ids = []
-        for stage_id in item.get("stage_ids") if isinstance(item.get("stage_ids"), list) else []:
-            try:
-                normalized = int(stage_id)
-                if normalized > 0:
-                    stage_ids.append(normalized)
-            except (TypeError, ValueError):
-                continue
-        if pipeline_id > 0:
-            selected.append({"id": pipeline_id, "stage_ids": stage_ids[:100]})
-    try:
-        # Onboarding and the settings editor must write the same runtime
-        # configuration. Saving the wizard cannot silently leave old scopes.
-        remote = await _tenant_kommo_request(profile['tenant_id'], 'GET', 'leads/pipelines')
-        remote_pipelines = (remote.get('_embedded') or {}).get('pipelines') or []
-        selected_by_id = {str(item['id']): item['stage_ids'] for item in selected}
-        remote_by_id = {str(item['id']): item for item in remote_pipelines}
-        if any(pid not in remote_by_id for pid in selected_by_id):
-            raise TenantPlatformError('Seçilən vərəq Kommo hesabınızda yoxdur.')
-        prior = profile.get('workflow') or {}
-        prior_pipelines = {str(item['pipeline_id']): item for item in prior.get('pipelines', [])}
-        prior_stages = {(str(item['pipeline_id']), str(item['stage_id'])): item for item in prior.get('stages', [])}
-        pipelines, stages = [], []
-        for pid, pipeline in remote_by_id.items():
-            pipelines.append({**prior_pipelines.get(pid, {}), 'pipeline_id': pid, 'name': pipeline.get('name') or '', 'active': pid in selected_by_id})
-            status_rows = (pipeline.get('_embedded') or {}).get('statuses') or []
-            if any(sid not in {int(stage['id']) for stage in status_rows} for sid in selected_by_id.get(pid, [])):
-                raise TenantPlatformError('Seçilən mərhələ bu Kommo vərəqində yoxdur.')
-            for stage in status_rows:
-                old = prior_stages.get((pid, str(stage['id'])), {})
-                visible = not selected_by_id.get(pid) or int(stage['id']) in selected_by_id[pid]
-                stages.append({**old, 'pipeline_id': pid, 'stage_id': str(stage['id']), 'name': stage.get('name') or '',
-                               'sort_order': int(stage.get('sort') or 0), 'stage_type': old.get('stage_type') or 'open',
-                               'settings': {**old.get('settings', {}), 'visible': visible}})
-        for pid, old in prior_pipelines.items():
-            if pid not in remote_by_id:
-                pipelines.append({**old, 'active': False})
-        await asyncio.to_thread(save_tenant_workflow_config, tenant_id=profile['tenant_id'], owner_id=int(profile['telegram_id']),
-                                pipelines=pipelines, stages=stages)
-        tenant = await asyncio.to_thread(
-            update_onboarding,
-            tenant_id=profile["tenant_id"],
-            owner_id=int(profile["telegram_id"]),
-            patch={"pipeline": {"selected": selected[:30]}},
-        )
-        return web.json_response({"success": True, "tenant": tenant})
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
 
 
 def _tenant_has_module(profile: dict, module: str) -> bool:
@@ -22930,6 +22463,18 @@ def _tenant_member_from_request(request: web.Request, *, owner_only: bool = Fals
     return _tenant_browser_session.profile(request, owner_only=owner_only)
 
 
+_tenant_kommo_service = TenantKommo(KommoContext(
+    member=_tenant_member_from_request, origin=CANONICAL_WEB_ORIGIN, logger=logger,
+    platform_error=TenantPlatformError, begin_oauth=begin_kommo_oauth,
+    consume_oauth_state=consume_kommo_oauth_state,
+    disconnect_integration=disconnect_tenant_integration,
+    credentials=kommo_credentials, replace_tokens=replace_kommo_tokens,
+    request_connection=request_kommo_connection, save_tokens=save_kommo_oauth_tokens,
+    save_workflow=save_tenant_workflow_config, update_onboarding=update_onboarding,
+    append_audit=append_tenant_audit_event,
+))
+
+
 def _is_public_api_request(request: web.Request) -> bool:
     # The self-service platform has its own tenant-scoped session. Its
     # handlers verify that session themselves instead of accepting a legacy
@@ -23592,8 +23137,19 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/me", handle_platform_me)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
-    app_web.router.add_get("/api/platform/members", handle_platform_members)
-    app_web.router.add_post("/api/platform/members", handle_platform_members)
+    member_api = tenant_member_handlers(MemberApiContext(
+        member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
+        telegram_name=_telegram_display_name, send_telegram=_send_telegram_text,
+        origin=CANONICAL_WEB_ORIGIN,
+        list_members=list_tenant_members, upsert_member=upsert_tenant_member,
+        deactivate_member=deactivate_tenant_member, create_invite=create_tenant_invite,
+        request_invite_acceptance=request_tenant_invite_acceptance,
+        list_invite_requests=list_tenant_invite_requests,
+        decide_invite_request=decide_tenant_invite_request,
+        platform_error=TenantPlatformError,
+    ))
+    app_web.router.add_get("/api/platform/members", member_api["members"])
+    app_web.router.add_post("/api/platform/members", member_api["members"])
     app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/tasks/complete', handle_platform_task_complete)
@@ -23606,17 +23162,18 @@ async def start_webhook_server():
     )
     app_web.router.add_post("/api/platform/onboarding/assistant", onboarding_assistant)
     app_web.router.add_post("/api/platform/onboarding/finish", onboarding_complete)
-    app_web.router.add_post("/api/platform/invites", handle_platform_create_invite)
-    app_web.router.add_post("/api/platform/invites/accept", handle_platform_accept_invite)
-    app_web.router.add_get("/api/platform/access-requests", handle_platform_invite_requests)
-    app_web.router.add_post("/api/platform/access-requests", handle_platform_invite_requests)
-    app_web.router.add_post("/api/platform/integrations/kommo", handle_platform_request_kommo)
-    app_web.router.add_post("/api/platform/integrations/kommo/start", handle_platform_start_kommo_oauth)
-    app_web.router.add_post("/api/platform/integrations/disconnect", handle_platform_disconnect_integration)
-    app_web.router.add_get("/api/platform/integrations/kommo/callback", handle_platform_kommo_callback)
-    app_web.router.add_get("/api/platform/integrations/kommo/pipelines", handle_platform_kommo_pipelines)
-    app_web.router.add_post("/api/platform/integrations/kommo/pipelines", handle_platform_save_kommo_pipelines)
-    app_web.router.add_get("/api/platform/integrations/kommo/test", handle_platform_test_kommo_connection)
+    app_web.router.add_post("/api/platform/invites", member_api["create_invite"])
+    app_web.router.add_post("/api/platform/invites/accept", member_api["accept_invite"])
+    app_web.router.add_get("/api/platform/access-requests", member_api["invite_requests"])
+    app_web.router.add_post("/api/platform/access-requests", member_api["invite_requests"])
+    kommo_api = tenant_kommo_handlers(_tenant_kommo_service.context, _tenant_kommo_service)
+    app_web.router.add_post("/api/platform/integrations/kommo", kommo_api["request"])
+    app_web.router.add_post("/api/platform/integrations/kommo/start", kommo_api["start"])
+    app_web.router.add_post("/api/platform/integrations/disconnect", kommo_api["disconnect"])
+    app_web.router.add_get("/api/platform/integrations/kommo/callback", kommo_api["callback"])
+    app_web.router.add_get("/api/platform/integrations/kommo/pipelines", kommo_api["pipelines"])
+    app_web.router.add_post("/api/platform/integrations/kommo/pipelines", kommo_api["save_pipelines"])
+    app_web.router.add_get("/api/platform/integrations/kommo/test", kommo_api["test"])
     app_web.router.add_get("/api/platform/crm/deals", handle_platform_crm_deals)
     app_web.router.add_get('/api/platform/crm/sync', handle_platform_crm_sync_status)
     app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
