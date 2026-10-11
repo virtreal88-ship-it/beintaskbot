@@ -31,7 +31,7 @@ import secrets
 import time as _time_module
 import unicodedata
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, quote, unquote, urlencode, parse_qsl
+from urllib.parse import quote, unquote, urlencode, parse_qsl
 import urllib.request
 import urllib.error
 from openai import OpenAI
@@ -135,6 +135,16 @@ from legacy_kommo_chat_resolver import (
 )
 from legacy_kommo_chat_sender import (
     _send_kommo_talk_message, _send_kommo_talk_text, configure_chat_sender,
+)
+from legacy_kommo_media_policy import (
+    _as_absolute_media_url, _host_matches, _is_allowed_avatar_url,
+    _is_allowed_kommo_media_url, _is_allowed_media_url, _media_host,
+)
+from legacy_kommo_media_parser import (
+    _extract_file_uuid, _extract_media_url, _extract_nested_text,
+    _first_avatar_url, _is_media_notice_text, _looks_audio_name,
+    _looks_image_name, _looks_profile_photo, _sniff_media_type,
+    _walk_media_urls,
 )
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
@@ -8638,156 +8648,6 @@ def _user_can_view_personal_lead(chat_id: int, lead: dict) -> bool:
     return bool(owner and int(owner["pipeline_id"]) == pipeline_id)
 
 
-_TELEPHONY_MEDIA_SUFFIXES = (
-    "sipuni.com",
-    "mango-office.ru",
-    "onlinepbx.ru",
-    "telphin.ru",
-    "zadarma.com",
-    "binotel.ua",
-    "uiscom.ru",
-    "callgear.ru",
-    "voximplant.com",
-    "mcn.ru",
-    "novofon.com",
-    "gravitel.ru",
-    "beeline-cloud.ru",
-    "proto.online",
-    "uis.st",
-)
-
-
-def _media_host(raw: str) -> str:
-    try:
-        parsed = urlparse(str(raw or "").strip())
-    except Exception:
-        return ""
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return ""
-    return parsed.netloc.split("@")[-1].split(":")[0].casefold()
-
-
-def _is_allowed_kommo_media_url(raw: str) -> bool:
-    host = _media_host(raw)
-    if not host:
-        return False
-    return (
-        host.endswith(".kommo.com")
-        or host.endswith(".amocrm.ru")
-        or host.endswith(".amocrm.com")
-        or host.endswith(".amojo.ru")
-        or host in {"kommo.com", "amocrm.ru", "amocrm.com", "amojo.kommo.com", "amojo.amocrm.ru"}
-    )
-
-
-_PROFILE_PHOTO_SUFFIXES = (
-    "lookaside.fbsbx.com",
-    "fbcdn.net",
-    "cdninstagram.com",
-    "pps.whatsapp.net",
-    "mms.whatsapp.net",
-    "graph.facebook.com",
-)
-
-
-def _is_allowed_avatar_url(raw: str) -> bool:
-    if _is_allowed_media_url(raw):
-        return True
-    host = _media_host(raw)
-    if not host:
-        return False
-    return any(host == suffix or host.endswith("." + suffix) for suffix in _PROFILE_PHOTO_SUFFIXES)
-
-
-def _host_matches(host: str, suffixes: tuple[str, ...]) -> bool:
-    return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
-
-
-def _is_allowed_media_url(raw: str) -> bool:
-    if _is_allowed_kommo_media_url(raw):
-        return True
-    host = _media_host(raw)
-    if not host:
-        return False
-    if _host_matches(host, _TELEPHONY_MEDIA_SUFFIXES) or _host_matches(host, _PROFILE_PHOTO_SUFFIXES):
-        return True
-    return host == "whatsapp.net" or host.endswith(".whatsapp.net")
-
-
-def _as_absolute_media_url(raw: str) -> str:
-    val = str(raw or "").strip()
-    if not val:
-        return ""
-    if val.startswith("//"):
-        val = "https:" + val
-    if val.startswith("/"):
-        val = f"{KOMMO_BASE_URL}{val}"
-    parsed = urlparse(val)
-    if parsed.scheme in {"http", "https"} and parsed.netloc:
-        return val
-    return ""
-
-
-def _walk_media_urls(value, depth: int = 0) -> list[str]:
-    if depth > 5 or value is None:
-        return []
-    if isinstance(value, str):
-        found = _as_absolute_media_url(value)
-        return [found] if found else []
-    if isinstance(value, dict):
-        preferred = []
-        for key in ("link", "url", "media", "recording", "recording_link", "call_record", "download_link", "file_link", "href"):
-            preferred.extend(_walk_media_urls(value.get(key), depth + 1))
-        extra = []
-        skip = {
-            "author", "sender", "avatar", "profile", "icon", "recipient",
-            "chat", "talk", "phone", "uniq", "source", "duration",
-        }
-        for key, inner in value.items():
-            if str(key).casefold() in skip:
-                continue
-            extra.extend(_walk_media_urls(inner, depth + 1))
-        return preferred + extra
-    if isinstance(value, list):
-        found: list[str] = []
-        for inner in value:
-            found.extend(_walk_media_urls(inner, depth + 1))
-        return found
-    return []
-
-
-def _extract_media_url(params: dict) -> str:
-    if not isinstance(params, dict):
-        return ""
-    for url in _walk_media_urls(params):
-        return url
-    return ""
-
-
-def _sniff_media_type(body: bytes, hinted: str = "", src: str = "", name: str = "") -> str:
-    head = body[:16] if body else b""
-    if head.startswith(b"OggS"):
-        return "audio/ogg"
-    if head.startswith(b"ID3") or (len(head) > 1 and head[0] == 0xFF and head[1] & 0xE0 == 0xE0):
-        return "audio/mpeg"
-    if head.startswith(b"RIFF") and b"WAVE" in head:
-        return "audio/wav"
-    if len(head) >= 8 and head[4:8] == b"ftyp":
-        return "audio/mp4"
-    hinted = str(hinted or "").split(";")[0].strip().lower()
-    if hinted.startswith("audio/") and hinted != "application/octet-stream":
-        return hinted
-    low = f"{src} {name}".lower()
-    if any(token in low for token in (".mp3", ".mpeg")):
-        return "audio/mpeg"
-    if ".wav" in low:
-        return "audio/wav"
-    if any(token in low for token in (".m4a", ".mp4", ".aac")):
-        return "audio/mp4"
-    if any(token in low for token in (".ogg", ".oga", ".opus")):
-        return "audio/ogg"
-    return hinted or "application/octet-stream"
-
 
 def _drive_file_download_url(file_uuid: str) -> str:
     uuid = str(file_uuid or "").strip()
@@ -8806,100 +8666,18 @@ def _drive_file_download_url(file_uuid: str) -> str:
     return ""
 
 
-def _extract_nested_text(value, depth: int = 0) -> str:
-    if depth > 5 or value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, dict):
-        for key in ("text", "message", "body", "content", "caption", "service"):
-            found = _extract_nested_text(value.get(key), depth + 1)
-            if found:
-                return found
-    if isinstance(value, list):
-        for inner in value:
-            found = _extract_nested_text(inner, depth + 1)
-            if found:
-                return found
-    return ""
 
 
-def _extract_file_uuid(params, depth: int = 0) -> str:
-    if depth > 4 or params is None:
-        return ""
-    if isinstance(params, dict):
-        for key in ("file_uuid", "uuid", "fileId", "file_id", "attachment_id"):
-            val = str(params.get(key) or "").strip()
-            if len(val) >= 32:
-                return val
-        file_obj = params.get("file") if isinstance(params.get("file"), dict) else {}
-        for key in ("file_uuid", "uuid", "fileId", "file_id", "attachment_id"):
-            val = str(file_obj.get(key) or "").strip()
-            if len(val) >= 32:
-                return val
-        for key, inner in params.items():
-            if isinstance(inner, (dict, list)):
-                found = _extract_file_uuid(inner, depth + 1)
-                if found:
-                    return found
-    elif isinstance(params, list):
-        for inner in params:
-            found = _extract_file_uuid(inner, depth + 1)
-            if found:
-                return found
-    return ""
 
 
-def _looks_audio_name(name: str) -> bool:
-    n = str(name or "").casefold()
-    return any(n.endswith(ext) for ext in (".ogg", ".mp3", ".m4a", ".wav", ".opus", ".aac", ".oga", ".webm", ".mpeg")) or "voice" in n or "audio" in n
 
 
-def _looks_image_name(name: str) -> bool:
-    n = str(name or "").casefold()
-    return any(n.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp")) or any(token in n for token in ("photo", "image", "şəkil", "sekil", "картинка", "фото"))
 
 
-def _is_media_notice_text(text: str) -> bool:
-    low = str(text or "").casefold()
-    return "вам пришло медиа" in low or "медиа-сообщение" in low or "пожалуйста, подождите загрузки" in low or "пожалуйста, подождите" in low
 
 
-def _looks_profile_photo(file_name: str, message_type: str = "") -> bool:
-    blob = f"{file_name} {message_type}".casefold()
-    return any(token in blob for token in ("profile", "avatar", "userpic", "фото профил", "pp.jpg", "pp.jpeg"))
 
 
-def _first_avatar_url(*blobs, depth: int = 0) -> str:
-    if depth > 4:
-        return ""
-    for blob in blobs:
-        if isinstance(blob, str):
-            url = _as_absolute_media_url(blob)
-            if url and _is_allowed_avatar_url(url) and ("/profiles/" in url.lower() or _looks_profile_photo(url, "avatar")):
-                return url
-            continue
-        if not isinstance(blob, dict):
-            continue
-        for key in ("avatar", "avatar_url", "photo", "picture", "icon"):
-            raw = blob.get(key)
-            if isinstance(raw, dict):
-                raw = raw.get("url") or raw.get("link") or raw.get("src") or ""
-            url = _as_absolute_media_url(str(raw or ""))
-            if url and _is_allowed_avatar_url(url):
-                return url
-        embedded = blob.get("_embedded") if isinstance(blob.get("_embedded"), dict) else {}
-        for item in (embedded.get("contacts") or [])[:3]:
-            found = _first_avatar_url(item, depth=depth + 1)
-            if found:
-                return found
-        for nested_key in ("author", "peer", "client", "contact", "chat"):
-            nested = blob.get(nested_key)
-            if isinstance(nested, dict):
-                found = _first_avatar_url(nested, depth=depth + 1)
-                if found:
-                    return found
-    return ""
 
 
 def _deal_fmt_ts(ts) -> str:

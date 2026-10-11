@@ -441,5 +441,11 @@ policies.notifications — типы уведомлений</pre>
 <p><code>legacy_kommo_chat_resolver.py</code> выбирает Talk только из запрошенного источника. Подсказка последнего входящего сообщения имеет приоритет, но Instagram никогда не подменяется TikTok и наоборот; сохранённый ранее Talk применяется только при совпадении канала. Произвольного fallback в чужой диалог нет.</p>
 <p><code>legacy_kommo_chat_sender.py</code> содержит отправку текста, файлов, голосовых и native reply. Сохранены официальный endpoint, прежние совместимые reply-маршруты и понятные ошибки прав, лимита, закрытого чата и Chat API. Сетевой транспорт и разбор ошибок передаются явно, токен модуль не хранит.</p>
 </section>
+<section class="wrap card" id="legacy-kommo-media-refactor">
+<h2>Безопасность и разбор медиа Kommo отделены от bot.py · 12 октября 2026</h2>
+<p><code>legacy_kommo_media_policy.py</code> содержит единую allow-list политику для файлов Kommo/amoCRM, аватаров Meta/WhatsApp и записей поддерживаемой телефонии. Проверяется разобранный hostname, поэтому адреса-подделки вида <code>kommo.com.evil</code> и URL с подменой через userinfo не проходят.</p>
+<p><code>legacy_kommo_media_parser.py</code> извлекает вложения и file UUID из вложенных payload, отличает аудио и изображения, распознаёт MIME по сигнатуре файла и ищет разрешённый аватар. Автор, служебные поля чата и профиль не принимаются за вложение сообщения.</p>
+<p>Публичный формат истории, media-proxy и список разрешённых провайдеров не изменены. Модули не выполняют сеть и не знают Telegram, HTTP-обработчики или tenant-хранилище.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>
