@@ -63,6 +63,8 @@ from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
 from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
 from tenant_chat_api import ChatApiContext, handlers as tenant_chat_handlers
 from tenant_chat_import_api import handler as tenant_chat_import_handler
+from tenant_hot_order_api import HotOrderApiContext, handler as tenant_hot_order_handler
+from tenant_push_api import PushApiContext, handler as tenant_push_handler
 from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handler
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
@@ -71,6 +73,7 @@ from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
     list_orders as list_tenant_hot_orders, change_order as change_tenant_hot_order,
 )
+from tenant_hot_order_completion import completion_command as complete_tenant_hot_order
 from tenant_tasks import create_task as create_tenant_task
 from tenant_task_commands import task_executor_profiles, TaskCommandPending, pending_task_approval_page
 from tenant_task_completion import complete_task as complete_tenant_task
@@ -21450,11 +21453,6 @@ async def _tenant_kommo_request(tenant_id: str, method: str, path: str, *, param
 
 
 
-def _tenant_selected_pipeline_ids(profile: dict) -> tuple[list[int], dict[int, set[int]]]:
-    scope = TenantPolicy(profile).pipeline_scope()
-    return [item['pipeline_id'] for item in scope], {item['pipeline_id']: set(item['status_ids']) for item in scope}
-
-
 def _tenant_kommo_timestamp(value) -> str | None:
     try:
         raw = int(value or 0)
@@ -21463,16 +21461,6 @@ def _tenant_kommo_timestamp(value) -> str | None:
     except (TypeError, ValueError, OSError):
         pass
     return None
-
-
-def _tenant_kommo_phone(contact: dict) -> str:
-    for field in contact.get("custom_fields_values") or []:
-        if str(field.get("field_code") or "").upper() != "PHONE":
-            continue
-        values = field.get("values") if isinstance(field.get("values"), list) else []
-        if values:
-            return str((values[0] or {}).get("value") or "")[:80]
-    return ""
 
 
 async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False, force_full: bool = False) -> dict:
@@ -21487,13 +21475,6 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False, force_
     if include_tasks and policy.allows('tasks'):
         jobs.append(await asyncio.to_thread(enqueue_tenant_crm_sync, str(profile['tenant_id']), 'tasks', **options))
     return {'jobs': jobs}
-
-
-def _tenant_talk_id(talk: dict) -> int:
-    try:
-        return int((talk or {}).get("talk_id") or (talk or {}).get("id") or 0)
-    except (AttributeError, TypeError, ValueError):
-        return 0
 
 
 def _tenant_talk_channel(talk: dict) -> str:
@@ -21572,85 +21553,6 @@ async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
     from kommo_phone_duplicates_api import handler
     return await handler(_deal_request_user, _authorized_deal_lead, _user_can_view_personal_lead,
                          _http, KOMMO_BASE_URL, HEADERS, logger)(request)
-
-
-async def handle_platform_hot_orders(request: web.Request) -> web.Response:
-    """SaaS queue only; legacy Telegram sessions/tables cannot authorize it."""
-    headers = {'Cache-Control': 'no-store'}
-    try:
-        profile = _tenant_member_from_request(request)
-        if not profile or not TenantPolicy(profile).allows('hot_orders'):
-            return web.json_response({'success':False,'error':'İcazə yoxdur.'},status=403,headers=headers)
-        if request.method == 'GET':
-            filters = {'approvals_only':True} if request.rel_url.query.get('approvals')=='1' else {}
-            result = await asyncio.to_thread(list_tenant_hot_orders, profile,
-                limit=int(request.rel_url.query.get('limit','50')), offset=int(request.rel_url.query.get('offset','0')), **filters)
-            return web.json_response({'success':True,**result},headers=headers)
-        if (request.content_type != 'application/json' or
-                request.headers.get('Origin','').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
-            return web.json_response({'success':False,'error':'Sorğunun mənbəyi düzgün deyil.'},status=403,headers=headers)
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise TenantHotOrderError('Sorğu düzgün deyil.')
-        if (str(data.get('expected_tenant_id') or '') != str(profile['tenant_id']) or
-                str(data.get('expected_user_id') or '') != str(profile['telegram_id'])):
-            return web.json_response({'success':False,'error':'Kabinet dəyişib. Səhifəni yeniləyin.'},status=409,headers=headers)
-        action = data.get('action')
-        if action == 'create':
-            order = await asyncio.to_thread(create_tenant_hot_order,profile,data)
-        elif action in {'claim','release','cancel'}:
-            order = await asyncio.to_thread(change_tenant_hot_order,profile,order_id=data.get('order_id'),action=action)
-        elif action in {'complete','approve','reject'}:
-            from tenant_hot_order_completion import completion_command
-            order = await asyncio.to_thread(completion_command,profile,data)
-        else:
-            raise TenantHotOrderError('Əməliyyat düzgün deyil.')
-        return web.json_response({'success':True,'order':order},headers=headers)
-    except TenantHotOrderError as exc:
-        return web.json_response({'success':False,'error':str(exc)},status=exc.status,headers=headers)
-    except ValueError:
-        return web.json_response({'success':False,'error':'Sorğu düzgün deyil.'},status=400,headers=headers)
-    except Exception:
-        logger.error('Tenant hot-order API failed')
-        return web.json_response({'success':False,'error':'Sifariş əməliyyatı tamamlanmadı.'},status=503,headers=headers)
-
-
-async def handle_platform_push_devices(request: web.Request) -> web.Response:
-    """Tenant device API; never use global legacy push subscriptions."""
-    profile = _tenant_member_from_request(request)
-    if not profile or profile.get('active') is not True:
-        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
-    if request.method != 'GET' and (request.content_type != 'application/json'
-            or request.headers.get('Origin', '').rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
-        return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-    headers = {'Cache-Control': 'no-store'}
-    try:
-        if request.method == 'GET':
-            devices = await asyncio.to_thread(list_tenant_push_devices, profile)
-            return web.json_response({'success': True, 'devices': devices, 'max_devices': TENANT_PUSH_MAX_DEVICES,
-                                      'tenant_id': str(profile['tenant_id']), 'user_id': str(profile['telegram_id']),
-                                      'public_key': VAPID_PUBLIC_KEY, 'delivery_enabled': bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)}, headers=headers)
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise ValueError('Sorğu düzgün deyil.')
-        if (data.get('expected_tenant_id',str(profile['tenant_id'])) != str(profile['tenant_id'])
-                or str(data.get('expected_user_id',profile['telegram_id'])) != str(profile['telegram_id'])):
-            return web.json_response({'success':False,'error':'Kabinet dəyişib. Səhifəni yeniləyin.'},status=409,headers=headers)
-        if data.get('action') == 'subscribe':
-            device = await asyncio.to_thread(register_tenant_push_device, profile, data.get('subscription'), data.get('label', ''))
-            response = web.json_response({'success': True, 'device': device, 'delivery_enabled': bool(VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY)}, headers=headers)
-            response.set_cookie('tenant_push_device',device['device_id'],max_age=31536000,httponly=True,secure=True,samesite='Lax',path='/')
-            return response
-        if data.get('action') == 'unsubscribe':
-            await asyncio.to_thread(disable_tenant_push_device, profile, data.get('device_id'))
-            return web.json_response({'success': True}, headers=headers)
-        raise ValueError('Əməliyyat düzgün deyil.')
-    except (ValueError, TenantPlatformError) as exc:
-        return web.json_response({'success': False, 'error': str(exc)}, status=400, headers=headers)
-    except Exception:
-        # Subscription URLs/keys are private. No request/error bodies in logs.
-        logger.error('Tenant push device API failed: tenant=%s', profile['tenant_id'])
-        return web.json_response({'success': False, 'error': 'Cihaz ayarları saxlanmadı.'}, status=500, headers=headers)
 
 
 async def handle_web_login_complete(request: web.Request) -> web.Response:
@@ -22740,10 +22642,33 @@ async def start_webhook_server():
         _tenant_kommo_request, tenant_member, upsert_tenant_crm_messages,
         _tenant_normalize_talk_message, _tenant_talk_channel, logger,
     )
+    hot_order_api = tenant_hot_order_handler(HotOrderApiContext(
+        member=_tenant_member_from_request,
+        policy=TenantPolicy,
+        list_orders=list_tenant_hot_orders,
+        create_order=create_tenant_hot_order,
+        change_order=change_tenant_hot_order,
+        completion_command=complete_tenant_hot_order,
+        origin=CANONICAL_WEB_ORIGIN,
+        hot_order_error=TenantHotOrderError,
+        logger=logger,
+    ))
+    push_api = tenant_push_handler(PushApiContext(
+        member=_tenant_member_from_request,
+        list_devices=list_tenant_push_devices,
+        register_device=register_tenant_push_device,
+        disable_device=disable_tenant_push_device,
+        origin=CANONICAL_WEB_ORIGIN,
+        max_devices=TENANT_PUSH_MAX_DEVICES,
+        public_key=VAPID_PUBLIC_KEY,
+        private_key=VAPID_PRIVATE_KEY,
+        platform_error=TenantPlatformError,
+        logger=logger,
+    ))
     duplicate_api = tenant_duplicate_handler(
         _tenant_member_from_request, _tenant_kommo_request, logger)
-    app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
-    app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
+    app_web.router.add_get('/api/platform/push/devices', push_api)
+    app_web.router.add_post('/api/platform/push/devices', push_api)
     member_api = tenant_member_handlers(MemberApiContext(
         member=_tenant_member_from_request, telegram_identity=_telegram_login_user_id,
         telegram_name=telegram_display_name, send_telegram=_send_telegram_text,
@@ -22787,8 +22712,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/chat", chat_api["chat"])
     app_web.router.add_post('/api/platform/crm/chat/import-history', chat_import_api)
     app_web.router.add_get("/api/platform/crm/tasks", task_api["tasks"])
-    app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
-    app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)
+    app_web.router.add_get('/api/platform/hot-orders', hot_order_api)
+    app_web.router.add_post('/api/platform/hot-orders', hot_order_api)
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
     app_web.router.add_get('/assets/deal-phone-duplicates.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-phone-duplicates.js'), headers={'Cache-Control': 'no-cache'}))

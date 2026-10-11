@@ -1,8 +1,5 @@
-import ast
-import asyncio
 import base64
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, AsyncMock
@@ -10,6 +7,7 @@ from unittest.mock import MagicMock, Mock, AsyncMock
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from test_tenant_tasks import load_service, TenantPlatformError, person
+import tenant_push_api as push_api
 
 
 class ApiResponse(tuple):
@@ -118,16 +116,13 @@ class PushStorageTests(unittest.TestCase):
 
 class PushApiTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        source=(Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig')
-        nodes=[node for node in ast.parse(source).body if isinstance(node,ast.AsyncFunctionDef) and node.name=='handle_platform_push_devices']
         self.profile=person();self.register=Mock(return_value={'device_id':'hash'});self.disable=Mock();self.list=Mock(return_value=[])
         self.log=Mock()
-        namespace={'TENANT_PUSH_MAX_DEVICES':5,'web':SimpleNamespace(Request=object,Response=object,json_response=ApiResponse),
-                   '_tenant_member_from_request':lambda _:self.profile,'asyncio':asyncio,'VAPID_PUBLIC_KEY':'public','VAPID_PRIVATE_KEY':'private',
-                   'CANONICAL_WEB_ORIGIN':'https://crm.pro.az','TenantPlatformError':TenantPlatformError,'logger':self.log,
-                   'register_tenant_push_device':self.register,'disable_tenant_push_device':self.disable,'list_tenant_push_devices':self.list}
-        exec(compile(ast.Module(body=nodes,type_ignores=[]),'<push-api>','exec'),namespace)
-        self.api=namespace['handle_platform_push_devices']
+        push_api.web=SimpleNamespace(Request=object,Response=object,json_response=ApiResponse)
+        self.api=push_api.handler(push_api.PushApiContext(
+            member=lambda request:self.profile,list_devices=self.list,register_device=self.register,
+            disable_device=self.disable,origin='https://crm.pro.az',max_devices=5,
+            public_key='public',private_key='private',platform_error=TenantPlatformError,logger=self.log))
         self.request=SimpleNamespace(method='POST',content_type='application/json',headers={'Origin':'https://crm.pro.az'},
                                      json=AsyncMock(return_value={'action':'subscribe','subscription':{},'tenant_id':'other','telegram_id':99}))
 

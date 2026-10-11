@@ -1,15 +1,14 @@
 """Tenant SQL/API contracts without a production database or messages."""
 import ast
-import asyncio
 import hashlib
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock
 
 from tenant_policy import TenantPolicy
+import tenant_hot_order_api as hot_order_api
 import test_tenant_hot_order_policy as fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,20 +135,19 @@ class QueueTests(unittest.TestCase):
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.profile=fixtures.person('owner');self.list=Mock(return_value={'orders':[],'total':0})
-        self.create=Mock(return_value={'id':'order'});self.change=Mock(return_value={})
+        self.create=Mock(return_value={'id':'order'});self.change=Mock(return_value={});self.complete=Mock(return_value={})
         service=load('tenant_hot_orders',{'_connect':Mock(),'ensure_hot_order_schema':Mock()},
                      {'tenant_platform','tenant_hot_order_schema'})
-        tree=ast.parse((ROOT/'bot.py').read_text(encoding='utf-8-sig'))
-        tree.body=[n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='handle_platform_hot_orders']
-        self.ns={'asyncio':asyncio,'TenantPolicy':TenantPolicy,'TenantHotOrderError':service.TenantHotOrderError,
-                 '_tenant_member_from_request':lambda request:self.profile,'CANONICAL_WEB_ORIGIN':'https://crm.pro.az',
-                 'list_tenant_hot_orders':self.list,'create_tenant_hot_order':self.create,'change_tenant_hot_order':self.change,
-                 'logger':Mock(),'web':SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,**kw:{'data':data,**kw})}
-        exec(compile(tree,'<hot-api>','exec'),self.ns)
+        self.logger=Mock()
+        hot_order_api.web=SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,**kw:{'data':data,**kw})
+        self.api=hot_order_api.handler(hot_order_api.HotOrderApiContext(
+            member=lambda request:self.profile,policy=TenantPolicy,list_orders=self.list,
+            create_order=self.create,change_order=self.change,completion_command=self.complete,
+            origin='https://crm.pro.az',hot_order_error=service.TenantHotOrderError,logger=self.logger))
 
     async def request(self, data=None, method='POST', origin='https://crm.pro.az', query=None):
         async def read():return data
-        return await self.ns['handle_platform_hot_orders'](SimpleNamespace(method=method,content_type='application/json',
+        return await self.api(SimpleNamespace(method=method,content_type='application/json',
             headers={'Origin':origin},json=read,rel_url=SimpleNamespace(query=query or {})))
 
     async def test_get_uses_only_current_membership(self):
@@ -161,12 +159,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.list.assert_called_once_with(self.profile,limit=50,offset=0,approvals_only=True)
 
     async def test_completion_routes_through_same_session_and_origin_checks(self):
-        command=Mock(return_value={'status':'submitted'})
-        with patch.dict(sys.modules,{'tenant_hot_order_completion':SimpleNamespace(completion_command=command)}):
-            for action in ('complete','approve','reject'):
-                data={'action':action,'expected_tenant_id':'company-a','expected_user_id':20}
-                response=await self.request(data)
-                self.assertTrue(response['data']['success']);command.assert_called_with(self.profile,data)
+        for action in ('complete','approve','reject'):
+            data={'action':action,'expected_tenant_id':'company-a','expected_user_id':20}
+            response=await self.request(data)
+            self.assertTrue(response['data']['success']);self.complete.assert_called_with(self.profile,data)
         self.create.assert_not_called();self.change.assert_not_called()
 
     async def test_cross_origin_and_switched_company_are_rejected(self):
@@ -186,4 +182,4 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_storage_failure_is_generic_and_no_customer_details_are_logged(self):
         self.list.side_effect=RuntimeError('password and private client')
         result=await self.request(method='GET');self.assertEqual(result['status'],503)
-        self.assertNotIn('password',str(result));self.ns['logger'].error.assert_called_once_with('Tenant hot-order API failed')
+        self.assertNotIn('password',str(result));self.logger.error.assert_called_once_with('Tenant hot-order API failed')
