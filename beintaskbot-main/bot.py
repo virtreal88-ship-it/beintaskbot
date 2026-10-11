@@ -136,6 +136,10 @@ from legacy_kommo_chat_resolver import (
 from legacy_kommo_chat_sender import (
     _send_kommo_talk_message, _send_kommo_talk_text, configure_chat_sender,
 )
+from legacy_kommo_chat_merge import (
+    _chat_item_key, _clean_body_text, _deduplicate_chat, _delivery_rank,
+    _merge_chat_item, configure_chat_merge,
+)
 from legacy_kommo_media_policy import (
     _as_absolute_media_url, _host_matches, _is_allowed_avatar_url,
     _is_allowed_kommo_media_url, _is_allowed_media_url, _media_host,
@@ -1417,6 +1421,7 @@ configure_chat_sender(
     error_detail=lambda response: _kommo_error_detail(response),
     app_logger=logger,
 )
+configure_chat_merge(split_quote=lambda text: _split_quote_prefix(text))
 
 
 
@@ -12032,15 +12037,6 @@ def _process_whatsapp_payload(payload: dict) -> None:
                 _ingest_cloud_incoming(value)
 
 
-def _chat_item_key(item: dict) -> tuple:
-    return (
-        str(item.get("id") or ""),
-        str(item.get("text") or ""),
-        int(item.get("created_at") or 0),
-        str(item.get("file_uuid") or ""),
-    )
-
-
 def _split_quote_prefix(text: str) -> tuple[str, str]:
     raw = str(text or "")
     stripped = raw.lstrip()
@@ -12066,29 +12062,6 @@ def _split_quote_prefix(text: str) -> tuple[str, str]:
     if not quote or not body:
         return "", raw
     return quote, body
-
-
-def _clean_body_text(text: str) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    quote, body = _split_quote_prefix(raw)
-    return body.strip() if body else raw
-
-
-def _delivery_rank(status: str) -> int:
-    text = str(status or "").strip().lower()
-    if text in {"read", "seen", "viewed", "3"}:
-        return 5
-    if text in {"delivered", "1", "2"}:
-        return 4
-    if text in {"sent", "0"}:
-        return 3
-    if text in {"sending", "pending"}:
-        return 2
-    if text in {"error", "failed", "undelivered", "4", "-1"}:
-        return 1
-    return 0
 
 
 def _normalized_channel(key: str) -> str:
@@ -12414,65 +12387,7 @@ def _collect_deal_chat(
     chat_blocked = False
 
     def _add_chat(item: dict | None) -> None:
-        if not item:
-            return
-        key = _chat_item_key(item)
-        if key in seen_chat:
-            return
-        item_text = str(item.get("text") or "").strip()
-        item_clean_text = _clean_body_text(item_text)
-        item_ts = int(item.get("created_at") or 0)
-        item_dir = bool(item.get("incoming"))
-        item_uuid = str(item.get("file_uuid") or "").strip()
-        item_media = str(item.get("media_url") or "").strip()
-        item_ext = str(item.get("external_id") or "").strip()
-        item_id = str(item.get("id") or "").strip()
-        item_is_stub = item_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
-
-        for existing in chat:
-            if bool(existing.get("incoming")) != item_dir:
-                continue
-            ex_id = str(existing.get("id") or "").strip()
-            ex_ext = str(existing.get("external_id") or "").strip()
-            ex_uuid = str(existing.get("file_uuid") or "").strip()
-            ex_media = str(existing.get("media_url") or "").strip()
-            ex_text = str(existing.get("text") or "").strip()
-            ex_clean_text = _clean_body_text(ex_text)
-            ex_ts = int(existing.get("created_at") or 0)
-            ex_is_stub = ex_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
-
-            same_ext = bool(item_ext and ex_ext and item_ext == ex_ext)
-            same_file = bool((item_uuid and item_uuid == ex_uuid) or (item_media and item_media == ex_media))
-            same_text = bool(
-                (item_text and item_text == ex_text and abs(ex_ts - item_ts) <= 300)
-                or (item_clean_text and item_clean_text == ex_clean_text and abs(ex_ts - item_ts) <= 300)
-            )
-
-            if same_ext or same_file or same_text:
-                if ex_is_stub and not item_is_stub:
-                    existing["id"] = item_id
-                    if item_ext:
-                        existing["external_id"] = item_ext
-                    if item.get("talk_id"):
-                        existing["talk_id"] = item["talk_id"]
-                    if item_ts:
-                        existing["created_at"] = item_ts
-                    if item_text:
-                        existing["text"] = item_text
-                if item_uuid and not ex_uuid:
-                    existing["file_uuid"] = item_uuid
-                if item_media and not ex_media:
-                    existing["media_url"] = item_media
-                if item.get("message_type") and (not existing.get("message_type") or existing.get("message_type") == "text"):
-                    existing["message_type"] = item.get("message_type")
-                if item.get("cards") and not existing.get("cards"):
-                    existing["cards"] = item.get("cards")
-                if _delivery_rank(item.get("delivery_status")) > _delivery_rank(existing.get("delivery_status")):
-                    existing["delivery_status"] = item.get("delivery_status")
-                return
-
-        seen_chat.add(key)
-        chat.append(item)
+        _merge_chat_item(chat, seen_chat, item)
 
     # Every customer channel, including WhatsApp, is loaded from Kommo Talks.
     # The previous WhatsApp-only branch read the local Cloud/WABA outbox and
@@ -12597,82 +12512,15 @@ def _collect_deal_chat(
     # Kommo Talk is the source of truth for all customer chats.  Do not replay
     # the legacy local Cloud/WABA outbox here: those rows were never confirmed
     # by the grey Kommo channel and made old Business messages look live.
-    clean_chat: list[dict] = []
-    for candidate in chat:
-        txt = str(candidate.get("text") or "")
-        if _is_generic_placeholder_message(txt) and not str(candidate.get("media_url") or "").strip() and not str(candidate.get("file_uuid") or "").strip():
-            continue
-        cand_dir = bool(candidate.get("incoming"))
-        cand_text = txt.strip()
-        cand_clean = _clean_body_text(cand_text)
-        cand_ts = int(candidate.get("created_at") or 0)
-        cand_ext = str(candidate.get("external_id") or "").strip()
-        cand_uuid = str(candidate.get("file_uuid") or "").strip()
-        cand_media = str(candidate.get("media_url") or "").strip()
-        cand_id = str(candidate.get("id") or "").strip()
-        cand_stub = cand_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
-
-        dup = False
-        for kept in clean_chat:
-            if bool(kept.get("incoming")) != cand_dir:
-                continue
-            k_id = str(kept.get("id") or "").strip()
-            k_ext = str(kept.get("external_id") or "").strip()
-            k_uuid = str(kept.get("file_uuid") or "").strip()
-            k_media = str(kept.get("media_url") or "").strip()
-            k_text = str(kept.get("text") or "").strip()
-            k_clean = _clean_body_text(k_text)
-            k_ts = int(kept.get("created_at") or 0)
-            k_stub = k_id.startswith(("sent-", "local-", "note-", "event-", "hook-"))
-
-            if cand_id and k_id and cand_id == k_id:
-                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
-                    kept["delivery_status"] = candidate.get("delivery_status")
-                dup = True
-                break
-            if cand_ext and k_ext and cand_ext == k_ext:
-                if k_stub and not cand_stub:
-                    kept["id"] = cand_id
-                    if cand_ts:
-                        kept["created_at"] = cand_ts
-                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
-                    kept["delivery_status"] = candidate.get("delivery_status")
-                dup = True
-                break
-            if cand_uuid and k_uuid and cand_uuid == k_uuid:
-                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
-                    kept["delivery_status"] = candidate.get("delivery_status")
-                dup = True
-                break
-            if cand_media and k_media and cand_media == k_media:
-                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
-                    kept["delivery_status"] = candidate.get("delivery_status")
-                dup = True
-                break
-            same_c = (
-                (cand_text and cand_text == k_text and abs(k_ts - cand_ts) <= 300)
-                or (cand_clean and cand_clean == k_clean and abs(k_ts - cand_ts) <= 300)
-            )
-            if same_c:
-                if k_stub and not cand_stub:
-                    kept["id"] = cand_id
-                    if cand_ext:
-                        kept["external_id"] = cand_ext
-                    if candidate.get("talk_id"):
-                        kept["talk_id"] = candidate["talk_id"]
-                    if cand_text:
-                        kept["text"] = candidate.get("text")
-                    if cand_ts:
-                        kept["created_at"] = cand_ts
-                if candidate.get("cards") and not kept.get("cards"):
-                    kept["cards"] = candidate.get("cards")
-                if _delivery_rank(candidate.get("delivery_status")) > _delivery_rank(kept.get("delivery_status")):
-                    kept["delivery_status"] = candidate.get("delivery_status")
-                dup = True
-                break
-        if not dup:
-            clean_chat.append(candidate)
-    chat = clean_chat
+    chat = [
+        candidate for candidate in chat
+        if not (
+            _is_generic_placeholder_message(str(candidate.get("text") or ""))
+            and not str(candidate.get("media_url") or "").strip()
+            and not str(candidate.get("file_uuid") or "").strip()
+        )
+    ]
+    chat = _deduplicate_chat(chat)
     chat.sort(key=lambda item: int(item.get("created_at") or 0))
     if before:
         older = [item for item in chat if int(item.get("created_at") or 0) < before]
