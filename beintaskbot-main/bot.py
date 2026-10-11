@@ -53,6 +53,8 @@ from gh_storage import read_json, write_json
 from crm_stage_labels import stage_display_name
 from kommo_deal_tags import public_tags, tag_list, tags_handler
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
+from tenant_web_routes import TenantWebContext, register_feature_routes
+from tenant_web_assets import register_assets
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
     list_orders as list_tenant_hot_orders, change_order as change_tenant_hot_order,
@@ -64,14 +66,8 @@ from tenant_task_approvals import decide_task_approval
 from tenant_notification_worker import deliver_approval_notifications
 from tenant_push_worker import deliver_push_notifications
 from tenant_hot_order_notification_worker import deliver_hot_order_notifications
-from tenant_finance_api import finance_handler
-from tenant_linear_api import linear_handler
-from tenant_linear_tasks_api import tasks_handler as tenant_linear_tasks_handler
 from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
-from tenant_news_api import news_handler as tenant_news_handler
-from tenant_news_telegram_api import handler as tenant_news_telegram_handler
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
-from tenant_chat_ai_api import handler as tenant_chat_ai_handler
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
@@ -22359,24 +22355,12 @@ async def handle_platform_crm_chat(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "messages": rows, "stale": bool(warning), "warning": warning})
 
 
-async def handle_platform_crm_chat_review(request: web.Request) -> web.Response:
-    from tenant_chat_review_api import handler
-    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)(request)
 
 
-async def handle_platform_diagnostics(request: web.Request) -> web.Response:
-    from tenant_diagnostics_api import handler
-    return await handler(_tenant_member_from_request, logger)(request)
 
 
-async def handle_platform_crm_chat_history(request: web.Request) -> web.Response:
-    from tenant_chat_history_api import handler
-    return await handler(_tenant_member_from_request, logger)(request)
 
 
-async def handle_platform_crm_chat_attachment(request: web.Request) -> web.Response:
-    from tenant_chat_attachment_api import handler
-    return await handler(_tenant_member_from_request, _tenant_kommo_request, logger)(request)
 
 
 async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
@@ -22386,30 +22370,12 @@ async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
                          _tenant_normalize_talk_message, _tenant_talk_channel, logger)(request)
 
 
-async def handle_platform_deal_complete(request: web.Request) -> web.Response:
-    from tenant_deal_completion_api import handler
-    from tenant_deal_completion_provider import provider
-    return await handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
-        provider(_tenant_kommo_request,_wait_for_tenant_kommo_slot),logger)(request)
 
 
-async def handle_platform_deal_approvals(request: web.Request) -> web.Response:
-    from tenant_deal_completion_api import handler
-    from tenant_deal_completion_provider import provider
-    return await handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
-        provider(_tenant_kommo_request,_wait_for_tenant_kommo_slot),logger,review=True)(request)
 
 
-async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
-    from tenant_chat_send_api import handler
-    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
-                         _tenant_kommo_request, _wait_for_tenant_kommo_slot, logger)(request)
 
 
-async def handle_platform_crm_chat_send_file(request: web.Request) -> web.Response:
-    from tenant_chat_upload_api import handler
-    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
-                         _tenant_kommo_request, _wait_for_tenant_kommo_slot, logger)(request)
 
 
 async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
@@ -22432,14 +22398,8 @@ async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
 
-async def serve_tenant_hot_order_completion_script(request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-hot-order-completion.js'),
-                            headers={'Cache-Control':'no-cache'})
 
 
-async def serve_tenant_finance_script(request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-finance.js'),
-                            headers={'Cache-Control':'no-cache'})
 
 
 async def serve_deal_tags_script(request: web.Request) -> web.Response:
@@ -22769,35 +22729,16 @@ async def redirect_platform_app(request: web.Request) -> web.Response:
     return response
 
 
-async def serve_tenant_task_approvals_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-task-approvals.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_task_completion_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-task-completion.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_deal_completion_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-deal-completion.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_diagnostics_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-diagnostics.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_chat_send_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-send.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_workflow_script(_request: web.Request) -> web.Response:
-    response = web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workflow.js'))
-    response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
-    return response
 
 
 async def serve_moderation_login(request: web.Request) -> web.Response:
@@ -22811,38 +22752,18 @@ async def handle_moderation_login(request: web.Request) -> web.Response:
                          CANONICAL_WEB_ORIGIN, logger)(request)
 
 
-async def serve_tenant_hot_order_settings(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-hot-order-settings.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_hot_orders_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-hot-orders.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_tenant_push_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push.js'),headers={'Cache-Control':'no-store'})
 
 
-async def serve_tenant_crm_sync_script(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-crm-sync.js'),
-                            headers={'Cache-Control': 'no-store'})
 
 
-async def serve_task_date_fields(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','task-date-fields.js'),headers={'Cache-Control':'no-store'})
 
 
-async def serve_tenant_push_worker(_request: web.Request) -> web.Response:
-    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)),'docs','tenant-push-sw.js'),
-                            headers={'Cache-Control':'no-store','Service-Worker-Allowed':'/app/'})
 
 
-async def serve_tenant_tasks_script(_request: web.Request) -> web.Response:
-    response = web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-tasks.js'))
-    response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
-    return response
 
 
 async def serve_deal_page(request: web.Request) -> web.Response:
@@ -23751,13 +23672,15 @@ async def start_webhook_server():
     app_web.router.add_get("/auth/web-login", handle_web_login_complete)
     # Public self-service platform. These endpoints use a separate
     # tenant-scoped cookie and never fall through to legacy employee APIs.
+    register_feature_routes(app_web, TenantWebContext(
+        member=_tenant_member_from_request, origin=CANONICAL_WEB_ORIGIN, logger=logger,
+        crm_request=_tenant_kommo_request, wait_slot=_wait_for_tenant_kommo_slot,
+        bot=lambda: _bot_app.bot if _bot_app else None))
+    register_assets(app_web)
     app_web.router.add_post("/api/platform/register", handle_platform_register)
     app_web.router.add_post("/api/platform/login", handle_platform_login)
     app_web.router.add_post("/api/platform/logout", handle_platform_logout)
     app_web.router.add_get("/api/platform/me", handle_platform_me)
-    app_web.router.add_get('/app/push-sw.js',serve_tenant_push_worker)
-    app_web.router.add_get('/assets/tenant-push.js',serve_tenant_push_script)
-    app_web.router.add_get('/assets/task-date-fields.js',serve_task_date_fields)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_get("/api/platform/members", handle_platform_members)
@@ -23765,9 +23688,6 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/task-approvals', handle_platform_task_approvals)
     app_web.router.add_post('/api/platform/crm/tasks/complete', handle_platform_task_complete)
-    app_web.router.add_post('/api/platform/crm/deals/complete', handle_platform_deal_complete)
-    app_web.router.add_get('/api/platform/crm/deal-approvals', handle_platform_deal_approvals)
-    app_web.router.add_post('/api/platform/crm/deal-approvals', handle_platform_deal_approvals)
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
@@ -23788,80 +23708,10 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/crm/sync', handle_platform_crm_sync_status)
     app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
-    app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
-    app_web.router.add_post('/api/platform/crm/chat/send-file', handle_platform_crm_chat_send_file)
-    app_web.router.add_get('/api/platform/diagnostics', handle_platform_diagnostics)
-    app_web.router.add_get("/api/platform/crm/chat/history", handle_platform_crm_chat_history)
-    app_web.router.add_get("/api/platform/crm/chat/attachment", handle_platform_crm_chat_attachment)
     app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
-    app_web.router.add_get('/assets/tenant-chat-import.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-import.js'), headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-chat-history.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-history.js'), headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-chat-attachments.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-attachments.js'), headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get("/api/platform/crm/chat/receipts", handle_platform_crm_chat_review)
-    app_web.router.add_post("/api/platform/crm/chat/receipts", handle_platform_crm_chat_review)
-    app_web.router.add_get('/assets/tenant-chat-review.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-review.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get("/api/platform/crm/tasks", handle_platform_crm_tasks)
     app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)
-    tenant_finance_handler=finance_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,logger)
-    app_web.router.add_get('/api/platform/finance',tenant_finance_handler)
-    app_web.router.add_post('/api/platform/finance',tenant_finance_handler)
-    app_web.router.add_get('/assets/tenant-finance.js',serve_tenant_finance_script)
-    tenant_linear_handler = linear_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
-    app_web.router.add_get('/api/platform/linear/settings', tenant_linear_handler)
-    app_web.router.add_post('/api/platform/linear/settings', tenant_linear_handler)
-    linear_tasks_api = tenant_linear_tasks_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
-    app_web.router.add_get('/api/platform/linear/tasks', linear_tasks_api)
-    app_web.router.add_post('/api/platform/linear/tasks', linear_tasks_api)
-    news_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
-    app_web.router.add_get('/api/platform/news', news_api)
-    app_web.router.add_post('/api/platform/news', news_api)
-    news_ai_api = tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, ai=True)
-    app_web.router.add_get('/api/platform/news/ai', news_ai_api)
-    app_web.router.add_post('/api/platform/news/ai', news_ai_api)
-    chat_ai_settings_api = tenant_chat_ai_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, settings=True)
-    app_web.router.add_get('/api/platform/chat/ai/settings', chat_ai_settings_api)
-    app_web.router.add_post('/api/platform/chat/ai/settings', chat_ai_settings_api)
-    app_web.router.add_post('/api/platform/chat/ai', tenant_chat_ai_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
-    app_web.router.add_get('/assets/tenant-chat-ai.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-ai.js'), headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-chat-ai-settings.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-ai-settings.js'), headers={'Cache-Control': 'no-cache'}))
-    news_channel_api=tenant_news_telegram_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
-        lambda: _bot_app.bot if _bot_app else None,logger,configuration=True)
-    app_web.router.add_get('/api/platform/news/telegram/settings',news_channel_api)
-    app_web.router.add_post('/api/platform/news/telegram/settings',news_channel_api)
-    news_delivery_api=tenant_news_telegram_handler(_tenant_member_from_request,CANONICAL_WEB_ORIGIN,
-        lambda: _bot_app.bot if _bot_app else None,logger)
-    app_web.router.add_get('/api/platform/news/telegram',news_delivery_api)
-    app_web.router.add_post('/api/platform/news/telegram',news_delivery_api)
-    app_web.router.add_get('/assets/tenant-news-telegram-settings.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-telegram-settings.js'),
-        headers={'Cache-Control':'no-cache'}))
-    app_web.router.add_get('/api/platform/news/public/{company}',
-        tenant_news_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger, public=True))
-    app_web.router.add_get('/updates/{company}', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-public.html'),
-        headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-news.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news.js'),
-        headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-news-ai-settings.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-news-ai-settings.js'),
-        headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-linear-settings.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-settings.js'),
-        headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-linear-board.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-board.js'),
-        headers={'Cache-Control': 'no-cache'}))
-    app_web.router.add_get('/assets/tenant-linear-rules.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-linear-rules.js'),
-        headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
     app_web.router.add_get('/assets/deal-phone-duplicates.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-phone-duplicates.js'), headers={'Cache-Control': 'no-cache'}))
@@ -23892,19 +23742,6 @@ async def start_webhook_server():
     app_web.router.add_get("/nece-baslamaq", serve_getting_started_page)
     app_web.router.add_get("/news", serve_news_page)
     app_web.router.add_get("/documentation", serve_documentation_page)
-    app_web.router.add_get('/assets/tenant-task-approvals.js', serve_tenant_task_approvals_script)
-    app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
-    app_web.router.add_get('/assets/tenant-deal-completion.js', serve_tenant_deal_completion_script)
-    app_web.router.add_get('/assets/tenant-diagnostics.js', serve_tenant_diagnostics_script)
-    app_web.router.add_get('/assets/tenant-chat-send.js', serve_tenant_chat_send_script)
-    app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
-    app_web.router.add_get('/assets/tenant-workspace.js', lambda request: web.FileResponse(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workspace.js')))
-    app_web.router.add_get('/assets/tenant-hot-order-settings.js', serve_tenant_hot_order_settings)
-    app_web.router.add_get('/assets/tenant-hot-orders.js', serve_tenant_hot_orders_script)
-    app_web.router.add_get('/assets/tenant-hot-order-completion.js', serve_tenant_hot_order_completion_script)
-    app_web.router.add_get('/assets/tenant-crm-sync.js', serve_tenant_crm_sync_script)
-    app_web.router.add_get("/assets/tenant-tasks.js", serve_tenant_tasks_script)
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
     runner = web.AppRunner(app_web)
