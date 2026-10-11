@@ -59,6 +59,8 @@ from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
+from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
+from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handler
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
 from tenant_web_assets import register_assets
@@ -21546,70 +21548,6 @@ async def _sync_tenant_crm(profile: dict, *, include_tasks: bool = False, force_
     return {'jobs': jobs}
 
 
-async def handle_platform_crm_sync_status(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    policy = TenantPolicy(profile or {})
-    resources = []
-    if policy.allows('deals') or policy.allows('customers') or policy.task_scope().get('kind') == 'pipelines':
-        resources.append('leads')
-    if policy.allows('tasks'):
-        resources.append('tasks')
-    if not profile or not resources:
-        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
-    try:
-        jobs = await asyncio.to_thread(tenant_crm_sync_status, str(profile['tenant_id']), resources)
-        return web.json_response({'success': True, 'jobs': jobs})
-    except Exception:
-        logger.error('Tenant CRM sync status unavailable')
-        return web.json_response({'success': False, 'error': 'Sinxronizasiya vəziyyəti alınmadı.'}, status=503)
-
-
-async def handle_platform_crm_deals(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
-        return web.json_response({"success": False, "error": "Sövdələşmələr üçün icazəniz yoxdur."}, status=403)
-    should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
-    sync_error = ""
-    if should_refresh:
-        try:
-            await _sync_tenant_crm(profile, include_tasks=False,
-                                   force_full=str(request.rel_url.query.get('full') or '') == '1')
-        except TenantPlatformError as exc:
-            sync_error = str(exc)
-        except Exception:
-            logger.exception("Tenant CRM deal sync failed: tenant=%s", profile["tenant_id"])
-            sync_error = "Kommo məlumatları yenilənmədi. Son saxlanmış siyahı göstərilir."
-    values = request.rel_url.query
-    try:
-        pipeline_ids = [int(value) for value in values.getall("pipeline_id", [])]
-        status_ids = [int(value) for value in values.getall("status_id", [])]
-        limit, offset = int(values.get("limit") or 100), int(values.get("offset") or 0)
-    except ValueError:
-        return web.json_response({"success": False, "error": "Filtr düzgün deyil."}, status=400)
-    rows, total = await asyncio.to_thread(
-        list_tenant_crm_deals, tenant_id=profile["tenant_id"], search=str(values.get("search") or ""),
-        pipeline_ids=pipeline_ids, status_ids=status_ids, limit=limit, offset=offset,
-        scope=TenantPolicy(profile).pipeline_scope(),
-    )
-    return web.json_response({"success": True, "deals": rows, "total": total, "stale": bool(sync_error), "warning": sync_error})
-
-
-async def handle_platform_crm_deal(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not (_tenant_has_module(profile, "deals") or _tenant_has_module(profile, "customers")):
-        return web.json_response({"success": False, "error": "Sövdələşmə üçün icazəniz yoxdur."}, status=403)
-    try:
-        lead_id = int(request.rel_url.query.get("lead_id") or 0)
-    except ValueError:
-        lead_id = 0
-    if lead_id <= 0:
-        return web.json_response({"success": False, "error": "Sövdələşmə seçilməyib."}, status=400)
-    row = await asyncio.to_thread(get_tenant_crm_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
-    if not TenantPolicy(profile).can_access_deal(row):
-        return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
-    return web.json_response({"success": True, "deal": row})
-
-
 def _tenant_talk_id(talk: dict) -> int:
     try:
         return int((talk or {}).get("talk_id") or (talk or {}).get("id") or 0)
@@ -21720,11 +21658,6 @@ async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
     from kommo_phone_duplicates_api import handler
     return await handler(_deal_request_user, _authorized_deal_lead, _user_can_view_personal_lead,
                          _http, KOMMO_BASE_URL, HEADERS, logger)(request)
-
-
-async def handle_platform_deal_duplicates(request: web.Request) -> web.Response:
-    from kommo_phone_duplicates_api import tenant_handler
-    return await tenant_handler(_tenant_member_from_request, _tenant_kommo_request, logger)(request)
 
 
 async def handle_platform_hot_orders(request: web.Request) -> web.Response:
@@ -22864,6 +22797,14 @@ async def start_webhook_server():
         platform_error=TenantPlatformError, pending_error=TaskCommandPending,
         logger=logger,
     ))
+    deal_api = tenant_deal_handlers(DealApiContext(
+        member=_tenant_member_from_request, policy=TenantPolicy,
+        sync_crm=_sync_tenant_crm, sync_status=tenant_crm_sync_status,
+        list_deals=list_tenant_crm_deals, get_deal=get_tenant_crm_deal,
+        platform_error=TenantPlatformError, logger=logger,
+    ))
+    duplicate_api = tenant_duplicate_handler(
+        _tenant_member_from_request, _tenant_kommo_request, logger)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     member_api = tenant_member_handlers(MemberApiContext(
@@ -22903,9 +22844,9 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/integrations/kommo/pipelines", kommo_api["pipelines"])
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", kommo_api["save_pipelines"])
     app_web.router.add_get("/api/platform/integrations/kommo/test", kommo_api["test"])
-    app_web.router.add_get("/api/platform/crm/deals", handle_platform_crm_deals)
-    app_web.router.add_get('/api/platform/crm/sync', handle_platform_crm_sync_status)
-    app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
+    app_web.router.add_get("/api/platform/crm/deals", deal_api["deals"])
+    app_web.router.add_get('/api/platform/crm/sync', deal_api["sync_status"])
+    app_web.router.add_get("/api/platform/crm/deal", deal_api["deal"])
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
     app_web.router.add_get("/api/platform/crm/tasks", task_api["tasks"])
@@ -22915,7 +22856,7 @@ async def start_webhook_server():
     app_web.router.add_get('/assets/deal-phone-duplicates.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-phone-duplicates.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/api/deal/duplicates', handle_api_deal_duplicates)
-    app_web.router.add_get('/api/platform/crm/deals/duplicates', handle_platform_deal_duplicates)
+    app_web.router.add_get('/api/platform/crm/deals/duplicates', duplicate_api)
     deal_tags_api = tags_handler(identify=_deal_request_user, authorize=_authorized_deal_lead,
                                 http=_http, base_url=KOMMO_BASE_URL, headers=HEADERS,
                                 update=update_lead_kommo, invalidate=invalidate_rufat_overview_cache, logger=logger)

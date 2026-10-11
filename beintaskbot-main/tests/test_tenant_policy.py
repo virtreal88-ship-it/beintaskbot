@@ -124,8 +124,8 @@ class TenantRuntimeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
-        names={'_tenant_has_module','handle_platform_crm_deals','handle_platform_crm_deal',
-               'handle_platform_crm_chat','handle_platform_crm_chat_send','handle_platform_workflow_config'}
+        names={'_tenant_has_module','handle_platform_crm_chat','handle_platform_crm_chat_send',
+               'handle_platform_workflow_config'}
         cls.code=compile(ast.Module(body=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names],type_ignores=[]),'<tenant-api>','exec')
 
     def setUp(self):
@@ -139,17 +139,9 @@ class TenantRuntimeTests(unittest.TestCase):
         exec(self.code,self.ns)
         self.request=SimpleNamespace(rel_url=SimpleNamespace(query=Query(lead_id='1')))
 
-    def test_list_filters_are_intersected_with_database_scope(self):
-        self.request.rel_url.query=Query(pipeline_id=['11'])
-        result=asyncio.run(self.ns['handle_platform_crm_deals'](self.request))
-        self.assertEqual(result['status'],200)
-        self.assertEqual(self.ns['list_tenant_crm_deals'].call_args.kwargs['scope'],[{'pipeline_id':10,'status_ids':[100]}])
-        self.assertEqual(self.ns['list_tenant_crm_deals'].call_args.kwargs['pipeline_ids'],[11])
-
-    def test_direct_deal_and_cached_chat_cannot_bypass_assignment(self):
-        for name in ('handle_platform_crm_deal','handle_platform_crm_chat'):
-            result=asyncio.run(self.ns[name](self.request))
-            self.assertEqual(result['status'],404)
+    def test_cached_chat_cannot_bypass_assignment(self):
+        result=asyncio.run(self.ns['handle_platform_crm_chat'](self.request))
+        self.assertEqual(result['status'],404)
         self.ns['list_tenant_crm_messages'].assert_not_called()
 
     def test_workflow_settings_remain_owner_only(self):

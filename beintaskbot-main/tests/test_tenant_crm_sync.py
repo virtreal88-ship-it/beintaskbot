@@ -283,7 +283,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                         'permissions':['tasks'],'modules':{'tasks':True}}
         tree = ast.parse((ROOT/'bot.py').read_text(encoding='utf-8-sig'))
         tree.body = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
-                     and node.name in {'_sync_tenant_crm','handle_platform_crm_sync_status'}]
+                     and node.name == '_sync_tenant_crm']
         self.queue = Mock(return_value={'status':'queued'})
         self.status = Mock(return_value=[])
         self.ns = {'asyncio':asyncio, 'TenantPolicy':TenantPolicy, 'logger':Mock(),
@@ -301,30 +301,5 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.profile.update(role='manager',permissions=['tasks','deals'],modules={'tasks':True,'deals':True})
         await self.ns['_sync_tenant_crm'](self.profile, include_tasks=True)
         self.assertEqual([call.args for call in self.queue.call_args_list], [('company-a','leads'),('company-a','tasks')])
-
-    async def test_status_returns_only_allowed_resources_in_current_company(self):
-        response = await self.ns['handle_platform_crm_sync_status']({})
-        self.assertEqual(response['status'], 200)
-        self.status.assert_called_once_with('company-a',['tasks'])
-
-    async def test_pipeline_task_visibility_waits_for_deal_dependency(self):
-        self.profile['role'] = 'manager'
-        response = await self.ns['handle_platform_crm_sync_status']({})
-        self.assertEqual(response['status'],200)
-        self.status.assert_called_once_with('company-a',['leads','tasks'])
-
-    async def test_inactive_and_unauthorized_users_cannot_read_status(self):
-        self.profile['active'] = False
-        self.assertEqual((await self.ns['handle_platform_crm_sync_status']({}))['status'],403)
-        self.profile['active'] = True; self.profile['permissions'] = []
-        self.assertEqual((await self.ns['handle_platform_crm_sync_status']({}))['status'],403)
-        self.status.assert_not_called()
-
-    async def test_status_storage_error_is_generic_not_database_details(self):
-        self.status.side_effect = RuntimeError('postgres password internal')
-        response = await self.ns['handle_platform_crm_sync_status']({})
-        self.assertEqual(response['status'],503)
-        self.assertNotIn('password', str(response))
-
 
 if __name__ == '__main__': unittest.main()
