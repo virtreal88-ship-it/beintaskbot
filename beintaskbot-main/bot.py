@@ -60,6 +60,7 @@ from tenant_members_api import MemberApiContext, handlers as tenant_member_handl
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
+from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
 from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handler
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
@@ -21402,67 +21403,6 @@ async def handle_telegram_login(request: web.Request) -> web.Response:
     return response
 
 
-async def handle_platform_workflow_config(request: web.Request) -> web.Response:
-    """Owner API for tenant-specific pipelines, stages and workflow policies."""
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({"success": False, "error": "Yalnız şirkət sahibi üçün."}, status=403)
-    tenant_id = str(profile["tenant_id"])
-    owner_id = int(profile["telegram_id"])
-    try:
-        if request.method == "GET":
-            config = await asyncio.to_thread(list_tenant_workflow_config, tenant_id=tenant_id, owner_id=owner_id)
-        else:
-            data = await request.json()
-            data = data if isinstance(data, dict) else {}
-            config = await asyncio.to_thread(
-                save_tenant_workflow_config,
-                tenant_id=tenant_id, owner_id=owner_id,
-                pipelines=data.get("pipelines"), stages=data.get("stages"), policies=data.get("policies"),
-                members=data.get('members'),
-            )
-        return web.json_response({"success": True, **config, "role_permissions": ROLE_PERMISSIONS})
-    except TenantPlatformError as exc:
-        return web.json_response({"success": False, "error": str(exc)}, status=400)
-    except (ValueError, TypeError):
-        return web.json_response({"success": False, "error": "Workflow məlumatı düzgün deyil."}, status=400)
-    except Exception:
-        logger.exception("Tenant workflow configuration failed: tenant=%s", tenant_id)
-        return web.json_response({"success": False, "error": "Workflow ayarları saxlanmadı."}, status=500)
-
-
-async def handle_platform_workflow_catalog(request: web.Request) -> web.Response:
-    """Import account choices without creating or changing Kommo resources."""
-    profile = _tenant_member_from_request(request, owner_only=True)
-    if not profile:
-        return web.json_response({'success': False, 'error': 'Yalnız şirkət sahibi üçün.'}, status=403)
-    # These reads share a rotating OAuth refresh token; do not start two
-    # independent refreshes of the same credentials in this catalog request.
-    results = []
-    # Employees are app memberships, not separate paid Kommo seats.
-    for path, params in (('leads/pipelines', None),):
-        try:
-            results.append(await _tenant_kommo_request(profile['tenant_id'], 'GET', path, params=params))
-        except Exception as exc:
-            results.append(exc)
-    warnings = []
-    pipelines, users = [], []
-    for kind, result in zip(('pipelines', 'users'), results):
-        if isinstance(result, Exception):
-            logger.warning('Tenant workflow catalog failed: tenant=%s kind=%s', profile['tenant_id'], kind)
-            warnings.append('Kommo vərəqləri yüklənmədi.' if kind == 'pipelines' else 'Kommo istifadəçiləri yüklənmədi. Kommo administrator icazəsini yoxlayın.')
-            continue
-        for item in (result.get('_embedded') or {}).get(kind, []):
-            if kind == 'users':
-                if (item.get('rights') or {}).get('is_active', True):
-                    users.append({'id': item['id'], 'name': item.get('name') or item.get('email') or str(item['id'])})
-            else:
-                pipelines.append({'pipeline_id': str(item['id']), 'name': item.get('name') or '',
-                                  'stages': [{'stage_id': str(stage['id']), 'name': stage.get('name') or '', 'sort_order': int(stage.get('sort') or 0)}
-                                             for stage in (item.get('_embedded') or {}).get('statuses', [])]})
-    return web.json_response({'success': True, 'pipelines': pipelines, 'users': users, 'warnings': warnings})
-
-
 def _ask_tenant_onboarding(system: str, prompt: str) -> str:
     response = llm_client.chat.completions.create(
         model=LLM_MODEL,
@@ -22807,6 +22747,15 @@ async def start_webhook_server():
         list_deals=list_tenant_crm_deals, get_deal=get_tenant_crm_deal,
         platform_error=TenantPlatformError, logger=logger,
     ))
+    workflow_api = tenant_workflow_handlers(WorkflowApiContext(
+        member=_tenant_member_from_request,
+        load_workflow=list_tenant_workflow_config,
+        save_workflow=save_tenant_workflow_config,
+        crm_request=_tenant_kommo_request,
+        role_permissions=ROLE_PERMISSIONS,
+        platform_error=TenantPlatformError,
+        logger=logger,
+    ))
     duplicate_api = tenant_duplicate_handler(
         _tenant_member_from_request, _tenant_kommo_request, logger)
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
@@ -22827,9 +22776,9 @@ async def start_webhook_server():
     app_web.router.add_get('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/tasks/complete', task_api["complete"])
-    app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
-    app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
-    app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
+    app_web.router.add_get("/api/platform/workflow", workflow_api["config"])
+    app_web.router.add_post("/api/platform/workflow", workflow_api["config"])
+    app_web.router.add_get("/api/platform/workflow/catalog", workflow_api["catalog"])
     onboarding_assistant, onboarding_complete = tenant_onboarding_handlers(
         _tenant_member_from_request, _ask_tenant_onboarding, update_onboarding,
         finalize_onboarding, TenantPlatformError, logger,

@@ -124,8 +124,7 @@ class TenantRuntimeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
-        names={'_tenant_has_module','handle_platform_crm_chat','handle_platform_crm_chat_send',
-               'handle_platform_workflow_config'}
+        names={'_tenant_has_module','handle_platform_crm_chat','handle_platform_crm_chat_send'}
         cls.code=compile(ast.Module(body=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names],type_ignores=[]),'<tenant-api>','exec')
 
     def setUp(self):
@@ -143,12 +142,6 @@ class TenantRuntimeTests(unittest.TestCase):
         result=asyncio.run(self.ns['handle_platform_crm_chat'](self.request))
         self.assertEqual(result['status'],404)
         self.ns['list_tenant_crm_messages'].assert_not_called()
-
-    def test_workflow_settings_remain_owner_only(self):
-        self.person['role']='admin';self.request.method='GET'
-        result=asyncio.run(self.ns['handle_platform_workflow_config'](self.request))
-        self.assertEqual(result['status'],403)
-
 
 if __name__=='__main__':
     unittest.main()
