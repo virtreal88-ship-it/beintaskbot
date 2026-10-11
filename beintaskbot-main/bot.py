@@ -96,6 +96,15 @@ from legacy_kommo_funnels import (
     is_rufat_chat, kommo_user_id_for_employee_funnel, owner_name_for_pipeline,
     personal_entry_stage,
 )
+from legacy_kommo_contacts import (
+    _contact_phone_value, _leads_linked_to_contact, configure_contact_service,
+    create_contact_kommo, get_contact_details, search_contact_by_phone,
+    search_contacts_by_query, update_contact_kommo,
+)
+from legacy_kommo_deals import (
+    configure_deal_service, create_lead_for_contact, get_lead_details,
+    get_leads_by_status, update_lead_kommo,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1217,6 +1226,16 @@ _bot_updated_tasks: dict = {}  # {task_id: timestamp} - suppress update webhook 
 _bot_changed_leads: dict = {}  # {lead_id: timestamp}
 _webhook_stage_dedup: dict = {}  # {(lead_id, status_id): timestamp}
 
+
+def _track_bot_changed_lead(lead_id: int) -> None:
+    """Remember a local stage mutation so its Kommo webhook echo is ignored."""
+    now = _time_module.time()
+    _bot_changed_leads[int(lead_id)] = now
+    cutoff = now - 60
+    for stored_id in list(_bot_changed_leads):
+        if _bot_changed_leads[stored_id] < cutoff:
+            del _bot_changed_leads[stored_id]
+
 # ─── Pending registrations ───────────────────────────────────────────────────
 _pending_partner_registration: dict = {}
 _pending_employee_registration: dict = {}
@@ -1270,82 +1289,23 @@ _legacy_kommo_runtime = install_legacy_kommo_transport(
 HEADERS = _legacy_kommo_runtime.headers
 _http = _legacy_kommo_runtime.session
 configure_pipeline_catalog(http=_http, headers=HEADERS, app_logger=logger)
-
-def search_contact_by_phone(phone: str) -> list:
-    digits = re.sub(r"[^\d]", "", phone)
-    target_suffix = digits[-9:] if len(digits) >= 9 else digits
-    variants = set()
-    if len(digits) >= 9:
-        variants.add(digits[-9:])
-    if digits.startswith("994"):
-        variants.add(digits[3:])
-        variants.add("+" + digits)
-    elif digits.startswith("0") and len(digits) == 10:
-        variants.add(digits[1:])
-        variants.add("994" + digits[1:])
-    else:
-        variants.add(digits)
-    variants.add(phone.strip())
-    all_contacts = []
-    seen_ids = set()
-    for variant in variants:
-        url = f"{KOMMO_BASE_URL}/api/v4/contacts"
-        params = {"query": variant, "limit": 5}
-        try:
-            resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-            if resp.status_code == 200:
-                contacts = resp.json().get("_embedded", {}).get("contacts", [])
-                for c in contacts:
-                    if c["id"] not in seen_ids:
-                        # Verify phone actually matches
-                        phone_match = False
-                        for cf in c.get("custom_fields_values", []) or []:
-                            if cf.get("field_code") == "PHONE":
-                                for val in cf.get("values", []):
-                                    contact_digits = re.sub(r"[^\d]", "", val.get("value", ""))
-                                    if contact_digits[-9:] == target_suffix:
-                                        phone_match = True
-                                        break
-                            if phone_match:
-                                break
-                        if phone_match:
-                            seen_ids.add(c["id"])
-                            all_contacts.append(c)
-        except Exception as e:
-            logger.error(f"Search contact error ({variant}): {e}")
-    return all_contacts
+configure_contact_service(http=_http, headers=HEADERS, app_logger=logger)
+configure_deal_service(
+    http=_http,
+    headers=HEADERS,
+    employee_funnel_user=kommo_user_id_for_employee_funnel,
+    pipeline_for_chat=get_pipeline_id_for_chat,
+    on_stage_change=_track_bot_changed_lead,
+    on_pipeline_move=lambda lead_id, pipeline_id: maybe_reassign_open_tasks_for_employee_funnel(
+        lead_id, pipeline_id,
+    ),
+    app_logger=logger,
+)
 
 
-def search_contacts_by_query(query: str) -> list:
-    q = str(query or "").strip()
-    digits = re.sub(r"[^\d]", "", q)
-    if len(digits) >= 7:
-        return search_contact_by_phone(q)
-    if len(q) < 2:
-        return []
-    try:
-        resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/contacts",
-            headers=HEADERS,
-            params={"query": q, "limit": 10, "with": "leads"},
-            timeout=8,
-        )
-        if resp.status_code != 200:
-            return []
-        return [item for item in (resp.json().get("_embedded") or {}).get("contacts") or [] if isinstance(item, dict)]
-    except Exception as exc:
-        logger.error("Search contacts query error: %s", exc)
-        return []
 
 
-def _contact_phone_value(contact: dict) -> str:
-    for field in (contact or {}).get("custom_fields_values") or []:
-        if not isinstance(field, dict) or field.get("field_code") != "PHONE":
-            continue
-        values = field.get("values") or []
-        if values and isinstance(values[0], dict):
-            return str(values[0].get("value") or "").strip()
-    return ""
+
 
 
 def _pick_search_lead(contact: dict, chat_id: int) -> dict:
@@ -1388,15 +1348,6 @@ def _pick_search_lead(contact: dict, chat_id: int) -> dict:
     }
 
 
-def get_contact_details(contact_id: int) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}"
-    try:
-        resp = _http.get(url, headers=HEADERS, params={"with": "leads"}, timeout=8)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Contact details error: {e}")
-    return None
 
 
 
@@ -1529,15 +1480,6 @@ def route_deal_for_employee(name: str = "", chat_id=None) -> tuple[int, int] | N
 
 
 
-def get_lead_details(lead_id: int) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
-    try:
-        resp = _http.get(url, headers=HEADERS, params={"with": "contacts"}, timeout=8)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Lead details error: {e}")
-    return None
 
 def get_task_deal_context(task_data: dict) -> dict:
     """Resolve a Kommo task to its deal and primary client details."""
@@ -2099,40 +2041,6 @@ def _first_note_id(result) -> int:
             return 0
     return 0
 
-def update_lead_kommo(lead_id: int, data: dict) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}"
-    old_pipeline_id = None
-    new_pipeline_id = 0
-    try:
-        new_pipeline_id = int((data or {}).get("pipeline_id") or 0)
-    except (TypeError, ValueError):
-        new_pipeline_id = 0
-    if new_pipeline_id and kommo_user_id_for_employee_funnel(new_pipeline_id):
-        details = get_lead_details(int(lead_id))
-        if details:
-            old_pipeline_id = _lead_pipeline_id(details)
-    try:
-        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
-        if resp.status_code == 200:
-            # Track bot-initiated stage changes to suppress webhook echo
-            if "status_id" in data:
-                import time as _time
-                _bot_changed_leads[int(lead_id)] = _time.time()
-                # Cleanup old entries (>60s)
-                cutoff = _time.time() - 60
-                for k in list(_bot_changed_leads.keys()):
-                    if _bot_changed_leads[k] < cutoff:
-                        del _bot_changed_leads[k]
-            if (
-                new_pipeline_id
-                and old_pipeline_id is not None
-                and new_pipeline_id != old_pipeline_id
-            ):
-                maybe_reassign_open_tasks_for_employee_funnel(lead_id, new_pipeline_id)
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Update lead error: {e}")
-    return None
 
 def update_task_kommo(task_id, data: dict) -> dict | None:
     url = f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}"
@@ -2151,32 +2059,7 @@ def update_task_kommo(task_id, data: dict) -> dict | None:
         logger.error(f"Update task error: {e}")
     return None
 
-def update_contact_kommo(contact_id: int, data: dict) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}"
-    try:
-        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
-        if resp.status_code == 200:
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Update contact error: {e}")
-    return None
 
-def create_contact_kommo(name: str, phone: str, custom_fields: list = None, responsible_user_id: int = 10932455) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/contacts"
-    payload = [{
-        "name": name,
-        "responsible_user_id": responsible_user_id,
-        "custom_fields_values": [
-            {"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}
-        ] + (custom_fields or [])
-    }]
-    try:
-        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
-        if resp.status_code in (200, 201):
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Create contact error: {e}")
-    return None
 
 def _normalize_kommo_entity_type(entity_type) -> str:
     value = str(entity_type or "").strip().lower()
@@ -2250,22 +2133,6 @@ def _rufat_may_use_lead(lead_id=None, lead=None, chat_id=None) -> bool:
     return _cached_funnel_has_lead(chat_id, resolved_id)
 
 
-def _leads_linked_to_contact(contact_id: int) -> list:
-    contact = get_contact_details(int(contact_id))
-    leads = list((contact or {}).get("_embedded", {}).get("leads", []) or [])
-    if leads:
-        return leads
-    try:
-        resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/contacts/{int(contact_id)}/leads",
-            headers=HEADERS,
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            return list(resp.json().get("_embedded", {}).get("leads", []) or [])
-    except Exception as exc:
-        logger.error("Contact leads lookup error: %s", exc)
-    return []
 
 
 def _preferred_lead_for_rufat(leads: list) -> dict | None:
@@ -2383,16 +2250,6 @@ def task_allowed_for_chat(task_id: int, chat_id: int) -> bool:
     return task_payload_allowed_for_chat(task, chat_id)
 
 
-def get_leads_by_status(status_id: int, chat_id: int = None) -> list:
-    url = f"{KOMMO_BASE_URL}/api/v4/leads"
-    params = {"filter[statuses][0][pipeline_id]": get_pipeline_id_for_chat(chat_id), "filter[statuses][0][status_id]": status_id, "limit": 50}
-    try:
-        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-        if resp.status_code == 200:
-            return resp.json().get("_embedded", {}).get("leads", [])
-    except:
-        pass
-    return []
 
 def get_user_name(user_id: int) -> str:
     return KOMMO_USERS.get(user_id, f"User {user_id}")
@@ -2917,39 +2774,6 @@ def execute_tool_search_contact(phone: str) -> str:
         results.append(format_contact_info(full_contact, notes, tasks))
     return "\n\n".join(results)
 
-def create_lead_for_contact(contact_id: int, contact_name: str, pipeline_id: int = None, status_id: int = None, *, tags: list | None = None) -> int | None:
-    """Create a deal linked to a contact in the requested pipeline."""
-    payload = {
-        "name": contact_name or str(contact_id),
-        "_embedded": {"contacts": [{"id": int(contact_id)}]},
-        "pipeline_id": int(pipeline_id or PIPELINE_ID),
-    }
-    if status_id:
-        payload["status_id"] = int(status_id)
-    if tags:
-        payload["_embedded"]["tags"] = tags
-    headers = {
-        "Authorization": f"Bearer {KOMMO_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    try:
-        response = _http.post(
-            f"{KOMMO_BASE_URL}/api/v4/leads",
-            headers=headers,
-            json=[payload],
-            timeout=8,
-        )
-        if response.status_code in (200, 201):
-            return response.json().get("_embedded", {}).get("leads", [{}])[0].get("id")
-        logger.error(
-            "Create lead for contact %s failed: status=%s body=%s",
-            contact_id,
-            response.status_code,
-            response.text[:500],
-        )
-    except Exception as exc:
-        logger.error("Create lead for contact %s error: %s", contact_id, exc)
-    return None
 
 
 def execute_tool_create_task(phone: str, text: str, date: str = None, time_str: str = None, assign_to: str = None, client_name: str = "", chat_id: int = None, assignee_name: str = "") -> dict:

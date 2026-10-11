@@ -38,10 +38,11 @@ class TagTests(unittest.TestCase):
         self.assertEqual(public_tags(LEAD), [{"id": 1, "name": "Müştəri"}, {"id": 2, "name": "Yeni"}])
 
     def test_creation_attaches_tags_in_same_request(self):
-        tree = ast.parse((ROOT/'bot.py').read_text(encoding='utf-8-sig'))
+        tree = ast.parse((ROOT/'legacy_kommo_deals.py').read_text(encoding='utf-8-sig'))
         tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'create_lead_for_contact']
         http = Mock(); http.post.return_value = SimpleNamespace(status_code=200, json=lambda: {"_embedded": {"leads": [{"id": 4}]}})
-        ns = {"_http": http, "KOMMO_BASE_URL": "https://test.kommo.com", "KOMMO_TOKEN": "test", "PIPELINE_ID": 1, "logger": Mock()}
+        ns = {"_http": http, "_headers": {"Authorization": "Bearer test"},
+              "KOMMO_BASE_URL": "https://test.kommo.com", "PIPELINE_ID": 1, "logger": Mock()}
         exec(compile(tree, '<create-deal>', 'exec'), ns)
         self.assertEqual(ns['create_lead_for_contact'](1, 'Client', tags=[{"id": 2}]), 4)
         self.assertEqual(http.post.call_args.kwargs['json'][0]['_embedded'], {"contacts": [{"id": 1}], "tags": [{"id": 2}]})
