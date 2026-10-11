@@ -8,9 +8,12 @@ from unittest.mock import MagicMock
 
 class NewsPublicationStorageTests(unittest.TestCase):
     def setUp(self):
-        tree = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        root = Path(__file__).resolve().parents[1]
+        trees = [ast.parse((root / name).read_text(encoding='utf-8-sig')) for name in
+                 ('tenant_linear_news_store.py', 'tenant_linear_news_publication_store.py')]
         names = {'list_linear_news', 'sync_linear_news_environments', 'require_linear_news_review_once', 'restore_linear_news_publications_once'}
-        nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+        nodes = [node for tree in trees for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name in names]
         self.conn = MagicMock()
         self.cur = self.conn.cursor.return_value.__enter__.return_value
         self.cur.fetchall.return_value = []

@@ -60,7 +60,7 @@ class DeletionTests(unittest.TestCase):
         self.assertTrue(all('ADD COLUMN IF NOT EXISTS' in call.args[0] for call in cur.execute.call_args_list))
 
     def test_all_current_read_paths_hide_confirmed_deleted_leads_and_linked_tasks(self):
-        source=ast.parse((fixtures.ROOT/'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        source=ast.parse((fixtures.ROOT/'tenant_crm_store.py').read_text(encoding='utf-8-sig'))
         names={'list_crm_deals','get_crm_deal','list_crm_tasks','get_crm_task'}
         tree=ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[])
         connect=MagicMock();conn=connect.return_value.__enter__.return_value

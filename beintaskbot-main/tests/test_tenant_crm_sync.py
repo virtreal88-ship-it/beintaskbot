@@ -248,7 +248,7 @@ class SchemaTests(unittest.TestCase):
 
 class TokenRefreshTests(unittest.TestCase):
     def setUp(self):
-        tree = ast.parse((ROOT/'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        tree = ast.parse((ROOT/'tenant_integration_store.py').read_text(encoding='utf-8-sig'))
         tree.body = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name in {'save_kommo_oauth_tokens','replace_kommo_tokens'}]
         self.conn = MagicMock(); self.cur = self.conn.cursor.return_value.__enter__.return_value

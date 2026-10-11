@@ -9,9 +9,13 @@ from unittest.mock import MagicMock, Mock
 
 class OnboardingActivation(unittest.TestCase):
     def setUp(self):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        root = Path(__file__).resolve().parents[1]
+        sources = [ast.parse((root / name).read_text(encoding='utf-8-sig')) for name in
+                   ('tenant_member_store.py', 'tenant_integration_store.py')]
         names = {'finalize_onboarding', 'save_kommo_oauth_tokens'}
-        code = compile(ast.Module(body=[n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in names], type_ignores=[]), '<activation>', 'exec')
+        nodes = [node for source in sources for node in source.body
+                 if isinstance(node, ast.FunctionDef) and node.name in names]
+        code = compile(ast.Module(body=nodes, type_ignores=[]), '<activation>', 'exec')
         self.conn = MagicMock()
         self.cur = self.conn.cursor.return_value.__enter__.return_value
         connect = MagicMock()

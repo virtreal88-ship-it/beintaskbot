@@ -12,16 +12,20 @@ from tenant_policy import ROLE_PERMISSIONS, validate_workflow_patch
 class WorkflowStorageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source=ast.parse((Path(__file__).resolve().parents[1]/'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        root=Path(__file__).resolve().parents[1]
+        sources=[ast.parse((root/name).read_text(encoding='utf-8-sig')) for name in
+                 ('tenant_workflow_store.py','tenant_crm_store.py','tenant_platform_common.py')]
         names={'save_tenant_workflow_config','list_crm_deals','list_crm_tasks','_permissions'}
-        cls.code=compile(ast.Module(body=[n for n in source.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'<workflow-storage>','exec')
+        nodes=[node for source in sources for node in source.body
+               if isinstance(node,ast.FunctionDef) and node.name in names]
+        cls.code=compile(ast.Module(body=nodes,type_ignores=[]),'<workflow-storage>','exec')
 
     def setUp(self):
         self.connection=MagicMock()
         self.cursor=self.connection.cursor.return_value.__enter__.return_value
         self.cursor.fetchall.side_effect=[[{'telegram_id':1,'role':'owner'},{'telegram_id':2,'role':'manager'}],[{'pipeline_id':'10'}]]
         connect=MagicMock();connect.return_value.__enter__.return_value=self.connection
-        self.ns={'member':Mock(return_value={'role':'owner','telegram_id':1}),'_connect':connect,
+        self.ns={'_member':Mock(return_value={'role':'owner','telegram_id':1}),'_connect':connect,
                  '_ensure_schema':Mock(),'validate_workflow_patch':validate_workflow_patch,'TenantPlatformError':RuntimeError,
                  '_json':json.dumps,'uuid':uuid,'_ROLE_PERMISSIONS':ROLE_PERMISSIONS,
                  'list_tenant_workflow_config':Mock(return_value={'pipelines':[]}),'_public_crm_row':lambda row:row}

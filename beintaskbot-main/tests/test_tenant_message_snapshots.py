@@ -54,7 +54,7 @@ class MessageRowsTests(unittest.TestCase):
 
 class MessageStorageTests(unittest.TestCase):
     def setUp(self):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_crm_store.py').read_text(encoding='utf-8-sig'))
         node = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == 'upsert_crm_messages')
         self.connect = MagicMock()
         self.conn = self.connect.return_value.__enter__.return_value

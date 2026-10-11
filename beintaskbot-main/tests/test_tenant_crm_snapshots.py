@@ -44,7 +44,7 @@ class SnapshotTests(unittest.TestCase):
 class BatchStorageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        source = ast.parse((Path(__file__).resolve().parents[1] / 'tenant_crm_store.py').read_text(encoding='utf-8-sig'))
         names = {'upsert_crm_deals', 'upsert_crm_tasks'}
         cls.code = compile(ast.Module(body=[n for n in source.body if isinstance(n, ast.FunctionDef)
                                           and n.name in names], type_ignores=[]), '<batch-storage>', 'exec')

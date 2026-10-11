@@ -85,7 +85,7 @@ class Policy(unittest.TestCase):
         self.assertEqual(normalize({'type':'outgoing'},'other')['message_type'],'text')
 
     def test_visible_history_limits_recent_rows_then_orders_chronologically(self):
-        tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_platform.py').read_text(encoding='utf-8-sig'))
+        tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_crm_store.py').read_text(encoding='utf-8-sig'))
         node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='list_crm_messages')
         connect=MagicMock();cur=connect.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
         cur.fetchall.return_value=[]
