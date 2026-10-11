@@ -275,35 +275,4 @@ class TaskCommandStorageTests(unittest.TestCase):
         self.assertFalse(any('unlock' in call.args[0] for call in cur.execute.call_args_list))
 
 
-class TaskEndpointTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
-        tree.body=[node for node in tree.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='handle_platform_task_create']
-        self.create=AsyncMock(return_value={'task_id':9})
-        self.profile=person()
-        self.ns={'web':SimpleNamespace(Request=dict,Response=dict,json_response=lambda data,status=200:(status,data)),
-                 '_tenant_member_from_request':lambda request:self.profile,'TenantPolicy':TenantPolicy,
-                 'create_tenant_task':self.create,'_tenant_kommo_request':Mock(),'CANONICAL_WEB_ORIGIN':'https://crm.pro.az',
-                 'TaskCommandPending':TaskCommandPending,'TenantPlatformError':TenantPlatformError,'logger':Mock()}
-        exec(compile(tree,'<task-api>','exec'),self.ns)
-        self.request=SimpleNamespace(content_type='application/json',headers={'Origin':'https://crm.pro.az'},json=AsyncMock(return_value={}))
-
-    async def test_missing_permissions_and_foreign_origin_are_rejected(self):
-        self.profile['permissions']=[]
-        self.assertEqual((await self.ns['handle_platform_task_create'](self.request))[0],403)
-        self.profile['permissions']=['tasks'];self.request.headers['Origin']='https://evil.example'
-        self.assertEqual((await self.ns['handle_platform_task_create'](self.request))[0],403)
-        self.create.assert_not_awaited()
-
-    async def test_unknown_write_result_is_explicitly_marked_for_same_request(self):
-        self.create.side_effect=TaskCommandPending('check request')
-        status,body=await self.ns['handle_platform_task_create'](self.request)
-        self.assertEqual(status,409);self.assertTrue(body['retry_same_request'])
-
-    async def test_valid_command_is_forwarded(self):
-        status,body=await self.ns['handle_platform_task_create'](self.request)
-        self.assertEqual(status,200);self.assertEqual(body['task_id'],9)
-        self.create.assert_awaited_once()
-
-
 if __name__=='__main__':unittest.main()

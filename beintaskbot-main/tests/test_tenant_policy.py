@@ -125,7 +125,7 @@ class TenantRuntimeTests(unittest.TestCase):
     def setUpClass(cls):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
         names={'_tenant_has_module','handle_platform_crm_deals','handle_platform_crm_deal',
-               'handle_platform_crm_chat','handle_platform_crm_chat_send','handle_platform_crm_tasks','handle_platform_workflow_config'}
+               'handle_platform_crm_chat','handle_platform_crm_chat_send','handle_platform_workflow_config'}
         cls.code=compile(ast.Module(body=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.name in names],type_ignores=[]),'<tenant-api>','exec')
 
     def setUp(self):
@@ -151,12 +151,6 @@ class TenantRuntimeTests(unittest.TestCase):
             result=asyncio.run(self.ns[name](self.request))
             self.assertEqual(result['status'],404)
         self.ns['list_tenant_crm_messages'].assert_not_called()
-
-    def test_task_query_is_scoped_to_internal_marker(self):
-        self.person['role']='worker'
-        result=asyncio.run(self.ns['handle_platform_crm_tasks'](self.request))
-        self.assertEqual(result['status'],200)
-        self.assertEqual(self.ns['list_tenant_crm_tasks'].call_args.kwargs['scope'],TenantPolicy(self.person).task_scope())
 
     def test_workflow_settings_remain_owner_only(self):
         self.person['role']='admin';self.request.method='GET'

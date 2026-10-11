@@ -211,37 +211,3 @@ class CompletionStorageTests(unittest.TestCase):
         with self.assertRaises(commands.TaskCommandPending): self.store.lock_task(9)
         self.assertEqual(self.cur.execute.call_args.args[1], ('task-complete:company-a:9',))
         self.store.conn.commit.assert_not_called()
-
-
-class CompletionEndpointTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
-        tree = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
-        nodes = [n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'handle_platform_task_complete']
-        self.profile = person()
-        self.complete = AsyncMock(return_value={'completed': True})
-        import asyncio
-        from tenant_policy import TenantPolicy
-        ns = {'web': SimpleNamespace(Request=dict, Response=dict, json_response=lambda data,status=200:(status,data)),
-              '_tenant_member_from_request': lambda _: self.profile, 'TenantPolicy': TenantPolicy,
-              'complete_tenant_task': self.complete, '_tenant_kommo_request': Mock(), 'asyncio': asyncio,
-              'TenantPlatformError': TenantPlatformError, 'TaskCommandPending': commands.TaskCommandPending,
-              'CANONICAL_WEB_ORIGIN': 'https://crm.pro.az', 'logger': Mock()}
-        exec(compile(ast.Module(body=nodes,type_ignores=[]), '<completion-api>', 'exec'), ns)
-        self.endpoint = ns['handle_platform_task_complete']
-        self.request = SimpleNamespace(content_type='application/json', headers={'Origin':'https://crm.pro.az'},
-                                       json=AsyncMock(return_value={'task_id': 9}))
-
-    async def test_permissions_origin_and_payload_fail_before_service(self):
-        self.request.headers['Origin']='https://other.example'
-        self.assertEqual((await self.endpoint(self.request))[0],403)
-        self.request.headers['Origin']='https://crm.pro.az'; self.request.json.return_value=[]
-        self.assertEqual((await self.endpoint(self.request))[0],400)
-        self.profile['active']=False
-        self.assertEqual((await self.endpoint(self.request))[0],403)
-        self.complete.assert_not_awaited()
-
-    async def test_pending_write_reports_conflict_without_retry(self):
-        self.complete.side_effect=commands.TaskCommandPending('Check request')
-        status, body=await self.endpoint(self.request)
-        self.assertEqual(status,409); self.assertTrue(body['retry_same_request'])
-        self.assertEqual(self.complete.await_count,1)

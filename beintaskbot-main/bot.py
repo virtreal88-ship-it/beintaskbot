@@ -58,6 +58,7 @@ from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECOND
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
+from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
 from tenant_web_assets import register_assets
@@ -21710,30 +21711,6 @@ async def handle_platform_crm_chat_import(request: web.Request) -> web.Response:
 
 
 
-async def handle_platform_crm_tasks(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not _tenant_has_module(profile, "tasks"):
-        return web.json_response({"success": False, "error": "Tapşırıqlar üçün icazəniz yoxdur."}, status=403)
-    should_refresh = str(request.rel_url.query.get("refresh") or "").lower() in {"1", "true", "yes"}
-    sync_error = ""
-    if should_refresh:
-        try:
-            await _sync_tenant_crm(profile, include_tasks=True,
-                                   force_full=str(request.rel_url.query.get('full') or '') == '1')
-        except TenantPlatformError as exc:
-            sync_error = str(exc)
-        except Exception:
-            logger.exception("Tenant CRM task sync failed: tenant=%s", profile["tenant_id"])
-            sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
-    rows = await asyncio.to_thread(list_tenant_crm_tasks, tenant_id=profile["tenant_id"], limit=200,
-                                  scope=TenantPolicy(profile).task_scope())
-    return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
-
-
-
-
-
-
 async def serve_deal_tags_script(request: web.Request) -> web.Response:
     return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-tags.js'),
                             headers={'Cache-Control': 'no-cache'})
@@ -21827,99 +21804,6 @@ async def handle_platform_push_devices(request: web.Request) -> web.Response:
         # Subscription URLs/keys are private. No request/error bodies in logs.
         logger.error('Tenant push device API failed: tenant=%s', profile['tenant_id'])
         return web.json_response({'success': False, 'error': 'Cihaz ayarları saxlanmadı.'}, status=500, headers=headers)
-
-
-async def handle_platform_task_options(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not TenantPolicy(profile).allows('tasks'):
-        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
-    try:
-        profiles = await asyncio.to_thread(task_executor_profiles, profile)
-        executors = []
-        for person in profiles:
-            policy = TenantPolicy(person)
-            if not policy.allows('tasks'):
-                continue
-            personal = TenantPolicy({**person, 'role': 'manager'}).pipeline_scope()
-            names = {str(p['pipeline_id']): p.get('name') or '' for p in (person.get('workflow') or {}).get('pipelines', [])}
-            personal = [{**p, 'name': names.get(str(p['pipeline_id']), '')} for p in personal]
-            executors.append({'id': person['telegram_id'], 'name': person.get('display_name') or 'Əməkdaş',
-                              'role': person['role'], 'pipelines': personal if person['role'] in {'manager', 'owner', 'admin'} else []})
-        rows, _ = await asyncio.to_thread(list_tenant_crm_deals, tenant_id=profile['tenant_id'],
-                                         scope=TenantPolicy(profile).pipeline_scope(), limit=200)
-        deals = [{'id': row['kommo_lead_id'], 'name': row['name'], 'pipeline_id': row['pipeline_id']} for row in rows]
-        return web.json_response({'success': True, 'executors': executors, 'deals': deals})
-    except Exception:
-        logger.exception('Tenant task options failed: tenant=%s', profile['tenant_id'])
-        return web.json_response({'success': False, 'error': 'Tapşırıq ayarları yüklənmədi.'}, status=500)
-
-
-async def handle_platform_task_create(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not TenantPolicy(profile).allows('tasks'):
-        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
-    if request.content_type != 'application/json' or (request.headers.get('Origin') and request.headers['Origin'].rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
-        return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-    try:
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise ValueError('Sorğu düzgün deyil.')
-        result = await create_tenant_task(profile, data, _tenant_kommo_request)
-        return web.json_response({'success': True, **result})
-    except TaskCommandPending as exc:
-        return web.json_response({'success': False, 'error': str(exc), 'retry_same_request': True}, status=409)
-    except (ValueError, TenantPlatformError) as exc:
-        return web.json_response({'success': False, 'error': str(exc)}, status=400)
-    except Exception:
-        logger.exception('Tenant task create failed: tenant=%s', profile['tenant_id'])
-        return web.json_response({'success': False, 'error': 'Nəticə təsdiqlənmədi. Eyni sorğu ilə yenidən yoxlayın; yeni tapşırıq yaratmayın.'}, status=500)
-
-
-async def handle_platform_task_complete(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not TenantPolicy(profile).allows('tasks'):
-        return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403)
-    if request.content_type != 'application/json' or (request.headers.get('Origin') and request.headers['Origin'].rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
-        return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-    try:
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise ValueError('Sorğu düzgün deyil.')
-        result = await complete_tenant_task(profile, data, _tenant_kommo_request)
-        return web.json_response({'success': True, **result})
-    except TaskCommandPending as exc:
-        return web.json_response({'success': False, 'error': str(exc), 'retry_same_request': True}, status=409)
-    except (ValueError, TenantPlatformError) as exc:
-        return web.json_response({'success': False, 'error': str(exc)}, status=400)
-    except Exception:
-        logger.exception('Tenant task completion failed: tenant=%s', profile['tenant_id'])
-        return web.json_response({'success': False, 'error': 'Nəticə yoxlanmalıdır. Eyni sorğu ilə yoxlayın; yeni sorğu yaratmayın.'}, status=500)
-
-
-async def handle_platform_task_approvals(request: web.Request) -> web.Response:
-    profile = _tenant_member_from_request(request)
-    if not profile or not TenantPolicy(profile).privileged or not TenantPolicy(profile).allows('tasks'):
-        return web.json_response({'success': False, 'error': 'Təsdiq üçün icazəniz yoxdur.'}, status=403)
-    try:
-        if request.method == 'GET':
-            page = await asyncio.to_thread(pending_task_approval_page, profile,
-                                          limit=request.rel_url.query.get('limit', 50),
-                                          cursor=request.rel_url.query.get('cursor', ''))
-            return web.json_response({'success': True, **page}, headers={'Cache-Control': 'no-store'})
-        if request.content_type != 'application/json' or (request.headers.get('Origin') and request.headers['Origin'].rstrip('/') != CANONICAL_WEB_ORIGIN.rstrip('/')):
-            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-        data = await request.json()
-        if not isinstance(data, dict):
-            raise ValueError('Sorğu düzgün deyil.')
-        result = await decide_task_approval(profile, data, _tenant_kommo_request)
-        return web.json_response({'success': True, **result})
-    except TaskCommandPending as exc:
-        return web.json_response({'success': False, 'error': str(exc), 'retry_same_request': True}, status=409)
-    except (ValueError, TenantPlatformError) as exc:
-        return web.json_response({'success': False, 'error': str(exc)}, status=400)
-    except Exception:
-        logger.exception('Tenant task approval failed: tenant=%s', profile['tenant_id'])
-        return web.json_response({'success': False, 'error': 'Nəticə yoxlanmalıdır. Yeni sorğu yaratmayın.'}, status=500)
 
 
 async def handle_web_login_complete(request: web.Request) -> web.Response:
@@ -22970,6 +22854,16 @@ async def start_webhook_server():
     app_web.router.add_post("/api/platform/login", auth_api["login"])
     app_web.router.add_post("/api/platform/logout", auth_api["logout"])
     app_web.router.add_get("/api/platform/me", auth_api["me"])
+    task_api = tenant_task_handlers(TaskApiContext(
+        member=_tenant_member_from_request, policy=TenantPolicy,
+        sync_crm=_sync_tenant_crm, list_tasks=list_tenant_crm_tasks,
+        executor_profiles=task_executor_profiles, list_deals=list_tenant_crm_deals,
+        create_task=create_tenant_task, complete_task=complete_tenant_task,
+        approval_page=pending_task_approval_page, decide_approval=decide_task_approval,
+        crm_request=_tenant_kommo_request, origin=CANONICAL_WEB_ORIGIN,
+        platform_error=TenantPlatformError, pending_error=TaskCommandPending,
+        logger=logger,
+    ))
     app_web.router.add_get('/api/platform/push/devices', handle_platform_push_devices)
     app_web.router.add_post('/api/platform/push/devices', handle_platform_push_devices)
     member_api = tenant_member_handlers(MemberApiContext(
@@ -22985,9 +22879,9 @@ async def start_webhook_server():
     ))
     app_web.router.add_get("/api/platform/members", member_api["members"])
     app_web.router.add_post("/api/platform/members", member_api["members"])
-    app_web.router.add_get('/api/platform/crm/task-approvals', handle_platform_task_approvals)
-    app_web.router.add_post('/api/platform/crm/task-approvals', handle_platform_task_approvals)
-    app_web.router.add_post('/api/platform/crm/tasks/complete', handle_platform_task_complete)
+    app_web.router.add_get('/api/platform/crm/task-approvals', task_api["approvals"])
+    app_web.router.add_post('/api/platform/crm/task-approvals', task_api["approvals"])
+    app_web.router.add_post('/api/platform/crm/tasks/complete', task_api["complete"])
     app_web.router.add_get("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_post("/api/platform/workflow", handle_platform_workflow_config)
     app_web.router.add_get("/api/platform/workflow/catalog", handle_platform_workflow_catalog)
@@ -23014,7 +22908,7 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
-    app_web.router.add_get("/api/platform/crm/tasks", handle_platform_crm_tasks)
+    app_web.router.add_get("/api/platform/crm/tasks", task_api["tasks"])
     app_web.router.add_get('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_post('/api/platform/hot-orders', handle_platform_hot_orders)
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
@@ -23027,8 +22921,8 @@ async def start_webhook_server():
                                 update=update_lead_kommo, invalidate=invalidate_rufat_overview_cache, logger=logger)
     app_web.router.add_get('/api/deal/tags', deal_tags_api)
     app_web.router.add_post('/api/deal/tags', deal_tags_api)
-    app_web.router.add_get("/api/platform/crm/tasks/options", handle_platform_task_options)
-    app_web.router.add_post("/api/platform/crm/tasks", handle_platform_task_create)
+    app_web.router.add_get("/api/platform/crm/tasks/options", task_api["options"])
+    app_web.router.add_post("/api/platform/crm/tasks", task_api["create"])
     app_web.router.add_get("/register", auth_api["onboarding_page"])
     app_web.router.add_get("/login", auth_api["onboarding_page"])
     app_web.router.add_get("/setup", auth_api["onboarding_page"])
