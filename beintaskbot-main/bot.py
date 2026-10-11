@@ -117,6 +117,13 @@ from legacy_kommo_chat_reader import (
     _fetch_chat_history_by_chat_id, _fetch_talk_messages,
     configure_chat_reader,
 )
+from legacy_kommo_chat_message_meta import (
+    _chat_author_name, _chat_delivery_status, _is_generic_chat_author,
+    configure_chat_message_meta,
+)
+from legacy_kommo_chat_normalizer import (
+    _format_chat_message, configure_chat_message_normalizer,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1334,6 +1341,23 @@ configure_chat_reader(
     headers=HEADERS,
     token=KOMMO_TOKEN,
     app_logger=logger,
+)
+configure_chat_message_meta(users=KOMMO_USERS)
+configure_chat_message_normalizer(
+    extract_media_url=lambda value: _extract_media_url(value),
+    absolute_media_url=lambda value: _as_absolute_media_url(value),
+    extract_file_uuid=lambda value: _extract_file_uuid(value),
+    generic_placeholder=lambda value: _is_generic_placeholder_message(value),
+    call_is_missed=lambda value, text: _call_is_missed(value, text),
+    media_notice=lambda value: _is_media_notice_text(value),
+    looks_audio=lambda value: _looks_audio_name(value),
+    looks_image=lambda value: _looks_image_name(value),
+    looks_profile_photo=lambda name, kind: _looks_profile_photo(name, kind),
+    split_quote=lambda value: _split_quote_prefix(value),
+    message_ids=lambda message, nested: _chat_message_ids(message, nested),
+    format_timestamp=lambda value: _deal_fmt_ts(value),
+    origin_channel=lambda value: _origin_channel_key(value),
+    allowed_media=lambda value: _is_allowed_media_url(value),
 )
 
 
@@ -13530,66 +13554,8 @@ def _recent_talk_delivery_status(talk_id: int, text: str, sent_at: int) -> str:
 
 
 
-def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
-    if incoming:
-        return ""
-    raw = (
-        nested.get("status")
-        or nested.get("delivery_status")
-        or nested.get("state")
-        or nested.get("msgid_status")
-        or message.get("status")
-        or message.get("delivery_status")
-        or message.get("state")
-        or message.get("msgid_status")
-    )
-    if isinstance(raw, dict):
-        raw = raw.get("type") or raw.get("name") or raw.get("code") or raw.get("id")
-    text = str(raw or "").strip().lower()
-    mapping = {
-        "0": "sent",
-        "sent": "sent",
-        "sending": "sent",
-        "1": "delivered",
-        "delivered": "delivered",
-        "deliver": "delivered",
-        "2": "delivered",
-        "3": "read",
-        "read": "read",
-        "seen": "read",
-        "viewed": "read",
-        "-1": "error",
-        "4": "error",
-        "error": "error",
-        "failed": "error",
-        "undelivered": "error",
-    }
-    if text in mapping:
-        return mapping[text]
-    if nested.get("read") or message.get("read") or nested.get("seen") or message.get("seen"):
-        return "read"
-    if nested.get("delivered") or message.get("delivered"):
-        return "delivered"
-    if "read" in text or "seen" in text:
-        return "read"
-    if "undeliver" in text or "error" in text or "fail" in text:
-        return "error"
-    if "deliver" in text:
-        return "delivered"
-    return "sent"
 
 
-def _is_generic_chat_author(name: str) -> bool:
-    folded = str(name or "").strip().casefold()
-    if not folded:
-        return True
-    tokens = (
-        "whatsapp", "waba", "instagram", "facebook", "messenger", "tiktok",
-        "telegram", "viber", "amojo", "kommo", "menecer", "manager", "müştəri", "musteri",
-    )
-    if any(token in folded for token in tokens):
-        return True
-    return folded in {"client", "bot", "capi", "im", "wa", "fb"}
 
 
 def _find_wamid(value, depth: int = 0) -> str:
@@ -13611,150 +13577,8 @@ def _find_wamid(value, depth: int = 0) -> str:
     return ""
 
 
-def _chat_author_name(author: dict, message: dict, incoming: bool) -> str:
-    name = str((author or {}).get("name") or "").strip()
-    generic = _is_generic_chat_author(name)
-    if incoming:
-        return "" if generic else name
-    if not generic:
-        return name
-    uid = (author or {}).get("id") or message.get("created_by") or message.get("created_by_id")
-    mapped = KOMMO_USERS.get(uid, "") if uid not in (None, "") else ""
-    return str(mapped or "").strip()
 
 
-def _format_chat_message(message: dict, origin: str = "") -> dict | None:
-    if not isinstance(message, dict):
-        return None
-    nested = message.get("message") if isinstance(message.get("message"), dict) else {}
-    author = message.get("author") if isinstance(message.get("author"), dict) else {}
-    if not author:
-        author = message.get("sender") if isinstance(message.get("sender"), dict) else {}
-    attachment = message.get("attachment") if isinstance(message.get("attachment"), dict) else {}
-    created = int(message.get("created_at") or message.get("timestamp") or nested.get("timestamp") or 0)
-    media = _extract_media_url(attachment) or _extract_media_url(nested)
-    if not media:
-        media = _as_absolute_media_url(str(message.get("media") or message.get("link") or ""))
-    file_uuid = _extract_file_uuid(attachment) or _extract_file_uuid(nested) or _extract_file_uuid(message)
-    file_name = str(attachment.get("file_name") or nested.get("file_name") or message.get("file_name") or "").strip()
-    message_type = str(nested.get("type") or message.get("message_type") or message.get("type") or "text")
-    if message_type in {"incoming", "outgoing"}:
-        message_type = str(nested.get("type") or "text")
-    text = str(nested.get("text") or message.get("text") or "").strip()
-    folded = text.casefold()
-    if "агенты ии остановлены" in folded or "ai agents have been stopped" in folded:
-        return None
-    if _is_generic_placeholder_message(text) and not media and not file_uuid:
-        return None
-    if message_type in {"call", "call_in", "call_out"} or "call" in message_type:
-        if _call_is_missed(nested, text) or _call_is_missed(message, text) or _call_is_missed(attachment, text):
-            text = "Buraxılmış zəng"
-            message_type = "call_missed"
-        else:
-            message_type = "audio" if media or file_uuid else message_type
-    is_media_notice = _is_media_notice_text(text)
-    audio_hint = message_type in {"voice", "audio", "ptt"} or _looks_audio_name(file_name)
-    if is_media_notice and audio_hint:
-        message_type = "audio"
-        text = "Səs mesajı"
-    elif is_media_notice:
-        message_type = "picture"
-        if media or file_uuid:
-            text = file_name or ""
-        else:
-            text = "📷 Şəkil"
-    elif not text:
-        if message_type in {"voice", "audio"} or _looks_audio_name(file_name):
-            text = "Səs mesajı"
-            message_type = "audio" if message_type not in {"voice", "audio"} else message_type
-        elif message_type == "picture" or _looks_image_name(file_name):
-            text = file_name or "Şəkil"
-            message_type = "picture"
-        elif message_type in {"file", "video", "sticker"}:
-            text = file_name or message_type
-    elif _looks_image_name(file_name) and message_type in {"text", ""}:
-        message_type = "picture"
-    direction = str(message.get("type") or message.get("direction") or "")
-    incoming = direction == "incoming" or str(author.get("type") or "") == "external"
-    if direction not in {"incoming", "outgoing"} and str(author.get("client_id") or ""):
-        incoming = True
-    author_avatar = _as_absolute_media_url(str((author or {}).get("avatar") or (author or {}).get("photo") or (author or {}).get("icon") or ""))
-    if incoming and _looks_profile_photo(file_name, message_type):
-        message_type = "avatar"
-        if text.casefold() in {"şəkil", "sekil", "picture", "sticker", "avatar"}:
-            text = ""
-        if not author_avatar:
-            author_avatar = media
-    author_type = str((author or {}).get("type") or "").strip().lower()
-    raw_author_name = str((author or {}).get("name") or "").strip()
-    is_bot = False
-    bot_name = ""
-    if author_type == "bot" or "salesbot" in raw_author_name.casefold() or "gpt" in raw_author_name.casefold():
-        folded_bot = raw_author_name.casefold()
-        transport_tokens = ("whatsapp", "waba", "telegram", "viber", "instagram", "facebook", "messenger", "tiktok")
-        if not any(t in folded_bot for t in transport_tokens):
-            is_bot = True
-            bot_name = raw_author_name or "Salesbot"
-
-    if not text and not media and not file_uuid and not author_avatar:
-        reaction_obj = nested.get("reaction") or message.get("reaction") or {}
-        if isinstance(reaction_obj, dict) and reaction_obj.get("emoji"):
-            emoji = str(reaction_obj.get("emoji") or "").strip()
-            text = f"💬 Reaksiya: {emoji}" if emoji else "💬 Müştəri reaksiya bildirdi"
-            message_type = "reaction"
-        elif incoming:
-            text = "💬 Müştəri reaksiya bildirdi"
-            message_type = "reaction"
-        else:
-            return None
-    reply_src = nested.get("reply_to") or nested.get("replied_message") or message.get("reply_to")
-    reply_id = ""
-    reply_text = ""
-    reply_author = ""
-    if isinstance(reply_src, dict):
-        reply_msg = reply_src.get("message") if isinstance(reply_src.get("message"), dict) else reply_src
-        reply_id = str(
-            reply_msg.get("id")
-            or reply_msg.get("msgid")
-            or reply_src.get("message_id")
-            or reply_src.get("id")
-            or ""
-        ).strip()
-        reply_text = str(reply_msg.get("text") or reply_src.get("text") or "").strip()[:200]
-        sender = reply_msg.get("author") or reply_msg.get("sender") or reply_src.get("author") or reply_src.get("sender") or {}
-        if isinstance(sender, dict):
-            reply_author = str(sender.get("name") or "").strip()[:80]
-    elif reply_src:
-        reply_id = str(reply_src).strip()
-    inline_quote, inline_body = _split_quote_prefix(text)
-    if inline_quote:
-        text = inline_body
-        reply_text = reply_text or inline_quote
-    msg_id, msgid, external_id = _chat_message_ids(message, nested)
-    return {
-        "id": msg_id or msgid,
-        "msgid": msgid,
-        "external_id": external_id,
-        "direction": "incoming" if incoming else "outgoing",
-        "incoming": incoming,
-        "author": bot_name if is_bot else _chat_author_name(author, message, incoming),
-        "is_bot": is_bot,
-        "bot_name": bot_name,
-        "text": text,
-        "message_type": message_type,
-        "created_at": created,
-        "created": _deal_fmt_ts(created),
-        "origin": origin or str(message.get("origin") or ""),
-        "channel": _origin_channel_key(origin) or str(origin or "").strip().lower(),
-        "reply_to_message_id": reply_id,
-        "reply_to_text": reply_text,
-        "reply_to_author": reply_author,
-        "media_url": "" if message_type == "avatar" else (media if _is_allowed_media_url(media) else ""),
-        "file_uuid": "" if message_type == "avatar" else file_uuid,
-        "file_name": file_name,
-        "author_avatar": author_avatar,
-        "delivery_status": _chat_delivery_status(message, nested, incoming),
-    }
 
 
 def _fetch_chat_events(lead_id: int, contact_ids: list[int]) -> tuple[list[dict], bool]:
