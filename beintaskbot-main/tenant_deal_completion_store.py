@@ -3,6 +3,7 @@ import json
 from tenant_policy import TenantPolicy
 from tenant_platform import _connect, _ensure_schema
 from tenant_linear_policy import TenantLinearError
+from tenant_deal_notice_schema import ensure_schema as ensure_notice_schema
 
 
 def ensure_schema(conn) -> None:
@@ -15,6 +16,7 @@ def ensure_schema(conn) -> None:
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,actor_id,request_id))''')
         cur.execute('''CREATE INDEX IF NOT EXISTS saas_deal_completion_pending
           ON saas_deal_completion_commands(tenant_id,lead_id) WHERE state->>'step' NOT IN ('done','rejected')''')
+        ensure_notice_schema(cur)
 
 
 class DealCommandStore:
@@ -47,6 +49,9 @@ class DealCommandStore:
         with self.conn.cursor() as cur:
             cur.execute('''UPDATE saas_deal_completion_commands SET state=%s::jsonb,updated_at=now()
               WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid''',(json.dumps(state),*self.key))
+            if state.get('step') == 'waiting_approval' and self.state.get('step') != 'waiting_approval':
+                cur.execute('''INSERT INTO saas_deal_notice_events(tenant_id,actor_id,request_id)
+                  VALUES(%s::uuid,%s,%s::uuid) ON CONFLICT DO NOTHING''', self.key)
         self.conn.commit();self.state=state
 
     def close(self) -> None:

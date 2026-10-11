@@ -75,6 +75,22 @@ def mark_sending(item, route):
     return profile, credentials
 
 
+def upload_credentials(item):
+    """Fresh authority before upload, without claiming message sending."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile, connection, integration = authority(cur,
+                {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
+            if connection != item['connection']:
+                raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
+            tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])))
+            if not isinstance(tokens, dict) or not isinstance(tokens.get('access_token'), str) or not tokens['access_token']:
+                raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
+        conn.commit()
+    return {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
+
+
 def finish(item, state, message_id=None):
     with _connect() as conn:
         ensure_schema(conn)

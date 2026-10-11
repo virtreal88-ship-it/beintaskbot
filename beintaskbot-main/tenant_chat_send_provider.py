@@ -3,12 +3,12 @@ import requests
 from tenant_linear_policy import TenantLinearError
 
 
-def send(credentials, route, text, wait_slot):
+def send(credentials, route, text, wait_slot, *, attachment=None):
     wait_slot(credentials['account_domain'])
     try:
         response = requests.post(f"https://{credentials['account_domain']}/api/v4/talks/{route['talk_id']}/send_message",
             headers={'Authorization': 'Bearer ' + credentials['access_token'], 'Accept': 'application/json'},
-            json={'text': text}, timeout=(5, 20), allow_redirects=False)
+            json={'text': text, **({'attachment': attachment} if attachment else {})}, timeout=(5, 20), allow_redirects=False)
     except requests.RequestException:
         raise RuntimeError('Provider result unknown') from None
     if response.status_code in {400, 401, 402, 403, 404, 422, 429}:

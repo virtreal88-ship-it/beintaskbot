@@ -4,6 +4,10 @@ _DEFAULT = {'title': 'CRM Smart Assistant',
             'body': 'Yeni tapşırıq təsdiq sorğusu. Kabinetdə yoxlayın.',
             'url': '/app', 'tag': 'crm-task-approval'}
 _PAYLOADS = {
+    'deal_completion_requested': {
+        'title': 'CRM Smart Assistant',
+        'body': 'Sövdələşmə tamamlanması üçün təsdiq var. Kabinetdə yoxlayın.',
+        'url': '/app?view=approvals', 'tag': 'crm-deal-approval', 'kind': 'deal_approval'},
     'task_approval_decided': {
         'title': 'CRM Smart Assistant',
         'body': 'Tapşırıq təsdiqinin nəticəsi hazırdır. Kabinetdə yoxlayın.',

@@ -20891,24 +20891,15 @@ async def handle_api_linear_news_review(request: web.Request) -> web.Response:
 
 
 async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        from tenant_crm_notice_worker import deliver as deliver_crm_notices
-        await deliver_crm_notices(context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)
-    except Exception:
-        logger.error('Tenant CRM notification queue unavailable')
-    try:
-        await deliver_approval_notifications(context.bot, logger)
-    except Exception:
-        logger.exception('Tenant approval notification queue failed')
-    try:
-        await deliver_push_notifications(VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
-    except Exception:
-        logger.error('Tenant push notification queue failed')
-    try:
-        from tenant_task_decision_worker import deliver
-        await deliver(context.bot,VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
-    except Exception:
-        logger.error('Tenant task decision queue unavailable')
+    from functools import partial
+    from tenant_job_runner import run_jobs, deliver_from
+    await run_jobs([
+        ('crm_notices', partial(deliver_from, 'tenant_crm_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
+        ('task_approvals', partial(deliver_approval_notifications, context.bot, logger)),
+        ('push_approvals', partial(deliver_push_notifications, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
+        ('task_decisions', partial(deliver_from, 'tenant_task_decision_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
+        ('deal_approvals', partial(deliver_from, 'tenant_deal_notice_worker', context.bot, VAPID_PRIVATE_KEY, VAPID_CLAIMS, logger)),
+    ], logger)
 
 
 async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -22373,6 +22364,11 @@ async def handle_platform_crm_chat_review(request: web.Request) -> web.Response:
     return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)(request)
 
 
+async def handle_platform_diagnostics(request: web.Request) -> web.Response:
+    from tenant_diagnostics_api import handler
+    return await handler(_tenant_member_from_request, logger)(request)
+
+
 async def handle_platform_crm_chat_history(request: web.Request) -> web.Response:
     from tenant_chat_history_api import handler
     return await handler(_tenant_member_from_request, logger)(request)
@@ -22406,6 +22402,12 @@ async def handle_platform_deal_approvals(request: web.Request) -> web.Response:
 
 async def handle_platform_crm_chat_send(request: web.Request) -> web.Response:
     from tenant_chat_send_api import handler
+    return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
+                         _tenant_kommo_request, _wait_for_tenant_kommo_slot, logger)(request)
+
+
+async def handle_platform_crm_chat_send_file(request: web.Request) -> web.Response:
+    from tenant_chat_upload_api import handler
     return await handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN,
                          _tenant_kommo_request, _wait_for_tenant_kommo_slot, logger)(request)
 
@@ -22662,17 +22664,6 @@ async def serve_webapp(request: web.Request) -> web.Response:
     return resp
 
 
-async def serve_moderation_login(request: web.Request) -> web.Response:
-    from moderation_demo_api import page
-    return await page(request)
-
-
-async def handle_moderation_login(request: web.Request) -> web.Response:
-    from moderation_demo_api import handler
-    return await handler(_make_tenant_session, _TENANT_SESSION_COOKIE,
-                         CANONICAL_WEB_ORIGIN, logger)(request)
-
-
 async def serve_landing_page(request: web.Request) -> web.Response:
     """Serve the public BeinSystems product landing page at the domain root."""
     from public_integration_pages import localized_page
@@ -22793,10 +22784,31 @@ async def serve_tenant_deal_completion_script(_request: web.Request) -> web.Resp
                             headers={'Cache-Control': 'no-store'})
 
 
+async def serve_tenant_diagnostics_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-diagnostics.js'),
+                            headers={'Cache-Control': 'no-store'})
+
+
+async def serve_tenant_chat_send_script(_request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-chat-send.js'),
+                            headers={'Cache-Control': 'no-store'})
+
+
 async def serve_tenant_workflow_script(_request: web.Request) -> web.Response:
     response = web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workflow.js'))
     response.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
     return response
+
+
+async def serve_moderation_login(request: web.Request) -> web.Response:
+    from moderation_demo_api import page
+    return await page(request)
+
+
+async def handle_moderation_login(request: web.Request) -> web.Response:
+    from moderation_demo_api import handler
+    return await handler(_make_tenant_session, _TENANT_SESSION_COOKIE,
+                         CANONICAL_WEB_ORIGIN, logger)(request)
 
 
 async def serve_tenant_hot_order_settings(_request: web.Request) -> web.Response:
@@ -23777,6 +23789,8 @@ async def start_webhook_server():
     app_web.router.add_get("/api/platform/crm/deal", handle_platform_crm_deal)
     app_web.router.add_get("/api/platform/crm/chat", handle_platform_crm_chat)
     app_web.router.add_post("/api/platform/crm/chat/send", handle_platform_crm_chat_send)
+    app_web.router.add_post('/api/platform/crm/chat/send-file', handle_platform_crm_chat_send_file)
+    app_web.router.add_get('/api/platform/diagnostics', handle_platform_diagnostics)
     app_web.router.add_get("/api/platform/crm/chat/history", handle_platform_crm_chat_history)
     app_web.router.add_get("/api/platform/crm/chat/attachment", handle_platform_crm_chat_attachment)
     app_web.router.add_post('/api/platform/crm/chat/import-history', handle_platform_crm_chat_import)
@@ -23881,6 +23895,8 @@ async def start_webhook_server():
     app_web.router.add_get('/assets/tenant-task-approvals.js', serve_tenant_task_approvals_script)
     app_web.router.add_get('/assets/tenant-task-completion.js', serve_tenant_task_completion_script)
     app_web.router.add_get('/assets/tenant-deal-completion.js', serve_tenant_deal_completion_script)
+    app_web.router.add_get('/assets/tenant-diagnostics.js', serve_tenant_diagnostics_script)
+    app_web.router.add_get('/assets/tenant-chat-send.js', serve_tenant_chat_send_script)
     app_web.router.add_get("/assets/tenant-workflow.js", serve_tenant_workflow_script)
     app_web.router.add_get('/assets/tenant-workspace.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'tenant-workspace.js')))
@@ -24855,4 +24871,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -2,6 +2,7 @@
 
 CHANNELS = ('telegram', 'push')
 EVENTS = {
+    'deal_completion_requested': {'label': 'Sövdələşmə tamamlanması üçün təsdiq', 'module': 'deals', 'roles': ('owner', 'admin')},
     'new_lead': {'label': 'Yeni sövdələşmə', 'module': 'deals', 'roles': ('owner', 'admin', 'manager')},
     'incoming_message': {'label': 'Yeni mesaj', 'module': 'customers', 'roles': ('owner', 'admin', 'manager')},
     'task_assigned': {'label': 'Yeni tapşırıq', 'module': 'tasks', 'roles': ('owner', 'admin', 'manager', 'worker')},

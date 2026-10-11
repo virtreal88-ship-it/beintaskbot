@@ -3,6 +3,7 @@ from aiohttp import web
 from tenant_chat_import_service import run
 from tenant_chat_import_store import authorize
 from tenant_linear_policy import TenantLinearError
+from tenant_request_origin import require_json_post
 
 
 def handler(member_from_request, origin, provider, member, upsert, normalize, channel, logger):
@@ -10,8 +11,9 @@ def handler(member_from_request, origin, provider, member, upsert, normalize, ch
         headers = {'Cache-Control': 'no-store'}
         try:
             session = member_from_request(request)
-            if not session or request.method != 'POST' or request.content_type != 'application/json' or request.headers.get('Origin', '').rstrip('/') != origin.rstrip('/'):
+            if not session:
                 raise TenantLinearError('İcazə yoxdur.', 403)
+            require_json_post(request, origin, message='İcazə yoxdur.')
             data = await request.json()
             if not isinstance(data, dict): raise ValueError()
             if (str(data.get('expected_tenant_id')), str(data.get('expected_user_id'))) != (str(session['tenant_id']), str(session['telegram_id'])):

@@ -1,13 +1,16 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('docs/tenant-app.html', 'utf8');
-const body = source.split("$('sendChat').onclick=async()=>{")[1].split('\n      };')[0];
+const source = fs.readFileSync('docs/tenant-chat-send.js', 'utf8');
+const page = fs.readFileSync('docs/tenant-app.html', 'utf8');
+const body = source.split('button.onclick=async()=>{')[1].split('\n    };')[0];
 
 function fixture() {
   const storage = new Map(), sent = [], alerts = [];
   const input = {value:'Salam'}, button = {disabled:false,textContent:'Göndər',classList:{add(){},remove(){}}};
   const env = {
+    button,input,key:'tenant-chat-send:tenant:20:7',leadId:7,me:{tenant_id:'tenant',telegram_id:20},
+    isCurrent:()=>env.chatIdentity()==='tenant:20',reload:async()=>{},
     $:id=>id==='chatText'?input:button, x:{kommo_lead_id:7},
     identity:'tenant:20',revision:1,chatRevision:1,chatIdentity:()=>env.identity,
     state:{me:{tenant_id:'tenant',telegram_id:20}}, crypto:{randomUUID:()=>{env.uuids++;return 'request-id';}},
@@ -32,6 +35,7 @@ function fixture() {
   f=fixture();f.env.api=async()=>{const e=new Error('rejected');e.keepRequest=false;throw e;};await f.click();assert.equal(f.storage.size,0);
   f=fixture();f.env.api=async()=>{f.env.chatIdentity=()=> 'other';f.input.value='New draft';return {state:'accepted'};};
   await f.click();assert.equal(f.input.value,'New draft');assert.equal(f.storage.size,0);
-  assert.ok(source.includes('e.keepRequest=d.keep_request!==false'));
+  assert.ok(page.includes('e.keepRequest=d.keep_request!==false'));
+  assert.ok(page.includes('/assets/tenant-chat-send.js'));
   console.log('PASS: exact send receipt recovery, no new UUID after timeout, edits blocked while unknown, late responses scoped.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

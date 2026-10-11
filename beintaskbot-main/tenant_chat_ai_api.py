@@ -4,6 +4,7 @@ from aiohttp import web
 from tenant_chat_ai_settings import read, save
 from tenant_chat_ai_service import run
 from tenant_linear_policy import TenantLinearError
+from tenant_request_origin import require_json_post
 
 
 def handler(member_from_request, canonical_origin, logger, *, settings=False):
@@ -16,8 +17,7 @@ def handler(member_from_request, canonical_origin, logger, *, settings=False):
             if request.method == 'GET' and settings:
                 result = await asyncio.to_thread(read, profile)
             else:
-                if request.method != 'POST' or request.content_type != 'application/json' or request.headers.get('Origin', '').rstrip('/') != canonical_origin.rstrip('/'):
-                    raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.', 403)
+                require_json_post(request, canonical_origin)
                 data = await request.json()
                 if not isinstance(data, dict):
                     raise TenantLinearError('Sorğu düzgün deyil.')

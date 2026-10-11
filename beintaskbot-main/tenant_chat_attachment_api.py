@@ -4,6 +4,7 @@ from aiohttp import web
 from tenant_chat_attachment_store import load, token
 from tenant_chat_attachment_provider import download
 from tenant_linear_policy import TenantLinearError
+from tenant_read_session import require_read_session
 
 SLOTS = asyncio.Semaphore(3)
 
@@ -13,12 +14,7 @@ def handler(member_from_request, request_provider, logger):
         headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                    'Content-Security-Policy': "default-src 'none'; sandbox", 'Referrer-Policy': 'no-referrer'}
         try:
-            session = member_from_request(request)
-            if not session:
-                raise TenantLinearError('İcazə yoxdur.', 403)
-            if (request.query.get('expected_tenant_id'), request.query.get('expected_user_id')) != (
-                    str(session['tenant_id']), str(session['telegram_id'])):
-                raise TenantLinearError('Kabinet dəyişib. Yeniləyin.', 409)
+            session = require_read_session(request, member_from_request)
             if SLOTS.locked():
                 raise TenantLinearError('Fayllar yüklənir. Bir az sonra yoxlayın.', 429)
             async with SLOTS:

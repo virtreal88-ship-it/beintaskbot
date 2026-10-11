@@ -3,6 +3,7 @@ import asyncio
 from aiohttp import web
 from tenant_chat_review_store import list_receipts, resolve
 from tenant_linear_policy import TenantLinearError
+from tenant_request_origin import require_json_post
 
 
 def handler(member_from_request, canonical_origin, logger):
@@ -15,8 +16,7 @@ def handler(member_from_request, canonical_origin, logger):
             if request.method == 'GET':
                 result = await asyncio.to_thread(list_receipts, session, request.query.get('lead_id'))
             else:
-                if request.method != 'POST' or request.content_type != 'application/json' or request.headers.get('Origin', '').rstrip('/') != canonical_origin.rstrip('/'):
-                    raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.', 403)
+                require_json_post(request, canonical_origin)
                 data = await request.json()
                 if not isinstance(data, dict):
                     raise ValueError('Invalid body')

@@ -3,18 +3,14 @@ import asyncio
 from aiohttp import web
 from tenant_chat_history_store import page
 from tenant_linear_policy import TenantLinearError
+from tenant_read_session import require_read_session
 
 
 def handler(member_from_request, logger):
     async def handle(request):
         headers = {'Cache-Control':'no-store'}
         try:
-            session = member_from_request(request)
-            if not session:
-                raise TenantLinearError('İcazə yoxdur.', 403)
-            if (request.query.get('expected_tenant_id'), request.query.get('expected_user_id')) != (
-                    str(session['tenant_id']), str(session['telegram_id'])):
-                raise TenantLinearError('Kabinet dəyişib. Yeniləyin.', 409)
+            session = require_read_session(request, member_from_request)
             result = await asyncio.to_thread(page, session, request.query.get('lead_id'),
                 request.query.get('cursor', ''), request.query.get('limit', '120'))
             return web.json_response({'success':True, **result}, headers=headers)

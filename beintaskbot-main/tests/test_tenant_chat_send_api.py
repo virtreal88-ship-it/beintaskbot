@@ -21,6 +21,19 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.invoke(origin='https://other.invalid'))['status'], 403)
         self.run.assert_not_awaited()
 
+    async def test_transport_rejection_does_not_parse_json(self):
+        for change in ({'method': 'GET'}, {'content_type': 'text/plain'},
+                       {'headers': {}}, {'headers': {'Origin': 'https://crm.pro.az.evil'}}):
+            request = SimpleNamespace(method='POST', content_type='application/json',
+                headers={'Origin': 'https://crm.pro.az'}, json=AsyncMock())
+            for key, value in change.items():
+                setattr(request, key, value)
+            result = await self.handle(request)
+            self.assertEqual(result['status'], 403)
+            self.assertEqual(result['data']['error'], 'Sorğunun mənbəyi düzgün deyil.')
+            request.json.assert_not_awaited()
+        self.run.assert_not_awaited()
+
     async def test_company_and_user_mismatch_stop_before_provider(self):
         for data in ({**INPUT, 'expected_tenant_id': 'other', 'expected_user_id': 20}, {**INPUT, 'expected_tenant_id': TENANT, 'expected_user_id': 21}):
             self.assertEqual((await self.invoke(data))['status'], 409)

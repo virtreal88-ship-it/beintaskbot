@@ -2,6 +2,7 @@
 from aiohttp import web
 from tenant_chat_send_service import run
 from tenant_linear_policy import TenantLinearError
+from tenant_request_origin import require_json_post
 
 
 def handler(member_from_request, canonical_origin, request_provider, wait_slot, logger):
@@ -11,8 +12,7 @@ def handler(member_from_request, canonical_origin, request_provider, wait_slot, 
             session = member_from_request(request)
             if not session:
                 raise TenantLinearError('İcazə yoxdur.', 403)
-            if request.method != 'POST' or request.content_type != 'application/json' or request.headers.get('Origin', '').rstrip('/') != canonical_origin.rstrip('/'):
-                raise TenantLinearError('Sorğunun mənbəyi düzgün deyil.', 403)
+            require_json_post(request, canonical_origin)
             data = await request.json()
             if not isinstance(data, dict):
                 raise TenantLinearError('Sorğu düzgün deyil.')

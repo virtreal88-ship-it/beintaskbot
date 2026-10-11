@@ -99,17 +99,10 @@
       $('modalContent').innerHTML=`<div class="meta"><div><b>Müştəri</b>${esc(x.contact_name||'Göstərilməyib')}</div><div><b>Telefon</b>${esc(x.phone||'Göstərilməyib')}</div><div><b>Mərhələ</b>${esc(x.stage_name||'Göstərilməyib')}</div><div><b>Kommo ID</b>${esc(x.kommo_lead_id)}</div></div><div class="chat-placeholder"><div id="chatRows"></div><div style="display:flex;gap:8px;margin-top:10px"><textarea id="chatText" rows="2" placeholder="Mesaj yazın" style="flex:1;resize:none;border:0;background:#fff;border-radius:9px;padding:9px"></textarea><button class="primary" id="sendChat">Göndər</button></div></div>`;
       $('modalContent').querySelector('.meta')?.insertAdjacentHTML('afterend',`<button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}" style="margin-top:12px">Dublikatları tap</button>`);
       $('dealModal').classList.add('show');
-      try{if(sessionStorage.getItem('tenant-chat-send:'+identity+':'+x.kommo_lead_id))$('sendChat').textContent='Vəziyyəti yoxla'}catch(e){$('sendChat').disabled=true;}
       document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
-      $('sendChat').onclick=async()=>{
-        const b=$('sendChat'),input=$('chatText'),key='tenant-chat-send:'+identity+':'+x.kommo_lead_id;
-        let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null')}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
-        const text=input.value.trim();if(!pending&&!text)return;
-        if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
-        if(!pending){pending={lead_id:x.kommo_lead_id,text,request_id:crypto.randomUUID(),expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id};try{sessionStorage.setItem(key,JSON.stringify(pending))}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
-        b.disabled=true;b.classList.add('loading');
-        try{const sent=await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});sessionStorage.removeItem(key);if(revision!==chatRevision||identity!==chatIdentity())return;if(input.value.trim()===pending.text)input.value='';b.textContent='Göndər';alert(sent.manual_review?'Administrator mesajı Kommo-da tapdığını qeyd edib. Mesaj təkrar göndərilmədi.':'Mesaj Kommo tərəfindən qəbul edildi. Çat tarixçəsində çatdırılmanı yoxlayın.');await loadChat(x.kommo_lead_id);}catch(e){if(e.keepRequest===false)sessionStorage.removeItem(key);if(revision===chatRevision&&identity===chatIdentity()){b.textContent=e.keepRequest===false?'Göndər':'Vəziyyəti yoxla';alert(e.message)}}finally{b.disabled=false;b.classList.remove('loading');}
-      };
+      if(window.tenantChatSend)window.tenantChatSend.bind({api,identity,leadId:x.kommo_lead_id,me:state.me,
+        isCurrent:()=>revision===chatRevision&&identity===chatIdentity(),reload:()=>loadChat(x.kommo_lead_id)});
+      else{$('sendChat').disabled=true;alert('Mesaj modulu yüklənmədi. Səhifəni yeniləyin.');}
       loadChat(x.kommo_lead_id);
     }catch(e){if(revision===chatRevision&&identity===chatIdentity())alert(e.message);}
   }
@@ -124,7 +117,11 @@
   $('testKommo').onclick=async()=>{const b=$('testKommo');b.disabled=true;try{const d=await api('/api/platform/integrations/kommo/test');$('integrationInfo').textContent=`Kommo işləyir: ${d.account?.name||'bağlantı təsdiqləndi'}`}catch(e){$('integrationInfo').textContent=e.message}finally{b.disabled=false}};
   $('disconnectKommo').onclick=async()=>{if(!confirm('Kommo bağlantısı ayrılsın? Yenidən qoşmaq üçün OAuth lazımdır.'))return;try{await api('/api/platform/integrations/disconnect',{method:'POST',body:JSON.stringify({provider:'kommo'})});loadSettings()}catch(e){alert(e.message)}};
   $('logout').onclick=async()=>{if(!confirm('Bu cihazda sistemdən çıxmaq istəyirsiniz?'))return;const b=$('logout');b.disabled=true;try{if(window.tenantPushLogout)await window.tenantPushLogout();await api('/api/platform/logout',{method:'POST',body:'{}'});location.href='/login'}catch(e){alert(e.message)}finally{b.disabled=false}};
-  (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}if(state.capabilities.modules?.tasks)await loadTasks(true);if(state.capabilities.modules?.deals||state.capabilities.modules?.customers)await loadDeals(false);renderProfile(state.me);if(state.me.role==='owner')loadSettings()})();
+  (async()=>{try{await api('/api/platform/me')}catch(e){location.href='/login';return}
+    const requested=new URLSearchParams(location.search).get('view');
+    const target=[...document.querySelectorAll('.nav [data-view]')].find(button=>button.dataset.view===requested&&!button.hidden&&button.style.display!=='none');
+    if(target)target.click();
+    if(state.capabilities.modules?.tasks)await loadTasks(true);if(state.capabilities.modules?.deals||state.capabilities.modules?.customers)await loadDeals(false);renderProfile(state.me);if(state.me.role==='owner')loadSettings()})();
 })();
 </script>
 <script src="/assets/tenant-hot-order-settings.js"></script>
@@ -146,10 +143,12 @@
 <script src="/assets/tenant-chat-history.js"></script>
 <script src="/assets/deal-phone-duplicates.js"></script>
 <script src="/assets/tenant-chat-attachments.js"></script>
+<script src="/assets/tenant-chat-send.js"></script>
 <script src="/assets/tenant-chat-import.js"></script>
 <script src="/assets/tenant-tasks.js"></script>
 <script src="/assets/tenant-task-completion.js"></script>
 <script src="/assets/tenant-deal-completion.js"></script>
+<script src="/assets/tenant-diagnostics.js"></script>
 <script src="/assets/tenant-push.js"></script>
 <script src="/assets/tenant-workspace.js"></script>
 </body></html>
