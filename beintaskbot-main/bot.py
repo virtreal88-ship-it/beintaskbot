@@ -113,6 +113,10 @@ from legacy_kommo_notes import (
     _first_note_id, _note_entity_kind, _note_is_deleted, add_note,
     configure_note_service, delete_note, get_contact_notes, update_note,
 )
+from legacy_kommo_chat_reader import (
+    _fetch_chat_history_by_chat_id, _fetch_talk_messages,
+    configure_chat_reader,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1322,6 +1326,13 @@ configure_note_service(
     http=_http,
     headers=HEADERS,
     on_deleted=lambda note_id: _forget_cached_note(note_id),
+    app_logger=logger,
+)
+configure_chat_reader(
+    http=_http,
+    raw_http=requests,
+    headers=HEADERS,
+    token=KOMMO_TOKEN,
     app_logger=logger,
 )
 
@@ -13468,59 +13479,6 @@ def _overlay_sent_delivery(items: list, lead_id: int) -> None:
             item["delivery_status"] = nxt
 
 
-def _fetch_talk_messages(talk_id: int, pages: int = 1, page_limit: int = 50) -> tuple[list[dict], bool, bool]:
-    rows: list[dict] = []
-    blocked = False
-    maybe_more = False
-    try:
-        page_limit = max(1, min(int(page_limit or 50), 250))
-    except (TypeError, ValueError):
-        page_limit = 50
-    urls = (
-        f"{KOMMO_BASE_URL}/api/v4/talks/{int(talk_id)}/messages",
-        f"{KOMMO_BASE_URL}/ajax/v4/talks/{int(talk_id)}/messages",
-        f"{KOMMO_BASE_URL}/ajax/v2/talks/{int(talk_id)}/messages",
-    )
-    working_url = None
-    for url in urls:
-        try:
-            resp = _http.get(url, headers=HEADERS, params={"limit": page_limit, "page": 1, "order[created_at]": "desc"}, timeout=10)
-        except Exception as exc:
-            logger.warning("Deal talk %s %s failed: %s", talk_id, url, exc)
-            continue
-        if resp.status_code in {401, 402, 403, 429}:
-            blocked = True
-            logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
-            break
-        if resp.status_code != 200:
-            logger.warning("Deal talk %s messages %s status %s", talk_id, url, resp.status_code)
-            continue
-        payload = resp.json() if resp.content else {}
-        messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
-        if isinstance(messages, list):
-            rows.extend(messages)
-            working_url = url
-            blocked = False
-            maybe_more = len(messages) >= page_limit
-            break
-    if working_url and pages > 1:
-        for page in range(2, pages + 1):
-            try:
-                resp = _http.get(working_url, headers=HEADERS, params={"limit": page_limit, "page": page, "order[created_at]": "desc"}, timeout=10)
-            except Exception:
-                break
-            if resp.status_code != 200:
-                break
-            payload = resp.json() if resp.content else {}
-            messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or []
-            if not messages:
-                maybe_more = False
-                break
-            rows.extend(messages)
-            maybe_more = len(messages) >= page_limit
-            if len(messages) < page_limit:
-                break
-    return rows, blocked, maybe_more
 
 
 def _recent_talk_delivery_status(talk_id: int, text: str, sent_at: int) -> str:
@@ -13568,40 +13526,8 @@ def _recent_talk_delivery_status(talk_id: int, text: str, sent_at: int) -> str:
     return "pending"
 
 
-def _extract_messages_payload(payload) -> list[dict]:
-    if not isinstance(payload, dict):
-        return []
-    messages = (payload.get("_embedded") or {}).get("messages") or payload.get("messages") or payload.get("items") or []
-    return messages if isinstance(messages, list) else []
 
 
-def _fetch_chat_history_by_chat_id(chat_id: str) -> list[dict]:
-    chat_id = str(chat_id or "").strip()
-    if not chat_id:
-        return []
-    urls = (
-        f"https://amojo.kommo.com/v1/chats/{chat_id}/history",
-        f"https://amojo.kommo.com/v2/chats/{chat_id}/history",
-        f"{KOMMO_BASE_URL}/ajax/v4/chats/{chat_id}/history",
-        f"{KOMMO_BASE_URL}/ajax/v2/chats/{chat_id}/history",
-    )
-    for url in urls:
-        try:
-            resp = requests.get(url, headers={"Authorization": f"Bearer {KOMMO_TOKEN}"}, params={"limit": 50, "offset": 0}, timeout=12)
-        except Exception as exc:
-            logger.warning("Chat history %s failed: %s", url, exc)
-            continue
-        if resp.status_code != 200:
-            logger.warning("Chat history %s status %s", url, resp.status_code)
-            continue
-        try:
-            payload = resp.json()
-        except Exception:
-            continue
-        messages = _extract_messages_payload(payload)
-        if messages:
-            return messages
-    return []
 
 
 def _chat_delivery_status(message: dict, nested: dict, incoming: bool) -> str:
