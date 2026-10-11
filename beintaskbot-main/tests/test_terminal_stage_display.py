@@ -12,8 +12,12 @@ ROOT=Path(__file__).resolve().parents[1]
 class TerminalStageTests(unittest.TestCase):
     def setUp(self):
         tree=ast.parse((ROOT/'bot.py').read_text(encoding='utf-8-sig'))
-        names={'_is_successful_deal','_stage_key_from_kommo','_stage_maps_from_statuses','_inbox_pulse_payload'}
+        catalog=ast.parse((ROOT/'legacy_kommo_pipeline_catalog.py').read_text(encoding='utf-8-sig'))
+        names={'_is_successful_deal','_inbox_pulse_payload'}
         tree.body=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in names]
+        tree.body.extend(node for node in catalog.body if isinstance(node,ast.FunctionDef) and node.name in {
+            '_stage_key_from_kommo','_stage_maps_from_statuses'
+        })
         self.ns={'stage_display_name':stage_display_name,'_fold_stage_name':lambda value:str(value).lower(),'re':re,
             '_personal_overview_cache':{},'_inbox_pulse_lock':threading.Lock(),'_inbox_pulse_rev':2,
             '_inbox_pulse_events':[],'is_admin':lambda user:True,'get_funnel_owner':lambda user:{'pipeline_id':1},
@@ -58,7 +62,7 @@ class TerminalStageTests(unittest.TestCase):
             self.assertEqual(len(body['chats']),1);self.assertEqual(body['chats'][0]['status_id'],status)
 
     def test_personal_funnel_fallbacks_no_longer_contain_russian_terminal_labels(self):
-        tree=ast.parse((ROOT/'bot.py').read_text(encoding='utf-8-sig'))
+        tree=ast.parse((ROOT/'legacy_runtime_config.py').read_text(encoding='utf-8-sig'))
         for node in tree.body:
             if isinstance(node,ast.Assign) and isinstance(node.value,ast.Dict) and any(
                 isinstance(target,ast.Name) and target.id.endswith('STAGE_NAMES') for target in node.targets):

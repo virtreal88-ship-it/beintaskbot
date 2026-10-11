@@ -104,6 +104,7 @@ TECHNICAL_SUPPORT_NAME = "Texniki Dəstək"
 NIZAMI_PIPELINE_ID = 14243944
 # Kommo funnel literally named Sövdələşmələr. Nizami's Çatlar also reads it, including NÖMRƏ ALINIB.
 SOVDELESMELER_PIPELINE_ID = 8329347
+GOZLEME_PIPELINE_ID = 14243944
 HUSEYN_PIPELINE_ID = 14358480
 RASIM_PIPELINE_ID = 14461812
 # Live Kommo snapshots. Nizami's pipeline is still the shared Gözləmə board.

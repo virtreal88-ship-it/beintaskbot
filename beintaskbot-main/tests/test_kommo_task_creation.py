@@ -13,7 +13,7 @@ class KommoTaskCreationTests(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[1]
         sources = [ast.parse((root / filename).read_text(encoding="utf-8-sig"))
-                   for filename in ("legacy_runtime_config.py", "bot.py")]
+                   for filename in ("legacy_runtime_config.py", "legacy_kommo_funnels.py", "bot.py")]
         names = {"KOMMO_TASK_RESPONSIBLE_USER_ID", "ACTIVE_ASSIGNEES", "kommo_user_id_for_employee_funnel", "create_task", "handle_api_action"}
         selected = [
             node for source in sources for node in source.body

@@ -85,6 +85,17 @@ from legacy_chat_reply_prompt import history_reply_instructions, history_reply_m
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
 from legacy_kommo_transport import install_legacy_kommo_transport
+from legacy_kommo_pipeline_catalog import (
+    _fold_stage_name, _pipeline_stage_cache, _stage_key_from_kommo, _stage_maps_from_statuses,
+    configure_pipeline_catalog, load_all_kommo_pipelines, load_pipeline_stage_maps,
+)
+from legacy_kommo_funnels import (
+    _lead_pipeline_id, all_personal_pipeline_ids, employee_name_for_lead,
+    employee_personal_pipeline_ids, get_funnel_owner, get_pipeline_id_for_chat,
+    get_pipeline_stages_for_chat, get_rufat_completion_stage, is_funnel_chat,
+    is_rufat_chat, kommo_user_id_for_employee_funnel, owner_name_for_pipeline,
+    personal_entry_stage,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -149,7 +160,7 @@ from legacy_runtime_config import (
     PIPELINE_ID, RUFAT_CHAT_ID, SAMIL_CHAT_ID, RUFAT_COMPAT_CHAT_IDS,
     RUFAT_LOGIN_LINK, RUFAT_PIPELINE_ID, RUFAT_STAGES, RUFAT_STAGE_NAMES,
     ADMIN_CHAT_ID, ADMIN_KOMMO_USER_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID,
-    TECHNICAL_SUPPORT_NAME, NIZAMI_PIPELINE_ID, SOVDELESMELER_PIPELINE_ID,
+    TECHNICAL_SUPPORT_NAME, NIZAMI_PIPELINE_ID, SOVDELESMELER_PIPELINE_ID, GOZLEME_PIPELINE_ID,
     HUSEYN_PIPELINE_ID, RASIM_PIPELINE_ID, HUSEYN_STAGES, HUSEYN_STAGE_NAMES,
     RASIM_STAGES, RASIM_STAGE_NAMES, NIZAMI_STAGES, NIZAMI_STAGE_NAMES,
     KOMMO_TASK_RESPONSIBLE_USER_ID, ACTIVE_ASSIGNEES, _UPD_MARKER, STAGES,
@@ -1258,6 +1269,7 @@ _legacy_kommo_runtime = install_legacy_kommo_transport(
 )
 HEADERS = _legacy_kommo_runtime.headers
 _http = _legacy_kommo_runtime.session
+configure_pipeline_catalog(http=_http, headers=HEADERS, app_logger=logger)
 
 def search_contact_by_phone(phone: str) -> list:
     digits = re.sub(r"[^\d]", "", phone)
@@ -1386,246 +1398,30 @@ def get_contact_details(contact_id: int) -> dict | None:
         logger.error(f"Contact details error: {e}")
     return None
 
-def is_rufat_chat(chat_id) -> bool:
-    try:
-        return int(chat_id) in get_rufat_compat_chat_ids()
-    except (TypeError, ValueError):
-        return False
 
 
-def _fold_stage_name(value: str) -> str:
-    table = str.maketrans({
-        "ə": "e", "ı": "i", "ö": "o", "ü": "u", "ğ": "g", "ş": "s", "ç": "c",
-        "Ə": "e", "İ": "i", "Ö": "o", "Ü": "u", "Ğ": "g", "Ş": "s", "Ç": "c",
-    })
-    return str(value or "").translate(table).casefold().strip()
 
 
-def _stage_key_from_kommo(name: str, status_id: int) -> str:
-    try:
-        sid = int(status_id)
-    except (TypeError, ValueError):
-        sid = 0
-    if sid == 142:
-        return "ugurlu"
-    if sid == 143:
-        return "imtina"
-    n = _fold_stage_name(name)
-    needles = (
-        ("nerazobrann", "nerazobrannoye"),
-        ("неразобран", "nerazobrannoye"),
-        ("unparsed", "nerazobrannoye"),
-        ("sorgular", "sorgular"),
-        ("sorgu", "sorgular"),
-        ("danisiq", "danisiqlar"),
-        ("telimat", "telimat"),
-        ("yeni sifaris", "yeni_sifaris"),
-        ("geri don", "geri_donusler"),
-        ("soyuq zeng", "soyuq_zeng"),
-        ("cavab gozlenilir", "cavab_gozlenilir"),
-        ("gorus", "gorusler"),
-        ("qurasdirma", "qurashdirma"),
-        ("qurashdirma", "qurashdirma"),
-        ("muzakire", "muzakire"),
-        ("icra olunur", "icra_olunur"),
-        ("gozleme", "gozleme"),
-        ("ugurlu", "ugurlu"),
-        ("imtina", "imtina"),
-        ("successfully", "ugurlu"),
-        ("closed - won", "ugurlu"),
-        ("closed - lost", "imtina"),
-    )
-    for needle, key in needles:
-        if needle in n:
-            return key
-    slug = re.sub(r"[^a-z0-9]+", "_", n).strip("_") or f"stage_{sid}"
-    return slug
 
 
-_pipeline_stage_cache: dict[int, tuple[dict, dict, list]] = {}
-_all_pipelines_cache: list[dict] | None = None
-_all_pipelines_cache_at = 0.0
 
 
-def _personal_pipeline_packs() -> dict[int, tuple[dict, dict]]:
-    return {
-        int(RUFAT_PIPELINE_ID): (RUFAT_STAGES, RUFAT_STAGE_NAMES),
-        int(HUSEYN_PIPELINE_ID): (HUSEYN_STAGES, HUSEYN_STAGE_NAMES),
-        int(RASIM_PIPELINE_ID): (RASIM_STAGES, RASIM_STAGE_NAMES),
-        int(NIZAMI_PIPELINE_ID): (NIZAMI_STAGES, NIZAMI_STAGE_NAMES),
-    }
 
 
-def _stage_maps_from_statuses(statuses: list) -> tuple[dict, dict, list]:
-    stages: dict[str, int] = {}
-    names: dict[int, str] = {}
-    ui: list[tuple[str, str]] = []
-    used: set[str] = set()
-    rows = sorted(statuses or [], key=lambda row: int((row or {}).get("sort") or 0))
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            sid = int(row.get("id"))
-        except (TypeError, ValueError):
-            continue
-        label = stage_display_name(sid,row.get("name") or sid)
-        key = _stage_key_from_kommo(label, sid)
-        if key in used:
-            key = f"{key}_{sid}"
-        used.add(key)
-        stages[key] = sid
-        names[sid] = label
-        ui.append((key, label))
-    return stages, names, ui
 
 
-def load_pipeline_stage_maps(pipeline_id: int, *, fallback: bool = True) -> tuple[dict, dict, list]:
-    """Return stages, stage_names, and ordered UI pairs for a Kommo pipeline."""
-    pid = int(pipeline_id)
-    cached = _pipeline_stage_cache.get(pid)
-    if cached:
-        return cached
-    pack = _personal_pipeline_packs().get(pid)
-    if pack:
-        stages_map, names_map = pack
-        ui = [(key, names_map.get(sid, key)) for key, sid in stages_map.items()]
-        _pipeline_stage_cache[pid] = (dict(stages_map), dict(names_map), ui)
-        return _pipeline_stage_cache[pid]
-    stages: dict[str, int] = {}
-    names: dict[int, str] = {}
-    ui: list[tuple[str, str]] = []
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines/{pid}", headers=HEADERS, timeout=12)
-        if resp.status_code == 200:
-            statuses = (resp.json().get("_embedded") or {}).get("statuses") or []
-            stages, names, ui = _stage_maps_from_statuses(statuses)
-    except Exception as exc:
-        logger.warning("Pipeline %s stage load failed: %s", pid, exc)
-    if not stages and fallback:
-        stages, names, ui = dict(RUFAT_STAGES), dict(RUFAT_STAGE_NAMES), [
-            (key, RUFAT_STAGE_NAMES.get(sid, key)) for key, sid in RUFAT_STAGES.items()
-        ]
-    if stages:
-        _pipeline_stage_cache[pid] = (stages, names, ui)
-    return stages, names, ui
 
 
-def _ordered_ui_for_pipeline(pipeline_id: int, statuses: list) -> list[dict]:
-    stages_map, names, ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
-    key_by_sid = {int(sid): key for key, sid in stages_map.items()}
-    ordered: list[dict] = []
-    seen: set[str] = set()
-    for row in sorted(statuses or [], key=lambda item: int((item or {}).get("sort") or 0)):
-        if not isinstance(row, dict):
-            continue
-        try:
-            sid = int(row.get("id"))
-        except (TypeError, ValueError):
-            continue
-        key = key_by_sid.get(sid)
-        if not key:
-            continue
-        ordered.append({"key": key, "name": names.get(sid) or str(row.get("name") or key)})
-        seen.add(key)
-    for key, label in ui:
-        if key in seen:
-            continue
-        ordered.append({"key": key, "name": label})
-        seen.add(key)
-    return ordered
 
 
-def load_all_kommo_pipelines(*, force: bool = False) -> list[dict]:
-    """All active Kommo funnels with statuses in CRM sort order."""
-    global _all_pipelines_cache, _all_pipelines_cache_at
-    now = _time_module.time()
-    if not force and _all_pipelines_cache and (now - _all_pipelines_cache_at) < 300:
-        return _all_pipelines_cache
-    rows: list[dict] = []
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/pipelines", headers=HEADERS, timeout=15)
-        if resp.status_code == 200:
-            rows = (resp.json().get("_embedded") or {}).get("pipelines") or []
-    except Exception as exc:
-        logger.warning("Kommo pipelines list failed: %s", exc)
-        if _all_pipelines_cache:
-            return _all_pipelines_cache
-        return []
-    result: list[dict] = []
-    packs = _personal_pipeline_packs()
-    for pipeline in sorted(rows, key=lambda item: int((item or {}).get("sort") or 0)):
-        if not isinstance(pipeline, dict) or pipeline.get("is_archive"):
-            continue
-        try:
-            pid = int(pipeline.get("id"))
-        except (TypeError, ValueError):
-            continue
-        statuses = (pipeline.get("_embedded") or {}).get("statuses") or []
-        if pid not in packs and pid not in _pipeline_stage_cache:
-            stages, names, ui = _stage_maps_from_statuses(statuses)
-            if stages:
-                _pipeline_stage_cache[pid] = (stages, names, ui)
-        ordered = _ordered_ui_for_pipeline(pid, statuses)
-        if not ordered:
-            continue
-        result.append({
-            "id": pid,
-            "name": str(pipeline.get("name") or pid),
-            "sort": int(pipeline.get("sort") or 0),
-            "is_main": bool(pipeline.get("is_main")),
-            "stages": ordered,
-        })
-    if result:
-        _all_pipelines_cache = result
-        _all_pipelines_cache_at = now
-    return result or (_all_pipelines_cache or [])
 
 
-def get_funnel_owner(chat_id) -> dict | None:
-    try:
-        cid = int(chat_id)
-    except (TypeError, ValueError):
-        return None
-    if is_rufat_chat(cid):
-        stages, names, ui = load_pipeline_stage_maps(RUFAT_PIPELINE_ID)
-        return {
-            "chat_id": RUFAT_CHAT_ID, "pipeline_id": int(RUFAT_PIPELINE_ID),
-            "name": "Rüfət Həsənzadə", "stages": stages, "stage_names": names, "ui_stages": ui,
-        }
-    mapping = {
-        ADMIN_CHAT_ID: (NIZAMI_PIPELINE_ID, "Nizami Qasımov"),
-        HUSEYN_CHAT_ID: (HUSEYN_PIPELINE_ID, "Hüseyn Səfərov"),
-        RASIM_CHAT_ID: (RASIM_PIPELINE_ID, "Rasim Əsgərov"),
-    }
-    row = mapping.get(cid)
-    if not row:
-        return None
-    pipeline_id, name = row
-    stages, names_map, ui = load_pipeline_stage_maps(pipeline_id)
-    return {
-        "chat_id": cid, "pipeline_id": int(pipeline_id),
-        "name": name, "stages": stages, "stage_names": names_map, "ui_stages": ui,
-    }
 
 
-def is_funnel_chat(chat_id) -> bool:
-    return get_funnel_owner(chat_id) is not None
 
 
-def all_personal_pipeline_ids() -> set[int]:
-    return {int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
 
 
-def employee_personal_pipeline_ids() -> set[int]:
-    """Funnels owned by Rüfət / Hüseyn / Rasim — not admin Gözləmə."""
-    return {int(RUFAT_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
-
-
-def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
-    if int(pipeline_id) in employee_personal_pipeline_ids():
-        return KOMMO_TASK_RESPONSIBLE_USER_ID
-    return None
 
 
 def reassign_open_tasks_for_lead(lead_id: int, responsible_user_id: int) -> int:
@@ -1681,41 +1477,10 @@ def maybe_reassign_open_tasks_for_employee_funnel(lead_id, pipeline_id) -> int:
         return 0
 
 
-def owner_name_for_pipeline(pipeline_id: int) -> str:
-    return {
-        int(RUFAT_PIPELINE_ID): "Rüfət Həsənzadə",
-        int(NIZAMI_PIPELINE_ID): "Nizami Qasımov",
-        int(HUSEYN_PIPELINE_ID): "Hüseyn Səfərov",
-        int(RASIM_PIPELINE_ID): "Rasim Əsgərov",
-    }.get(int(pipeline_id), "")
 
 
-def employee_name_for_lead(lead: dict | None) -> str:
-    if not isinstance(lead, dict):
-        return ""
-    try:
-        pipeline_id = int(lead.get("pipeline_id") or 0)
-    except (TypeError, ValueError):
-        pipeline_id = 0
-    name = owner_name_for_pipeline(pipeline_id)
-    if name:
-        return name
-    return str(KOMMO_USERS.get(lead.get("responsible_user_id"), "") or "").strip()
 
 
-def personal_entry_stage(pipeline_id: int) -> tuple[int, int] | None:
-    stages, _names, ui = load_pipeline_stage_maps(pipeline_id)
-    skip = {"nerazobrannoye", "ugurlu", "imtina"}
-    for key, _label in ui:
-        if key in skip:
-            continue
-        status_id = stages.get(key)
-        if status_id:
-            return int(pipeline_id), int(status_id)
-    status_id = stages.get("sorgular") or stages.get("nizami")
-    if not status_id:
-        return None
-    return int(pipeline_id), int(status_id)
 
 
 def move_lead_to_icraci(lead_id, assignee_name: str) -> bool:
@@ -1758,54 +1523,10 @@ def route_deal_for_employee(name: str = "", chat_id=None) -> tuple[int, int] | N
     return None
 
 
-def get_pipeline_id_for_chat(chat_id=None) -> int:
-    owner = get_funnel_owner(chat_id)
-    if owner:
-        return int(owner["pipeline_id"])
-    return PIPELINE_ID
 
 
-def get_pipeline_stages_for_chat(chat_id=None) -> tuple[dict, dict]:
-    owner = get_funnel_owner(chat_id)
-    if owner:
-        return owner["stages"], owner["stage_names"]
-    return (STAGES, STAGE_NAMES)
 
 
-def get_rufat_completion_stage(pipeline_key: str, stage_key: str, chat_id=None, lead_pipeline_id: int | None = None) -> tuple[int, int, str] | None:
-    """Resolve the completion-stage choice across a personal funnel and Əməliyyatlar."""
-    if pipeline_key in ("rufat", "samil", "own", "personal"):
-        owner = get_funnel_owner(chat_id)
-        pipeline_id = int(lead_pipeline_id or (owner or {}).get("pipeline_id") or 0)
-        if pipeline_id in all_personal_pipeline_ids():
-            stages, names, _ui = load_pipeline_stage_maps(pipeline_id)
-            status_id = stages.get(stage_key)
-            if status_id:
-                return pipeline_id, int(status_id), names.get(int(status_id), stage_key)
-        if owner:
-            status_id = owner["stages"].get(stage_key)
-            if status_id:
-                return int(owner["pipeline_id"]), int(status_id), owner["stage_names"].get(int(status_id), stage_key)
-        return None
-    if pipeline_key == "operations":
-        if stage_key in ("samil", "shamil"):
-            stage_key = "rufat"
-        operation_stages = {
-            "rufat": (109988184, "Rüfət Həsənzadə"),
-            "soltan": (109988188, "Soltan Abbasov"),
-            "huseyn": (109988192, "Hüseyn Səfərov"),
-            "nizami": (109988196, "Nizami Qasımov"),
-            "rasim": (109988200, "Rasim Əsgərov"),
-            "sermaye": (109988204, "Sərmayə Əhmədsoy"),
-            "asya": (109988208, "Asya Agayeva"),
-            "nurane": (109988212, "Nuranə Şirinova"),
-            "ugurlu": (142, "Uğurla tamamlandı"),
-            "imtina": (143, "İmtina olundu"),
-        }
-        stage = operation_stages.get(stage_key)
-        if stage:
-            return GOZLEME_PIPELINE_ID, int(stage[0]), stage[1]
-    return None
 
 
 def get_lead_details(lead_id: int) -> dict | None:
@@ -2466,14 +2187,6 @@ def _normalize_kommo_entity_type(entity_type) -> str:
     return value or "leads"
 
 
-def _lead_pipeline_id(lead) -> int:
-    raw = (lead or {}).get("pipeline_id", 0) if isinstance(lead, dict) else 0
-    if isinstance(raw, dict):
-        raw = raw.get("id") or raw.get("pipeline_id") or 0
-    try:
-        return int(raw or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _cached_funnel_has_lead(chat_id, lead_id) -> bool:
@@ -18396,7 +18109,6 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Server xətası."}, status=500)
 
 # ─── Gözləmə Pipeline Configuration ────────────────────────────────────────
-GOZLEME_PIPELINE_ID = 14243944
 XATIRLAT_TASK_TYPE_ID = 4239844  # xatırlat muşt.
 TG_TO_STATUS_ID = {
     RUFAT_CHAT_ID: 109988184,   # Rüfət Həsənzadə
