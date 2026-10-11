@@ -134,6 +134,9 @@ class EntityArchitectureTests(unittest.TestCase):
             "search_contact_by_phone", "search_contacts_by_query", "get_contact_details",
             "update_contact_kommo", "create_contact_kommo", "get_lead_details",
             "update_lead_kommo", "create_lead_for_contact", "get_leads_by_status",
+            "get_contact_notes", "get_entity_tasks", "get_tasks",
+            "get_all_incomplete_tasks", "create_task", "add_note", "delete_note",
+            "update_note", "update_task_kommo", "get_kommo_task",
         }
         self.assertFalse(moved & definitions)
         source = (ROOT / "bot.py").read_text(encoding="utf-8-sig")
@@ -141,7 +144,10 @@ class EntityArchitectureTests(unittest.TestCase):
         self.assertIn("configure_deal_service(", source)
 
     def test_modules_are_bounded_and_do_not_import_bot(self):
-        for filename in ("legacy_kommo_contacts.py", "legacy_kommo_deals.py"):
+        for filename in (
+            "legacy_kommo_contacts.py", "legacy_kommo_deals.py",
+            "legacy_kommo_tasks.py", "legacy_kommo_notes.py",
+        ):
             source = (ROOT / filename).read_text(encoding="utf-8-sig")
             with self.subTest(filename=filename):
                 self.assertLessEqual(len(source.splitlines()), 250)

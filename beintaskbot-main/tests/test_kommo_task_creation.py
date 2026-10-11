@@ -13,7 +13,7 @@ class KommoTaskCreationTests(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[1]
         sources = [ast.parse((root / filename).read_text(encoding="utf-8-sig"))
-                   for filename in ("legacy_runtime_config.py", "legacy_kommo_funnels.py", "bot.py")]
+                   for filename in ("legacy_runtime_config.py", "legacy_kommo_funnels.py", "legacy_kommo_tasks.py", "bot.py")]
         names = {"KOMMO_TASK_RESPONSIBLE_USER_ID", "ACTIVE_ASSIGNEES", "kommo_user_id_for_employee_funnel", "create_task", "handle_api_action"}
         selected = [
             node for source in sources for node in source.body
@@ -25,7 +25,8 @@ class KommoTaskCreationTests(unittest.TestCase):
         self.ns = {
             "web": types.SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {"data": data, "status": status}),
             "asyncio": asyncio, "datetime": datetime, "timedelta": timedelta, "BAKU_TZ": timezone(timedelta(hours=4)),
-            "KOMMO_BASE_URL": "https://example.kommo.com", "HEADERS": {}, "_http": self.http, "logger": Mock(),
+            "KOMMO_BASE_URL": "https://example.kommo.com", "HEADERS": {}, "_headers": {}, "_http": self.http, "logger": Mock(),
+            "_on_create_started": Mock(), "_on_created": Mock(),
             "_mark_pending_bot_task_lead": Mock(), "_save_bot_created_cache": Mock(), "_bot_created_tasks": set(), "_bot_created_tasks_ts": {},
             "_TASK_CREATORS_FILE": "test-only", "read_json": lambda path: {}, "write_json": Mock(),
             "employee_personal_pipeline_ids": lambda: {10, 11, 12},

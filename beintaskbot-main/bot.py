@@ -105,6 +105,14 @@ from legacy_kommo_deals import (
     configure_deal_service, create_lead_for_contact, get_lead_details,
     get_leads_by_status, update_lead_kommo,
 )
+from legacy_kommo_tasks import (
+    _created_task_id, configure_task_service, create_task, get_all_incomplete_tasks,
+    get_entity_tasks, get_kommo_task, get_tasks, update_task_kommo,
+)
+from legacy_kommo_notes import (
+    _first_note_id, _note_entity_kind, _note_is_deleted, add_note,
+    configure_note_service, delete_note, get_contact_notes, update_note,
+)
 from legacy_user_registry import (
     _ACTIVE_STAFF_CHAT_IDS, _ACTIVE_TEAM_CHAT_IDS, _KNOWN_EMPLOYEE_REGISTRATIONS,
     _RETIRED_EMPLOYEE_CHAT_IDS, _SALARY_CHAT_IDS,
@@ -1301,6 +1309,21 @@ configure_deal_service(
     ),
     app_logger=logger,
 )
+configure_task_service(
+    http=_http,
+    headers=HEADERS,
+    on_create_started=lambda entity_id: _mark_pending_bot_task_lead(entity_id),
+    on_created=lambda result, creator: _record_bot_created_task(result, creator),
+    on_updated=lambda task_id: _bot_updated_tasks.__setitem__(int(task_id), _time_module.time()),
+    on_completed=lambda task_id: unregister_tecili_task(task_id),
+    app_logger=logger,
+)
+configure_note_service(
+    http=_http,
+    headers=HEADERS,
+    on_deleted=lambda note_id: _forget_cached_note(note_id),
+    app_logger=logger,
+)
 
 
 
@@ -1591,57 +1614,15 @@ def get_contact_name_from_entity(entity_id: int, entity_type: str) -> str:
         pass
     return ""
 
-def get_contact_notes(contact_id: int) -> list:
-    url = f"{KOMMO_BASE_URL}/api/v4/contacts/{contact_id}/notes"
-    try:
-        resp = _http.get(url, headers=HEADERS, params={"limit": 20, "order[updated_at]": "desc"}, timeout=8)
-        if resp.status_code == 200:
-            return resp.json().get("_embedded", {}).get("notes", [])
-    except:
-        pass
-    return []
 
-def get_entity_tasks(entity_id: int, entity_type: str) -> list:
-    url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-    params = {"filter[entity_id]": entity_id, "filter[entity_type]": entity_type, "filter[is_completed]": 0}
-    try:
-        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-        if resp.status_code == 200:
-            return resp.json().get("_embedded", {}).get("tasks", [])
-    except:
-        pass
-    return []
 
-def get_tasks(start: datetime, end: datetime, responsible_id: int = None) -> list:
-    url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-    params = {
-        "filter[is_completed]": 0,
-        "filter[complete_till][from]": int(start.timestamp()),
-        "filter[complete_till][to]": int(end.timestamp()),
-        "limit": 50,
-    }
-    if responsible_id:
-        params["filter[responsible_user_id]"] = responsible_id
-    try:
-        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-        if resp.status_code == 200:
-            return resp.json().get("_embedded", {}).get("tasks", [])
-    except:
-        pass
-    return []
 
-def get_all_incomplete_tasks() -> list:
-    url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-    params = {"filter[is_completed]": 0, "limit": 250}
-    try:
-        resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-        if resp.status_code == 200:
-            return resp.json().get("_embedded", {}).get("tasks", [])
-    except:
-        pass
-    return []
 
-_BOT_CREATED_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_bot_created_cache.json")
+
+_BOT_CREATED_CACHE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "_bot_created_cache.json",
+)
 
 
 def _save_bot_created_cache():
@@ -1689,6 +1670,29 @@ def _mark_pending_bot_task_lead(entity_id: int):
     _save_bot_created_cache()
 
 
+def _record_bot_created_task(result: dict, creator_name: str = "") -> None:
+    """Record a Kommo-created task for webhook deduplication and attribution."""
+    created_id = _created_task_id(result)
+    if not created_id:
+        return
+    _bot_created_tasks.add(created_id)
+    _bot_created_tasks_ts[created_id] = _time_module.time()
+    _save_bot_created_cache()
+    if len(_bot_created_tasks) > 500:
+        oldest = next(iter(_bot_created_tasks))
+        _bot_created_tasks.discard(oldest)
+        _bot_created_tasks_ts.pop(oldest, None)
+    if not creator_name:
+        return
+    creators = read_json(_TASK_CREATORS_FILE) or {}
+    creators[str(created_id)] = creator_name
+    if len(creators) > 500:
+        keys = list(creators)
+        for key in keys[:len(keys) - 400]:
+            del creators[key]
+    write_json(_TASK_CREATORS_FILE, creators)
+
+
 def _is_bot_created_task_webhook(task_id, entity_id) -> bool:
     _load_bot_created_cache()
     now = _time_module.time()
@@ -1716,348 +1720,28 @@ def _is_bot_created_task_webhook(task_id, entity_id) -> bool:
     return False
 
 
-def create_task(entity_id: int, text: str, complete_till: int, responsible_user_id: int = None, entity_type: str = "contacts", task_type_id: int = 1, creator_name: str = "") -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-    task_payload = {
-        "text": text,
-        "complete_till": complete_till,
-        "entity_id": entity_id,
-        "entity_type": entity_type,
-        "responsible_user_id": responsible_user_id or 10932455,
-    }
-    if task_type_id:
-        task_payload["task_type_id"] = task_type_id
-    payload = [task_payload]
-    logger.info(f"create_task: entity_id={entity_id}, text={text[:50]}, resp_user={responsible_user_id}, type_id={task_type_id}")
-    _mark_pending_bot_task_lead(entity_id)
-    try:
-        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
-        if resp.status_code not in (200, 201):
-            logger.error(f"create_task FAILED: status={resp.status_code}, body={resp.text[:300]}")
-        if resp.status_code in (200, 201):
-            result = resp.json()
-            try:
-                created_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
-                if created_id:
-                    import time as _time
-                    _bot_created_tasks.add(int(created_id))
-                    _bot_created_tasks_ts[int(created_id)] = _time.time()
-                    _save_bot_created_cache()
-                    if len(_bot_created_tasks) > 500:
-                        oldest = next(iter(_bot_created_tasks))
-                        _bot_created_tasks.discard(oldest)
-                        _bot_created_tasks_ts.pop(oldest, None)
-                    # Store creator name
-                    if creator_name:
-                        _creators = read_json(_TASK_CREATORS_FILE) or {}
-                        _creators[str(created_id)] = creator_name
-                        # Keep max 500 entries
-                        if len(_creators) > 500:
-                            keys = list(_creators.keys())
-                            for k in keys[:len(keys)-400]:
-                                del _creators[k]
-                        write_json(_TASK_CREATORS_FILE, _creators)
-            except Exception:
-                pass
-            return result
-    except Exception as e:
-        logger.error(f"Create task error: {e}")
-    return None
-
-def add_note(entity_id: int, text: str, entity_type: str = "contacts") -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes"
-    payload = [{"note_type": "common", "params": {"text": text}}]
-    try:
-        resp = _http.post(url, headers=HEADERS, json=payload, timeout=8)
-        if resp.status_code in (200, 201):
-            return resp.json()
-    except Exception as e:
-        logger.error(f"Add note error: {e}")
-    return None
-
-_NOTE_DELETED_MARK = "⟦silindi⟧"
-
-def _note_is_deleted(item: dict | None) -> bool:
-    text = str((item or {}).get("text") or "").strip()
-    return (not text) or text == _NOTE_DELETED_MARK
 
 
-def _lookup_note(note_id: int, kinds: list[str], entity_ids: list[int]) -> tuple[str, int, str]:
-    nid = int(note_id)
-    ids = [int(i) for i in entity_ids if int(i or 0)]
-    for kind in kinds:
-        for url, params in (
-            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", None),
-            (f"{KOMMO_BASE_URL}/api/v4/{kind}/notes", {"filter[id][]": nid, "limit": 1}),
-        ):
-            try:
-                resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-            except Exception as exc:
-                logger.warning("Lookup note %s failed: %s", url, exc)
-                continue
-            if resp.status_code != 200:
-                continue
-            payload = resp.json() if resp.content else {}
-            if isinstance(payload, dict) and payload.get("id"):
-                notes = [payload]
-            else:
-                notes = ((payload or {}).get("_embedded") or {}).get("notes") or []
-            if notes and isinstance(notes[0], dict):
-                note = notes[0]
-                try:
-                    eid = int(note.get("entity_id") or 0)
-                except (TypeError, ValueError):
-                    eid = 0
-                return kind, eid, str(note.get("note_type") or "common")
-        for eid in ids:
-            try:
-                resp = _http.get(
-                    f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes",
-                    headers=HEADERS,
-                    params={"limit": 250, "filter[id][]": nid},
-                    timeout=8,
-                )
-            except Exception:
-                continue
-            if resp.status_code != 200:
-                continue
-            for note in ((resp.json() or {}).get("_embedded") or {}).get("notes") or []:
-                if not isinstance(note, dict):
-                    continue
-                try:
-                    if int(note.get("id") or 0) != nid:
-                        continue
-                except (TypeError, ValueError):
-                    continue
-                return kind, eid, str(note.get("note_type") or "common")
-    return "", 0, ""
 
 
-def _note_is_present(note_id: int, kind: str, entity_id: int) -> bool | None:
-    """True when Kommo still has the note, False when a read proves it is gone."""
-    try:
-        nid = int(note_id)
-        eid = int(entity_id or 0)
-    except (TypeError, ValueError):
-        return None
-    if not nid or not kind:
-        return None
-    urls: list[tuple[str, dict | None]] = []
-    if eid:
-        urls.append((f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes", {"filter[id][]": nid, "limit": 5}))
-    urls.append((f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", None))
-    saw_answer = False
-    for url, params in urls:
-        try:
-            resp = _http.get(url, headers=HEADERS, params=params, timeout=8)
-        except Exception as exc:
-            logger.warning("Recheck note %s failed: %s", url, exc)
-            continue
-        if resp.status_code in {204, 404}:
-            saw_answer = True
-            continue
-        if resp.status_code != 200:
-            continue
-        saw_answer = True
-        payload = resp.json() if resp.content else {}
-        notes = []
-        if isinstance(payload, dict) and payload.get("id"):
-            notes = [payload]
-        elif isinstance(payload, dict):
-            notes = ((payload.get("_embedded") or {}).get("notes") or [])
-        for note in notes:
-            if not isinstance(note, dict):
-                continue
-            try:
-                if int(note.get("id") or 0) != nid:
-                    continue
-            except (TypeError, ValueError):
-                continue
-            if note.get("is_deleted") in {True, 1, "1"}:
-                continue
-            return True
-        if url.endswith(f"/notes/{nid}"):
-            return False
-    if saw_answer:
-        return False
-    return None
 
 
-def _note_text_is_blank(note_id: int, kind: str) -> bool:
-    try:
-        nid = int(note_id)
-    except (TypeError, ValueError):
-        return False
-    if not nid or not kind:
-        return False
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{kind}/notes/{nid}", headers=HEADERS, timeout=8)
-    except Exception as exc:
-        logger.warning("Blank note check %s failed: %s", note_id, exc)
-        return False
-    if resp.status_code in {204, 404}:
-        return True
-    if resp.status_code != 200:
-        return False
-    payload = resp.json() if resp.content else {}
-    params = payload.get("params") if isinstance(payload, dict) and isinstance(payload.get("params"), dict) else {}
-    return not str(params.get("text") or "").strip()
 
 
-def _kommo_ajax_delete_note(note_id: int, entity_id: int, kind: str) -> bool:
-    element_type = "1" if str(kind).startswith("contact") else "2"
-    form_headers = {
-        "Authorization": f"Bearer {KOMMO_TOKEN}",
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    attempts = [
-        (
-            f"{KOMMO_BASE_URL}/ajax/v1/notes/set/",
-            {
-                "request[notes][delete][0][id]": str(note_id),
-                "request[notes][delete][0][element_id]": str(entity_id or ""),
-                "request[notes][delete][0][element_type]": element_type,
-            },
-        ),
-        (
-            f"{KOMMO_BASE_URL}/private/notes/edit2.php",
-            {"ID": str(note_id), "ACTION": "NOTE_DELETE", "ELEMENT_ID": str(entity_id or ""), "ELEMENT_TYPE": element_type},
-        ),
-    ]
-    for url, form in attempts:
-        try:
-            resp = _http.post(url, headers=form_headers, data=form, timeout=10)
-        except Exception as exc:
-            logger.warning("Ajax delete note failed: %s", exc)
-            continue
-        body = (resp.text or "")
-        folded = body.lower()
-        if resp.status_code in {200, 202, 204} and "<html" not in folded and "login" not in folded:
-            if "error" in folded and "success" not in folded and "status\":\"ok" not in folded:
-                logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
-                continue
-            return True
-        logger.warning("Ajax delete note %s %s: %s", resp.status_code, url, body[:180])
-    try:
-        resp = _http.post(
-            f"{KOMMO_BASE_URL}/api/v2/notes",
-            headers=HEADERS,
-            json={"delete": [{"id": int(note_id)}]},
-            timeout=10,
-        )
-    except Exception as exc:
-        logger.warning("v2 delete note failed: %s", exc)
-        return False
-    if resp.status_code in {200, 202, 204}:
-        return True
-    logger.warning("v2 delete note %s: %s", resp.status_code, (resp.text or "")[:180])
-    return False
 
 
-def _note_delete_error(raw: str) -> str:
-    text = str(raw or "")
-    if not text or text.startswith("{") or "FieldMissing" in text or "Bad Request" in text:
-        return "Qeyd silinmədi."
-    return text[:180]
 
 
-def delete_note(note_id: int, entity_type: str = "leads", entity_id: int = 0, extra_ids: list[int] | None = None, note_type: str = "") -> tuple[bool, str]:
-    try:
-        nid = int(note_id)
-    except (TypeError, ValueError):
-        return False, "Qeyd tapılmadı."
-    try:
-        eid = int(entity_id or 0)
-    except (TypeError, ValueError):
-        eid = 0
-    ok, err = update_note(nid, " ", _note_entity_kind(entity_type), eid)
-    if ok:
-        _forget_cached_note(nid)
-        return True, ""
-    return False, err or "Qeyd silinmədi."
-
-def _note_entity_kind(entity_type: str) -> str:
-    raw = str(entity_type or "").strip().lower()
-    if raw.startswith("contact") or raw in {"1", "contacts"}:
-        return "contacts"
-    return "leads"
 
 
-def update_note(note_id: int, text: str, entity_type: str = "leads", entity_id: int = 0) -> tuple[bool, str]:
-    try:
-        nid = int(note_id)
-    except (TypeError, ValueError):
-        return False, "Qeyd tapılmadı."
-    try:
-        eid = int(entity_id or 0)
-    except (TypeError, ValueError):
-        eid = 0
-    primary = _note_entity_kind(entity_type)
-    kinds = [primary] + ([k for k in ("leads", "contacts") if k != primary])
-    body = {"id": nid, "params": {"text": str(text or "")}}
-    if eid:
-        body["entity_id"] = eid
-    last_err = "Qeyd yenilənmədi."
-    for kind in kinds:
-        payloads = [[{**body, "note_type": "common"}], [body]]
-        urls = [f"{KOMMO_BASE_URL}/api/v4/{kind}/notes"]
-        if eid:
-            urls.insert(0, f"{KOMMO_BASE_URL}/api/v4/{kind}/{eid}/notes")
-        for url in urls:
-            for payload in payloads:
-                try:
-                    resp = _http.patch(url, headers=HEADERS, json=payload, timeout=10)
-                except Exception as exc:
-                    logger.error("Update note error: %s", exc)
-                    last_err = str(exc)
-                    continue
-                if resp.status_code in {200, 202, 204}:
-                    return True, ""
-                last_err = (resp.text or "")[:240] or f"HTTP {resp.status_code}"
-                logger.warning("Update note %s %s: %s", resp.status_code, url, last_err)
-    return False, last_err
-
-def _created_task_id(result) -> int:
-    if not isinstance(result, dict):
-        return 0
-    tasks = (result.get("_embedded") or {}).get("tasks") or []
-    if tasks and isinstance(tasks[0], dict):
-        try:
-            return int(tasks[0].get("id") or 0)
-        except (TypeError, ValueError):
-            return 0
-    return 0
 
 
-def _first_note_id(result) -> int:
-    if not isinstance(result, dict):
-        return 0
-    notes = (result.get("_embedded") or {}).get("notes") or []
-    if notes and isinstance(notes[0], dict):
-        try:
-            return int(notes[0].get("id") or 0)
-        except (TypeError, ValueError):
-            return 0
-    return 0
 
 
-def update_task_kommo(task_id, data: dict) -> dict | None:
-    url = f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}"
-    import time as _time
-    _bot_updated_tasks[int(task_id)] = _time.time()
-    if data.get("is_completed"):
-        unregister_tecili_task(task_id)
-    try:
-        resp = _http.patch(url, headers=HEADERS, json=data, timeout=8)
-        logger.info(f"update_task_kommo {task_id}: status={resp.status_code}")
-        if resp.status_code == 200:
-            return resp.json()
-        else:
-            logger.error(f"update_task_kommo failed: {resp.status_code} {resp.text[:200]}")
-    except Exception as e:
-        logger.error(f"Update task error: {e}")
-    return None
+
+
+
+
 
 
 
@@ -2172,34 +1856,6 @@ def lead_allowed_for_chat(lead_id: int, chat_id: int) -> bool:
     return lead_belongs_to_pipeline(lead_id, get_pipeline_id_for_chat(chat_id))
 
 
-def get_kommo_task(task_id) -> dict | None:
-    try:
-        tid = int(task_id)
-    except (TypeError, ValueError):
-        return None
-    try:
-        resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{tid}", headers=HEADERS, timeout=8)
-        if resp.status_code == 200:
-            data = resp.json() or {}
-            if isinstance(data, dict) and data.get("id"):
-                return data
-            embedded = (data.get("_embedded") or {}).get("tasks") or []
-            if embedded:
-                return embedded[0]
-        resp = _http.get(
-            f"{KOMMO_BASE_URL}/api/v4/tasks",
-            headers=HEADERS,
-            params={"filter[id][]": tid, "limit": 1},
-            timeout=8,
-        )
-        if resp.status_code == 200:
-            tasks = (resp.json() or {}).get("_embedded", {}).get("tasks") or []
-            if tasks:
-                return tasks[0]
-        logger.warning("get_kommo_task %s HTTP %s", tid, getattr(resp, "status_code", "?"))
-    except Exception as exc:
-        logger.error("get_kommo_task error: %s", exc)
-    return None
 
 
 def task_payload_allowed_for_chat(task: dict, chat_id: int) -> bool:
