@@ -6194,6 +6194,937 @@ def _task_update_action_context() -> TaskUpdateContext:
     )
 
 
+async def _handle_legacy_info(data: dict, chat_id: int, phone: str) -> web.Response:
+    if is_funnel_chat(chat_id) and not is_admin(chat_id):
+        contacts = search_contact_by_phone(phone)
+        full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
+        if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
+            return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Rüfət."}, status=403)
+    result = execute_tool_get_lead_info(phone)
+    return web.json_response({"success": True, "message": result})
+
+
+async def _handle_legacy_add_note(data: dict, chat_id: int, phone: str) -> web.Response:
+                text = data.get("text", "")
+                if not text:
+                    return web.json_response({"success": False, "error": "Qeyd m\u0259tni bo\u015fdur."})
+                task_id_note = data.get("task_id")
+                if task_id_note:
+                    if not task_allowed_for_chat(task_id_note, chat_id):
+                        return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
+                    try:
+                        headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                        t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
+                        t_data = t_resp.json()
+                        entity_id = t_data.get("entity_id")
+                        entity_type = t_data.get("entity_type", "leads")
+                        if entity_id:
+                            note_payload = [{"note_type": "common", "params": {"text": text}}]
+                            _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
+                    except: pass
+                if phone and not task_id_note and is_funnel_chat(chat_id) and not is_admin(chat_id):
+                    contacts = search_contact_by_phone(phone)
+                    full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
+                    if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
+                        return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Rüfət."}, status=403)
+                result = execute_tool_add_note(phone, text) if (phone and not task_id_note) else "OK"
+                # Subtask
+                if data.get("create_subtask") and data.get("subtask_text"):
+                    st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "rufat" if is_rufat_chat(chat_id) else "soltan", chat_id=chat_id)
+                    if isinstance(st_result, dict) and st_result.get("success"):
+                        now = datetime.now(tz=BAKU_TZ)
+                        deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+                        create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
+                # Admin notify
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = None
+                for _nm, _cid in NAME_TO_CHAT.items():
+                    if _cid == chat_id and len(_nm) > 5:
+                        sender_name = _nm
+                        break
+                if not sender_name:
+                    sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
+                # Check if there's a pending assignee change waiting for this note
+                conf_key = data.get("conf_key", "")
+                pending = None
+                found_conf_key = conf_key
+                if _bot_app:
+                    pending_updates = _bot_app.bot_data.get("pending_updates", {})
+                    if conf_key and conf_key in pending_updates:
+                        pending = pending_updates[conf_key]
+                    elif task_id_note:
+                        # Fallback: find pending by task_id (compare as strings to avoid type mismatch)
+                        for pk, pv in pending_updates.items():
+                            if str(pv.get("task_id", "")) == str(task_id_note):
+                                pending = pv
+                                found_conf_key = pk
+                                break
+                if pending and admin_chat and _bot_app:
+                    # Send confirmation to admin WITH the note text + client details
+                    try:
+                        pending["note_text"] = text  # store note in pending for later
+                        # Get task details for rich notification
+                        client_name = pending.get("contact_name", "")
+                        client_phone = pending.get("phone", "")
+                        task_type_name = ""
+                        deal_link = pending.get("link", "")
+                        try:
+                            headers_k3 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                            t_resp3 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
+                            t_data3 = t_resp3.json()
+                            entity_id3 = t_data3.get("entity_id", "")
+                            entity_type3 = t_data3.get("entity_type", "leads")
+                            task_type_id = t_data3.get("task_type_id")
+                            if task_type_id:
+                                _LOCAL_TASK_TYPES = {4229218: "\u018flaq\u0259 saxla", 4229220: "G\u00f6r\u00fc\u015f", 4229222: "Qura\u015fd\u0131rma", 4229224: "Cavab g\u00f6zl\u0259nilir", 4229226: "T\u0259qdimat"}
+                                task_type_name = _LOCAL_TASK_TYPES.get(task_type_id, "")
+                            if entity_id3:
+                                deal_link = f"{KOMMO_BASE_URL}/{entity_type3}/detail/{entity_id3}"
+                                # Get lead/contact info
+                                l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
+                                l_data = l_resp.json()
+                                client_name = l_data.get("name", "") or client_name
+                                # Get contact phone
+                                contacts = l_data.get("_embedded", {}).get("contacts", [])
+                                if contacts:
+                                    c_id = contacts[0].get("id")
+                                    if c_id:
+                                        c_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{c_id}", headers=headers_k3, timeout=5)
+                                        c_data = c_resp.json()
+                                        for cf in c_data.get("custom_fields_values", []):
+                                            if cf.get("field_code") == "PHONE":
+                                                client_phone = cf["values"][0].get("value", "") or client_phone
+                                                break
+                        except: pass
+                        msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n"
+                        if client_name:
+                            msg_text += f"\n\ud83d\udc64 {client_name}"
+                        if client_phone:
+                            msg_text += f"\n\ud83d\udcde {client_phone}"
+                        msg_text += f"\n\ud83d\udcdd {pending.get('display_text', '')}"
+                        if task_type_name:
+                            msg_text += f"\n\ud83d\udccb N\u00f6v: {task_type_name}"
+                        msg_text += f"\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}"
+                        msg_text += f"\n\ud83d\udcac Qeyd: {text}"
+                        if deal_link:
+                            msg_text += f"\n\ud83d\udd17 {deal_link}"
+                        kb_json = {"inline_keyboard": [
+                            [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
+                            [{"text": "R\u00fcf\u0259t", "callback_data": f"updtask-{found_conf_key}-rufat"}, {"text": "H\u00fcseyn", "callback_data": f"updtask-{found_conf_key}-huseyn"}],
+                            [{"text": "Rasim", "callback_data": f"updtask-{found_conf_key}-rasim"}, {"text": "S\u0259rmay\u0259", "callback_data": f"updtask-{found_conf_key}-sermaye"}],
+                            [{"text": "Asya", "callback_data": f"updtask-{found_conf_key}-asya"}, {"text": "Nuran\u0259", "callback_data": f"updtask-{found_conf_key}-nurane"}],
+                            [{"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
+                            [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
+                        ]}
+                        tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
+                        tg_msg_id = None
+                        try:
+                            tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
+                        except: pass
+                        save_pending_action("reassign_task", {
+                            "contact_name": client_name or pending.get('display_text', ''),
+                            "phone": client_phone or pending.get("phone", ""),
+                            "lead_id": entity_id3 if entity_id3 else None,
+                            "task_id": pending.get('task_id'),
+                            "task_text": pending.get('display_text', ''),
+                            "task_type_name": task_type_name,
+                            "stage_name": f"İcraçı: {pending['sender_name']} → {pending['assignee_name_raw']}",
+                            "sender_name": pending['sender_name'],
+                            "assignee_name_raw": pending['assignee_name_raw'],
+                            "note": text,
+                            "link": deal_link or pending.get("link", ""),
+                            "conf_key": found_conf_key,
+                            "update_data": pending.get('update_data'),
+                            "creator_chat_id": pending.get('creator_chat_id'),
+                            "telegram_chat_id": admin_chat,
+                            "telegram_message_id": tg_msg_id,
+                        }, ["Təsdiq et", "Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
+                        send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending")
+                    except Exception as e:
+                        logger.error(f"add_note conf notification error: {e}")
+                elif admin_chat and admin_chat != chat_id and _bot_app:
+                    # Regular note notification (no pending assignee change)
+                    try:
+                        note_msg = f"\ud83d\udcdd *{sender_name}* qeyd \u0259lav\u0259 etdi:\n\n\ud83d\udcac {text}"
+                        if task_id_note:
+                            try:
+                                headers_k2 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+                                t_resp2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k2, timeout=5)
+                                t_data2 = t_resp2.json()
+                                entity_id2 = t_data2.get("entity_id", "")
+                                entity_type2 = t_data2.get("entity_type", "leads")
+                                task_text2 = t_data2.get("text", "")
+                                if task_text2:
+                                    note_msg += f"\n\ud83d\udcdd {task_text2}"
+                                if entity_id2:
+                                    note_msg += f"\n\ud83d\udd17 {KOMMO_BASE_URL}/{entity_type2}/detail/{entity_id2}"
+                            except: pass
+                        await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
+    #                    send_push_to_admin(note_msg, title="📝 Qeyd əlavə edildi")
+                    except: pass
+                # Extract link from result message
+                link = ""
+                if "\ud83d\udd17" in result:
+                    parts = result.split("\ud83d\udd17 ")
+                    if len(parts) > 1:
+                        link = parts[1].strip()
+                return web.json_response({"success": True, "message": result, "link": link})
+
+
+async def _handle_legacy_task(data: dict, chat_id: int, phone: str) -> web.Response:
+    text = data.get("text", "")
+    priority = _normalize_task_priority(data.get("priority", ""))
+    assignee_name_raw = normalize_assignee_name(data.get("assigneeName") or data.get("assignee_name"))
+    creator_name = get_employee_name_by_chat_id(chat_id, "")
+    if not assignee_name_raw:
+        return web.json_response({"success": False, "error": "İcraçı seçin."}, status=400)
+    # Routing: all legacy Sahə Meneceri assignments now go to Admin.
+    if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
+        assignee = "admin"
+    else:
+        assignee = "admin"
+    # Price is stored in text if provided (no more [Name] marker - we use pipeline stages)
+    price_val = data.get("price", "").strip()
+    if price_val:
+        text = f"[{price_val}] {text}"
+    deadline_key = data.get("deadline", "today")
+    now = datetime.now(tz=BAKU_TZ)
+    if deadline_key.startswith('custom:'):
+        try:
+            custom_val = deadline_key.replace('custom:', '')
+            deadline_dt = datetime.fromisoformat(custom_val).replace(tzinfo=BAKU_TZ)
+        except:
+            deadline_dt = now + timedelta(hours=2)
+    elif deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
+    elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
+    elif deadline_key == "today":
+        deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        if deadline_dt <= now: deadline_dt += timedelta(days=1)
+    elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    task_type_id = int(data.get("task_type") or data.get("task_type_id") or "1")
+    # If entity_id passed directly (from subtask), use it instead of phone search
+    direct_entity_id = data.get("entity_id")
+    direct_entity_type = data.get("entity_type", "leads")
+    if direct_entity_id:
+        direct_entity_id = int(direct_entity_id)
+        assignee_map_direct = {"rufat": 10932455, "soltan": 15531960, "huseyn": 10932455, "rasim": 10932455, "texniki": 10932455, "admin": 10932455, "sahe_meneceri": 10932455}
+        assignee_id_direct = assignee_map_direct.get(assignee, 10932455)
+        link_direct = f"{KOMMO_BASE_URL}/{direct_entity_type}/detail/{direct_entity_id}"
+        logger.info(f"Subtask create: entity_id={direct_entity_id}, entity_type={direct_entity_type}, assignee={assignee}, assignee_id={assignee_id_direct}")
+        result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
+    else:
+        client_name_input = data.get("client_name", "").strip()
+        result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input, chat_id=chat_id, assignee_name=assignee_name_raw)
+    if isinstance(result, str):
+        return web.json_response({"success": False, "error": result})
+    if not result.get("success"):
+        return web.json_response({"success": False, "error": result.get("message", "Xəta")})
+    deadline_ts = int(deadline_dt.timestamp())
+    # If non-admin creating for OTHERS, send to admin for confirmation
+    # If creating for themselves, no confirmation needed
+    is_admin_user = is_admin(chat_id)
+    creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
+    creates_for_self = task_assignee_is_self(chat_id, assignee_name_raw)
+    if not is_admin_user and not creates_for_self and _bot_app:
+        # Store pending task in bot_data
+        conf_key = str(uuid.uuid4())[:8]
+        pending = {
+            "entity_id": result["entity_id"], "entity_type": result["entity_type"],
+            "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
+            "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
+            "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
+            "creator_chat_id": chat_id, "priority": priority
+        }
+        _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
+        sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+        display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
+        admin_chat = get_chat_id_for_kommo_user(10932455)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Rüfət", callback_data=f"cnftask-{conf_key}-rufat"), InlineKeyboardButton("Hüseyn", callback_data=f"cnftask-{conf_key}-huseyn")],
+            [InlineKeyboardButton("Rasim", callback_data=f"cnftask-{conf_key}-rasim"), InlineKeyboardButton("Sərmayə", callback_data=f"cnftask-{conf_key}-sermaye")],
+            [InlineKeyboardButton("Asya", callback_data=f"cnftask-{conf_key}-asya"), InlineKeyboardButton("Nuranə", callback_data=f"cnftask-{conf_key}-nurane")],
+            [InlineKeyboardButton("Özüm", callback_data=f"cnftask-{conf_key}-admin")],
+            [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
+        ])
+        try:
+            await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
+            send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
+        except: pass
+        # Get lead stage for display
+        _lead_stage_name = ""
+        try:
+            _ld = get_lead_details(int(result.get('entity_id', 0)))
+            if _ld:
+                _sid = _ld.get("status_id")
+                _lead_stage_name = STAGE_NAMES.get(_sid, "")
+        except: pass
+        save_pending_action("assign_executor", {
+            "contact_name": result['contact_name'],
+            "phone": phone,
+            "lead_id": result.get('entity_id'),
+            "task_text": display_text,
+            "deadline": deadline_dt.strftime('%d.%m.%Y %H:%M'),
+            "sender_name": sender_name,
+            "assignee_name_raw": assignee_name_raw,
+            "stage_name": _lead_stage_name,
+            "link": result.get('link', ''),
+            "conf_key": conf_key,
+            "creator_chat_id": chat_id,
+        }, ["Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
+        return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
+    # Admin creates directly
+    logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
+    _pwa_creator = get_employee_name_by_chat_id(chat_id, "Admin")
+    res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id, creator_name=_pwa_creator)
+    logger.info(f"Create task result: {res}")
+    if res:
+        save_task_priority(res, priority)
+        msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
+        # Notify assignee by marker name
+        if assignee_name_raw:
+            target_chat = get_chat_id_by_name(assignee_name_raw)
+            logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
+            # An Admin-created task must never generate a self-notification or self-push.
+            if target_chat and target_chat != chat_id and not (is_admin_user and target_chat == ADMIN_CHAT_ID):
+                display_text = text.replace(f'[{assignee_name_raw}] ', '')
+                notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
+                try:
+                    _http.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                        json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
+                        timeout=8
+                    )
+                except: pass
+                send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
+                remember_staff_notice(target_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {display_text}", int(result.get("entity_id") or 0) if result.get("entity_type") == "leads" else 0)
+        return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
+    return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
+
+
+async def _handle_legacy_stage(data: dict, chat_id: int, phone: str) -> web.Response:
+                stage = data.get("stage", "")
+                if not stage:
+                    return web.json_response({"success": False, "error": "Mərhələ seçilməyib."})
+                result = execute_tool_change_stage(phone, stage, chat_id)
+                if not result.get("success"):
+                    return web.json_response({"success": False, "error": result.get("message", "Xəta")})
+                if result.get("needs_confirmation"):
+                    # Non-admin needs confirmation in both Telegram and the PWA.
+                    admin_chat = get_chat_id_for_kommo_user(10932455)
+                    sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                    stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
+                    conf_key = str(uuid.uuid4())[:8]
+                    if _bot_app:
+                        _bot_app.bot_data[f"confirm_{conf_key}"] = {
+                            "phone": result["phone"], "stage": stage,
+                            "lead_id": result["lead_id"], "status_id": result["status_id"],
+                            "sender_chat_id": chat_id,
+                            "sender_kommo_id": get_kommo_user_id_for_chat(chat_id),
+                        }
+                    sent = None
+                    if admin_chat and _bot_app:
+                        keyboard = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"),
+                            InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
+                        ]])
+                        try:
+                            sent = await _bot_app.bot.send_message(
+                                admin_chat,
+                                f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
+                                f"👤 {result['contact_name']}\n📞 {result['phone']}\n📌 {stage_display}",
+                                parse_mode="Markdown",
+                                reply_markup=keyboard,
+                            )
+                        except Exception as exc:
+                            logger.error(f"PWA stage confirmation send error: {exc}")
+                    send_push_to_admin(
+                        f"{sender_name}: {result['contact_name']} → {stage_display}",
+                        title="🔄 Mərhələ",
+                    url="#pending",
+                    )
+                    return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
+                update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
+                stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
+                # Notify admin
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                if admin_chat and admin_chat != chat_id and _bot_app:
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
+    #                    send_push_to_admin(f"{sender_name} mərhələni dəyişdi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
+                    except: pass
+                link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
+                # Auto-create task for the new stage if applicable
+                task_msg = ""
+                if stage in _STAGE_TASK_TEXTS:
+                    task_text = _STAGE_TASK_TEXTS[stage]
+                    now_dt = datetime.now(tz=BAKU_TZ)
+                    deadline_ts = int((now_dt + timedelta(hours=2)).timestamp())
+                    if stage == "qiymet_teklifi":
+                        create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+                    else:
+                        kommo_uid = get_kommo_user_id_for_chat(chat_id) or 10932455
+                        create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=kommo_uid, entity_type="leads")
+                    task_msg = f"\n\u2705 Tap\u015f\u0131r\u0131q: {task_text}"
+                return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}{task_msg}", "link": link})
+
+
+async def _handle_legacy_create_deal(data: dict, chat_id: int, phone: str) -> web.Response:
+    if not is_funnel_chat(chat_id):
+        return web.json_response({"success": False, "error": "Bu əməliyyat yalnız öz huniniz üçün mümkündür."}, status=403)
+    customer_name = str(data.get("customer_name") or "").strip()
+    note_text = str(data.get("note") or data.get("text") or "").strip()
+    stage_key = str(data.get("stage_key") or data.get("stage") or "").strip()
+    phone_raw = str(phone or data.get("phone") or "").strip()
+    if not customer_name:
+        return web.json_response({"success": False, "error": "Müştəri adını daxil edin."})
+    if not phone_raw or len(re.sub(r"\D", "", phone_raw)) < 7:
+        return web.json_response({"success": False, "error": "Telefon nömrəsini daxil edin."})
+    owner = get_funnel_owner(chat_id)
+    if not owner:
+        return web.json_response({"success": False, "error": "Huni tapılmadı."}, status=403)
+    pipeline_id = int(owner["pipeline_id"])
+    stages = owner["stages"]
+    names = owner["stage_names"]
+    if is_admin(chat_id):
+        try:
+            requested_pipeline = int(data.get("pipeline_id") or 0)
+        except (TypeError, ValueError):
+            requested_pipeline = 0
+        if requested_pipeline:
+            pipeline_id = requested_pipeline
+            stages, names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
+        if stage_key not in stages:
+            return web.json_response({"success": False, "error": "Mərhələni hunidən seçin."})
+    else:
+        working_keys = {
+            str(key)
+            for key, _label in (owner.get("ui_stages") or [])
+            if key not in ("ugurlu", "imtina", "nerazobrannoye")
+        }
+        if stage_key not in stages or (working_keys and stage_key not in working_keys):
+            return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
+    try:
+        selected_tags = tag_list(data.get("tags", []))
+    except ValueError as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=400)
+    utm_blob = " ".join((
+        str(data.get("utm_source") or ""),
+        str(data.get("utm_medium") or ""),
+        str(data.get("utm_campaign") or ""),
+        note_text,
+    ))
+    utm_label = menbe_from_utm(utm_blob)
+    menbe_cf = menbe_field_payload(utm_label) if utm_label else None
+    extra_fields = [menbe_cf] if menbe_cf else None
+    contacts = search_contact_by_phone(phone_raw)
+    contact_id = None
+    if contacts:
+        contact_id = int(contacts[0]["id"])
+        update_payload = {"name": customer_name}
+        if extra_fields:
+            update_payload["custom_fields_values"] = extra_fields
+        update_contact_kommo(contact_id, update_payload)
+    else:
+        created = create_contact_kommo(customer_name, phone_raw, extra_fields)
+        contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
+    if not contact_id:
+        return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
+    lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key], tags=selected_tags)
+    if not lead_id:
+        return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
+    applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
+    if note_text:
+        add_note(int(lead_id), note_text, "leads")
+    invalidate_rufat_overview_cache()
+    stage_label = names.get(int(stages[stage_key]), stage_key)
+    return web.json_response({
+        "success": True,
+        "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
+        "lead_id": int(lead_id),
+        "stage_key": stage_key,
+        "tags": selected_tags,
+        "utm": applied_utm,
+        "partners": get_partner_list_for_chat(chat_id),
+        "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
+    })
+
+
+async def _handle_legacy_update_task(data: dict, chat_id: int, phone: str) -> web.Response:
+    task_id = data.get("task_id")
+    if not task_id:
+        return web.json_response({"success": False, "error": "task_id yoxdur."})
+    if not task_allowed_for_chat(task_id, chat_id):
+        return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
+    update_data = {}
+    if data.get("text"):
+        update_data["text"] = data["text"]
+    # Handle assignee change
+    assignee = data.get("assignee")
+    assignee_name_raw = normalize_assignee_name(data.get("assigneeName", ""))
+    if assignee:
+        selected_assignee = ACTIVE_ASSIGNEES.get(str(assignee).casefold())
+        if selected_assignee:
+            update_data["responsible_user_id"] = selected_assignee[2]
+    # Handle task type change
+    task_type = data.get("task_type")
+    if task_type:
+        try:
+            update_data["task_type_id"] = int(task_type)
+        except: pass
+    if data.get("deadline"):
+        now = datetime.now(tz=BAKU_TZ)
+        dl = data["deadline"]
+        if dl.startswith('custom:'):
+            try:
+                new_dl = datetime.fromisoformat(dl.replace('custom:', '')).replace(tzinfo=BAKU_TZ)
+            except:
+                new_dl = now + timedelta(hours=2)
+        elif dl == "15m": new_dl = now + timedelta(minutes=15)
+        elif dl == "1h": new_dl = now + timedelta(hours=1)
+        elif dl == "today": new_dl = now.replace(hour=18, minute=0, second=0)
+        elif dl == "tomorrow": new_dl = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
+        elif dl == "week": new_dl = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
+        else: new_dl = now + timedelta(hours=2)
+        update_data["complete_till"] = int(new_dl.timestamp())
+    # Update contact name in Kommo if provided
+    edit_client_name = data.get("client_name", "").strip()
+    if edit_client_name and task_id:
+        # Get task to find entity_id, then find contact and update name
+        try:
+            t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+            if t_resp.status_code == 200:
+                task_info = t_resp.json()
+                eid = task_info.get("entity_id")
+                etype = task_info.get("entity_type", "leads")
+                if eid and etype == "contacts":
+                    update_contact_kommo(int(eid), {"name": edit_client_name})
+                elif eid and etype == "leads":
+                    l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/{eid}?with=contacts", headers=HEADERS, timeout=8)
+                    if l_resp.status_code == 200:
+                        contacts_emb = l_resp.json().get("_embedded", {}).get("contacts", [])
+                        if contacts_emb:
+                            update_contact_kommo(int(contacts_emb[0]["id"]), {"name": edit_client_name})
+        except Exception as e:
+            logger.error(f"Edit client_name update error: {e}")
+    _edit_priority = data.get("priority", "").strip()
+    if not update_data and not edit_client_name and not _edit_priority:
+        return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
+    # Non-admin changing assignee → send to admin for confirmation
+    is_admin_user = is_admin(chat_id)
+    creator_name = None
+    for _n, _cid in NAME_TO_CHAT.items():
+        if _cid == chat_id and len(_n) > 5:
+            creator_name = _n
+            break
+    # Check if assignee actually changed (compare with original)
+    original_assignee = data.get("originalAssignee", "")
+    assignee_actually_changed = assignee_name_raw and original_assignee and assignee_name_raw != original_assignee
+    if not is_admin_user and assignee_actually_changed and _bot_app:
+        # Non-admin changing assignee -> save pending, DON'T notify yet (wait for note)
+        sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
+        # Resolve contact details now, because this volatile pending entry may be
+        # completed later through a note callback after the original UI request.
+        pending_contact_name = data.get("client_name", "").strip()
+        pending_phone = phone
+        pending_link = ""
+        try:
+            task_response = _http.get(
+                f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8
+            )
+            if task_response.status_code == 200:
+                task_context = get_task_deal_context(task_response.json())
+                pending_contact_name = task_context.get("client_name") or pending_contact_name
+                pending_phone = task_context.get("phone") or pending_phone
+                pending_link = task_context.get("link") or pending_link
+        except Exception as context_error:
+            logger.warning("Could not resolve reassignment contact context for task %s: %s", task_id, context_error)
+        display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
+        conf_key = str(uuid.uuid4())[:8]
+        _bot_app.bot_data.setdefault("pending_updates", {})[conf_key] = {
+            "task_id": task_id, "update_data": update_data,
+            "assignee_name_raw": assignee_name_raw, "sender_name": sender_name,
+            "creator_chat_id": chat_id, "display_text": display_text,
+            "contact_name": pending_contact_name,
+            "phone": pending_phone,
+            "link": pending_link,
+        }
+        # Return conf_key so frontend can attach note to this pending update
+        return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
+    # Admin updates directly
+    # Save priority locally (not a Kommo field)
+    priority = data.get("priority", "").strip()
+    if priority:
+        task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+        task_priorities[str(task_id)] = priority
+        write_json(_TASK_PRIORITIES_FILE, task_priorities)
+    if not update_data:
+        # Only client_name or priority was changed, no Kommo task fields to update
+        # Still need entity_id for voice upload
+        _eid = None
+        _etype = "leads"
+        try:
+            _tr = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+            if _tr.status_code == 200:
+                _td = _tr.json()
+                _eid = _td.get("entity_id")
+                _etype = _td.get("entity_type", "leads")
+        except: pass
+        return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!", "entity_id": _eid, "entity_type": _etype})
+    result = update_task_kommo(task_id, update_data)
+    if result:
+        invalidate_rufat_overview_cache()
+        link = ""
+        try:
+            headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
+            t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
+            t_data = t_resp.json()
+            entity_id = t_data.get("entity_id", "")
+            entity_type = t_data.get("entity_type", "leads")
+            link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
+            # Save note if provided
+            note_text = data.get("note", "").strip()
+            if note_text and entity_id:
+                note_payload = [{"note_type": "common", "params": {"text": note_text}}]
+                _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=8)
+        except:
+            pass
+        return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link, "entity_id": entity_id, "entity_type": entity_type})
+    else:
+        return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
+
+
+async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> web.Response:
+    try:
+        task_id = int(data.get("task_id"))
+    except (TypeError, ValueError):
+        task_id = 0
+    if not task_id:
+        return web.json_response({"success": False, "error": "task_id yoxdur."})
+    task_data = get_kommo_task(task_id)
+    if not task_data:
+        return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
+    if not task_payload_allowed_for_chat(task_data, chat_id):
+        return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
+
+    task_context = get_task_deal_context(task_data)
+    lead_id = task_context["lead_id"]
+    link = task_context["link"]
+    phone = data.get("phone", "") or task_context["phone"]
+    contact_name = task_context["client_name"]
+    note_text = data.get("note", "").strip()
+    task_result_text = note_text or "Tamamlandı"
+    delay_reason = data.get("delay_reason", "")
+    task_type_id = int(task_data.get("task_type_id", 1) or 1)
+    task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
+    samil_completion_stage = None
+    selected_pipeline = str(data.get("completion_pipeline", "")).strip()
+    selected_stage = str(data.get("completion_stage", "")).strip()
+    if _salary_funnel_user(chat_id):
+        owner = get_funnel_owner(chat_id)
+        if owner:
+            selected_pipeline = "samil"
+            selected_stage = "ugurlu"
+            samil_completion_stage = (
+                int(owner["pipeline_id"]),
+                142,
+                owner["stage_names"].get(142) or "Uğurla tamamlandı",
+            )
+    elif is_funnel_chat(chat_id) and not is_admin(chat_id):
+        lead_pipeline_id = None
+        if lead_id:
+            try:
+                lead_pipeline_id = _lead_pipeline_id(get_lead_details(int(lead_id)))
+            except Exception:
+                lead_pipeline_id = None
+        samil_completion_stage = get_rufat_completion_stage(
+            selected_pipeline, selected_stage, chat_id=chat_id, lead_pipeline_id=lead_pipeline_id
+        )
+        if not samil_completion_stage:
+            return web.json_response({"success": False, "error": "Mərhələ seçin: öz vоронка və ya Əməliyyatlar lövhəsi."})
+
+    # Salary KPI is deterministic: on/before the Kommo deadline = 100,
+    # after the deadline = 0. Admin can correct it afterward.
+    kpi_result = None
+    try:
+        emp_type = get_employee_type(chat_id)
+        if emp_type == "salary":
+            # Auto-create session if none exists (timer removed from UI)
+            if not has_active_session(chat_id, int(task_id)):
+                start_task_session(chat_id, int(task_id))
+            kpi_result = finish_task_session(
+                chat_id,
+                int(task_id),
+                task_type_id,
+                delay_reason,
+                deadline_ts=task_deadline_ts,
+            )
+    except Exception as kpi_err:
+        logger.error(f"KPI processing error in complete_task: {kpi_err}\n{traceback.format_exc()}")
+
+    # Determine the creator before any completion-stage branch. This
+    # must be available not only in the final notification block, but
+    # also when legacy/new_stage handling runs first.
+    _task_creator_is_rufat = task_created_by_rufat(task_id)
+    result = update_task_kommo(
+        task_id,
+        {"is_completed": True, "result": {"text": task_result_text}},
+    )
+    stage_msg = ""
+    if result and lead_id:
+        record_lead_pulse_event(int(lead_id), "task_complete")
+        if samil_completion_stage:
+            target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
+            target_pipeline_name = owner_name_for_pipeline(target_pipeline_id) or "Əməliyyatlar lövhəsi"
+            if update_lead_kommo(
+                int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
+            ):
+                stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
+                maps, _names, _ui = load_pipeline_stage_maps(int(target_pipeline_id)) if int(target_pipeline_id) in all_personal_pipeline_ids() else ({}, {}, [])
+                rufat_stage_key = next(
+                    (key for key, sid in maps.items() if int(sid) == int(target_status_id)),
+                    None,
+                )
+                if rufat_stage_key:
+                    patch_rufat_overview_deal_stage(int(lead_id), rufat_stage_key)
+                else:
+                    invalidate_rufat_overview_cache()
+            else:
+                logger.error("Rüfət completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
+                stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
+        else:
+            # Existing behaviour for every employee other than Rüfət.
+            try:
+                _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
+                    headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": 142}, timeout=8)
+            except Exception as _ue:
+                logger.error(f"Failed to move lead to Ugurlu: {_ue}")
+    # Also change stage if requested by legacy clients.
+    new_stage = data.get("new_stage")
+    logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={phone}, result={bool(result)}")
+    if new_stage:
+        # Try to find lead: by phone or by task entity
+        status_id = STAGES.get(new_stage)
+        if phone:
+            stage_result = execute_tool_change_stage(phone, new_stage, chat_id)
+            logger.info(f"complete_task stage_result: {stage_result}")
+            if stage_result.get("success"):
+                lead_id = stage_result["lead_id"]
+                contact_name = stage_result.get("contact_name", "")
+                update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
+                stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
+                stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+        else:
+            # No phone - try to get lead from task entity
+            try:
+                task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
+                if task_resp.status_code == 200:
+                    task_data = task_resp.json()
+                    entity_id = task_data.get("entity_id")
+                    entity_type = task_data.get("entity_type", "contacts")
+                    if entity_type == "leads":
+                        lead_id = entity_id
+                    elif entity_type == "contacts":
+                        full_c = get_contact_details(entity_id)
+                        if full_c:
+                            leads = full_c.get("_embedded", {}).get("leads", [])
+                            if leads:
+                                lead_id = leads[0]["id"]
+            except: pass
+            if lead_id and status_id:
+                update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
+                stage_display = STAGE_NAMES.get(status_id, new_stage)
+                stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
+                link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
+    # The employee note is both the task result (set above) and a
+    # common note on the related deal.
+    if note_text:
+        if lead_id:
+            if not add_note(lead_id, note_text, "leads"):
+                logger.error(f"complete_task: failed to add deal note for lead {lead_id}")
+        else:
+            logger.warning(f"complete_task: task {task_id} has no related deal for note")
+
+    # Auto-create a task for legacy clients that explicitly submitted a
+    # stage with completion. The new admin stage buttons only move the deal.
+    stage_confirmed = stage_msg and "təsdiq" not in stage_msg
+    if lead_id and new_stage in _STAGE_TASK_TEXTS and stage_confirmed:
+        followup_text = _STAGE_TASK_TEXTS[new_stage]
+        deadline_dt = datetime.now(tz=BAKU_TZ) + timedelta(hours=2)
+        deadline_ts = int(deadline_dt.timestamp())
+        if new_stage == "qiymet_teklifi":
+            create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+        else:
+            creator_marker = get_employee_name_by_chat_id(chat_id, "")
+            if creator_marker:
+                followup_text = f"[{creator_marker}] {followup_text}"
+                create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+            else:
+                create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
+        stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
+
+    # A task created by Rüfət is handled by his admin account; do not
+    # send its completion to Nizami for confirmation.
+    if not is_admin(chat_id):  # Admin doesn't need self-confirmation
+      try:
+        logger.info("complete_task: ENTERING notification block")
+        task_text_full = task_data.get("text", "").strip()
+        task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
+        task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
+        completion_sender = get_employee_name_by_chat_id(
+            chat_id,
+            KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
+        )
+        # Queue piecework earnings for Admin confirmation and persist the
+        # task context needed by the redesigned balance history.
+        try:
+            # Price can be in [Price] or [Name:Price] format
+            price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
+            if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
+                amount = float(price_match.group(1))
+                if amount > 0:
+                    add_balance_transaction(
+                        chat_id,
+                        int(task_id),
+                        amount,
+                        price_match.group(2) or task_text_full,
+                        executor_name=completion_sender,
+                        client=contact_name or "—",
+                        phone=phone or "—",
+                        task_type=task_type_name,
+                        result_text=note_text or task_result_text,
+                        kpi=0,
+                        status="pending",
+                    )
+        except Exception as balance_error:
+            logger.error(f"Pending balance transaction error: {balance_error}")
+
+        admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
+        logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
+
+        # Completion review is an explicit per-employee setting. No
+        # stage change ever creates an Admin confirmation.
+        if admin_chat and employee_requires_completion_approval(chat_id):
+            deadline_display = (
+                datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+                if task_deadline_ts else "—"
+            )
+            kpi_info = ""
+            if kpi_result:
+                timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
+                kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
+                if delay_reason:
+                    kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
+
+            # Get current deal stage
+            current_stage_name = "—"
+            if lead_id:
+                try:
+                    lead_detail = get_lead_details(int(lead_id))
+                    if lead_detail:
+                        current_status_id = lead_detail.get("status_id")
+                        current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
+                except Exception:
+                    pass
+            completion_message = (
+                f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
+                f"👤 {contact_name or '—'}\n"
+                f"📝 {task_desc_display or '—'}\n"
+                f"📞 {phone or '—'}\n"
+                f"⏰ {deadline_display}\n"
+                f"📋 {task_type_name}\n"
+                f"📌 Mərhələ: {current_stage_name}"
+            )
+            if note_text:
+                completion_message += f"\n💬 İcraçı qeydi: {note_text}"
+            completion_message += kpi_info
+            if link:
+                completion_message += f"\n🔗 {link}"
+
+            raw_task_text = task_data.get("text", "").strip()
+            task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
+            try:
+                _http.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": admin_chat,
+                        "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
+                        "disable_web_page_preview": True,
+                    },
+                    timeout=8
+                )
+                save_pending_action("change_stage", {
+                    "contact_name": contact_name or "—",
+                    "phone": phone or "—",
+                    "lead_id": lead_id,
+                    "task_id": int(task_id),
+                    "sender_name": completion_sender,
+                    "sender_chat_id": int(chat_id),
+                    "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
+                    "task_price": task_price_match.group(1) if task_price_match else "",
+                    "note": note_text or "",
+                    "completion_kind": "employee_review",
+                    "stage_name": current_stage_name,
+                    "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
+                    "link": link,
+                }, ["Təsdiq et", "Rədd et"])
+                send_push_to_admin(
+                    f"{completion_sender}: {contact_name or '—'}",
+                    title="✅ Sifariş tamamlandı — təsdiq gözləyir",
+                    url="#pending",
+                )
+            except Exception as notify_error:
+                logger.error(f"Completion notification error: {notify_error}")
+
+        # Notify the task creator independently of the Admin confirmation
+        # flow. In particular, Rüfət receives his own tasks' completion
+        # notice, even though Nizami receives no confirmation request.
+        try:
+            _creators_data = read_json(_TASK_CREATORS_FILE) or {}
+            _creator_name = _creators_data.get(str(task_id), "")
+            _creator_chat = RUFAT_CHAT_ID if _task_creator_is_rufat else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
+            if _creator_chat and int(_creator_chat) != int(chat_id):
+                _c_cn = contact_name or "—"
+                _c_td = task_desc_display or "—"
+                _c_ph = phone or "—"
+                _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
+                    f"👤 {_c_cn}\n"
+                    f"📝 {_c_td}\n"
+                    f"👷 İcraçı: {completion_sender}\n"
+                    f"📞 {_c_ph}")
+                if link: _creator_msg += f"\n🔗 {link}"
+                _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
+        except Exception as _cav_err:
+            logger.warning(f"Cavabdeh notification error: {_cav_err}")
+      except Exception as notif_block_err:
+        logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
+      localStorage_key = f'timer_{task_id}'
+      msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+      return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+    else:
+      # Admin completing task - just return success
+      msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+      return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+
+
+async def _handle_legacy_close_job_report(data: dict, chat_id: int, phone: str) -> web.Response:
+                comment = data.get("master_comment", "")
+                if not comment:
+                    return web.json_response({"success": False, "error": "Hesabat mətni boşdur."})
+                # Notify admin about job completion
+                admin_chat = get_chat_id_for_kommo_user(10932455)
+                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
+                if admin_chat and _bot_app:
+                    try:
+                        await _bot_app.bot.send_message(admin_chat, f"✅ *{sender_name}* iş hesabatı:\n\n📝 {comment}", parse_mode="Markdown")
+    #                    send_push_to_admin(f"{sender_name}: {comment[:80]}", title="✅ İş hesabatı")
+                    except: pass
+                return web.json_response({"success": True, "message": "✅ Hesabat göndərildi!"})
+
+
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
     parsed = await parse_action_request(request, load_users)
@@ -6250,594 +7181,17 @@ async def handle_api_action(request: web.Request) -> web.Response:
             )
             return web.json_response(result.payload, status=result.status)
         elif action == "info":
-            if is_funnel_chat(chat_id) and not is_admin(chat_id):
-                contacts = search_contact_by_phone(phone)
-                full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
-                if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
-                    return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Rüfət."}, status=403)
-            result = execute_tool_get_lead_info(phone)
-            return web.json_response({"success": True, "message": result})
+            return await _handle_legacy_info(data, chat_id, phone)
         elif action == "add_note":
-            text = data.get("text", "")
-            if not text:
-                return web.json_response({"success": False, "error": "Qeyd m\u0259tni bo\u015fdur."})
-            task_id_note = data.get("task_id")
-            if task_id_note:
-                if not task_allowed_for_chat(task_id_note, chat_id):
-                    return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-                try:
-                    headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k)
-                    t_data = t_resp.json()
-                    entity_id = t_data.get("entity_id")
-                    entity_type = t_data.get("entity_type", "leads")
-                    if entity_id:
-                        note_payload = [{"note_type": "common", "params": {"text": text}}]
-                        _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload)
-                except: pass
-            if phone and not task_id_note and is_funnel_chat(chat_id) and not is_admin(chat_id):
-                contacts = search_contact_by_phone(phone)
-                full_contact = get_contact_details(contacts[0]["id"]) if contacts else None
-                if not any(lead_allowed_for_chat(int(lead.get("id")), chat_id) for lead in (full_contact or {}).get("_embedded", {}).get("leads", [])):
-                    return web.json_response({"success": False, "error": "Доступ запрещён: сделка не в воронке Rüfət."}, status=403)
-            result = execute_tool_add_note(phone, text) if (phone and not task_id_note) else "OK"
-            # Subtask
-            if data.get("create_subtask") and data.get("subtask_text"):
-                st_result = execute_tool_create_task(phone, data["subtask_text"], None, None, "rufat" if is_rufat_chat(chat_id) else "soltan", chat_id=chat_id)
-                if isinstance(st_result, dict) and st_result.get("success"):
-                    now = datetime.now(tz=BAKU_TZ)
-                    deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-                    create_task(st_result["entity_id"], data["subtask_text"], int(deadline_dt.timestamp()), responsible_user_id=st_result["assignee_id"], entity_type=st_result["entity_type"])
-            # Admin notify
-            admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = None
-            for _nm, _cid in NAME_TO_CHAT.items():
-                if _cid == chat_id and len(_nm) > 5:
-                    sender_name = _nm
-                    break
-            if not sender_name:
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), 'Əməkdaş')
-            # Check if there's a pending assignee change waiting for this note
-            conf_key = data.get("conf_key", "")
-            pending = None
-            found_conf_key = conf_key
-            if _bot_app:
-                pending_updates = _bot_app.bot_data.get("pending_updates", {})
-                if conf_key and conf_key in pending_updates:
-                    pending = pending_updates[conf_key]
-                elif task_id_note:
-                    # Fallback: find pending by task_id (compare as strings to avoid type mismatch)
-                    for pk, pv in pending_updates.items():
-                        if str(pv.get("task_id", "")) == str(task_id_note):
-                            pending = pv
-                            found_conf_key = pk
-                            break
-            if pending and admin_chat and _bot_app:
-                # Send confirmation to admin WITH the note text + client details
-                try:
-                    pending["note_text"] = text  # store note in pending for later
-                    # Get task details for rich notification
-                    client_name = pending.get("contact_name", "")
-                    client_phone = pending.get("phone", "")
-                    task_type_name = ""
-                    deal_link = pending.get("link", "")
-                    try:
-                        headers_k3 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                        t_resp3 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{pending['task_id']}", headers=headers_k3, timeout=5)
-                        t_data3 = t_resp3.json()
-                        entity_id3 = t_data3.get("entity_id", "")
-                        entity_type3 = t_data3.get("entity_type", "leads")
-                        task_type_id = t_data3.get("task_type_id")
-                        if task_type_id:
-                            _LOCAL_TASK_TYPES = {4229218: "\u018flaq\u0259 saxla", 4229220: "G\u00f6r\u00fc\u015f", 4229222: "Qura\u015fd\u0131rma", 4229224: "Cavab g\u00f6zl\u0259nilir", 4229226: "T\u0259qdimat"}
-                            task_type_name = _LOCAL_TASK_TYPES.get(task_type_id, "")
-                        if entity_id3:
-                            deal_link = f"{KOMMO_BASE_URL}/{entity_type3}/detail/{entity_id3}"
-                            # Get lead/contact info
-                            l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/{entity_type3}/{entity_id3}", headers=headers_k3, timeout=5)
-                            l_data = l_resp.json()
-                            client_name = l_data.get("name", "") or client_name
-                            # Get contact phone
-                            contacts = l_data.get("_embedded", {}).get("contacts", [])
-                            if contacts:
-                                c_id = contacts[0].get("id")
-                                if c_id:
-                                    c_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts/{c_id}", headers=headers_k3, timeout=5)
-                                    c_data = c_resp.json()
-                                    for cf in c_data.get("custom_fields_values", []):
-                                        if cf.get("field_code") == "PHONE":
-                                            client_phone = cf["values"][0].get("value", "") or client_phone
-                                            break
-                    except: pass
-                    msg_text = f"\u270f\ufe0f {pending['sender_name']} icra\u00e7\u0131n\u0131 d\u0259yi\u015fm\u0259k ist\u0259yir:\n"
-                    if client_name:
-                        msg_text += f"\n\ud83d\udc64 {client_name}"
-                    if client_phone:
-                        msg_text += f"\n\ud83d\udcde {client_phone}"
-                    msg_text += f"\n\ud83d\udcdd {pending.get('display_text', '')}"
-                    if task_type_name:
-                        msg_text += f"\n\ud83d\udccb N\u00f6v: {task_type_name}"
-                    msg_text += f"\n\ud83d\udc64 {pending['sender_name']} \u2192 {pending['assignee_name_raw']}"
-                    msg_text += f"\n\ud83d\udcac Qeyd: {text}"
-                    if deal_link:
-                        msg_text += f"\n\ud83d\udd17 {deal_link}"
-                    kb_json = {"inline_keyboard": [
-                        [{"text": "\u2705 T\u0259sdiq et", "callback_data": f"updtask-{found_conf_key}-yes"}],
-                        [{"text": "R\u00fcf\u0259t", "callback_data": f"updtask-{found_conf_key}-rufat"}, {"text": "H\u00fcseyn", "callback_data": f"updtask-{found_conf_key}-huseyn"}],
-                        [{"text": "Rasim", "callback_data": f"updtask-{found_conf_key}-rasim"}, {"text": "S\u0259rmay\u0259", "callback_data": f"updtask-{found_conf_key}-sermaye"}],
-                        [{"text": "Asya", "callback_data": f"updtask-{found_conf_key}-asya"}, {"text": "Nuran\u0259", "callback_data": f"updtask-{found_conf_key}-nurane"}],
-                        [{"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
-                        [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
-                    ]}
-                    tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
-                    tg_msg_id = None
-                    try:
-                        tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
-                    except: pass
-                    save_pending_action("reassign_task", {
-                        "contact_name": client_name or pending.get('display_text', ''),
-                        "phone": client_phone or pending.get("phone", ""),
-                        "lead_id": entity_id3 if entity_id3 else None,
-                        "task_id": pending.get('task_id'),
-                        "task_text": pending.get('display_text', ''),
-                        "task_type_name": task_type_name,
-                        "stage_name": f"İcraçı: {pending['sender_name']} → {pending['assignee_name_raw']}",
-                        "sender_name": pending['sender_name'],
-                        "assignee_name_raw": pending['assignee_name_raw'],
-                        "note": text,
-                        "link": deal_link or pending.get("link", ""),
-                        "conf_key": found_conf_key,
-                        "update_data": pending.get('update_data'),
-                        "creator_chat_id": pending.get('creator_chat_id'),
-                        "telegram_chat_id": admin_chat,
-                        "telegram_message_id": tg_msg_id,
-                    }, ["Təsdiq et", "Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
-                    send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending")
-                except Exception as e:
-                    logger.error(f"add_note conf notification error: {e}")
-            elif admin_chat and admin_chat != chat_id and _bot_app:
-                # Regular note notification (no pending assignee change)
-                try:
-                    note_msg = f"\ud83d\udcdd *{sender_name}* qeyd \u0259lav\u0259 etdi:\n\n\ud83d\udcac {text}"
-                    if task_id_note:
-                        try:
-                            headers_k2 = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                            t_resp2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id_note}", headers=headers_k2, timeout=5)
-                            t_data2 = t_resp2.json()
-                            entity_id2 = t_data2.get("entity_id", "")
-                            entity_type2 = t_data2.get("entity_type", "leads")
-                            task_text2 = t_data2.get("text", "")
-                            if task_text2:
-                                note_msg += f"\n\ud83d\udcdd {task_text2}"
-                            if entity_id2:
-                                note_msg += f"\n\ud83d\udd17 {KOMMO_BASE_URL}/{entity_type2}/detail/{entity_id2}"
-                        except: pass
-                    await _bot_app.bot.send_message(admin_chat, note_msg, parse_mode="Markdown", disable_web_page_preview=True)
-#                    send_push_to_admin(note_msg, title="📝 Qeyd əlavə edildi")
-                except: pass
-            # Extract link from result message
-            link = ""
-            if "\ud83d\udd17" in result:
-                parts = result.split("\ud83d\udd17 ")
-                if len(parts) > 1:
-                    link = parts[1].strip()
-            return web.json_response({"success": True, "message": result, "link": link})
+            return await _handle_legacy_add_note(data, chat_id, phone)
         elif action == "task":
-            text = data.get("text", "")
-            priority = _normalize_task_priority(data.get("priority", ""))
-            assignee_name_raw = normalize_assignee_name(data.get("assigneeName") or data.get("assignee_name"))
-            creator_name = get_employee_name_by_chat_id(chat_id, "")
-            if not assignee_name_raw:
-                return web.json_response({"success": False, "error": "İcraçı seçin."}, status=400)
-            # Routing: all legacy Sahə Meneceri assignments now go to Admin.
-            if assignee_name_raw.lower() in ("nizami", "nizami qasımov"):
-                assignee = "admin"
-            else:
-                assignee = "admin"
-            # Price is stored in text if provided (no more [Name] marker - we use pipeline stages)
-            price_val = data.get("price", "").strip()
-            if price_val:
-                text = f"[{price_val}] {text}"
-            deadline_key = data.get("deadline", "today")
-            now = datetime.now(tz=BAKU_TZ)
-            if deadline_key.startswith('custom:'):
-                try:
-                    custom_val = deadline_key.replace('custom:', '')
-                    deadline_dt = datetime.fromisoformat(custom_val).replace(tzinfo=BAKU_TZ)
-                except:
-                    deadline_dt = now + timedelta(hours=2)
-            elif deadline_key == "15m": deadline_dt = now + timedelta(minutes=15)
-            elif deadline_key == "1h": deadline_dt = now + timedelta(hours=1)
-            elif deadline_key == "today":
-                deadline_dt = now.replace(hour=17, minute=0, second=0, microsecond=0)
-                if deadline_dt <= now: deadline_dt += timedelta(days=1)
-            elif deadline_key == "tomorrow": deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-            else: deadline_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-            task_type_id = int(data.get("task_type") or data.get("task_type_id") or "1")
-            # If entity_id passed directly (from subtask), use it instead of phone search
-            direct_entity_id = data.get("entity_id")
-            direct_entity_type = data.get("entity_type", "leads")
-            if direct_entity_id:
-                direct_entity_id = int(direct_entity_id)
-                assignee_map_direct = {"rufat": 10932455, "soltan": 15531960, "huseyn": 10932455, "rasim": 10932455, "texniki": 10932455, "admin": 10932455, "sahe_meneceri": 10932455}
-                assignee_id_direct = assignee_map_direct.get(assignee, 10932455)
-                link_direct = f"{KOMMO_BASE_URL}/{direct_entity_type}/detail/{direct_entity_id}"
-                logger.info(f"Subtask create: entity_id={direct_entity_id}, entity_type={direct_entity_type}, assignee={assignee}, assignee_id={assignee_id_direct}")
-                result = {"success": True, "entity_id": direct_entity_id, "entity_type": direct_entity_type, "assignee_id": assignee_id_direct, "contact_name": "", "link": link_direct, "phone": phone, "assignee_name": assignee_name_raw or assignee}
-            else:
-                client_name_input = data.get("client_name", "").strip()
-                result = execute_tool_create_task(phone, text, None, None, assignee, client_name=client_name_input, chat_id=chat_id, assignee_name=assignee_name_raw)
-            if isinstance(result, str):
-                return web.json_response({"success": False, "error": result})
-            if not result.get("success"):
-                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
-            deadline_ts = int(deadline_dt.timestamp())
-            # If non-admin creating for OTHERS, send to admin for confirmation
-            # If creating for themselves, no confirmation needed
-            is_admin_user = is_admin(chat_id)
-            creator_name = creator_name or get_employee_name_by_chat_id(chat_id, "")
-            creates_for_self = task_assignee_is_self(chat_id, assignee_name_raw)
-            if not is_admin_user and not creates_for_self and _bot_app:
-                # Store pending task in bot_data
-                conf_key = str(uuid.uuid4())[:8]
-                pending = {
-                    "entity_id": result["entity_id"], "entity_type": result["entity_type"],
-                    "text": text, "deadline_ts": deadline_ts, "assignee_id": result["assignee_id"],
-                    "task_type_id": task_type_id, "assignee_name_raw": assignee_name_raw,
-                    "contact_name": result["contact_name"], "phone": phone, "link": result.get("link", ""),
-                    "creator_chat_id": chat_id, "priority": priority
-                }
-                _bot_app.bot_data.setdefault("pending_tasks", {})[conf_key] = pending
-                sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                display_text = text.replace(f'[{assignee_name_raw}] ', '') if assignee_name_raw else text
-                admin_chat = get_chat_id_for_kommo_user(10932455)
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Rüfət", callback_data=f"cnftask-{conf_key}-rufat"), InlineKeyboardButton("Hüseyn", callback_data=f"cnftask-{conf_key}-huseyn")],
-                    [InlineKeyboardButton("Rasim", callback_data=f"cnftask-{conf_key}-rasim"), InlineKeyboardButton("Sərmayə", callback_data=f"cnftask-{conf_key}-sermaye")],
-                    [InlineKeyboardButton("Asya", callback_data=f"cnftask-{conf_key}-asya"), InlineKeyboardButton("Nuranə", callback_data=f"cnftask-{conf_key}-nurane")],
-                    [InlineKeyboardButton("Özüm", callback_data=f"cnftask-{conf_key}-admin")],
-                    [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
-                ])
-                try:
-                    await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
-                    send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
-                except: pass
-                # Get lead stage for display
-                _lead_stage_name = ""
-                try:
-                    _ld = get_lead_details(int(result.get('entity_id', 0)))
-                    if _ld:
-                        _sid = _ld.get("status_id")
-                        _lead_stage_name = STAGE_NAMES.get(_sid, "")
-                except: pass
-                save_pending_action("assign_executor", {
-                    "contact_name": result['contact_name'],
-                    "phone": phone,
-                    "lead_id": result.get('entity_id'),
-                    "task_text": display_text,
-                    "deadline": deadline_dt.strftime('%d.%m.%Y %H:%M'),
-                    "sender_name": sender_name,
-                    "assignee_name_raw": assignee_name_raw,
-                    "stage_name": _lead_stage_name,
-                    "link": result.get('link', ''),
-                    "conf_key": conf_key,
-                    "creator_chat_id": chat_id,
-                }, ["Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
-                return web.json_response({"success": True, "message": "⏳ Tapşırıq təsdiq üçün göndərildi.", "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads')})
-            # Admin creates directly
-            logger.info(f"Admin creating task: entity_id={result['entity_id']}, type={result['entity_type']}, assignee_id={result['assignee_id']}, task_type={task_type_id}, text={text[:50]}")
-            _pwa_creator = get_employee_name_by_chat_id(chat_id, "Admin")
-            res = create_task(int(result["entity_id"]), text, deadline_ts, responsible_user_id=int(result["assignee_id"]), entity_type=result["entity_type"], task_type_id=task_type_id, creator_name=_pwa_creator)
-            logger.info(f"Create task result: {res}")
-            if res:
-                save_task_priority(res, priority)
-                msg = f"✅ Tapşırıq yaradıldı!\n👤 {result['contact_name']}\n📞 {phone}\n📝 {text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 Məsul: {result['assignee_name']}"
-                # Notify assignee by marker name
-                if assignee_name_raw:
-                    target_chat = get_chat_id_by_name(assignee_name_raw)
-                    logger.info(f"create_task notify: assignee_name_raw={assignee_name_raw}, target_chat={target_chat}, chat_id={chat_id}")
-                    # An Admin-created task must never generate a self-notification or self-push.
-                    if target_chat and target_chat != chat_id and not (is_admin_user and target_chat == ADMIN_CHAT_ID):
-                        display_text = text.replace(f'[{assignee_name_raw}] ', '')
-                        notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
-                        try:
-                            _http.post(
-                                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                                json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
-                                timeout=8
-                            )
-                        except: pass
-                        send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
-                        remember_staff_notice(target_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {display_text}", int(result.get("entity_id") or 0) if result.get("entity_type") == "leads" else 0)
-                return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
-            return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
+            return await _handle_legacy_task(data, chat_id, phone)
         elif action == "stage":
-            stage = data.get("stage", "")
-            if not stage:
-                return web.json_response({"success": False, "error": "Mərhələ seçilməyib."})
-            result = execute_tool_change_stage(phone, stage, chat_id)
-            if not result.get("success"):
-                return web.json_response({"success": False, "error": result.get("message", "Xəta")})
-            if result.get("needs_confirmation"):
-                # Non-admin needs confirmation in both Telegram and the PWA.
-                admin_chat = get_chat_id_for_kommo_user(10932455)
-                sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-                stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
-                conf_key = str(uuid.uuid4())[:8]
-                if _bot_app:
-                    _bot_app.bot_data[f"confirm_{conf_key}"] = {
-                        "phone": result["phone"], "stage": stage,
-                        "lead_id": result["lead_id"], "status_id": result["status_id"],
-                        "sender_chat_id": chat_id,
-                        "sender_kommo_id": get_kommo_user_id_for_chat(chat_id),
-                    }
-                sent = None
-                if admin_chat and _bot_app:
-                    keyboard = InlineKeyboardMarkup([[
-                        InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"),
-                        InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
-                    ]])
-                    try:
-                        sent = await _bot_app.bot.send_message(
-                            admin_chat,
-                            f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
-                            f"👤 {result['contact_name']}\n📞 {result['phone']}\n📌 {stage_display}",
-                            parse_mode="Markdown",
-                            reply_markup=keyboard,
-                        )
-                    except Exception as exc:
-                        logger.error(f"PWA stage confirmation send error: {exc}")
-                send_push_to_admin(
-                    f"{sender_name}: {result['contact_name']} → {stage_display}",
-                    title="🔄 Mərhələ",
-                url="#pending",
-                )
-                return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
-            update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
-            stage_display = get_pipeline_stages_for_chat(chat_id)[1].get(result["status_id"], stage)
-            # Notify admin
-            admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-            if admin_chat and admin_chat != chat_id and _bot_app:
-                try:
-                    await _bot_app.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələni dəyişdi:\n\n👤 {result['contact_name']}\n📞 {phone}\n📌 {stage_display}", parse_mode="Markdown")
-#                    send_push_to_admin(f"{sender_name} mərhələni dəyişdi: {result['contact_name']} → {stage_display}", title="🔄 Mərhələ")
-                except: pass
-            link = f"{KOMMO_BASE_URL}/leads/detail/{result['lead_id']}"
-            # Auto-create task for the new stage if applicable
-            task_msg = ""
-            if stage in _STAGE_TASK_TEXTS:
-                task_text = _STAGE_TASK_TEXTS[stage]
-                now_dt = datetime.now(tz=BAKU_TZ)
-                deadline_ts = int((now_dt + timedelta(hours=2)).timestamp())
-                if stage == "qiymet_teklifi":
-                    create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
-                else:
-                    kommo_uid = get_kommo_user_id_for_chat(chat_id) or 10932455
-                    create_task(result["lead_id"], task_text, deadline_ts, responsible_user_id=kommo_uid, entity_type="leads")
-                task_msg = f"\n\u2705 Tap\u015f\u0131r\u0131q: {task_text}"
-            return web.json_response({"success": True, "message": f"✅ Mərhələ dəyişdirildi!\n👤 {result['contact_name']}\n📌 {stage_display}{task_msg}", "link": link})
+            return await _handle_legacy_stage(data, chat_id, phone)
         elif action == "create_deal":
-            if not is_funnel_chat(chat_id):
-                return web.json_response({"success": False, "error": "Bu əməliyyat yalnız öz huniniz üçün mümkündür."}, status=403)
-            customer_name = str(data.get("customer_name") or "").strip()
-            note_text = str(data.get("note") or data.get("text") or "").strip()
-            stage_key = str(data.get("stage_key") or data.get("stage") or "").strip()
-            phone_raw = str(phone or data.get("phone") or "").strip()
-            if not customer_name:
-                return web.json_response({"success": False, "error": "Müştəri adını daxil edin."})
-            if not phone_raw or len(re.sub(r"\D", "", phone_raw)) < 7:
-                return web.json_response({"success": False, "error": "Telefon nömrəsini daxil edin."})
-            owner = get_funnel_owner(chat_id)
-            if not owner:
-                return web.json_response({"success": False, "error": "Huni tapılmadı."}, status=403)
-            pipeline_id = int(owner["pipeline_id"])
-            stages = owner["stages"]
-            names = owner["stage_names"]
-            if is_admin(chat_id):
-                try:
-                    requested_pipeline = int(data.get("pipeline_id") or 0)
-                except (TypeError, ValueError):
-                    requested_pipeline = 0
-                if requested_pipeline:
-                    pipeline_id = requested_pipeline
-                    stages, names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
-                if stage_key not in stages:
-                    return web.json_response({"success": False, "error": "Mərhələni hunidən seçin."})
-            else:
-                working_keys = {
-                    str(key)
-                    for key, _label in (owner.get("ui_stages") or [])
-                    if key not in ("ugurlu", "imtina", "nerazobrannoye")
-                }
-                if stage_key not in stages or (working_keys and stage_key not in working_keys):
-                    return web.json_response({"success": False, "error": "Mərhələni öz huninizdən seçin."})
-            try:
-                selected_tags = tag_list(data.get("tags", []))
-            except ValueError as exc:
-                return web.json_response({"success": False, "error": str(exc)}, status=400)
-            utm_blob = " ".join((
-                str(data.get("utm_source") or ""),
-                str(data.get("utm_medium") or ""),
-                str(data.get("utm_campaign") or ""),
-                note_text,
-            ))
-            utm_label = menbe_from_utm(utm_blob)
-            menbe_cf = menbe_field_payload(utm_label) if utm_label else None
-            extra_fields = [menbe_cf] if menbe_cf else None
-            contacts = search_contact_by_phone(phone_raw)
-            contact_id = None
-            if contacts:
-                contact_id = int(contacts[0]["id"])
-                update_payload = {"name": customer_name}
-                if extra_fields:
-                    update_payload["custom_fields_values"] = extra_fields
-                update_contact_kommo(contact_id, update_payload)
-            else:
-                created = create_contact_kommo(customer_name, phone_raw, extra_fields)
-                contact_id = ((created or {}).get("_embedded") or {}).get("contacts", [{}])[0].get("id")
-            if not contact_id:
-                return web.json_response({"success": False, "error": "Kontakt yaradıla bilmədi."})
-            lead_id = create_lead_for_contact(int(contact_id), customer_name, pipeline_id, stages[stage_key], tags=selected_tags)
-            if not lead_id:
-                return web.json_response({"success": False, "error": "Sövdələşmə yaradıla bilmədi."})
-            applied_utm = apply_menbe(int(contact_id), int(lead_id), "", utm_blob, overwrite=False)
-            if note_text:
-                add_note(int(lead_id), note_text, "leads")
-            invalidate_rufat_overview_cache()
-            stage_label = names.get(int(stages[stage_key]), stage_key)
-            return web.json_response({
-                "success": True,
-                "message": f"✅ Sövdələşmə yaradıldı.\n👤 {customer_name}\n📌 {stage_label}",
-                "lead_id": int(lead_id),
-                "stage_key": stage_key,
-                "tags": selected_tags,
-                "utm": applied_utm,
-                "partners": get_partner_list_for_chat(chat_id),
-                "link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
-            })
+            return await _handle_legacy_create_deal(data, chat_id, phone)
         elif action == "update_task":
-            task_id = data.get("task_id")
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id yoxdur."})
-            if not task_allowed_for_chat(task_id, chat_id):
-                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-            update_data = {}
-            if data.get("text"):
-                update_data["text"] = data["text"]
-            # Handle assignee change
-            assignee = data.get("assignee")
-            assignee_name_raw = normalize_assignee_name(data.get("assigneeName", ""))
-            if assignee:
-                selected_assignee = ACTIVE_ASSIGNEES.get(str(assignee).casefold())
-                if selected_assignee:
-                    update_data["responsible_user_id"] = selected_assignee[2]
-            # Handle task type change
-            task_type = data.get("task_type")
-            if task_type:
-                try:
-                    update_data["task_type_id"] = int(task_type)
-                except: pass
-            if data.get("deadline"):
-                now = datetime.now(tz=BAKU_TZ)
-                dl = data["deadline"]
-                if dl.startswith('custom:'):
-                    try:
-                        new_dl = datetime.fromisoformat(dl.replace('custom:', '')).replace(tzinfo=BAKU_TZ)
-                    except:
-                        new_dl = now + timedelta(hours=2)
-                elif dl == "15m": new_dl = now + timedelta(minutes=15)
-                elif dl == "1h": new_dl = now + timedelta(hours=1)
-                elif dl == "today": new_dl = now.replace(hour=18, minute=0, second=0)
-                elif dl == "tomorrow": new_dl = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
-                elif dl == "week": new_dl = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
-                else: new_dl = now + timedelta(hours=2)
-                update_data["complete_till"] = int(new_dl.timestamp())
-            # Update contact name in Kommo if provided
-            edit_client_name = data.get("client_name", "").strip()
-            if edit_client_name and task_id:
-                # Get task to find entity_id, then find contact and update name
-                try:
-                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                    if t_resp.status_code == 200:
-                        task_info = t_resp.json()
-                        eid = task_info.get("entity_id")
-                        etype = task_info.get("entity_type", "leads")
-                        if eid and etype == "contacts":
-                            update_contact_kommo(int(eid), {"name": edit_client_name})
-                        elif eid and etype == "leads":
-                            l_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads/{eid}?with=contacts", headers=HEADERS, timeout=8)
-                            if l_resp.status_code == 200:
-                                contacts_emb = l_resp.json().get("_embedded", {}).get("contacts", [])
-                                if contacts_emb:
-                                    update_contact_kommo(int(contacts_emb[0]["id"]), {"name": edit_client_name})
-                except Exception as e:
-                    logger.error(f"Edit client_name update error: {e}")
-            _edit_priority = data.get("priority", "").strip()
-            if not update_data and not edit_client_name and not _edit_priority:
-                return web.json_response({"success": False, "error": "He\u00e7 n\u0259 d\u0259yi\u015fdirilm\u0259di."})
-            # Non-admin changing assignee → send to admin for confirmation
-            is_admin_user = is_admin(chat_id)
-            creator_name = None
-            for _n, _cid in NAME_TO_CHAT.items():
-                if _cid == chat_id and len(_n) > 5:
-                    creator_name = _n
-                    break
-            # Check if assignee actually changed (compare with original)
-            original_assignee = data.get("originalAssignee", "")
-            assignee_actually_changed = assignee_name_raw and original_assignee and assignee_name_raw != original_assignee
-            if not is_admin_user and assignee_actually_changed and _bot_app:
-                # Non-admin changing assignee -> save pending, DON'T notify yet (wait for note)
-                sender_name = creator_name or KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "\u018fm\u0259kda\u015f")
-                # Resolve contact details now, because this volatile pending entry may be
-                # completed later through a note callback after the original UI request.
-                pending_contact_name = data.get("client_name", "").strip()
-                pending_phone = phone
-                pending_link = ""
-                try:
-                    task_response = _http.get(
-                        f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8
-                    )
-                    if task_response.status_code == 200:
-                        task_context = get_task_deal_context(task_response.json())
-                        pending_contact_name = task_context.get("client_name") or pending_contact_name
-                        pending_phone = task_context.get("phone") or pending_phone
-                        pending_link = task_context.get("link") or pending_link
-                except Exception as context_error:
-                    logger.warning("Could not resolve reassignment contact context for task %s: %s", task_id, context_error)
-                display_text = (data.get("text") or "").replace(f'[{assignee_name_raw}] ', '')
-                conf_key = str(uuid.uuid4())[:8]
-                _bot_app.bot_data.setdefault("pending_updates", {})[conf_key] = {
-                    "task_id": task_id, "update_data": update_data,
-                    "assignee_name_raw": assignee_name_raw, "sender_name": sender_name,
-                    "creator_chat_id": chat_id, "display_text": display_text,
-                    "contact_name": pending_contact_name,
-                    "phone": pending_phone,
-                    "link": pending_link,
-                }
-                # Return conf_key so frontend can attach note to this pending update
-                return web.json_response({"success": True, "message": "\u2705 Yadda saxland\u0131.", "conf_key": conf_key})
-            # Admin updates directly
-            # Save priority locally (not a Kommo field)
-            priority = data.get("priority", "").strip()
-            if priority:
-                task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
-                task_priorities[str(task_id)] = priority
-                write_json(_TASK_PRIORITIES_FILE, task_priorities)
-            if not update_data:
-                # Only client_name or priority was changed, no Kommo task fields to update
-                # Still need entity_id for voice upload
-                _eid = None
-                _etype = "leads"
-                try:
-                    _tr = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                    if _tr.status_code == 200:
-                        _td = _tr.json()
-                        _eid = _td.get("entity_id")
-                        _etype = _td.get("entity_type", "leads")
-                except: pass
-                return web.json_response({"success": True, "message": "\u2705 Yenil\u0259ndi!", "entity_id": _eid, "entity_type": _etype})
-            result = update_task_kommo(task_id, update_data)
-            if result:
-                invalidate_rufat_overview_cache()
-                link = ""
-                try:
-                    headers_k = {"Authorization": f"Bearer {KOMMO_TOKEN}"}
-                    t_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=headers_k)
-                    t_data = t_resp.json()
-                    entity_id = t_data.get("entity_id", "")
-                    entity_type = t_data.get("entity_type", "leads")
-                    link = f"{KOMMO_BASE_URL}/leads/detail/{entity_id}" if entity_id else ""
-                    # Save note if provided
-                    note_text = data.get("note", "").strip()
-                    if note_text and entity_id:
-                        note_payload = [{"note_type": "common", "params": {"text": note_text}}]
-                        _http.post(f"{KOMMO_BASE_URL}/api/v4/{entity_type}/{entity_id}/notes", headers={"Authorization": f"Bearer {KOMMO_TOKEN}", "Content-Type": "application/json"}, json=note_payload, timeout=8)
-                except:
-                    pass
-                return web.json_response({"success": True, "message": "\u2705 Tap\u015f\u0131r\u0131q yenil\u0259ndi!", "link": link, "entity_id": entity_id, "entity_type": entity_type})
-            else:
-                return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
+            return await _handle_legacy_update_task(data, chat_id, phone)
         elif action == "update_task_deadline":
             result = handle_task_update_action(
                 action, data, chat_id, _task_update_action_context()
@@ -6849,318 +7203,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             )
             return web.json_response(result.payload, status=result.status)
         elif action == "complete_task":
-            try:
-                task_id = int(data.get("task_id"))
-            except (TypeError, ValueError):
-                task_id = 0
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id yoxdur."})
-            task_data = get_kommo_task(task_id)
-            if not task_data:
-                return web.json_response({"success": False, "error": "Tapşırıq Kommo-da tapılmadı."})
-            if not task_payload_allowed_for_chat(task_data, chat_id):
-                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-
-            task_context = get_task_deal_context(task_data)
-            lead_id = task_context["lead_id"]
-            link = task_context["link"]
-            phone = data.get("phone", "") or task_context["phone"]
-            contact_name = task_context["client_name"]
-            note_text = data.get("note", "").strip()
-            task_result_text = note_text or "Tamamlandı"
-            delay_reason = data.get("delay_reason", "")
-            task_type_id = int(task_data.get("task_type_id", 1) or 1)
-            task_deadline_ts = int(task_data.get("complete_till", 0) or 0)
-            samil_completion_stage = None
-            selected_pipeline = str(data.get("completion_pipeline", "")).strip()
-            selected_stage = str(data.get("completion_stage", "")).strip()
-            if _salary_funnel_user(chat_id):
-                owner = get_funnel_owner(chat_id)
-                if owner:
-                    selected_pipeline = "samil"
-                    selected_stage = "ugurlu"
-                    samil_completion_stage = (
-                        int(owner["pipeline_id"]),
-                        142,
-                        owner["stage_names"].get(142) or "Uğurla tamamlandı",
-                    )
-            elif is_funnel_chat(chat_id) and not is_admin(chat_id):
-                lead_pipeline_id = None
-                if lead_id:
-                    try:
-                        lead_pipeline_id = _lead_pipeline_id(get_lead_details(int(lead_id)))
-                    except Exception:
-                        lead_pipeline_id = None
-                samil_completion_stage = get_rufat_completion_stage(
-                    selected_pipeline, selected_stage, chat_id=chat_id, lead_pipeline_id=lead_pipeline_id
-                )
-                if not samil_completion_stage:
-                    return web.json_response({"success": False, "error": "Mərhələ seçin: öz vоронка və ya Əməliyyatlar lövhəsi."})
-
-            # Salary KPI is deterministic: on/before the Kommo deadline = 100,
-            # after the deadline = 0. Admin can correct it afterward.
-            kpi_result = None
-            try:
-                emp_type = get_employee_type(chat_id)
-                if emp_type == "salary":
-                    # Auto-create session if none exists (timer removed from UI)
-                    if not has_active_session(chat_id, int(task_id)):
-                        start_task_session(chat_id, int(task_id))
-                    kpi_result = finish_task_session(
-                        chat_id,
-                        int(task_id),
-                        task_type_id,
-                        delay_reason,
-                        deadline_ts=task_deadline_ts,
-                    )
-            except Exception as kpi_err:
-                logger.error(f"KPI processing error in complete_task: {kpi_err}\n{traceback.format_exc()}")
-
-            # Determine the creator before any completion-stage branch. This
-            # must be available not only in the final notification block, but
-            # also when legacy/new_stage handling runs first.
-            _task_creator_is_rufat = task_created_by_rufat(task_id)
-            result = update_task_kommo(
-                task_id,
-                {"is_completed": True, "result": {"text": task_result_text}},
-            )
-            stage_msg = ""
-            if result and lead_id:
-                record_lead_pulse_event(int(lead_id), "task_complete")
-                if samil_completion_stage:
-                    target_pipeline_id, target_status_id, target_stage_name = samil_completion_stage
-                    target_pipeline_name = owner_name_for_pipeline(target_pipeline_id) or "Əməliyyatlar lövhəsi"
-                    if update_lead_kommo(
-                        int(lead_id), {"pipeline_id": int(target_pipeline_id), "status_id": int(target_status_id)}
-                    ):
-                        stage_msg = f"\n📌 Mərhələ: {target_pipeline_name} → {target_stage_name}"
-                        maps, _names, _ui = load_pipeline_stage_maps(int(target_pipeline_id)) if int(target_pipeline_id) in all_personal_pipeline_ids() else ({}, {}, [])
-                        rufat_stage_key = next(
-                            (key for key, sid in maps.items() if int(sid) == int(target_status_id)),
-                            None,
-                        )
-                        if rufat_stage_key:
-                            patch_rufat_overview_deal_stage(int(lead_id), rufat_stage_key)
-                        else:
-                            invalidate_rufat_overview_cache()
-                    else:
-                        logger.error("Rüfət completion stage update failed: lead=%s pipeline=%s status=%s", lead_id, target_pipeline_id, target_status_id)
-                        stage_msg = "\n⚠️ Tapşırıq bağlandı, lakin mərhələ dəyişdirilmədi"
-                else:
-                    # Existing behaviour for every employee other than Rüfət.
-                    try:
-                        _http.patch(f"{KOMMO_BASE_URL}/api/v4/leads/{lead_id}",
-                            headers=HEADERS, json={"pipeline_id": GOZLEME_PIPELINE_ID, "status_id": 142}, timeout=8)
-                    except Exception as _ue:
-                        logger.error(f"Failed to move lead to Ugurlu: {_ue}")
-            # Also change stage if requested by legacy clients.
-            new_stage = data.get("new_stage")
-            logger.info(f"complete_task: task_id={task_id}, new_stage={new_stage}, phone={phone}, result={bool(result)}")
-            if new_stage:
-                # Try to find lead: by phone or by task entity
-                status_id = STAGES.get(new_stage)
-                if phone:
-                    stage_result = execute_tool_change_stage(phone, new_stage, chat_id)
-                    logger.info(f"complete_task stage_result: {stage_result}")
-                    if stage_result.get("success"):
-                        lead_id = stage_result["lead_id"]
-                        contact_name = stage_result.get("contact_name", "")
-                        update_lead_kommo(lead_id, {"status_id": stage_result["status_id"], "pipeline_id": PIPELINE_ID})
-                        stage_display = STAGE_NAMES.get(stage_result["status_id"], new_stage)
-                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
-                        link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-                else:
-                    # No phone - try to get lead from task entity
-                    try:
-                        task_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}", headers=HEADERS, timeout=8)
-                        if task_resp.status_code == 200:
-                            task_data = task_resp.json()
-                            entity_id = task_data.get("entity_id")
-                            entity_type = task_data.get("entity_type", "contacts")
-                            if entity_type == "leads":
-                                lead_id = entity_id
-                            elif entity_type == "contacts":
-                                full_c = get_contact_details(entity_id)
-                                if full_c:
-                                    leads = full_c.get("_embedded", {}).get("leads", [])
-                                    if leads:
-                                        lead_id = leads[0]["id"]
-                    except: pass
-                    if lead_id and status_id:
-                        update_lead_kommo(lead_id, {"status_id": status_id, "pipeline_id": PIPELINE_ID})
-                        stage_display = STAGE_NAMES.get(status_id, new_stage)
-                        stage_msg = f"\n\ud83d\udccc M\u0259rh\u0259l\u0259: {stage_display}"
-                        link = f"{KOMMO_BASE_URL}/leads/detail/{lead_id}"
-            # The employee note is both the task result (set above) and a
-            # common note on the related deal.
-            if note_text:
-                if lead_id:
-                    if not add_note(lead_id, note_text, "leads"):
-                        logger.error(f"complete_task: failed to add deal note for lead {lead_id}")
-                else:
-                    logger.warning(f"complete_task: task {task_id} has no related deal for note")
-
-            # Auto-create a task for legacy clients that explicitly submitted a
-            # stage with completion. The new admin stage buttons only move the deal.
-            stage_confirmed = stage_msg and "təsdiq" not in stage_msg
-            if lead_id and new_stage in _STAGE_TASK_TEXTS and stage_confirmed:
-                followup_text = _STAGE_TASK_TEXTS[new_stage]
-                deadline_dt = datetime.now(tz=BAKU_TZ) + timedelta(hours=2)
-                deadline_ts = int(deadline_dt.timestamp())
-                if new_stage == "qiymet_teklifi":
-                    create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
-                else:
-                    creator_marker = get_employee_name_by_chat_id(chat_id, "")
-                    if creator_marker:
-                        followup_text = f"[{creator_marker}] {followup_text}"
-                        create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
-                    else:
-                        create_task(lead_id, followup_text, deadline_ts, responsible_user_id=10932455, entity_type="leads")
-                stage_msg += f"\n✅ Yeni tapşırıq: {_STAGE_TASK_TEXTS[new_stage]}"
-
-            # A task created by Rüfət is handled by his admin account; do not
-            # send its completion to Nizami for confirmation.
-            if not is_admin(chat_id):  # Admin doesn't need self-confirmation
-              try:
-                logger.info("complete_task: ENTERING notification block")
-                task_text_full = task_data.get("text", "").strip()
-                task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
-                task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
-                completion_sender = get_employee_name_by_chat_id(
-                    chat_id,
-                    KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
-                )
-                # Queue piecework earnings for Admin confirmation and persist the
-                # task context needed by the redesigned balance history.
-                try:
-                    # Price can be in [Price] or [Name:Price] format
-                    price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
-                    if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
-                        amount = float(price_match.group(1))
-                        if amount > 0:
-                            add_balance_transaction(
-                                chat_id,
-                                int(task_id),
-                                amount,
-                                price_match.group(2) or task_text_full,
-                                executor_name=completion_sender,
-                                client=contact_name or "—",
-                                phone=phone or "—",
-                                task_type=task_type_name,
-                                result_text=note_text or task_result_text,
-                                kpi=0,
-                                status="pending",
-                            )
-                except Exception as balance_error:
-                    logger.error(f"Pending balance transaction error: {balance_error}")
-
-                admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
-                logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
-
-                # Completion review is an explicit per-employee setting. No
-                # stage change ever creates an Admin confirmation.
-                if admin_chat and employee_requires_completion_approval(chat_id):
-                    deadline_display = (
-                        datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-                        if task_deadline_ts else "—"
-                    )
-                    kpi_info = ""
-                    if kpi_result:
-                        timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
-                        kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
-                        if delay_reason:
-                            kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
-
-                    # Get current deal stage
-                    current_stage_name = "—"
-                    if lead_id:
-                        try:
-                            lead_detail = get_lead_details(int(lead_id))
-                            if lead_detail:
-                                current_status_id = lead_detail.get("status_id")
-                                current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
-                        except Exception:
-                            pass
-                    completion_message = (
-                        f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
-                        f"👤 {contact_name or '—'}\n"
-                        f"📝 {task_desc_display or '—'}\n"
-                        f"📞 {phone or '—'}\n"
-                        f"⏰ {deadline_display}\n"
-                        f"📋 {task_type_name}\n"
-                        f"📌 Mərhələ: {current_stage_name}"
-                    )
-                    if note_text:
-                        completion_message += f"\n💬 İcraçı qeydi: {note_text}"
-                    completion_message += kpi_info
-                    if link:
-                        completion_message += f"\n🔗 {link}"
-
-                    raw_task_text = task_data.get("text", "").strip()
-                    task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
-                    try:
-                        _http.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={
-                                "chat_id": admin_chat,
-                                "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
-                                "disable_web_page_preview": True,
-                            },
-                            timeout=8
-                        )
-                        save_pending_action("change_stage", {
-                            "contact_name": contact_name or "—",
-                            "phone": phone or "—",
-                            "lead_id": lead_id,
-                            "task_id": int(task_id),
-                            "sender_name": completion_sender,
-                            "sender_chat_id": int(chat_id),
-                            "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
-                            "task_price": task_price_match.group(1) if task_price_match else "",
-                            "note": note_text or "",
-                            "completion_kind": "employee_review",
-                            "stage_name": current_stage_name,
-                            "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
-                            "link": link,
-                        }, ["Təsdiq et", "Rədd et"])
-                        send_push_to_admin(
-                            f"{completion_sender}: {contact_name or '—'}",
-                            title="✅ Sifariş tamamlandı — təsdiq gözləyir",
-                            url="#pending",
-                        )
-                    except Exception as notify_error:
-                        logger.error(f"Completion notification error: {notify_error}")
-
-                # Notify the task creator independently of the Admin confirmation
-                # flow. In particular, Rüfət receives his own tasks' completion
-                # notice, even though Nizami receives no confirmation request.
-                try:
-                    _creators_data = read_json(_TASK_CREATORS_FILE) or {}
-                    _creator_name = _creators_data.get(str(task_id), "")
-                    _creator_chat = RUFAT_CHAT_ID if _task_creator_is_rufat else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
-                    if _creator_chat and int(_creator_chat) != int(chat_id):
-                        _c_cn = contact_name or "—"
-                        _c_td = task_desc_display or "—"
-                        _c_ph = phone or "—"
-                        _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
-                            f"👤 {_c_cn}\n"
-                            f"📝 {_c_td}\n"
-                            f"👷 İcraçı: {completion_sender}\n"
-                            f"📞 {_c_ph}")
-                        if link: _creator_msg += f"\n🔗 {link}"
-                        _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                            json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
-                except Exception as _cav_err:
-                    logger.warning(f"Cavabdeh notification error: {_cav_err}")
-              except Exception as notif_block_err:
-                logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
-              localStorage_key = f'timer_{task_id}'
-              msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-              return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
-            else:
-              # Admin completing task - just return success
-              msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-              return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+            return await _handle_legacy_complete_task(data, chat_id, phone)
         elif action == "delete_task":
             result = handle_task_update_action(
                 action, data, chat_id, _task_update_action_context()
@@ -7186,18 +7229,7 @@ async def handle_api_action(request: web.Request) -> web.Response:
             )
             return web.json_response(result.payload, status=result.status)
         elif action == "close_job_report":
-            comment = data.get("master_comment", "")
-            if not comment:
-                return web.json_response({"success": False, "error": "Hesabat mətni boşdur."})
-            # Notify admin about job completion
-            admin_chat = get_chat_id_for_kommo_user(10932455)
-            sender_name = KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş")
-            if admin_chat and _bot_app:
-                try:
-                    await _bot_app.bot.send_message(admin_chat, f"✅ *{sender_name}* iş hesabatı:\n\n📝 {comment}", parse_mode="Markdown")
-#                    send_push_to_admin(f"{sender_name}: {comment[:80]}", title="✅ İş hesabatı")
-                except: pass
-            return web.json_response({"success": True, "message": "✅ Hesabat göndərildi!"})
+            return await _handle_legacy_close_job_report(data, chat_id, phone)
         else:
             return web.json_response({"success": False, "error": f"Naməlum əməliyyat: {action}"})
     except Exception as e:
