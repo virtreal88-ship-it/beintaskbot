@@ -63,6 +63,14 @@ class ContactServiceTests(unittest.TestCase):
         self.assertEqual(payload["responsible_user_id"], 10932455)
         self.assertEqual(payload["custom_fields_values"][0]["field_code"], "PHONE")
 
+    def test_linked_contact_creation_uses_existing_lead(self):
+        self.http.post.return_value = Mock(status_code=201, json=lambda: {"id": 9})
+        created = self.service.create_contact_for_lead(77, "Client", "+994551234567")
+        self.assertEqual(created["id"], 9)
+        payload = self.http.post.call_args.kwargs["json"][0]
+        self.assertEqual(payload["_embedded"]["leads"], [{"id": 77}])
+        self.assertEqual(payload["custom_fields_values"][0]["field_code"], "PHONE")
+
 
 class DealServiceTests(unittest.TestCase):
     def setUp(self):

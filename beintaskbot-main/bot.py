@@ -102,6 +102,10 @@ from legacy_action_deals import (
 )
 from legacy_action_tasks import DealTaskContext, handle_deal_task
 from legacy_action_request import parse_action_request
+from legacy_action_contacts import DealContactContext, handle_deal_contact_edit
+from legacy_action_task_sessions import TaskSessionContext, handle_task_session_action
+from legacy_action_finance import PayoutContext, handle_payout
+from legacy_action_task_updates import TaskUpdateContext, handle_task_update_action
 from legacy_inbox_pulse import append_inbox_event, inbox_events_since
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
@@ -117,7 +121,7 @@ from legacy_kommo_funnels import (
 )
 from legacy_kommo_contacts import (
     _contact_phone_value, _leads_linked_to_contact, configure_contact_service,
-    create_contact_kommo, get_contact_details, search_contact_by_phone,
+    create_contact_for_lead, create_contact_kommo, get_contact_details, search_contact_by_phone,
     search_contacts_by_query, update_contact_kommo,
 )
 from legacy_kommo_deals import (
@@ -6071,6 +6075,101 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "message": "Yeniləmə uğursuz oldu."})
     return web.json_response({"success": True, "message": f"İcraçı dəyişdirildi: {executor}"})
 
+def _patch_overview_contact(lead_id: int, name: str, phone: str) -> None:
+    for overview in _personal_overview_cache.values():
+        if not isinstance(overview, dict):
+            continue
+        for deal in overview.get("deals") or []:
+            if not isinstance(deal, dict) or int(deal.get("id") or 0) != lead_id:
+                continue
+            if name:
+                deal["contact_name"] = name
+                deal["name"] = name
+            if phone:
+                deal["phone"] = phone
+                deal["phones"] = [phone]
+
+
+def _deal_contact_action_context() -> DealContactContext:
+    return DealContactContext(
+        is_funnel_chat=is_funnel_chat,
+        is_admin=is_admin,
+        lead_allowed_for_chat=lead_allowed_for_chat,
+        get_lead=get_lead_details,
+        update_contact=update_contact_kommo,
+        create_contact_for_lead=create_contact_for_lead,
+        update_lead=update_lead_kommo,
+        patch_overview_contact=_patch_overview_contact,
+        invalidate_overview=invalidate_rufat_overview_cache,
+        record_pulse=record_lead_pulse_event,
+    )
+
+
+def _deal_note_action_context() -> DealNoteContext:
+    return DealNoteContext(
+        lead_allowed_for_chat=lead_allowed_for_chat,
+        add_note=add_note,
+        update_note=update_note,
+        delete_note=delete_note,
+        note_entity_kind=_note_entity_kind,
+        first_note_id=_first_note_id,
+        invalidate_overview=invalidate_rufat_overview_cache,
+        record_pulse=record_lead_pulse_event,
+    )
+
+
+def _deal_task_action_context() -> DealTaskContext:
+    return DealTaskContext(
+        lead_allowed_for_chat=lead_allowed_for_chat,
+        create_task=create_task,
+        update_task=update_task_kommo,
+        active_assignees=ACTIVE_ASSIGNEES,
+        reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
+        timezone=BAKU_TZ,
+        get_funnel_owner=get_funnel_owner,
+        get_employee_name=get_employee_name_by_chat_id,
+        get_chat_id_by_name=get_chat_id_by_name,
+        send_telegram_text=_send_telegram_text,
+        send_push_notification=send_push_notification,
+        remember_staff_notice=remember_staff_notice,
+        kommo_base_url=KOMMO_BASE_URL,
+        invalidate_overview=invalidate_rufat_overview_cache,
+        record_pulse=record_lead_pulse_event,
+        created_task_id=_created_task_id,
+    )
+
+
+def _task_session_action_context() -> TaskSessionContext:
+    return TaskSessionContext(
+        has_active_session=has_active_session,
+        start_session=start_task_session,
+        pause_session=pause_task_session,
+        finish_session=finish_task_session,
+        get_task=get_kommo_task,
+    )
+
+
+def _payout_action_context() -> PayoutContext:
+    return PayoutContext(
+        get_kommo_user_id_for_chat=get_kommo_user_id_for_chat,
+        add_balance_transaction=add_balance_transaction,
+        get_employee_name=get_employee_name_by_chat_id,
+    )
+
+
+def _task_update_action_context() -> TaskUpdateContext:
+    return TaskUpdateContext(
+        task_allowed_for_chat=task_allowed_for_chat,
+        update_task=update_task_kommo,
+        invalidate_overview=invalidate_rufat_overview_cache,
+        employee_type=get_employee_type,
+        has_active_session=has_active_session,
+        start_session=start_task_session,
+        finish_session=finish_task_session,
+        timezone=BAKU_TZ,
+    )
+
+
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
     parsed = await parse_action_request(request, load_users)
@@ -6171,200 +6270,27 @@ async def handle_api_action(request: web.Request) -> web.Response:
             })
         elif action == "add_partner":
             return web.json_response({"success": False, "error": "Partner sahəsi ləğv edildi. Kommo teqlərindən istifadə edin."}, status=410)
-        elif action == "deal_add_note":
+        elif action in {"deal_add_note", "deal_edit_note", "deal_delete_note"}:
             result = handle_deal_note(
                 action,
                 data,
                 chat_id,
-                DealNoteContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    add_note=add_note,
-                    update_note=update_note,
-                    delete_note=delete_note,
-                    note_entity_kind=_note_entity_kind,
-                    first_note_id=_first_note_id,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                ),
+                _deal_note_action_context(),
             )
             return web.json_response(result.payload, status=result.status)
-        elif action == "deal_edit_note":
-            result = handle_deal_note(
-                action,
-                data,
-                chat_id,
-                DealNoteContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    add_note=add_note,
-                    update_note=update_note,
-                    delete_note=delete_note,
-                    note_entity_kind=_note_entity_kind,
-                    first_note_id=_first_note_id,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                ),
-            )
-            return web.json_response(result.payload, status=result.status)
-        elif action == "deal_delete_note":
-            result = handle_deal_note(
-                action,
-                data,
-                chat_id,
-                DealNoteContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    add_note=add_note,
-                    update_note=update_note,
-                    delete_note=delete_note,
-                    note_entity_kind=_note_entity_kind,
-                    first_note_id=_first_note_id,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                ),
-            )
-            return web.json_response(result.payload, status=result.status)
-        elif action == "deal_add_task":
+        elif action in {"deal_add_task", "deal_edit_task", "deal_delete_task"}:
             result = handle_deal_task(
                 action,
                 data,
                 chat_id,
-                DealTaskContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    create_task=create_task,
-                    update_task=update_task_kommo,
-                    active_assignees=ACTIVE_ASSIGNEES,
-                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
-                    timezone=BAKU_TZ,
-                    get_funnel_owner=get_funnel_owner,
-                    get_employee_name=get_employee_name_by_chat_id,
-                    get_chat_id_by_name=get_chat_id_by_name,
-                    send_telegram_text=_send_telegram_text,
-                    send_push_notification=send_push_notification,
-                    remember_staff_notice=remember_staff_notice,
-                    kommo_base_url=KOMMO_BASE_URL,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                    created_task_id=_created_task_id,
-                ),
-            )
-            return web.json_response(result.payload, status=result.status)
-        elif action == "deal_edit_task":
-            result = handle_deal_task(
-                action,
-                data,
-                chat_id,
-                DealTaskContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    create_task=create_task,
-                    update_task=update_task_kommo,
-                    active_assignees=ACTIVE_ASSIGNEES,
-                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
-                    timezone=BAKU_TZ,
-                    get_funnel_owner=get_funnel_owner,
-                    get_employee_name=get_employee_name_by_chat_id,
-                    get_chat_id_by_name=get_chat_id_by_name,
-                    send_telegram_text=_send_telegram_text,
-                    send_push_notification=send_push_notification,
-                    remember_staff_notice=remember_staff_notice,
-                    kommo_base_url=KOMMO_BASE_URL,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                    created_task_id=_created_task_id,
-                ),
-            )
-            return web.json_response(result.payload, status=result.status)
-        elif action == "deal_delete_task":
-            result = handle_deal_task(
-                action,
-                data,
-                chat_id,
-                DealTaskContext(
-                    lead_allowed_for_chat=lead_allowed_for_chat,
-                    create_task=create_task,
-                    update_task=update_task_kommo,
-                    active_assignees=ACTIVE_ASSIGNEES,
-                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
-                    timezone=BAKU_TZ,
-                    get_funnel_owner=get_funnel_owner,
-                    get_employee_name=get_employee_name_by_chat_id,
-                    get_chat_id_by_name=get_chat_id_by_name,
-                    send_telegram_text=_send_telegram_text,
-                    send_push_notification=send_push_notification,
-                    remember_staff_notice=remember_staff_notice,
-                    kommo_base_url=KOMMO_BASE_URL,
-                    invalidate_overview=invalidate_rufat_overview_cache,
-                    record_pulse=record_lead_pulse_event,
-                    created_task_id=_created_task_id,
-                ),
+                _deal_task_action_context(),
             )
             return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit_contact":
-            lead_id = int(data.get("lead_id") or 0)
-            name = str(data.get("name") or data.get("contact_name") or "").strip()
-            phone = str(data.get("phone") or "").strip()
-            if not lead_id or (not is_funnel_chat(chat_id) and not is_admin(chat_id) and not lead_allowed_for_chat(lead_id, chat_id)):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            contact_id = 0
-            try:
-                contact_id = int(data.get("contact_id") or 0)
-            except (TypeError, ValueError):
-                contact_id = 0
-            payload: dict = {}
-            if name:
-                payload["name"] = name
-            if phone:
-                payload["custom_fields_values"] = [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}]
-            if not payload:
-                return web.json_response({"success": False, "error": "Ad və ya telefon yazın."}, status=400)
-
-            ok = False
-            if contact_id:
-                ok = bool(update_contact_kommo(contact_id, payload))
-
-            if not ok:
-                lead = get_lead_details(lead_id) or {}
-                contacts = (lead.get("_embedded") or {}).get("contacts") or []
-                if contacts:
-                    try:
-                        cid = int(contacts[0].get("id") or 0)
-                    except (TypeError, ValueError):
-                        cid = 0
-                    if cid:
-                        ok = bool(update_contact_kommo(cid, payload))
-                        contact_id = cid
-
-            if not ok:
-                # Create contact and link to lead
-                create_payload = [{
-                    "name": name or "Müştəri",
-                    "custom_fields_values": [{"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}] if phone else [],
-                    "_embedded": {"leads": [{"id": lead_id}]}
-                }]
-                try:
-                    resp = _http.post(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, json=create_payload, timeout=8)
-                    ok = resp.status_code in (200, 201)
-                except Exception as exc:
-                    logger.error("Failed to create and link contact for lead %s: %s", lead_id, exc)
-
-            if ok:
-                if name:
-                    try:
-                        update_lead_kommo(lead_id, {"name": name})
-                    except Exception:
-                        pass
-                for overview in _personal_overview_cache.values():
-                    if not isinstance(overview, dict):
-                        continue
-                    for deal in overview.get("deals") or []:
-                        if isinstance(deal, dict) and int(deal.get("id") or 0) == lead_id:
-                            if name:
-                                deal["contact_name"] = name
-                                deal["name"] = name
-                            if phone:
-                                deal["phone"] = phone
-                                deal["phones"] = [phone]
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_edit_contact", contact_name=name, phone=phone)
-            return web.json_response({"success": ok, "message": "Kontakt yeniləndi." if ok else "Kontakt yenilənmədi."})
+            result = handle_deal_contact_edit(
+                data, chat_id, _deal_contact_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "info":
             if is_funnel_chat(chat_id) and not is_admin(chat_id):
                 contacts = search_contact_by_phone(phone)
@@ -6955,45 +6881,15 @@ async def handle_api_action(request: web.Request) -> web.Response:
             else:
                 return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
         elif action == "update_task_deadline":
-            task_id = data.get("task_id")
-            time_preset = data.get("time_preset", "+2h")
-            reason = data.get("reason", "")
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id yoxdur."})
-            if not task_allowed_for_chat(task_id, chat_id):
-                return web.json_response({"success": False, "error": "Доступ запрещён: задача не относится к воронке Rüfət."}, status=403)
-            now = datetime.now(tz=BAKU_TZ)
-            if time_preset == "+2h":
-                new_dl = now + timedelta(hours=2)
-            elif time_preset == "sabah":
-                new_dl = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-            elif time_preset == "gelen_hefte":
-                days_ahead = 7 - now.weekday()
-                if days_ahead <= 0: days_ahead += 7
-                new_dl = (now + timedelta(days=days_ahead)).replace(hour=10, minute=0, second=0, microsecond=0)
-            else:
-                new_dl = now + timedelta(hours=2)
-            result = update_task_kommo(task_id, {"complete_till": int(new_dl.timestamp())})
-            if result:
-                invalidate_rufat_overview_cache()
-            # If reason is employee's fault, record KPI=0
-            if reason == "Çatdıra bilmirəm" and get_employee_type(chat_id) == "salary":
-                # Auto-create session and finish with KPI=0 (missed deadline)
-                if not has_active_session(chat_id, int(task_id)):
-                    start_task_session(chat_id, int(task_id))
-                # Finish with deadline_ts=0 to force KPI=0 (completed after deadline)
-                finish_task_session(chat_id, int(task_id), 1, reason, deadline_ts=0)
-                logger.info(f"KPI=0 recorded for task {task_id}, reason: {reason}")
-            if result:
-                return web.json_response({"success": True, "message": "Vaxt dəyişdirildi."})
-            else:
-                return web.json_response({"success": False, "error": "Yeniləmə uğursuz."})
+            result = handle_task_update_action(
+                action, data, chat_id, _task_update_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "check_started":
-            task_id = data.get("task_id")
-            if not task_id:
-                return web.json_response({"success": True, "started": False})
-            started = has_active_session(chat_id, int(task_id))
-            return web.json_response({"success": True, "started": started})
+            result = handle_task_session_action(
+                action, data, chat_id, _task_session_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "complete_task":
             try:
                 task_id = int(data.get("task_id"))
@@ -7307,110 +7203,30 @@ async def handle_api_action(request: web.Request) -> web.Response:
               # Admin completing task - just return success
               msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
               return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
-        elif action == "update_task_deadline":
-            task_id = data.get("task_id")
-            time_preset = data.get("time_preset", "+2h")
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id yoxdur."})
-            now = datetime.now(tz=BAKU_TZ)
-            if time_preset == "+2h":
-                new_deadline = now + timedelta(hours=2)
-            elif time_preset == "sabah":
-                new_deadline = (now + timedelta(days=1)).replace(hour=12, minute=0, second=0)
-            elif time_preset == "gelen_hefte":
-                new_deadline = (now + timedelta(days=7)).replace(hour=12, minute=0, second=0)
-            else:
-                new_deadline = now + timedelta(hours=2)
-            result = update_task_kommo(task_id, {"complete_till": int(new_deadline.timestamp())})
-            if result:
-                return web.json_response({"success": True, "message": f"\u2705 Vaxt d\u0259yi\u015fdirildi: {new_deadline.strftime('%d.%m %H:%M')}"})
-            else:
-                return web.json_response({"success": False, "error": "Tapşırıq yenilənmədi."})
         elif action == "delete_task":
-            task_id = data.get("task_id")
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id yoxdur."})
-            # Kommo API does not support task deletion; mark as completed instead
-            result = update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Tamamlandı"}})
-            if result:
-                return web.json_response({"success": True, "message": "🗑 Tapşırıq silindi (bağlandı)!"})
-            else:
-                return web.json_response({"success": False, "error": "Silinmədi."})
+            result = handle_task_update_action(
+                action, data, chat_id, _task_update_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "start_task":
-            task_id = data.get('task_id')
-            if not task_id:
-                return web.json_response({'success': False, 'error': 'task_id lazımdır.'})
-            ok = start_task_session(chat_id, int(task_id))
-            if ok:
-                return web.json_response({'success': True, 'message': '▶️ Başladı! Vaxt sayılır.'})
-            else:
-                return web.json_response({'success': True, 'message': '⏱️ Artıq başlayıb.'})
+            result = handle_task_session_action(
+                action, data, chat_id, _task_session_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "payout":
             # Admin pays an employee - deduct from their balance
-            if get_kommo_user_id_for_chat(chat_id) != 10932455:
-                return web.json_response({'success': False, 'error': 'İcazə yoxdur.'})
-            emp_id = int(data.get('employee_id', 0))
-            amount = float(data.get('amount', 0))
-            note = data.get('note', 'Ödəniş')
-            if not emp_id or amount <= 0:
-                return web.json_response({'success': False, 'error': 'Məbləğ və əməkdaş seçin.'})
-            add_balance_transaction(
-                emp_id,
-                0,
-                -amount,
-                note,
-                executor_name=get_employee_name_by_chat_id(emp_id, str(emp_id)),
-                client="—",
-                phone="—",
-                task_type="Məxaric",
-                result_text=note,
-                kpi=0,
-                status="confirmed",
-                transaction_type="məxaric",
-            )
-            return web.json_response({'success': True, 'message': f'✅ {amount:.2f} AZN ödənildi.'})
+            result = handle_payout(data, chat_id, _payout_action_context())
+            return web.json_response(result.payload, status=result.status)
         elif action == "pause_task":
-            task_id = data.get('task_id')
-            elapsed_seconds = data.get('elapsed_seconds', 0)
-            if task_id:
-                pause_task_session(chat_id, int(task_id), int(elapsed_seconds))
-            return web.json_response({'success': True, 'message': 'Dayandırıldı.'})
-        elif action == "finish_task":
-            task_id = data.get("task_id")
-            task_type_id = int(data.get("task_type_id", 1) or 1)
-            delay_reason = data.get("delay_reason", "")
-            if not task_id:
-                return web.json_response({"success": False, "error": "task_id lazımdır."})
-            deadline_ts = 0
-            try:
-                task_response = _http.get(
-                    f"{KOMMO_BASE_URL}/api/v4/tasks/{task_id}",
-                    headers=HEADERS,
-                    timeout=8,
-                )
-                if task_response.status_code == 200:
-                    task_payload = task_response.json()
-                    task_type_id = int(task_payload.get("task_type_id", task_type_id) or task_type_id)
-                    deadline_ts = int(task_payload.get("complete_till", 0) or 0)
-            except Exception as exc:
-                logger.error(f"finish_task deadline lookup error: {exc}")
-            result = finish_task_session(
-                chat_id,
-                int(task_id),
-                task_type_id,
-                delay_reason,
-                deadline_ts=deadline_ts,
+            result = handle_task_session_action(
+                action, data, chat_id, _task_session_action_context()
             )
-            if not result:
-                return web.json_response({"success": False, "error": "Əvvəlcə 'Başla' basın."})
-            return web.json_response({
-                "success": True,
-                "message": f"✅ Bitdi! KPI: {result['kpi_score']}/100",
-                "kpi_score": result["kpi_score"],
-                "actual_minutes": result["actual_minutes"],
-                "target_minutes": result["target_minutes"],
-                "needs_reason": result["needs_reason"],
-            })
+            return web.json_response(result.payload, status=result.status)
+        elif action == "finish_task":
+            result = handle_task_session_action(
+                action, data, chat_id, _task_session_action_context()
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "close_job_report":
             comment = data.get("master_comment", "")
             if not comment:

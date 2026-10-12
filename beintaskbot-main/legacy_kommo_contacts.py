@@ -158,6 +158,28 @@ def create_contact_kommo(
         return None
 
 
+def create_contact_for_lead(lead_id: int, name: str, phone: str) -> dict | None:
+    """Create one contact already linked to an existing Kommo lead."""
+    payload = [{
+        "name": str(name or "").strip() or "Müştəri",
+        "custom_fields_values": [
+            {"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}
+        ] if phone else [],
+        "_embedded": {"leads": [{"id": int(lead_id)}]},
+    }]
+    try:
+        response = _http.post(
+            f"{KOMMO_BASE_URL}/api/v4/contacts",
+            headers=_headers,
+            json=payload,
+            timeout=8,
+        )
+        return response.json() if response.status_code in (200, 201) else None
+    except Exception as exc:
+        logger.error("Create linked contact error: %s", exc)
+        return None
+
+
 def _leads_linked_to_contact(contact_id: int) -> list:
     contact = get_contact_details(int(contact_id))
     leads = list((contact or {}).get("_embedded", {}).get("leads", []) or [])
