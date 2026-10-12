@@ -73,7 +73,10 @@
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
   sections.innerHTML = groups.map(([key,label]) => `<button type="button" role="tab" data-settings-tab="${key}">${label}</button>`).join('');
   const help = document.createElement('p'); help.className='settings-help';
-  settings.querySelector('.top').after(sections,help);
+  const advancedTitle = document.createElement('div'); advancedTitle.className = 'advanced-settings-title';
+  advancedTitle.innerHTML = '<h2>Geniş ayarlar</h2><p>Avtomatlaşdırma, AI və xidmət parametrlərini ehtiyac olduqda dəyişin.</p>';
+  const settingsAnchor = $('chakra-settings-root') || settings.querySelector('.top');
+  settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
     if (panel.id === 'workflowPanel') return 'workflow';
     if (/AiPanel/.test(panel.id)) return 'ai';
@@ -83,13 +86,16 @@
     return 'advanced';
   }
   function showSettings() {
-    const panels = [...settings.querySelectorAll(':scope > .panel,:scope > .grid > .panel')];
+    const panels = [...settings.querySelectorAll(':scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
+    const available = groups.find(([key]) => panels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
+    if (!panels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
     panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection !== section;});
     sections.querySelectorAll('button').forEach(button => {
       button.hidden = !panels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
       button.setAttribute('aria-selected',String(button.dataset.settingsTab === section));
     });
     help.textContent = groups.find(g => g[0] === section)?.[2] || '';
+    advancedTitle.hidden = !panels.length; sections.hidden = !panels.length; help.hidden = !panels.length;
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
   const observer = new MutationObserver(showSettings);

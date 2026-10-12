@@ -27,6 +27,7 @@ ASSETS = (
     ('/assets/tenant-diagnostics.js', 'tenant-diagnostics.js', 'no-store'),
     ('/assets/tenant-chat-send.js', 'tenant-chat-send.js', 'no-store'),
     ('/assets/tenant-workflow.js', 'tenant-workflow.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-chakra-ui.js', 'tenant-chakra-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-workspace.js', 'tenant-workspace.js', None),
     ('/assets/tenant-hot-order-settings.js', 'tenant-hot-order-settings.js', 'no-store'),
     ('/assets/tenant-hot-orders.js', 'tenant-hot-orders.js', 'no-store'),

@@ -7,6 +7,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+ui/node_modules/
 .eggs/
 .env
 .venv
@@ -15,6 +16,8 @@ ENV/
 *.log
 *.sqlite
 *.json
+!ui/package.json
+!ui/package-lock.json
 !railway.toml
 !users.json
 !message_maps.json
