@@ -15559,15 +15559,22 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
         completion_requires_admin = bool(data.get("completion_requires_admin", False))
         ai_enabled = bool(data.get("ai_enabled", False))
+        previous_linear_identity = employee_linear_identity(employee_id)
         linear_account = str(data.get("linear_account") or "").strip()[:120]
         linear_operator = str(data.get("linear_operator") or "").strip()[:160]
-        previous_linear_identity = employee_linear_identity(employee_id)
+        # Editing an unrelated employee setting must not erase or revalidate
+        # an already configured Linear identity. The identity becomes
+        # mandatory only when Linear creation permission is enabled now.
+        had_linear_create = "linear_create" in set(existing.get("permissions") or [])
+        if "linear_create" in permissions:
+            linear_account = linear_account or str(previous_linear_identity.get("account") or "").strip()[:120]
+            linear_operator = linear_operator or str(previous_linear_identity.get("operator") or "").strip()[:160]
         linear_accounts = (
             sorted(previous_linear_identity.get("accounts") or set())
             if linear_account and linear_account == str(previous_linear_identity.get("account") or "").strip()
             else ([linear_account] if linear_account else [])
         )
-        if "linear_create" in permissions and (not linear_account or not linear_operator):
+        if "linear_create" in permissions and not had_linear_create and (not linear_account or not linear_operator):
             return web.json_response({"success": False, "error": "Linear yaratmaq üçün hesab və operator yazın."}, status=400)
         try:
             pipeline_id = int(data.get("pipeline_id") or 0)
