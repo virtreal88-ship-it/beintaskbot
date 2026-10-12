@@ -62,6 +62,20 @@ function Empty({ children }) {
 function StatusBadge({ children, tone="green" }) {
   return <Badge colorPalette={tone} variant="subtle" borderRadius="full" px="2.5" py="1" fontWeight="700">{children}</Badge>
 }
+function IntegrationLogo({ provider, size="md" }) {
+  const item=integrationCatalog.find(row=>row.id===provider)||{}
+  const boxSize=size==="lg"?"64px":"52px"
+  const iconSize=size==="lg"?30:25
+  const common={width:iconSize,height:iconSize,viewBox:"0 0 24 24",fill:"none",xmlns:"http://www.w3.org/2000/svg"}
+  let logo=null
+  if(provider==="telegram")logo=<svg {...common}><path d="M21.4 3.4 18.2 19c-.24 1.1-.88 1.37-1.78.85l-4.9-3.61-2.36 2.27c-.26.26-.48.48-.98.48l.35-5 9.1-8.23c.4-.35-.08-.55-.61-.2L5.78 12.64.94 11.13c-1.05-.33-1.07-1.05.22-1.56L20.08 2.3c.88-.32 1.65.2 1.32 1.1Z" fill="currentColor"/></svg>
+  else if(provider==="linear")logo=<svg {...common}><path d="M4.3 4.3a10.9 10.9 0 0 0-1.9 2.75l14.55 14.54a10.9 10.9 0 0 0 2.75-1.89L4.3 4.3Zm-2.65 4.8a11 11 0 0 0-.5 3.33l10.42 10.42a11 11 0 0 0 3.33-.5L1.65 9.1Zm-.23 6.38a11.02 11.02 0 0 0 7.1 7.1l-7.1-7.1ZM6.35 2.65l15 15a11 11 0 0 0-15-15Z" fill="currentColor"/></svg>
+  else if(provider==="openai")logo=<svg {...common} viewBox="0 0 32 32"><path d="M15.9 3.8a7 7 0 0 1 11 5.8 7 7 0 0 1 1 12.3 7 7 0 0 1-11 5.8 7 7 0 0 1-11-5.8 7 7 0 0 1-1-12.3 7 7 0 0 1 11-5.8Zm0 4-5.8 3.4v6.7l5.8 3.4 5.8-3.4v-6.7l-5.8-3.4Zm0 3.2 3 1.8v3.5l-3 1.8-3-1.8v-3.5l3-1.8Z" fill="currentColor"/></svg>
+  else if(provider==="wappi")logo=<svg {...common}><path d="M12 2a9.5 9.5 0 0 0-8.2 14.3L2.4 21.6l5.4-1.4A9.5 9.5 0 1 0 12 2Zm5.3 13.6c-.22.62-1.3 1.18-1.8 1.25-.48.08-1.1.1-1.77-.11-.4-.13-.93-.3-1.6-.59-2.82-1.22-4.66-4.07-4.8-4.25-.14-.19-1.15-1.53-1.15-2.91 0-1.39.73-2.07.99-2.35.25-.28.56-.35.74-.35h.54c.17 0 .4-.07.63.48.23.56.8 1.94.87 2.08.07.14.12.3.02.49-.09.18-.14.3-.28.46-.14.16-.3.35-.42.47-.14.14-.29.3-.13.58.16.28.71 1.17 1.53 1.9 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.18.7-.81.88-1.09.19-.28.37-.23.63-.14.25.1 1.62.77 1.9.9.28.15.46.22.53.33.07.12.07.65-.16 1.27Z" fill="currentColor"/></svg>
+  else if(provider==="kommo")logo=<Text as="span" fontSize={size==="lg"?"lg":"md"} fontWeight="900" letterSpacing="-.8px" color="inherit">kommo</Text>
+  else logo=<Text as="span" fontSize={size==="lg"?"lg":"md"} fontWeight="900" letterSpacing="-.5px" color="inherit">BEIN</Text>
+  return <Flex w={boxSize} h={boxSize} flex="none" borderRadius="14px" bg={`${item.color}12`} color={item.color} borderWidth="1px" borderColor={`${item.color}26`} align="center" justify="center">{logo}</Flex>
+}
 function TasksTable({ rows=[] }) {
   if (!rows.length) return <Empty>Açıq tapşırıq yoxdur.</Empty>
   return <Card.Root borderColor="gray.200" borderRadius="2xl" overflow="hidden" shadow="sm"><Table.ScrollArea><Table.Root size="sm" variant="line" minW="720px">
@@ -214,8 +228,8 @@ function IntegrationMarketplace() {
   if(!profile&&!error)return <Flex py="16" justify="center"><Spinner color="brand.500"/></Flex>
   const state=selected?details[selected.id]||{}:{}
   return <Stack gap="6">
-    <Card.Root borderRadius="3xl" borderColor="gray.200" shadow="sm" overflow="hidden">
-      <Card.Body p={{base:"5",md:"7"}} bg="linear-gradient(135deg,#ffffff 0%,#f2faf7 100%)">
+    <Card.Root borderRadius="2xl" borderColor="gray.200" shadow="xs" overflow="hidden" bg="white">
+      <Card.Body p={{base:"5",md:"6"}}>
         <Flex direction={{base:"column",md:"row"}} gap="4" align={{md:"center"}} justify="space-between">
           <Box><Heading size="lg">İnteqrasiya marketi</Heading><Text mt="2" color="gray.600" fontSize="sm">Xidmətləri qoşun, vəziyyəti izləyin və ayarları buradan idarə edin.</Text></Box>
           <Input maxW={{md:"360px"}} h="11" bg="white" borderRadius="xl" placeholder="İnteqrasiya axtarın" value={query} onChange={event=>setQuery(event.target.value)}/>
@@ -224,22 +238,25 @@ function IntegrationMarketplace() {
       </Card.Body>
     </Card.Root>
     {error&&!selected&&<Box bg="red.50" color="red.700" p="4" borderRadius="xl">{error}</Box>}
-    <Grid templateColumns={{base:"repeat(2,minmax(0,1fr))",md:"repeat(3,minmax(0,1fr))",xl:"repeat(4,minmax(0,1fr))"}} gap={{base:"3",md:"5"}}>
-      {rows.map(item=>{const itemState=details[item.id]||{};return <Box key={item.id} minW="0">
-        <Button type="button" p="0" h="auto" w="full" display="block" textAlign="left" bg="transparent" whiteSpace="normal" disabled={item.pending} onClick={()=>choose(item)} _hover={{bg:"transparent"}}>
-          <Box h={{base:"104px",md:"132px"}} borderRadius="2xl" bg={`linear-gradient(145deg,${item.color},${item.color}cc)`} color="white" display="flex" alignItems="center" justifyContent="center" shadow="sm" transition=".18s ease" _hover={{transform:"translateY(-3px)",shadow:"lg"}}>
-            <Flex w={{base:"13",md:"16"}} h={{base:"13",md:"16"}} bg="whiteAlpha.900" color={item.color} borderRadius="2xl" align="center" justify="center" fontSize={{base:"lg",md:"2xl"}} fontWeight="900">{item.mark}</Flex>
-          </Box>
-          <Text mt="3" fontWeight="800" truncate>{item.name}</Text>
-          <Flex mt="1" align="center" gap="2"><Box w="2" h="2" borderRadius="full" bg={item.pending?"gray.400":itemState.connected?"green.500":"orange.400"}/><Text fontSize="xs" color="gray.600">{item.pending?"Tezliklə":itemState.connected?"Qoşulub":"Qoşulmayıb"}</Text></Flex>
-        </Button>
-      </Box>})}
+    <Grid templateColumns={{base:"1fr",sm:"repeat(2,minmax(0,1fr))",lg:"repeat(3,minmax(0,1fr))"}} gap="4">
+      {rows.map(item=>{const itemState=details[item.id]||{};return <Card.Root key={item.id} minW="0" bg="white" borderColor="gray.200" borderRadius="2xl" shadow="xs" overflow="hidden" transition="border-color .18s ease, box-shadow .18s ease, transform .18s ease" _hover={{borderColor:"gray.300",shadow:"md",transform:"translateY(-2px)"}}>
+        <Card.Body p="5">
+          <Flex align="flex-start" gap="4"><IntegrationLogo provider={item.id}/><Box minW="0" flex="1"><Text color="gray.900" fontSize="md" fontWeight="800" lineHeight="1.3">{item.name}</Text><Text mt="1" color="gray.500" fontSize="xs">{item.category}</Text></Box></Flex>
+          <Text mt="4" minH="44px" color="gray.600" fontSize="sm" lineHeight="1.55" lineClamp="2">{item.description}</Text>
+        </Card.Body>
+        <Card.Footer px="5" py="4" borderTopWidth="1px" borderColor="gray.100" bg="gray.50">
+          <Flex w="full" align="center" justify="space-between" gap="3">
+            <Flex minW="0" align="center" gap="2"><Box w="2" h="2" flex="none" borderRadius="full" bg={item.pending?"gray.400":itemState.connected?"green.500":"orange.400"}/><Text color="gray.600" fontSize="xs" fontWeight="650">{item.pending?"Tezliklə":itemState.connected?"Qoşulub":"Qoşulmayıb"}</Text></Flex>
+            <Button size="sm" borderRadius="lg" colorPalette="green" variant={itemState.connected?"outline":"solid"} disabled={item.pending} onClick={()=>choose(item)}>{item.pending?"Hazırlanır":itemState.connected?"İdarə et":"+ Qoş"}</Button>
+          </Flex>
+        </Card.Footer>
+      </Card.Root>})}
     </Grid>
     {!rows.length&&<Empty>Axtarışa uyğun inteqrasiya tapılmadı.</Empty>}
     <Dialog.Root open={!!selected} onOpenChange={event=>!event.open&&setSelected(null)} closeOnInteractOutside={false} size={{mdDown:"full",md:"xl"}} placement="center">
       <Portal><Dialog.Backdrop/><Dialog.Positioner><Dialog.Content maxH={{mdDown:"100dvh",md:"88vh"}} borderRadius={{mdDown:0,md:"3xl"}} overflow="hidden">
-        {selected&&<><Dialog.Header p={{base:"5",md:"6"}} bg={`linear-gradient(135deg,${selected.color}18,#fff)`} borderBottomWidth="1px">
-          <Flex align="center" gap="4"><Flex w="14" h="14" borderRadius="2xl" bg={selected.color} color="white" align="center" justify="center" fontWeight="900" fontSize="xl">{selected.mark}</Flex><Box flex="1"><Dialog.Title>{selected.name}</Dialog.Title><Dialog.Description>{selected.description}</Dialog.Description></Box><StatusBadge tone={state.connected?"green":"orange"}>{state.connected?"Qoşulub":"Qoşulmayıb"}</StatusBadge></Flex>
+        {selected&&<><Dialog.Header p={{base:"5",md:"6"}} bg="white" borderBottomWidth="1px">
+          <Flex align="center" gap="4"><IntegrationLogo provider={selected.id} size="lg"/><Box flex="1" minW="0"><Dialog.Title color="gray.900">{selected.name}</Dialog.Title><Dialog.Description color="gray.600">{selected.description}</Dialog.Description></Box><StatusBadge tone={state.connected?"green":"orange"}>{state.connected?"Qoşulub":"Qoşulmayıb"}</StatusBadge></Flex>
         </Dialog.Header>
         <Box px={{base:"5",md:"6"}} pt="4" borderBottomWidth="1px"><Flex gap="6"><Button px="0" pb="3" h="auto" borderRadius="0" variant="ghost" color={tab==="connection"?"brand.600":"gray.500"} borderBottomWidth="2px" borderColor={tab==="connection"?"brand.500":"transparent"} onClick={()=>setTab("connection")}>Qoşulma</Button><Button px="0" pb="3" h="auto" borderRadius="0" variant="ghost" color={tab==="settings"?"brand.600":"gray.500"} borderBottomWidth="2px" borderColor={tab==="settings"?"brand.500":"transparent"} onClick={()=>setTab("settings")}>Ayarlar</Button></Flex></Box>
         <Dialog.Body p={{base:"5",md:"6"}} overflowY="auto">
