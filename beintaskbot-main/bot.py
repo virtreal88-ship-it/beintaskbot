@@ -106,6 +106,7 @@ from legacy_action_contacts import DealContactContext, handle_deal_contact_edit
 from legacy_action_task_sessions import TaskSessionContext, handle_task_session_action
 from legacy_action_finance import PayoutContext, handle_payout
 from legacy_action_task_updates import TaskUpdateContext, handle_task_update_action
+from legacy_action_deal_routing import DealRoutingContext, handle_deal_edit
 from legacy_inbox_pulse import append_inbox_event, inbox_events_since
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
@@ -6105,6 +6106,29 @@ def _deal_contact_action_context() -> DealContactContext:
     )
 
 
+def _deal_routing_action_context() -> DealRoutingContext:
+    return DealRoutingContext(
+        lead_allowed_for_chat=lead_allowed_for_chat,
+        normalize_assignee_name=normalize_assignee_name,
+        move_lead_to_assignee=move_lead_to_icraci,
+        route_for_employee=route_deal_for_employee,
+        load_pipeline_stage_maps=load_pipeline_stage_maps,
+        invalidate_overview=invalidate_rufat_overview_cache,
+        record_pulse=record_lead_pulse_event,
+        get_partner=get_deal_partner,
+        get_partner_list=get_partner_list_for_chat,
+        get_lead=get_lead_details,
+        lead_pipeline_id=_lead_pipeline_id,
+        pipeline_for_chat=get_pipeline_id_for_chat,
+        is_admin=is_admin,
+        personal_pipeline_ids=all_personal_pipeline_ids,
+        update_lead=update_lead_kommo,
+        apply_source=apply_menbe,
+        patch_overview_stage=patch_rufat_overview_deal_stage,
+        clear_terminal_reentry=_clear_terminal_reentry,
+    )
+
+
 def _deal_note_action_context() -> DealNoteContext:
     return DealNoteContext(
         lead_allowed_for_chat=lead_allowed_for_chat,
@@ -6200,74 +6224,8 @@ async def handle_api_action(request: web.Request) -> web.Response:
             )
             return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit":
-            lead_id = int(data.get("lead_id") or 0)
-            if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Доступ запрещён."}, status=403)
-            # The deal editor uses the same executor names as task creation.
-            # Resolve the selected executor through the existing funnel router
-            # instead of requiring the browser to know pipeline IDs/stages.
-            assignee_name = normalize_assignee_name(data.get("assignee_name") or data.get("executor"))
-            if assignee_name:
-                # Changing the deal executor is intentionally available to
-                # every employee who can see the deal.  The old admin-only
-                # guard made the same executor selector work in task creation
-                # but fail from Sövdələşmələr for regular staff.
-                if not move_lead_to_icraci(lead_id, assignee_name):
-                    return web.json_response({"success": False, "error": "İcraçı üçün vərəq tapılmadı."}, status=400)
-                route = route_deal_for_employee(assignee_name)
-                routed_pipeline = int(route[0]) if route else 0
-                routed_status = int(route[1]) if route else 0
-                stage_key = ""
-                stage_name = ""
-                if routed_pipeline and routed_status:
-                    _routed_stages, _routed_names, _routed_ui = load_pipeline_stage_maps(routed_pipeline)
-                    stage_name = str(_routed_names.get(routed_status) or "")
-                    stage_key = next((key for key, status_id in _routed_stages.items() if int(status_id) == routed_status), "")
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=routed_pipeline, stage_key=stage_key)
-                return web.json_response({
-                    "success": True,
-                    "message": f"Sövdələşmə {assignee_name}-ə yönləndirildi.",
-                    "assignee_name": assignee_name,
-                    "pipeline_id": routed_pipeline,
-                    "stage_key": stage_key,
-                    "stage_name": stage_name,
-                    "partner": get_deal_partner(lead_id),
-                    "partners": get_partner_list_for_chat(chat_id),
-                })
-            stage_key = str(data.get("stage_key") or "")
-            lead = get_lead_details(lead_id) or {}
-            pipeline_id = _lead_pipeline_id(lead) or get_pipeline_id_for_chat(chat_id)
-            if is_admin(chat_id):
-                try:
-                    requested_pipeline = int(data.get("pipeline_id") or 0)
-                except (TypeError, ValueError):
-                    requested_pipeline = 0
-                if requested_pipeline:
-                    pipeline_id = requested_pipeline
-                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id, fallback=False)
-            else:
-                stages, _names, _ui = load_pipeline_stage_maps(pipeline_id) if pipeline_id in all_personal_pipeline_ids() else ({}, {}, [])
-            if stage_key not in stages:
-                return web.json_response({"success": False, "error": "Mərhələ tapılmadı."})
-            source_label = str(data.get("source") or data.get("menbe") or "").strip()
-            if not update_lead_kommo(lead_id, {"status_id": stages[stage_key], "pipeline_id": pipeline_id}):
-                return web.json_response({"success": False, "error": "Mərhələ dəyişdirilmədi."})
-            if source_label:
-                contacts = (lead.get("_embedded") or {}).get("contacts") or []
-                contact_id = int(contacts[0]["id"]) if contacts and contacts[0].get("id") else None
-                apply_menbe(contact_id, lead_id, source_label, overwrite=True)
-                invalidate_rufat_overview_cache()
-            patch_rufat_overview_deal_stage(lead_id, stage_key)
-            _clear_terminal_reentry(lead_id)
-            record_lead_pulse_event(lead_id, "deal_edit", pipeline_id=pipeline_id, stage_key=stage_key)
-            return web.json_response({
-                "success": True,
-                "message": "Sövdələşmə yeniləndi.",
-                "stage_key": stage_key,
-                "partner": get_deal_partner(lead_id),
-                "partners": get_partner_list_for_chat(chat_id),
-            })
+            result = handle_deal_edit(data, chat_id, _deal_routing_action_context())
+            return web.json_response(result.payload, status=result.status)
         elif action == "add_partner":
             return web.json_response({"success": False, "error": "Partner sahəsi ləğv edildi. Kommo teqlərindən istifadə edin."}, status=410)
         elif action in {"deal_add_note", "deal_edit_note", "deal_delete_note"}:
