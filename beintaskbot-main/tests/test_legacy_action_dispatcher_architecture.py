@@ -101,6 +101,17 @@ class LegacyActionDispatcherArchitectureTests(unittest.TestCase):
         self.assertIn("asyncio.to_thread", source)
         self.assertIn("_load_legacy_gozleme_response", functions)
 
+    def test_personal_funnel_overview_is_split_into_loader_indexes_and_presenter(self):
+        functions = self._functions()
+        overview = functions["build_rufat_overview"]
+        self.assertLessEqual(overview.end_lineno - overview.lineno + 1, 220)
+        for helper in (
+            "_load_personal_funnel_leads",
+            "_index_personal_funnel_leads",
+            "_build_personal_funnel_deals",
+        ):
+            self.assertIn(helper, functions)
+
 
 if __name__ == "__main__":
     unittest.main()
