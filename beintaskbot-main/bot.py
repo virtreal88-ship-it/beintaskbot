@@ -7845,119 +7845,118 @@ async def _load_personal_funnel_contact_ids() -> set[int]:
     return ids
 
 
-async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: int | None = None) -> dict:
-    """Load one personal Kommo funnel for local stage switching and task lists."""
-    owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
-    pipeline_id = int(owner["pipeline_id"])
-    funnel_stages = owner["stages"]
-    funnel_names = owner["stage_names"]
-    owner_name = owner["name"]
-    if stage_key is not None and stage_key not in funnel_stages:
-        stage_key = next(iter(funnel_stages), None)
-
-    async def _load_all_rufat_leads() -> list[dict]:
-        """Fetch every page from the pipeline so no stage is loaded on demand."""
-        all_leads: list[dict] = []
-        page = 1
-        while True:
-            response = await _kommo_get_async_retry(
-                f"{KOMMO_BASE_URL}/api/v4/leads",
-                params={
-                    "filter[pipeline_id]": pipeline_id,
-                    "with": "contacts",
-                    "limit": 250,
-                    "page": page,
-                },
-                timeout=12,
+async def _load_personal_funnel_leads(pipeline_id: int) -> list[dict]:
+    """Fetch every lead page for one configured personal funnel."""
+    all_leads: list[dict] = []
+    page = 1
+    while True:
+        response = await _kommo_get_async_retry(
+            f"{KOMMO_BASE_URL}/api/v4/leads",
+            params={
+                "filter[pipeline_id]": pipeline_id,
+                "with": "contacts",
+                "limit": 250,
+                "page": page,
+            },
+            timeout=12,
+        )
+        if response.status_code == 204:
+            break
+        if response.status_code != 200:
+            logger.error(
+                "Personal funnel leads fetch failed: %s body=%s",
+                response.status_code,
+                (response.text or "")[:200],
             )
-            # Kommo can respond with 204 when a page beyond the last one is requested.
-            if response.status_code == 204:
-                break
-            if response.status_code != 200:
-                logger.error("Rüfət leads fetch failed: %s body=%s", response.status_code, (response.text or "")[:200])
-                raise RuntimeError(f"Rüfət leads fetch failed: {response.status_code}")
-            batch = response.json().get("_embedded", {}).get("leads", []) or []
-            all_leads.extend(batch)
-            if len(batch) < 250:
-                break
-            page += 1
-        return all_leads
+            raise RuntimeError(f"Personal funnel leads fetch failed: {response.status_code}")
+        batch = response.json().get("_embedded", {}).get("leads", []) or []
+        all_leads.extend(batch)
+        if len(batch) < 250:
+            break
+        page += 1
+    return all_leads
 
-    leads = await _load_all_rufat_leads()
-    # Nizami's queue must retain every deal in its working stages. Filtering by
-    # an older deal for the same contact in another funnel made an active
-    # "Yeni sorğu" disappear from Müştərilər even though it was not closed.
-    # The client list itself now hides only Kommo's terminal stages.
 
+def _index_personal_funnel_leads(
+    leads: list[dict],
+    funnel_stages: dict,
+    selected_stage_key: str | None,
+) -> tuple[dict, dict, dict[int, dict], dict[int, dict], set[int]]:
+    """Normalize stage/contact indexes used by the personal-funnel presenter."""
     status_to_key = {status_id: key for key, status_id in funnel_stages.items()}
-    stage_counts = {stage_key: 0} if stage_key else {key: 0 for key in funnel_stages}
+    stage_counts = (
+        {selected_stage_key: 0}
+        if selected_stage_key
+        else {key: 0 for key in funnel_stages}
+    )
     lead_by_id: dict[int, dict] = {}
     lead_by_contact_id: dict[int, dict] = {}
+    contact_ids: set[int] = set()
     for lead in leads:
         try:
             lead_id = int(lead.get("id"))
         except (TypeError, ValueError):
             continue
         lead_by_id[lead_id] = lead
-        # Kommo may return status_id as either an integer or a JSON string.
-        # Normalize it before looking up the Rüfət pipeline stage; otherwise
-        # valid deals silently receive an empty stage_key and disappear from
-        # every visible stage in the web app.
         try:
             normalized_status_id = int(lead.get("status_id", 0) or 0)
         except (TypeError, ValueError):
             normalized_status_id = 0
-        stage_key = status_to_key.get(normalized_status_id, "")
-        if stage_key:
-            stage_counts[stage_key] += 1
+        current_stage_key = status_to_key.get(normalized_status_id, "")
+        if current_stage_key in stage_counts:
+            stage_counts[current_stage_key] += 1
         for contact in lead.get("_embedded", {}).get("contacts", []) or []:
             try:
                 contact_id = int(contact.get("id"))
             except (TypeError, ValueError):
                 continue
+            contact_ids.add(contact_id)
             lead_by_contact_id.setdefault(contact_id, lead)
+    return status_to_key, stage_counts, lead_by_id, lead_by_contact_id, contact_ids
 
-    # Fetch all linked contacts in bounded batches; one failed contact cannot hide a deal.
-    contact_ids = {
-        int(contact.get("id"))
-        for lead in leads
-        for contact in lead.get("_embedded", {}).get("contacts", []) or []
-        if str(contact.get("id", "")).isdigit()
-    }
-    # Open tasks are fetched once and filtered locally. Do not truncate linked
-    # entities: a stage edit changes ordering and otherwise hides a valid task.
-    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
-    contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
-    notes_request = asyncio.create_task(_load_rufat_latest_notes(
-        set(lead_by_id.keys()),
-        {cid: int(lead.get("id") or 0) for cid, lead in lead_by_contact_id.items() if int(lead.get("id") or 0)},
-    ))
-    tasks_request = asyncio.create_task(_load_rufat_open_tasks(task_entity_ids))
-    contacts = await contacts_request
-    deals = []
+
+def _build_personal_funnel_deals(
+    lead_by_id: dict[int, dict],
+    contacts: dict[int, dict],
+    *,
+    pipeline_id: int,
+    owner_name: str,
+    status_to_key: dict,
+    funnel_names: dict,
+    funnel_stages: dict,
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    """Present normalized Kommo leads without performing network requests."""
+    deals: list[dict] = []
     for lead_id, lead in lead_by_id.items():
         lead_contacts = lead.get("_embedded", {}).get("contacts", []) or []
-        first_contact_id = None
-        if lead_contacts:
-            try:
-                first_contact_id = int(lead_contacts[0].get("id"))
-            except (TypeError, ValueError):
-                pass
-        # Keep the contact fields separate from the deal title, with embedded fallback.
-        embedded_contact = next((c for c in lead_contacts if c.get("id") == first_contact_id), {})
-        contact = contacts.get(first_contact_id or 0, embedded_contact or {"name": "", "custom_fields_values": []})
-        contact_rows = []
-        all_phones = []
+        try:
+            first_contact_id = int(lead_contacts[0].get("id")) if lead_contacts else None
+        except (TypeError, ValueError):
+            first_contact_id = None
+        embedded_contact = next(
+            (contact for contact in lead_contacts if contact.get("id") == first_contact_id),
+            {},
+        )
+        contact = contacts.get(
+            first_contact_id or 0,
+            embedded_contact or {"name": "", "custom_fields_values": []},
+        )
+        contact_rows: list[dict] = []
+        all_phones: list[str] = []
         for linked_contact in lead_contacts:
             linked_id = linked_contact.get("id")
-            full_contact = contacts.get(int(linked_id), linked_contact) if str(linked_id).isdigit() else linked_contact
+            full_contact = (
+                contacts.get(int(linked_id), linked_contact)
+                if str(linked_id).isdigit()
+                else linked_contact
+            )
             phones = _contact_phones(full_contact)
             all_phones.extend(phone for phone in phones if phone not in all_phones)
-            contact_rows.append({"id": linked_id, "name": full_contact.get("name", ""), "phones": phones})
-        phone = all_phones[0] if all_phones else ""
-        # Normalize the status for this particular lead.  Do not reuse the
-        # normalized_status_id variable from the previous counting loop: that
-        # would assign every deal the stage of the last lead in the response.
+            contact_rows.append({
+                "id": linked_id,
+                "name": full_contact.get("name", ""),
+                "phones": phones,
+            })
         try:
             status_id = int(lead.get("status_id", 0) or 0)
         except (TypeError, ValueError):
@@ -7973,12 +7972,23 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
             "status_id": status_id,
             "stage_key": status_to_key.get(status_id, ""),
             "stage_name": funnel_names.get(status_id, "Naməlum mərhələ"),
-            "contact_name": contact.get("name", ""), "phone": phone, "phones": all_phones,
+            "contact_name": contact.get("name", ""),
+            "phone": all_phones[0] if all_phones else "",
+            "phones": all_phones,
             "contacts": contact_rows,
-            "source": source, "menbe": source,
-            "created_at": lead.get("created_at", 0), "updated_at": lead.get("updated_at", 0),
+            "source": source,
+            "menbe": source,
+            "created_at": lead.get("created_at", 0),
+            "updated_at": lead.get("updated_at", 0),
             "lead_updated_at": lead.get("updated_at", 0),
-            "last_note": "", "last_client_message": "", "last_incoming_at": 0, "chat_channel": "", "contact_avatar": _first_avatar_url(contact), "task_desc": "", "deadline": "", "deadline_ts": 0,
+            "last_note": "",
+            "last_client_message": "",
+            "last_incoming_at": 0,
+            "chat_channel": "",
+            "contact_avatar": _first_avatar_url(contact),
+            "task_desc": "",
+            "deadline": "",
+            "deadline_ts": 0,
             "wa_line": _wa_line_for_pipeline(pipeline_id),
             "voice_url": f"/api/voice/{lead_id}" if str(lead_id) in _voice_urls else "",
             "kommo_link": f"{KOMMO_BASE_URL}/leads/detail/{lead_id}",
@@ -7990,6 +8000,47 @@ async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: i
         stage_deals = deals_by_stage.get(deal.get("stage_key"))
         if stage_deals is not None:
             stage_deals.append(deal)
+    return deals, deals_by_stage
+
+
+async def build_rufat_overview(stage_key: str | None = None, *, owner_chat_id: int | None = None) -> dict:
+    """Load one personal Kommo funnel for local stage switching and task lists."""
+    owner = get_funnel_owner(owner_chat_id or RUFAT_CHAT_ID) or get_funnel_owner(RUFAT_CHAT_ID)
+    pipeline_id = int(owner["pipeline_id"])
+    funnel_stages = owner["stages"]
+    funnel_names = owner["stage_names"]
+    owner_name = owner["name"]
+    if stage_key is not None and stage_key not in funnel_stages:
+        stage_key = next(iter(funnel_stages), None)
+
+    leads = await _load_personal_funnel_leads(pipeline_id)
+    # Nizami's queue must retain every deal in its working stages. Filtering by
+    # an older deal for the same contact in another funnel made an active
+    # "Yeni sorğu" disappear from Müştərilər even though it was not closed.
+    # The client list itself now hides only Kommo's terminal stages.
+
+    status_to_key, stage_counts, lead_by_id, lead_by_contact_id, contact_ids = (
+        _index_personal_funnel_leads(leads, funnel_stages, stage_key)
+    )
+    # Open tasks are fetched once and filtered locally. Do not truncate linked
+    # entities: a stage edit changes ordering and otherwise hides a valid task.
+    task_entity_ids = list(dict.fromkeys([*lead_by_id.keys(), *lead_by_contact_id.keys()]))
+    contacts_request = asyncio.create_task(_load_rufat_contacts(contact_ids))
+    notes_request = asyncio.create_task(_load_rufat_latest_notes(
+        set(lead_by_id.keys()),
+        {cid: int(lead.get("id") or 0) for cid, lead in lead_by_contact_id.items() if int(lead.get("id") or 0)},
+    ))
+    tasks_request = asyncio.create_task(_load_rufat_open_tasks(task_entity_ids))
+    contacts = await contacts_request
+    deals, deals_by_stage = _build_personal_funnel_deals(
+        lead_by_id,
+        contacts,
+        pipeline_id=pipeline_id,
+        owner_name=owner_name,
+        status_to_key=status_to_key,
+        funnel_names=funnel_names,
+        funnel_stages=funnel_stages,
+    )
 
     # Attach all open tasks and use the nearest/most recent one as the compact summary.
     #
