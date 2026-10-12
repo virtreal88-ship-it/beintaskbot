@@ -38,6 +38,7 @@
   css.textContent += `.top{justify-content:flex-start}.top>div:first-child{margin-right:auto}#view-settings>.grid>.panel[data-settings-section=integrations]{grid-column:1/-1}@media(max-width:760px){.top{flex-wrap:wrap}.top>div:first-child{flex-basis:100%}}`;
   const paths = {tasks:'M9 5h10v15H5V5h4m0-2h6v4H9zM8 11h8M8 15h5',customers:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8m8-7a4 4 0 0 1 0 8m5 9v-2a4 4 0 0 0-3-4',deals:'M3 4h18v16H3zM9 4v16M15 4v16',settings:'M4 7h16M4 17h16M8 4v6M16 14v6',profile:'M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10',hot_orders:'M13 3c1 6-6 7-6 12a5 5 0 0 0 10 0c0-3-1-4-2-5 0 3-2 3-2 3',approvals:'M5 12l4 4L19 6',finance:'M12 3v18M17 7H9a3 3 0 0 0 0 6h6a3 3 0 0 1 0 6H6'};
   paths.linear='M4 4h16v16H4zM8 8h3v3H8zM14 8h2M8 15h8';
+  paths.integrations='M8 3v4m8-4v4M6 7h12v3a6 6 0 0 1-12 0zM12 16v5';
   paths.news='M4 4h16v16H4zM8 8h8M8 12h8M8 16h5';
   function updateIcons() { document.querySelectorAll('.nav [data-view]').forEach(button => {
     const span = button.querySelector('span'), path = paths[button.dataset.view];
@@ -98,6 +99,13 @@
     advancedTitle.hidden = !panels.length; sections.hidden = !panels.length; help.hidden = !panels.length;
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
+  window.tenantOpenSettingsSection = target => {
+    const view = document.querySelector('.nav [data-view="settings"]');
+    if (view && !view.hidden) view.click();
+    if (groups.some(group => group[0] === target)) section = target;
+    showSettings();
+    requestAnimationFrame(() => sections.scrollIntoView({behavior:'smooth',block:'start'}));
+  };
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});

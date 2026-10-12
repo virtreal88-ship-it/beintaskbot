@@ -14,9 +14,17 @@ class TenantChakraUiTests(unittest.TestCase):
 
     def test_chakra_source_covers_core_crm_surfaces(self):
         source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
-        for component in ("ChakraProvider", "TasksTable", "DealKanban", "DealTable", "SettingsHub", "MemberDialog"):
+        for component in ("ChakraProvider", "TasksTable", "DealKanban", "DealTable", "SettingsHub", "MemberDialog", "IntegrationMarketplace"):
             self.assertIn(component, source)
         self.assertIn('closeOnInteractOutside={false}', source)
+
+    def test_market_is_separate_navigation_surface_with_expected_catalog(self):
+        page = (ROOT / "docs" / "tenant-app.html").read_text(encoding="utf-8")
+        source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
+        self.assertIn('data-view="integrations"', page)
+        self.assertIn('id="view-integrations"', page)
+        for provider in ("Kommo", "Linear", "OpenAI", "Telegram", "Wappi", "BeinSystems ERP"):
+            self.assertIn(provider, source)
 
     def test_prebuilt_asset_exists_for_python_only_deploy(self):
         bundle = ROOT / "docs" / "tenant-chakra-ui.js"
