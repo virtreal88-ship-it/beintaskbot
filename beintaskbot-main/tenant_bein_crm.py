@@ -6,6 +6,7 @@ mutation requires a stable Idempotency-Key supplied by the calling command.
 """
 import asyncio
 from dataclasses import dataclass, field
+import ipaddress
 from urllib.parse import urlparse
 
 import requests
@@ -29,6 +30,15 @@ def normalize_base_url(value: str) -> str:
     parsed = urlparse(raw)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise CrmProviderError("BEIN ERP API ünvanı düzgün deyil.", status=400)
+    host = str(parsed.hostname or "").casefold().rstrip(".")
+    if host == "localhost" or host.endswith((".localhost", ".local")):
+        raise CrmProviderError("BEIN ERP API ünvanı ictimai HTTPS host olmalıdır.", status=400)
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address and not address.is_global:
+        raise CrmProviderError("BEIN ERP API ünvanı ictimai HTTPS host olmalıdır.", status=400)
     return raw if parsed.path.rstrip("/").endswith("/api/v1") else raw + "/api/v1"
 
 

@@ -37,7 +37,7 @@ def disconnect_integration(*, tenant_id: str, owner_id: int, provider: str) -> d
     if not current or current.get("role") != "owner":
         raise TenantPlatformError("İcazə yoxdur.")
     provider = str(provider or "").strip().casefold()
-    if provider not in {"kommo", "waba", "telegram", "push"}:
+    if provider not in {"kommo", "beinsystems", "waba", "telegram", "push"}:
         raise TenantPlatformError("Bu inteqrasiya idarə edilmir.")
     with _connect() as conn:
         _ensure_schema(conn)

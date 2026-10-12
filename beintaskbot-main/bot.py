@@ -66,6 +66,7 @@ from tenant_push_api import PushApiContext, handler as tenant_push_handler
 from kommo_phone_duplicates_api import tenant_handler as tenant_duplicate_handler
 from tenant_kommo import KommoContext, TenantKommo, wait_slot as tenant_kommo_wait_slot
 from tenant_kommo_api import handlers as tenant_kommo_handlers
+from tenant_bein_api import handler as tenant_bein_handler
 from tenant_web_assets import register_assets
 from tenant_hot_orders import (
     TenantHotOrderError, create_order as create_tenant_hot_order,
@@ -18617,6 +18618,9 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/api/platform/integrations/kommo/pipelines", kommo_api["pipelines"])
     app_web.router.add_post("/api/platform/integrations/kommo/pipelines", kommo_api["save_pipelines"])
     app_web.router.add_get("/api/platform/integrations/kommo/test", kommo_api["test"])
+    bein_api = tenant_bein_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get("/api/platform/integrations/beinsystems", bein_api)
+    app_web.router.add_post("/api/platform/integrations/beinsystems", bein_api)
     app_web.router.add_get("/api/platform/crm/deals", deal_api["deals"])
     app_web.router.add_get('/api/platform/crm/sync', deal_api["sync_status"])
     app_web.router.add_get("/api/platform/crm/deal", deal_api["deal"])

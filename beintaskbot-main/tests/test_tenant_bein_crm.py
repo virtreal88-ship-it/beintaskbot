@@ -46,7 +46,8 @@ class BeinCrmTests(unittest.IsolatedAsyncioTestCase):
     def test_base_url_and_token_are_restricted(self):
         self.assertEqual(normalize_base_url("https://erp.example.test/api/v1"), "https://erp.example.test/api/v1")
         self.assertNotIn("secret-value", repr(self.client))
-        for url in ("http://erp.example.test", "https://user:pass@erp.example.test", "https://erp.example.test?token=x"):
+        for url in ("http://erp.example.test", "https://user:pass@erp.example.test", "https://erp.example.test?token=x",
+                    "https://localhost", "https://127.0.0.1/api/v1"):
             with self.assertRaises(CrmProviderError):
                 normalize_base_url(url)
         with self.assertRaises(CrmProviderError):
