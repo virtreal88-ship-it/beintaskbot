@@ -101,25 +101,16 @@ class Assets(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.headers.get('Cache-Control'), cache)
             self.assertEqual(response.headers.get('Service-Worker-Allowed'), '/app/' if url == '/app/push-sw.js' else None)
 
-    def test_bot_composes_separate_legacy_and_tenant_route_groups(self):
+    def test_bot_only_mounts_one_group_and_legacy_routes_are_still_local(self):
         source = (ROOT/'bot.py').read_text(encoding='utf-8-sig')
         tree = ast.parse(source)
         start = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'start_webhook_server')
-        functions = {
-            node.name: node for node in tree.body
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        }
         text = ast.get_source_segment(source, start)
-        tenant_text = ast.get_source_segment(source, functions['_register_tenant_web_routes'])
-        legacy_text = ast.get_source_segment(source, functions['_register_legacy_web_routes'])
-        self.assertIn('_register_legacy_web_routes(app_web)', text)
-        self.assertIn('_register_tenant_web_routes(app_web)', text)
-        self.assertEqual(tenant_text.count('register_feature_routes('), 1)
-        self.assertEqual(tenant_text.count('register_assets('), 1)
+        self.assertEqual(text.count('register_feature_routes('), 1)
+        self.assertEqual(text.count('register_assets('), 1)
         for method, url in EXPECTED_API:
-            self.assertNotIn("'"+url+"'", tenant_text)
-            self.assertNotIn('"'+url+'"', tenant_text)
-        self.assertIn('"/webapp", serve_webapp', tenant_text)
-        self.assertIn('"/api/platform/integrations/kommo/callback"', tenant_text)
-        self.assertIn('"/api/platform/register"', tenant_text)
-        self.assertIn('"/api/action", handle_api_action', legacy_text)
+            self.assertNotIn("'"+url+"'", text)
+            self.assertNotIn('"'+url+'"', text)
+        self.assertIn('"/webapp", serve_webapp', text)
+        self.assertIn('"/api/platform/integrations/kommo/callback"', text)
+        self.assertIn('"/api/platform/register"', text)

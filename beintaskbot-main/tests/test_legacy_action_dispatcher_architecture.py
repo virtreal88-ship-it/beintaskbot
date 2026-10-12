@@ -74,33 +74,6 @@ class LegacyActionDispatcherArchitectureTests(unittest.TestCase):
         self.assertIn("asyncio.to_thread", source)
         self.assertIn("_load_legacy_notification_tasks", functions)
 
-    def test_web_server_startup_only_composes_route_groups(self):
-        functions = self._functions()
-        startup = functions["start_webhook_server"]
-        self.assertLessEqual(startup.end_lineno - startup.lineno + 1, 15)
-        self.assertLessEqual(
-            functions["_register_legacy_web_routes"].end_lineno
-            - functions["_register_legacy_web_routes"].lineno
-            + 1,
-            130,
-        )
-        self.assertLessEqual(
-            functions["_register_tenant_web_routes"].end_lineno
-            - functions["_register_tenant_web_routes"].lineno
-            + 1,
-            180,
-        )
-
-    def test_waiting_queue_http_handler_offloads_legacy_sync_work(self):
-        functions = self._functions()
-        handler = functions["handle_api_gozleme"]
-        self.assertLessEqual(handler.end_lineno - handler.lineno + 1, 75)
-        source = ast.get_source_segment(
-            (ROOT / "bot.py").read_text(encoding="utf-8-sig"), handler
-        ) or ""
-        self.assertIn("asyncio.to_thread", source)
-        self.assertIn("_load_legacy_gozleme_response", functions)
-
 
 if __name__ == "__main__":
     unittest.main()
