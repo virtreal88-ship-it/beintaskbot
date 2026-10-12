@@ -28,6 +28,7 @@ def _public(row: dict | None) -> dict:
         "base_url": str(row.get("account_domain") or ""),
         "branch_id": str(metadata.get("branch_id") or ""),
         "primary": bool(metadata.get("primary")),
+        "api_ready": bool(row.get("account_domain")),
         "capabilities": {
             "deals": True, "tasks": True, "customers": True,
             "pipelines": True, "stages": True,
@@ -68,6 +69,8 @@ def credential(tenant_id: str) -> BeinCrm:
     if secret.get("tenant_id") != tenant or secret.get("provider") != PROVIDER:
         raise TenantPlatformError("BeinSystems ERP bağlantısı bu şirkətə aid deyil.")
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if not str(row.get("account_domain") or "").strip():
+        raise TenantPlatformError("BeinSystems API ünvanı hələ aktiv deyil. Token təhlükəsiz saxlanılıb.")
     try:
         return BeinCrm(str(row.get("account_domain") or ""), str(secret.get("token") or ""),
                        str(metadata.get("branch_id") or ""))
@@ -75,16 +78,24 @@ def credential(tenant_id: str) -> BeinCrm:
         raise TenantPlatformError(str(exc)) from exc
 
 
-def save(profile: dict | None, *, base_url: str, token: str, branch_id: str,
+def save(profile: dict | None, *, base_url: str = "", token: str, branch_id: str = "",
          primary: bool = False) -> dict:
     tenant, actor = _owner(profile)
     # Validate before touching the currently working connection. Encryption is
     # also performed before the transaction so a missing key cannot corrupt it.
-    client = BeinCrm(base_url, token, branch_id)
+    clean_token = str(token or "").strip()
+    if not clean_token.startswith("bei_int_") or len(clean_token) < 24 or any(char.isspace() for char in clean_token):
+        raise TenantPlatformError("BeinSystems integration token düzgün deyil.")
+    clean_base_url = str(base_url or "").strip()
+    clean_branch_id = str(branch_id or "").strip()
+    client = BeinCrm(clean_base_url, clean_token, clean_branch_id) if clean_base_url else None
+    normalized_url = client.base_url if client else ""
+    normalized_token = client.integration_token if client else clean_token
+    normalized_branch = client.branch_id if client else clean_branch_id
     encrypted = _fernet().encrypt(_json({
-        "tenant_id": tenant, "provider": PROVIDER, "token": client.integration_token,
+        "tenant_id": tenant, "provider": PROVIDER, "token": normalized_token,
     }).encode("utf-8"))
-    metadata = {"branch_id": client.branch_id, "primary": bool(primary)}
+    metadata = {"branch_id": normalized_branch, "primary": bool(primary), "api_ready": bool(normalized_url)}
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -101,7 +112,7 @@ def save(profile: dict | None, *, base_url: str, token: str, branch_id: str,
                   metadata=EXCLUDED.metadata,secrets=EXCLUDED.secrets,
                   connected_at=COALESCE(saas_tenant_integrations.connected_at,now()),updated_at=now()
                 RETURNING status,account_domain,metadata,connected_at,updated_at""",
-                (tenant, PROVIDER, client.base_url, _json(metadata), encrypted))
+                (tenant, PROVIDER, normalized_url, _json(metadata), encrypted))
             row = cur.fetchone()
             if primary:
                 cur.execute("""UPDATE saas_tenant_integrations SET
@@ -112,7 +123,8 @@ def save(profile: dict | None, *, base_url: str, token: str, branch_id: str,
                 (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                 VALUES (%s,%s::uuid,%s,'integration_connected','integration',%s,%s::jsonb)""",
                 (uuid.uuid4(), tenant, actor, PROVIDER,
-                 _json({"base_url": client.base_url, "branch_id": client.branch_id, "primary": bool(primary)})))
+                 _json({"base_url": normalized_url, "branch_id": normalized_branch,
+                        "primary": bool(primary), "api_ready": bool(normalized_url)})))
         conn.commit()
     return _public(row)
 

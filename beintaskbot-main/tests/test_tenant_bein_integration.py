@@ -62,6 +62,21 @@ class BeinIntegrationStoreTests(unittest.TestCase):
                               token=TOKEN, branch_id="branch")
         self.connect.assert_not_called()
 
+    def test_token_can_be_saved_before_api_host_is_available(self):
+        self.cur.fetchone.side_effect = [
+            {"role": "owner", "active": True},
+            {"status": "connected", "account_domain": "",
+             "metadata": {"branch_id": "", "primary": False, "api_ready": False},
+             "connected_at": None, "updated_at": None},
+        ]
+        result = self.service.save(PROFILE, token=TOKEN)
+        insert = next(call for call in self.cur.execute.call_args_list
+                      if "INSERT INTO saas_tenant_integrations" in call.args[0])
+        self.assertEqual(insert.args[1][2], "")
+        self.assertFalse(result["api_ready"])
+        secret = json.loads(self.cipher.decrypt(insert.args[1][4]))
+        self.assertEqual(secret["token"], TOKEN)
+
     def test_primary_provider_defaults_to_kommo(self):
         self.cur.fetchone.return_value = None
         self.assertEqual(self.service.primary_provider(TENANT), "kommo")

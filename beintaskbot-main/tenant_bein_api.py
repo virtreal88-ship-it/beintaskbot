@@ -37,18 +37,16 @@ def handler(member: Callable, origin: str, logger) -> Callable:
         action = str(data.get("action") or "").casefold()
         try:
             if action == "connect":
-                # Never save an unverified credential. A lightweight catalog
-                # read also proves token, host and branch visibility.
-                from tenant_bein_crm import BeinCrm
-                client = BeinCrm(str(data.get("base_url") or ""), str(data.get("token") or ""),
-                                 str(data.get("branch_id") or ""))
-                catalog = await client.list_resource("pipelines", page=1)
-                item = await asyncio.to_thread(save, profile, base_url=client.base_url,
-                    token=client.integration_token, branch_id=client.branch_id,
+                # BeinSystems currently issues the integration token before
+                # the public API/Webhook host is enabled. Store the token now;
+                # a missing API host must not block tenant onboarding.
+                item = await asyncio.to_thread(save, profile,
+                    base_url=str(data.get("base_url") or ""), token=str(data.get("token") or ""),
+                    branch_id=str(data.get("branch_id") or ""),
                     primary=bool(data.get("primary")))
                 return web.json_response({"success": True, "integration": item,
-                                          "message": "BeinSystems ERP bağlantısı yoxlanıldı və saxlanıldı.",
-                                          "catalog_available": bool(catalog)})
+                                          "message": "BeinSystems API tokeni təhlükəsiz saxlanıldı.",
+                                          "catalog_available": False})
             if action == "test":
                 client = await asyncio.to_thread(credential, profile["tenant_id"])
                 payload = await client.list_resource("pipelines", page=1)
