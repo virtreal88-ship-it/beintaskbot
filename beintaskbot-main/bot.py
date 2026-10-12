@@ -216,6 +216,10 @@ from legacy_employee_access import (
     employee_has_permission, employee_requires_completion_approval,
     get_rufat_compat_chat_ids, is_admin,
 )
+from legacy_employee_notifications import (
+    effective_employee_notifications, notification_channel_enabled,
+    notification_event_catalog, normalize_employee_notifications,
+)
 from legacy_roster_cleanup import remove_retired_employee_access as _remove_retired_employee_access
 from tenant_crm_sync_store import enqueue as enqueue_tenant_crm_sync, sync_status as tenant_crm_sync_status
 from tenant_crm_sync_worker import run_sync_batch
@@ -895,12 +899,13 @@ def _resolve_pending_executor_change(
             task_desc = action_data.get("task_text", "")
             link = action_data.get("link", "")
             try:
-                asyncio.ensure_future(_bot_app.bot.send_message(
-                    new_chat,
-                    f"📨 *Sizə yeni tapşırıq təyin edildi!*\n\n📝 {task_desc}\n👤 {client}\n🔗 {link}",
-                    parse_mode="Markdown", disable_web_page_preview=True,
-                ))
-                send_push_notification(str(new_chat), "📨 Yeni tapşırıq!", f"{client} - {task_desc}")
+                if notification_channel_enabled(new_chat, "task_assigned", "telegram"):
+                    asyncio.ensure_future(_bot_app.bot.send_message(
+                        new_chat,
+                        f"📨 *Sizə yeni tapşırıq təyin edildi!*\n\n📝 {task_desc}\n👤 {client}\n🔗 {link}",
+                        parse_mode="Markdown", disable_web_page_preview=True,
+                    ))
+                send_push_notification(str(new_chat), "📨 Yeni tapşırıq!", f"{client} - {task_desc}", event="task_assigned")
                 remember_staff_notice(
                     new_chat, "new_task", "Yeni tapşırıq!", f"{client} - {task_desc}",
                     int(action_data.get("lead_id") or 0),
@@ -1054,7 +1059,7 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                         int(_sender_chat_ae),
                         f"\u2705 Sizin tapşırığınız təyin edildi:\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae2}\n\ud83d\udc77 İcraçı: {_assigned_to}",
                         parse_mode="Markdown", disable_web_page_preview=True))
-                    send_push_notification(str(_sender_chat_ae), '\u2705 Tapşırıq təyin edildi', f'{_client_ae2} - {_assigned_to}')
+                    send_push_notification(str(_sender_chat_ae), '\u2705 Tapşırıq təyin edildi', f'{_client_ae2} - {_assigned_to}', event="task_assigned")
                 except Exception:
                     pass
             # Notify new assignee
@@ -1065,11 +1070,12 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
                 _link_ae = action_data.get("link", "")
                 try:
                     import asyncio
-                    asyncio.ensure_future(_bot_app.bot.send_message(
-                        int(_target_chat_ae),
-                        f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae}\n\ud83d\udd17 {_link_ae}",
-                        parse_mode="Markdown", disable_web_page_preview=True))
-                    send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}')
+                    if notification_channel_enabled(_target_chat_ae, "task_assigned", "telegram"):
+                        asyncio.ensure_future(_bot_app.bot.send_message(
+                            int(_target_chat_ae),
+                            f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {task_text}\n\ud83d\udc64 {_client_ae}\n\ud83d\udd17 {_link_ae}",
+                            parse_mode="Markdown", disable_web_page_preview=True))
+                    send_push_notification(str(_target_chat_ae), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client_ae} - {task_text}', event="task_assigned")
                     remember_staff_notice(_target_chat_ae, "new_task", "Yeni tapşırıq!", f"{_client_ae} - {task_text}", int(action_data.get("lead_id") or 0))
                 except: pass
         result_message = "Sorğu ləğv edildi." if choice in ("Ləğv et", "Rədd et") else f"Tapşırıq {choice} üçün yaradıldı."
@@ -2962,13 +2968,14 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                         assignee_chat = get_chat_id_for_kommo_user(result["assignee_id"])
                         if assignee_chat:
                             try:
-                                await context.bot.send_message(
-                                    assignee_chat,
-                                    f"📢 Yeni tapşırıq:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n"
-                                    f"📝 {result['task_text']}\n⏰ {result['date']} {result['time']}\n🔗 {result['link']}",
-                                    disable_web_page_preview=True
-                                )
-                                send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{result['contact_name']} - {result['task_text']}")
+                                if notification_channel_enabled(assignee_chat, "task_assigned", "telegram"):
+                                    await context.bot.send_message(
+                                        assignee_chat,
+                                        f"📢 Yeni tapşırıq:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n"
+                                        f"📝 {result['task_text']}\n⏰ {result['date']} {result['time']}\n🔗 {result['link']}",
+                                        disable_web_page_preview=True
+                                    )
+                                send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{result['contact_name']} - {result['task_text']}", event="task_assigned")
                                 remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {result['task_text']}", int(result.get("lead_id") or 0))
                             except:
                                 pass
@@ -3023,15 +3030,16 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                     ]
                 ]
                 try:
-                    sent = await context.bot.send_message(
-                        admin_chat,
-                        f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
-                        f"👤 {result['contact_name']}\n📞 {result['phone']}\n"
-                        f"📌 Yeni mərhələ: *{stage_display}*\n\n"
-                        f"Təsdiq edirsiniz?",
-                        parse_mode="Markdown",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
+                    if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                        sent = await context.bot.send_message(
+                            admin_chat,
+                            f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
+                            f"👤 {result['contact_name']}\n📞 {result['phone']}\n"
+                            f"📌 Yeni mərhələ: *{stage_display}*\n\n"
+                            f"Təsdiq edirsiniz?",
+                            parse_mode="Markdown",
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
                 except Exception as e:
                     logger.error(f"Failed to send confirmation: {e}")
             save_pending_action("confirm_stage", {
@@ -3052,6 +3060,7 @@ async def execute_ai_tool(fn_name: str, fn_args: dict, chat_id: int, update: Upd
                 f"{sender_name}: {result['contact_name']} → {stage_display}",
                 title="🔄 Mərhələ təsdiqi",
                 url="#pending",
+                event="approval",
             )
             return f"⏳ Sorğunuz Admin-ə göndərildi. Təsdiq gözlənilir.\n👤 {result['contact_name']} → {stage_display}"
         else:
@@ -3432,13 +3441,15 @@ async def ai_task_deadline_callback(update: Update, context: ContextTypes.DEFAUL
             assignee_chat = get_chat_id_for_kommo_user(assignee_id)
             if assignee_chat:
                 try:
-                    sent_a = await context.bot.send_message(
-                        assignee_chat,
-                        f"📋 *Yeni tapşırıq!*\n\n👤 {contact_name}\n📞 {phone}\n"
-                        f"📝 {task_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
-                        parse_mode="Markdown", disable_web_page_preview=True
-                    )
-                    send_push_notification(str(assignee_chat), '📋 Yeni tapşırıq!', f"{contact_name} - {task_text}")
+                    sent_a = None
+                    if notification_channel_enabled(assignee_chat, "task_assigned", "telegram"):
+                        sent_a = await context.bot.send_message(
+                            assignee_chat,
+                            f"📋 *Yeni tapşırıq!*\n\n👤 {contact_name}\n📞 {phone}\n"
+                            f"📝 {task_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {link}",
+                            parse_mode="Markdown", disable_web_page_preview=True
+                        )
+                    send_push_notification(str(assignee_chat), '📋 Yeni tapşırıq!', f"{contact_name} - {task_text}", event="task_assigned")
                     remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{contact_name} - {task_text}", int(entity_id or 0) if entity_type == "leads" else 0)
                     tid = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if tid and sent_a:
@@ -3657,13 +3668,15 @@ async def task_deadline_callback(update: Update, context: ContextTypes.DEFAULT_T
             assignee_chat = get_chat_id_for_kommo_user(pending["assignee_id"])
             if assignee_chat:
                 try:
-                    sent_msg = await context.bot.send_message(
-                        assignee_chat,
-                        f"📢 Yeni tapşırıq:\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n"
-                        f"📝 {pending['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {pending['link']}",
-                        disable_web_page_preview=True
-                    )
-                    send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{pending['contact_name']} - {pending['task_text']}")
+                    sent_msg = None
+                    if notification_channel_enabled(assignee_chat, "task_assigned", "telegram"):
+                        sent_msg = await context.bot.send_message(
+                            assignee_chat,
+                            f"📢 Yeni tapşırıq:\n\n👤 {pending['contact_name']}\n📞 {pending['phone']}\n"
+                            f"📝 {pending['task_text']}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {pending['link']}",
+                            disable_web_page_preview=True
+                        )
+                    send_push_notification(str(assignee_chat), '📢 Yeni tapşırıq!', f"{pending['contact_name']} - {pending['task_text']}", event="task_assigned")
                     remember_staff_notice(assignee_chat, "new_task", "Yeni tapşırıq!", f"{pending['contact_name']} - {pending['task_text']}", int(pending.get("lead_id") or pending.get("entity_id") or 0))
                     task_id = result.get("_embedded", {}).get("tasks", [{}])[0].get("id")
                     if task_id and sent_msg:
@@ -4627,13 +4640,15 @@ async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE
             if admin_chat:
                 keyboard = [[InlineKeyboardButton("✅ Təsdiq et", callback_data=f"conftr_{conf_key}_yes"), InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no")]]
                 try:
-                    sent = await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+                    if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                        sent = await context.bot.send_message(admin_chat, f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n👤 {result['contact_name']}\n📞 {result['phone']}\n📌 Yeni mərhələ: *{stage_display}*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
                 except:
                     pass
             send_push_to_admin(
                 f"{sender_name} mərhələ dəyişikliyi: {result['contact_name']} → {stage_display}",
                 title="🔄 Mərhələ",
-            url="#pending",
+                url="#pending",
+                event="approval",
             )
             await update.message.reply_text(f"⏳ Sorğunuz Admin-ə göndərildi.\n👤 {result['contact_name']} → {stage_display}")
         else:
@@ -6342,11 +6357,12 @@ async def _handle_legacy_add_note(data: dict, chat_id: int, phone: str) -> web.R
                             [{"text": "\u00d6z\u00fcm", "callback_data": f"updtask-{found_conf_key}-admin"}],
                             [{"text": "\u274c R\u0259dd et", "callback_data": f"updtask-{found_conf_key}-no"}]
                         ]}
-                        tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
                         tg_msg_id = None
-                        try:
-                            tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
-                        except: pass
+                        if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                            tg_resp = _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": admin_chat, "text": msg_text, "reply_markup": kb_json}, timeout=8)
+                            try:
+                                tg_msg_id = tg_resp.json().get("result", {}).get("message_id")
+                            except: pass
                         save_pending_action("reassign_task", {
                             "contact_name": client_name or pending.get('display_text', ''),
                             "phone": client_phone or pending.get("phone", ""),
@@ -6365,7 +6381,7 @@ async def _handle_legacy_add_note(data: dict, chat_id: int, phone: str) -> web.R
                             "telegram_chat_id": admin_chat,
                             "telegram_message_id": tg_msg_id,
                         }, ["Təsdiq et", "Rüfət", "Hüseyn", "Rasim", "Sərmayə", "Asya", "Nuranə", "Özüm", "Rədd et"])
-                        send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending")
+                        send_push_to_admin(msg_text, title="✏️ İcraçı dəyişikliyi", url="#pending", event="approval")
                     except Exception as e:
                         logger.error(f"add_note conf notification error: {e}")
                 elif admin_chat and admin_chat != chat_id and _bot_app:
@@ -6474,8 +6490,9 @@ async def _handle_legacy_task(data: dict, chat_id: int, phone: str) -> web.Respo
             [InlineKeyboardButton("❌ Rədd et", callback_data=f"cnftask-{conf_key}-no")],
         ])
         try:
-            await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
-            send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq")
+            if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                await _bot_app.bot.send_message(admin_chat, f"📋 *{sender_name}* tapşırıq yaratmaq istəyir:\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n👤 {sender_name} → {assignee_name_raw}\n🔗 {result.get('link','')}", parse_mode="Markdown", disable_web_page_preview=True, reply_markup=kb)
+            send_push_to_admin(f"{sender_name} tapşırıq yaratmaq istəyir: {result['contact_name']}", title="📋 Yeni tapşırıq", event="approval")
         except: pass
         # Get lead stage for display
         _lead_stage_name = ""
@@ -6516,13 +6533,14 @@ async def _handle_legacy_task(data: dict, chat_id: int, phone: str) -> web.Respo
                 display_text = text.replace(f'[{assignee_name_raw}] ', '')
                 notif_msg = f"📋 Yeni tapşırıq!\n\n👤 {result['contact_name']}\n📞 {phone}\n📝 {display_text}\n⏰ {deadline_dt.strftime('%d.%m.%Y %H:%M')}\n🔗 {result['link']}"
                 try:
-                    _http.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                        json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
-                        timeout=8
-                    )
+                    if notification_channel_enabled(target_chat, "task_assigned", "telegram"):
+                        _http.post(
+                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                            json={"chat_id": target_chat, "text": notif_msg, "disable_web_page_preview": True},
+                            timeout=8
+                        )
                 except: pass
-                send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}")
+                send_push_notification(str(target_chat), '📋 Yeni tapşırıq!', f"{result['contact_name']} - {display_text}", event="task_assigned")
                 remember_staff_notice(target_chat, "new_task", "Yeni tapşırıq!", f"{result['contact_name']} - {display_text}", int(result.get("entity_id") or 0) if result.get("entity_type") == "leads" else 0)
         return web.json_response({"success": True, "message": msg, "link": result.get('link', ''), "entity_id": result.get('entity_id'), "entity_type": result.get('entity_type', 'leads'), "task_id": _created_task_id(res), "deadline": deadline_dt.strftime("%d.%m %H:%M")})
     return web.json_response({"success": False, "error": "Tapşırıq yaradılarkən xəta."})
@@ -6555,19 +6573,21 @@ async def _handle_legacy_stage(data: dict, chat_id: int, phone: str) -> web.Resp
                             InlineKeyboardButton("❌ Rədd et", callback_data=f"conftr_{conf_key}_no"),
                         ]])
                         try:
-                            sent = await _bot_app.bot.send_message(
-                                admin_chat,
-                                f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
-                                f"👤 {result['contact_name']}\n📞 {result['phone']}\n📌 {stage_display}",
-                                parse_mode="Markdown",
-                                reply_markup=keyboard,
-                            )
+                            if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                                sent = await _bot_app.bot.send_message(
+                                    admin_chat,
+                                    f"🔄 *{sender_name}* mərhələ dəyişikliyi istəyir:\n\n"
+                                    f"👤 {result['contact_name']}\n📞 {result['phone']}\n📌 {stage_display}",
+                                    parse_mode="Markdown",
+                                    reply_markup=keyboard,
+                                )
                         except Exception as exc:
                             logger.error(f"PWA stage confirmation send error: {exc}")
                     send_push_to_admin(
                         f"{sender_name}: {result['contact_name']} → {stage_display}",
                         title="🔄 Mərhələ",
-                    url="#pending",
+                        url="#pending",
+                        event="approval",
                     )
                     return web.json_response({"success": True, "message": f"✅ Admin-ə təsdiq sorğusu göndərildi.\n👤 {result['contact_name']}\n📌 {stage_display}"})
                 update_lead_kommo(result["lead_id"], {"status_id": result["status_id"], "pipeline_id": get_pipeline_id_for_chat(chat_id)})
@@ -6917,15 +6937,16 @@ def _notify_legacy_task_completion(
           raw_task_text = task_data.get("text", "").strip()
           task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
           try:
-              _http.post(
-                  f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                  json={
-                      "chat_id": admin_chat,
-                      "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
-                      "disable_web_page_preview": True,
-                  },
-                  timeout=8
-              )
+              if notification_channel_enabled(admin_chat, "approval", "telegram"):
+                  _http.post(
+                      f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      json={
+                          "chat_id": admin_chat,
+                          "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
+                          "disable_web_page_preview": True,
+                      },
+                      timeout=8
+                  )
               save_pending_action("change_stage", {
                   "contact_name": contact_name or "—",
                   "phone": phone or "—",
@@ -6945,6 +6966,7 @@ def _notify_legacy_task_completion(
                   f"{completion_sender}: {contact_name or '—'}",
                   title="✅ Sifariş tamamlandı — təsdiq gözləyir",
                   url="#pending",
+                  event="approval",
               )
           except Exception as notify_error:
               logger.error(f"Completion notification error: {notify_error}")
@@ -15423,6 +15445,7 @@ def _employee_directory_rows() -> list[dict]:
             "ai_enabled": bool(profile.get("ai_enabled")),
             "hot_order_skills": profile.get("hot_order_skills") or [],
             "completion_requires_admin": bool(profile.get("completion_requires_admin")),
+            "notifications": effective_employee_notifications(profile),
             "updated_at": str((access.get(str(chat_id)) or {}).get("updated_at") or ""),
         })
     return sorted(rows, key=lambda row: (not row["active"], row["name"].casefold(), row["chat_id"]))
@@ -15440,6 +15463,7 @@ async def handle_api_employee_directory(request: web.Request) -> web.Response:
     return web.json_response({
         "success": True,
         "permissions": list(_EMPLOYEE_PERMISSIONS),
+        "notification_events": notification_event_catalog(),
         "employees": _employee_directory_rows(),
         "pipelines": [{"id": int(row["id"]), "name": str(row.get("name") or row["id"])} for row in pipelines],
     })
@@ -15486,6 +15510,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
+            "notifications": existing.get("notifications") or {},
             "pipeline_id": int(existing.get("pipeline_id") or (current_owner or {}).get("pipeline_id") or 0),
             "linear_account": str(linear_identity.get("account") or ""),
             "linear_operator": str(linear_identity.get("operator") or ""),
@@ -15551,6 +15576,12 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": "İstifadəçi üçün Kommo hunisi seçin."}, status=400)
         if role in {"Əməkdaş", "Usta"}:
             pipeline_id = 0
+        notification_profile = {
+            "active": active,
+            "role": role,
+            "permissions": permissions,
+        }
+        notifications = normalize_employee_notifications(data.get("notifications"), notification_profile)
         for owner in configured_funnel_owners():
             if pipeline_id and int(owner.get("chat_id") or 0) != employee_id and int(owner.get("pipeline_id") or 0) == pipeline_id:
                 return web.json_response({"success": False, "error": "Bu huni artıq başqa əməkdaşa bağlıdır."}, status=409)
@@ -15562,6 +15593,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
+            "notifications": notifications,
             "pipeline_id": pipeline_id,
             "linear_account": linear_account,
             "linear_operator": linear_operator,
@@ -15587,6 +15619,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "completion_requires_admin": bool(
                     old_record.get("completion_requires_admin", completion_requires_admin)
                 ),
+                "notifications": old_record.get("notifications") or notifications,
                 "pipeline_id": 0,
                 "linear_account": "",
                 "linear_operator": "",
@@ -15651,8 +15684,8 @@ async def _notify_hot_order_recipients(order: dict, recipients: list[int], *, re
     title = "🔁 İsti sifariş yenidən açıldı" if reopened else "🔥 Yeni isti sifariş"
     body = f"{order.get('client_name') or 'Müştəri'} — {order.get('description') or ''}"[:160]
     for recipient in recipients:
-        send_push_notification(str(recipient), title, body, url="#hot-orders")
-        if _bot_app:
+        send_push_notification(str(recipient), title, body, url="#hot-orders", event="hot_order")
+        if _bot_app and notification_channel_enabled(recipient, "hot_order", "telegram"):
             try:
                 await _bot_app.bot.send_message(recipient, f"{title}\n\n👤 {order.get('client_name') or 'Müştəri'}\n📝 {order.get('description') or ''}\n\nProqramdan açıb götürə bilərsiniz.", disable_web_page_preview=True)
             except Exception:
@@ -15747,8 +15780,8 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
                 return web.json_response({"success": False, "error": "Bu sifarişi artıq başqa əməkdaş götürüb və ya sizə uyğun deyil."}, status=409)
             worker_name = get_employee_name_by_chat_id(chat_id, "Əməkdaş")
             message = f"🔥 İsti sifariş götürüldü: {order.get('client_name')} — {worker_name}"
-            send_push_to_admin(message, title="İsti sifariş")
-            if _bot_app and chat_id != ADMIN_CHAT_ID:
+            send_push_to_admin(message, title="İsti sifariş", event="hot_order")
+            if _bot_app and chat_id != ADMIN_CHAT_ID and notification_channel_enabled(ADMIN_CHAT_ID, "hot_order", "telegram"):
                 try:
                     await _bot_app.bot.send_message(ADMIN_CHAT_ID, message, disable_web_page_preview=True)
                 except Exception:
@@ -15770,8 +15803,8 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
             if not order:
                 return web.json_response({"success": False, "error": "Sifariş tapılmadı və ya sizə aid deyil."}, status=409)
             message = f"✅ İsti sifariş hesabatı gözləyir: {order.get('client_name')}"
-            send_push_to_admin(message, title="İsti sifariş")
-            if _bot_app:
+            send_push_to_admin(message, title="İsti sifariş", event="hot_order")
+            if _bot_app and notification_channel_enabled(ADMIN_CHAT_ID, "hot_order", "telegram"):
                 try:
                     await _bot_app.bot.send_message(ADMIN_CHAT_ID, message, disable_web_page_preview=True)
                 except Exception:
@@ -15798,7 +15831,15 @@ async def handle_api_hot_orders(request: web.Request) -> web.Response:
             if not saved:
                 logger.error("Hot order %s settled but pending balance was not saved", order_id)
                 return web.json_response({"success": False, "error": "Sifariş təsdiqləndi, lakin balans yadda saxlanmadı."}, status=500)
-            send_push_notification(str(worker_id), "✅ İsti sifariş təsdiqləndi", "Ödəniş Maliyyə bölməsində gözləmədədir.", url="#finance")
+            send_push_notification(str(worker_id), "✅ İsti sifariş təsdiqləndi", "Ödəniş Maliyyə bölməsində gözləmədədir.", url="#finance", event="finance")
+            if _bot_app and notification_channel_enabled(worker_id, "finance", "telegram"):
+                try:
+                    await _bot_app.bot.send_message(
+                        worker_id,
+                        f"✅ İsti sifariş təsdiqləndi\n\n💰 {amount:.2f} AZN Maliyyə bölməsində gözləmədədir.",
+                    )
+                except Exception:
+                    logger.warning("Finance Telegram notification failed for %s", worker_id)
             return web.json_response({"success": True, "order": order})
     except (HotOrderError, ValueError) as exc:
         return web.json_response({"success": False, "error": str(exc) or "Məlumat yanlışdır."}, status=400)
@@ -16485,10 +16526,13 @@ async def _notify_linear_status_change(issue: dict, target_state: dict) -> None:
         recipients.update(int(row["chat_id"]) for row in employees if row.get("active") and int(row.get("chat_id") or 0) > 0)
     for recipient in sorted(recipients):
         try:
-            await asyncio.to_thread(send_push_notification, str(recipient), f"Linear: {state_name}", body, url=url)
+            await asyncio.to_thread(
+                send_push_notification, str(recipient), f"Linear: {state_name}", body,
+                url=url, event="linear_status",
+            )
         except Exception:
             logger.exception("Linear status push notification failed for %s", recipient)
-        if _bot_app:
+        if _bot_app and notification_channel_enabled(recipient, "linear_status", "telegram"):
             try:
                 await _bot_app.bot.send_message(
                     chat_id=recipient,
@@ -17957,6 +18001,7 @@ def _notify_cloud_chat_incoming(lead_id: int, name: str, preview: str, phone: st
             contact_name=str(name or "").strip(),
             preview=str(preview or "")[:140],
             wa_line=line,
+            event="customer_message",
         )
 
 
@@ -18067,7 +18112,18 @@ def emit_staff_notice(chat_id, kind: str, title: str, body: str, lead_id: int = 
     if after == before:
         return
     url = f"#deal-{int(lead_id)}" if lead_id else "#chats"
-    send_push_notification(str(chat_id), title, body, url=url)
+    event = "customer_message" if kind == "knock" else "deal_stage"
+    send_push_notification(str(chat_id), title, body, url=url, event=event)
+    if _bot_app and notification_channel_enabled(chat_id, event, "telegram"):
+        message = f"🔔 {title}\n\n{body}"
+        if lead_id:
+            message += f"\n\n{KOMMO_BASE_URL}/leads/detail/{int(lead_id)}"
+        try:
+            _bot_app.create_task(
+                _bot_app.bot.send_message(int(chat_id), message, disable_web_page_preview=True)
+            )
+        except Exception as exc:
+            logger.warning("Staff Telegram notice failed for %s: %s", chat_id, exc)
 
 
 def notice_deal_entered(lead_id: int, pipeline_id: int, old_pipeline_id: int = 0, name: str = "") -> None:
@@ -18092,7 +18148,7 @@ def notice_knock(lead_id: int, preview: str, pipeline_id: int = 0, name: str = "
     emit_staff_notice(chat_id, "knock", str(name or "Yeni mesaj"), str(preview or "Yeni mesaj"), int(lead_id or 0))
 
 
-def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0, phone="", contact_name="", preview="", wa_line=""):
+def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id=0, phone="", contact_name="", preview="", wa_line="", event=""):
     """Send push notification to a user if subscribed."""
     try:
         recipient = int(user_id)
@@ -18100,6 +18156,9 @@ def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id
         return
     if not can_receive_staff_notification(recipient):
         logger.info("Push skipped for inactive recipient=%s", recipient)
+        return
+    if event and not notification_channel_enabled(recipient, event, "push"):
+        logger.info("Push skipped by employee policy recipient=%s event=%s", recipient, event)
         return
     sub = get_push_subscription(str(user_id))
     if not sub:
@@ -18132,9 +18191,9 @@ def send_push_notification(user_id, title, body, url=None, urgent=False, lead_id
     except Exception as e:
         logger.warning(f"Push error for {user_id}: {e}")
 
-def send_push_to_admin(body, title="Bein Systems", url=None):
+def send_push_to_admin(body, title="Bein Systems", url=None, event=""):
     """Send push notification to admin."""
-    send_push_notification('1628569350', title, body, url)
+    send_push_notification(str(ADMIN_CHAT_ID), title, body, url, event=event)
 
 def send_push_to_all_salary(title, body, url=None):
     """Send push to all salary employees."""
@@ -18698,10 +18757,11 @@ async def tecili_alarm_check(context: ContextTypes.DEFAULT_TYPE):
             link_line = f"\n\U0001f517 {KOMMO_BASE_URL}/{'leads' if entity_type == 'leads' else 'contacts'}/detail/{entity_id}" if entity_id else ""
             body = f"\U0001f6a8 TƏCİLİ tapşırıq hələ açıqdır!\n\n\U0001f4dd {task_text}{name_line}{phone_line}{link_line}"
             try:
-                await context.bot.send_message(int(chat_id), body, disable_web_page_preview=True)
+                if notification_channel_enabled(chat_id, "task_due", "telegram"):
+                    await context.bot.send_message(int(chat_id), body, disable_web_page_preview=True)
             except Exception:
                 pass
-            send_push_notification(str(chat_id), "\U0001f6a8 Təcili tapşırıq!", f"{task_text}" + (f" — {client_name}" if client_name else ""), urgent=True)
+            send_push_notification(str(chat_id), "\U0001f6a8 Təcili tapşırıq!", f"{task_text}" + (f" — {client_name}" if client_name else ""), urgent=True, event="task_due")
         except Exception as exc:
             logger.warning(f"tecili_alarm_check error for task {task_id}: {exc}")
 
@@ -18735,7 +18795,7 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         dt = datetime.fromtimestamp(t.get("complete_till", 0), tz=BAKU_TZ)
         # A short push is enough before the deadline. Telegram is reserved for
         # tasks that remain overdue, so employees do not receive duplicates.
-        send_push_notification(str(chat_id), '⏰ 15 dəq qalıb!', f'{task_text} - {dt.strftime("%H:%M")}')
+        send_push_notification(str(chat_id), '⏰ 15 dəq qalıb!', f'{task_text} - {dt.strftime("%H:%M")}', event="task_due")
     # Overdue tasks
     overdue_end = now - timedelta(minutes=5)
     overdue_start = now - timedelta(hours=2)
@@ -18755,14 +18815,15 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
         remember_staff_notice(chat_id, "overdue", "Vaxt keçib!", task_text, _over_lead)
         if task_id not in _overdue_push_notified_tasks:
             _overdue_push_notified_tasks[task_id] = now_ts
-            send_push_notification(str(chat_id), '🔴 Vaxt keçib!', task_text)
+            send_push_notification(str(chat_id), '🔴 Vaxt keçib!', task_text, event="task_overdue")
         overdue_age = now_ts - float(t.get("complete_till") or now_ts)
         if overdue_age >= 60 * 60 and task_id not in _overdue_admin_notified_tasks:
             _overdue_admin_notified_tasks[task_id] = now_ts
             escalation = f"🔴 1 saatdan çox gecikib: {task_text}"
-            send_push_to_admin(escalation, title="⚠️ Kritik gecikmə", url="#tasks")
+            send_push_to_admin(escalation, title="⚠️ Kritik gecikmə", url="#tasks", event="task_overdue")
             try:
-                await context.bot.send_message(int(ADMIN_CHAT_ID), escalation, disable_web_page_preview=True)
+                if notification_channel_enabled(ADMIN_CHAT_ID, "task_overdue", "telegram"):
+                    await context.bot.send_message(int(ADMIN_CHAT_ID), escalation, disable_web_page_preview=True)
             except Exception:
                 pass
         if overdue_age < 30 * 60 or task_id in _overdue_telegram_notified_tasks:
@@ -18775,12 +18836,13 @@ async def check_task_deadlines(context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
         try:
-            await context.bot.send_message(
-                chat_id,
-                f"🔴 *Tapşırıq vaxtı keçib!*\n\n📝 {task_text}",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            if notification_channel_enabled(chat_id, "task_overdue", "telegram"):
+                await context.bot.send_message(
+                    chat_id,
+                    f"🔴 *Tapşırıq vaxtı keçib!*\n\n📝 {task_text}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
         except:
             pass
 

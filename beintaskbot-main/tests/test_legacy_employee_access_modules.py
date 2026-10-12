@@ -41,6 +41,10 @@ class LegacyEmployeeAccessModuleTests(unittest.TestCase):
                 "can_receive_staff_notification", "is_admin", "can_use_deal_ai",
             },
             "legacy_roster_cleanup.py": {"remove_retired_employee_access"},
+            "legacy_employee_notifications.py": {
+                "notification_event_catalog", "normalize_employee_notifications",
+                "effective_employee_notifications", "notification_channel_enabled",
+            },
         }
         for filename, names in expected.items():
             path = ROOT / filename

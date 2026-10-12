@@ -1857,6 +1857,7 @@ let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeePermissions = new Set();
 let employeeDirectory = [];
 let employeePipelineDirectory = [];
+let employeeNotificationEvents = [];
 let employeeWhatsAppNumber = '';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
@@ -12677,6 +12678,25 @@ function employeePermissionInputs(selected = []) {
         : input(key,label)).join('');
 }
 const HOT_ORDER_SKILL_LABELS = {all:'Bütün sifarişlər', montaj:'Montaj', temir:'Təmir', catdirilma:'Çatdırılma', servis:'Servis', 'digər':'Digər'};
+function employeeNotificationInputs(employee = null) {
+    const saved = employee?.notifications || {};
+    return employeeNotificationEvents.map(event => {
+        const settings = saved[event.key] || event.defaults || {};
+        const required = (event.permissions || []).join(',');
+        const checkbox = (channel, label) => `<label class="flex items-center gap-1.5 text-[11px] font-bold text-slate-600"><input type="checkbox" data-employee-notification="${escapeHtml(event.key)}" data-notification-channel="${channel}" ${settings[channel] ? 'checked' : ''}><span>${label}</span></label>`;
+        return `<div data-notification-row data-required-permissions="${escapeHtml(required)}" data-notification-event="${escapeHtml(event.key)}" class="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"><span class="text-[11px] font-bold text-slate-700">${escapeHtml(event.label || event.key)}</span><span class="flex shrink-0 gap-3">${checkbox('telegram','Telegram')}${checkbox('push','Push')}</span></div>`;
+    }).join('');
+}
+function syncEmployeeNotificationFields() {
+    const role = document.getElementById('employee-editor-role')?.value || 'employee';
+    const permissions = new Set([...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission')));
+    document.querySelectorAll('[data-notification-row]').forEach(row => {
+        const eventKey = row.getAttribute('data-notification-event');
+        const required = String(row.getAttribute('data-required-permissions') || '').split(',').filter(Boolean);
+        const visible = role === 'admin' || (role === 'master' ? eventKey === 'hot_order' : required.some(key => permissions.has(key)));
+        row.hidden = !visible;
+    });
+}
 function employeeHotSkillDropdown(selected = []) {
     const skills = new Set(selected || ['all']);
     const picked = Object.entries(HOT_ORDER_SKILL_LABELS).filter(([key]) => skills.has(key)).map(([, label]) => label).join(', ') || 'Seçin';
@@ -12688,6 +12708,7 @@ document.addEventListener('change', event => {
         const key = event.target.getAttribute('data-employee-permission');
         if(key === 'waiting' && !event.target.checked) document.querySelectorAll('[data-employee-permission^="approvals_"]').forEach(el => { el.checked = false; });
         if(key.startsWith('approvals_') && event.target.checked) { const parent = document.querySelector('[data-employee-permission="waiting"]'); if(parent) parent.checked = true; }
+        syncEmployeeNotificationFields();
     }
     if(!event.target.matches('[data-employee-hot-skill]')) return;
     const selected = [...document.querySelectorAll('[data-employee-hot-skill]:checked')]
@@ -12722,16 +12743,19 @@ function openEmployeeEditor(chatId = null) {
         <label class="mt-3 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs font-bold text-emerald-900"><input id="employee-editor-completion-approval" type="checkbox" class="mt-0.5" ${employee?.completion_requires_admin ? 'checked' : ''}><span>Sövdələşmənin tamamlanmasını Admin təsdiqləsin<span class="mt-1 block text-[10px] font-normal leading-4 text-emerald-700">Bu əməkdaş işi tamamladıqda Təsdiq səhifəsində yalnız bir “Sifariş tamamlandı” sorğusu yaranacaq.</span></span></label>
         <div class="block text-[11px] font-bold text-slate-500 mt-4">İsti sifariş bacarıqları <span class="font-normal">(bir neçəsini seçin)</span>${employeeHotSkillDropdown([...skills])}</div>
         <div class="text-[11px] font-bold text-slate-500 mt-4 mb-1.5">Bölmə hüquqları</div><div id="employee-permission-list" class="grid grid-cols-2 gap-2 text-xs text-slate-700">${employeePermissionInputs(employee?.permissions || ['tasks'])}</div>
+        <div class="mt-4 rounded-2xl border border-sky-100 bg-sky-50/50 p-3"><div class="flex items-center justify-between gap-2 mb-2"><div><div class="text-[11px] font-extrabold text-slate-700">Bildiriş kanalları</div><div class="text-[10px] text-slate-400 mt-0.5">Hər hadisə üçün Telegram və Push ayrıca seçilir.</div></div></div><div class="space-y-2">${employeeNotificationInputs(employee)}</div></div>
         ${isEditing && !isSelf ? `<div class="grid grid-cols-2 gap-2 mt-4"><button type="button" onclick="copyEmployeeInviteLink(${employee.chat_id})" class="bg-sky-50 text-sky-700 font-bold py-2.5 rounded-xl text-xs">Dəvət linki</button><button type="button" onclick="setEmployeeAccess(${employee.chat_id}, ${employee.active ? 'false' : 'true'})" class="${employee.active ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'} font-bold py-2.5 rounded-xl text-xs">${employee.active ? 'Girişi bağla' : 'Girişi aktiv et'}</button></div><button type="button" onclick="deleteEmployee(${employee.chat_id})" class="w-full mt-2 text-rose-600 font-bold py-2 text-xs">Əməkdaşı sil</button>` : ''}
         <div style="position:sticky;bottom:-18px;background:#fff;border-top:1px solid #f1f5f9;padding:12px 0 calc(12px + env(safe-area-inset-bottom));margin-top:12px"><div class="flex gap-2"><button type="button" onclick="closeEmployeeEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="button" onclick="saveEmployee()" class="flex-1 bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Yadda saxla</button></div></div>
     </div>`;
     document.body.appendChild(modal);
     syncEmployeePipelineField();
+    syncEmployeeNotificationFields();
 }
 function syncEmployeePipelineField() {
     const role = document.getElementById('employee-editor-role')?.value || 'employee';
     const wrap = document.getElementById('employee-editor-pipeline-wrap');
     if(wrap) wrap.style.display = ['pipeline_user','admin'].includes(role) ? '' : 'none';
+    syncEmployeeNotificationFields();
 }
 function renderEmployees() {
     const list = document.getElementById('employees-list');
@@ -12751,6 +12775,7 @@ async function loadEmployees() {
         if(!response.ok || !data.success) throw new Error(data.error || 'Əməkdaşlar yüklənmədi');
         employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
         employeePipelineDirectory = Array.isArray(data.pipelines) ? data.pipelines : [];
+        employeeNotificationEvents = Array.isArray(data.notification_events) ? data.notification_events : [];
         renderEmployees();
     } catch(error) {
         if(list) list.innerHTML = `<div class="text-center py-8 text-xs font-bold text-rose-500">${escapeHtml(error.message || 'Xəta')}</div>`;
@@ -12762,8 +12787,14 @@ async function saveEmployee() {
     if(!/^\d+$/.test(chatId) || !name) { toast('Ad və Telegram ID yazın.', true); return; }
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
     const hotOrderSkills = [...document.querySelectorAll('[data-employee-hot-skill]:checked')].map(option => option.getAttribute('data-employee-hot-skill'));
+    const notifications = {};
+    document.querySelectorAll('[data-notification-row]:not([hidden])').forEach(row => {
+        const eventKey = row.getAttribute('data-notification-event');
+        notifications[eventKey] = {};
+        row.querySelectorAll('[data-employee-notification]').forEach(input => { notifications[eventKey][input.getAttribute('data-notification-channel')] = !!input.checked; });
+    });
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
-    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', pipeline_id:String(document.getElementById('employee-editor-pipeline')?.value || '').trim(), linear_account:String(document.getElementById('employee-editor-linear-account')?.value || '').trim(), linear_operator:String(document.getElementById('employee-editor-linear-operator')?.value || '').trim(), permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, ai_enabled:!!document.getElementById('employee-editor-ai')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
+    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', pipeline_id:String(document.getElementById('employee-editor-pipeline')?.value || '').trim(), linear_account:String(document.getElementById('employee-editor-linear-account')?.value || '').trim(), linear_operator:String(document.getElementById('employee-editor-linear-operator')?.value || '').trim(), permissions, notifications, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, ai_enabled:!!document.getElementById('employee-editor-ai')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));

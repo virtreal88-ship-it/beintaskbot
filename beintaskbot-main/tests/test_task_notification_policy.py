@@ -27,6 +27,7 @@ class PolicyTests(unittest.TestCase):
             "_linear_description_metadata": lambda text: ({"client": "rufet"}, text),
             "_linear_client_hint": lambda text: "rufet", "logger": Mock(),
             "send_push_notification": self.push,
+            "notification_channel_enabled": lambda *_: True,
             "_bot_app": types.SimpleNamespace(bot=types.SimpleNamespace(send_message=self.telegram)),
             "_LINEAR_LAST_NOTIFIED_STATES": {}}
         exec(self.code, self.ns)

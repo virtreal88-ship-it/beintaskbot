@@ -68,7 +68,7 @@ class AlarmTests(unittest.IsolatedAsyncioTestCase):
             '_http':SimpleNamespace(get=Mock(return_value=self.response)),'KOMMO_BASE_URL':'https://crm.invalid',
             'HEADERS':{},'ContextTypes':SimpleNamespace(DEFAULT_TYPE=object),'unregister_tecili_task':Mock(),
             'get_contact_name_from_entity':lambda *args:'Client','get_phone_from_entity':lambda *args:'phone',
-            'send_push_notification':Mock(),'logger':Mock()})
+            'send_push_notification':Mock(),'notification_channel_enabled':lambda *_:True,'logger':Mock()})
         self.context=SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
 
     async def test_both_telegram_and_push_go_only_to_current_owner(self):

@@ -142,6 +142,7 @@ def employee_access_profile(chat_id: int) -> dict:
             "hot_order_skills": _normalize_hot_order_skills(stored.get("hot_order_skills")),
             "completion_requires_admin": bool(stored.get("completion_requires_admin", False)),
             "pipeline_id": int(stored.get("pipeline_id") or 0),
+            "notifications": stored.get("notifications") if isinstance(stored.get("notifications"), dict) else {},
         }
     users = load_users()
     known = employee_id in _KNOWN_EMPLOYEE_REGISTRATIONS or str(employee_id) in users
@@ -160,6 +161,7 @@ def employee_access_profile(chat_id: int) -> dict:
         "hot_order_skills": ["all"],
         "completion_requires_admin": False,
         "pipeline_id": 0,
+        "notifications": {},
     }
 
 
