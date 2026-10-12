@@ -14586,6 +14586,301 @@ async def handle_api_admin_chat_deals(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Müştərilər yüklənmədi."}, status=502)
 
 
+def _load_legacy_notification_tasks(
+    chat_id: int, kommo_user_id: int
+) -> tuple[list[dict], str]:
+    """Load and shape legacy task cards outside the asyncio event loop."""
+    # Get tasks for this user (incomplete).
+    # Fetch active tasks once and filter locally. Nested Kommo task filters
+    # can return an empty/invalid response; the previous code swallowed that
+    # error and made every user see an empty task list.
+    now = datetime.now(tz=BAKU_TZ)
+    url = f"{KOMMO_BASE_URL}/api/v4/tasks"
+    tasks_list = []
+    # Employees retain visibility of their existing work as well as tasks
+    # newly routed to Admin.
+    allowed_responsible_ids = {10932455, 15532668, 15531960}
+    # Kommo may serialize numeric IDs as strings in some responses.
+    allowed_responsible_ids = {str(value) for value in allowed_responsible_ids}
+    raw_tasks = []
+    leads_contact_cache = {}
+    task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
+    if not isinstance(task_priorities, dict):
+        task_priorities = {}
+    try:
+        params = {"filter[is_completed]": 0, "limit": 250}
+        resp = _http.get(url, headers=HEADERS, params=params, timeout=10)
+        if resp.status_code == 200:
+            raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
+            if not isinstance(raw_tasks, list):
+                raw_tasks = []
+        else:
+            logger.error("Notifications task fetch failed: status=%s body=%s", resp.status_code, resp.text[:300])
+        if not is_rufat_chat(chat_id):
+            raw_tasks = [
+                t for t in raw_tasks
+                if str(t.get("responsible_user_id", "")) in allowed_responsible_ids
+                and str(t.get("is_completed", False)).lower() not in {"true", "1", "yes"}
+            ]
+        _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
+        if is_rufat_chat(chat_id):
+            raw_tasks = [t for t in raw_tasks if task_allowed_for_chat(t.get("id"), chat_id)]
+        if raw_tasks:
+            # Batch: collect unique contact entity_ids and fetch them in one request
+            contact_ids = set()
+            lead_ids = set()
+            for t in raw_tasks:
+                eid = t.get("entity_id")
+                etype = t.get("entity_type", "contacts")
+                if eid:
+                    if etype == "contacts":
+                        contact_ids.add(eid)
+                    else:
+                        lead_ids.add(eid)
+            # Batch fetch contacts
+            contacts_cache = {}
+            if contact_ids:
+                id_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(contact_ids)[:50])}
+                id_params["limit"] = 50
+                try:
+                    cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
+                    if cr.status_code == 200:
+                        for c in cr.json().get("_embedded", {}).get("contacts", []):
+                            try:
+                                contacts_cache[int(c["id"])] = _contact_cache_entry(c)
+                            except (KeyError, TypeError, ValueError):
+                                continue
+                except: pass
+            # Fetch leads linked to contacts (to get stage)
+            contact_lead_stage = {}  # {contact_id: stage_name}
+            leads_pipeline_cache = {}  # {lead_id: pipeline_id}
+            contact_pipeline_ids = {}  # {contact_id: set[pipeline_id]}
+            _employee_funnels = employee_personal_pipeline_ids()
+            if contact_ids:
+                try:
+                    # Batch: get leads with contacts filter
+                    cid_list = list(contact_ids)[:50]
+                    lead_params_c = {f"filter[contacts][{i}]": cid for i, cid in enumerate(cid_list)}
+                    lead_params_c["limit"] = 50
+                    lead_params_c["with"] = "contacts"
+                    lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params_c, timeout=8)
+                    if lr.status_code == 200:
+                        for ld in lr.json().get("_embedded", {}).get("leads", []):
+                            st_name = get_pipeline_stages_for_chat(chat_id)[1].get(ld.get("status_id", 0), "")
+                            try:
+                                _ld_id = int(ld["id"])
+                                _ld_pipe = _lead_pipeline_id(ld)
+                                leads_pipeline_cache[_ld_id] = _ld_pipe
+                            except (KeyError, TypeError, ValueError):
+                                _ld_pipe = 0
+                            for lc in ld.get("_embedded", {}).get("contacts", []):
+                                try:
+                                    _cid = int(lc["id"])
+                                except (KeyError, TypeError, ValueError):
+                                    continue
+                                if _cid in contact_ids and _cid not in contact_lead_stage:
+                                    contact_lead_stage[_cid] = st_name
+                                if _ld_pipe:
+                                    contact_pipeline_ids.setdefault(_cid, set()).add(_ld_pipe)
+                except: pass
+            # Batch fetch leads (get first contact from each)
+            leads_contact_cache = {}
+            leads_stage_cache = {}  # {lead_id: status_id}
+            if lead_ids:
+                lead_params = {f"filter[id][{i}]": lid for i, lid in enumerate(list(lead_ids)[:50])}
+                lead_params.update({"with": "contacts", "limit": 50})
+                try:
+                    lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=8)
+                    if lr.status_code == 200:
+                        for lead in lr.json().get("_embedded", {}).get("leads", []):
+                            try:
+                                lid = int(lead["id"])
+                            except (KeyError, TypeError, ValueError):
+                                continue
+                            leads_stage_cache[lid] = lead.get("status_id", 0)
+                            _ld_pipe = _lead_pipeline_id(lead)
+                            if _ld_pipe:
+                                leads_pipeline_cache[lid] = _ld_pipe
+                            emb_contacts = lead.get("_embedded", {}).get("contacts", [])
+                            if emb_contacts:
+                                try:
+                                    cid = int(emb_contacts[0]["id"])
+                                except (KeyError, TypeError, ValueError):
+                                    continue
+                                leads_contact_cache[lid] = cid
+                                contact_ids.add(cid)
+                                if _ld_pipe:
+                                    contact_pipeline_ids.setdefault(cid, set()).add(_ld_pipe)
+                except: pass
+                # Fetch any new contact_ids from leads
+                new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
+                if new_cids:
+                    new_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(new_cids)[:50])}
+                    new_params["limit"] = 50
+                    try:
+                        cr2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=8)
+                        if cr2.status_code == 200:
+                            for c in cr2.json().get("_embedded", {}).get("contacts", []):
+                                try:
+                                    contacts_cache[int(c["id"])] = _contact_cache_entry(c)
+                                except (KeyError, TypeError, ValueError):
+                                    continue
+                    except: pass
+            for t in raw_tasks:
+                # Skip "Cavab gözlənilir" task type
+                if t.get("task_type_id") == 4229224:
+                    continue
+                # Skip "xatırlat muşt." tasks — they go to Gözləmə tab
+                if t.get("task_type_id") == XATIRLAT_TASK_TYPE_ID:
+                    continue
+                deadline_ts = t.get("complete_till", 0)
+                deadline_dt, is_overdue, time_str = deadline_view(deadline_ts, now)
+                try:
+                    entity_id = int(t.get("entity_id"))
+                except (TypeError, ValueError):
+                    entity_id = t.get("entity_id")
+                entity_type = t.get("entity_type", "contacts")
+                _task_pipes = _task_entity_pipeline_ids(
+                    entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
+                )
+                if _task_pipes & _employee_funnels and not is_admin(chat_id):
+                    continue
+                contact_row = {}
+                if entity_type == "contacts":
+                    contact_row = contacts_cache.get(entity_id) or {}
+                elif entity_type == "leads":
+                    cid = leads_contact_cache.get(entity_id)
+                    contact_row = contacts_cache.get(cid) or {}
+                contact_name = contact_row.get("name", "")
+                phone = contact_row.get("phone", "")
+                phones = list(contact_row.get("phones") or ([] if not phone else [phone]))
+                responsible_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
+                if entity_type == "leads":
+                    kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
+                else:
+                    kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
+                # Extract assigneeName from marker
+                task_text = t.get("text", "")
+                assignee_name_from_marker = assignee_from_marker(task_text)
+                # Fallback: determine assignee from Gözləmə columns. Admin Nizami
+                # owns that board — do not treat Soltan/Sərmayə columns as a
+                # different icraçı (that hid his funnel tasks after sync).
+                if not assignee_name_from_marker and entity_type == 'leads' and not is_admin(chat_id):
+                    _lead_status = leads_stage_cache.get(entity_id, 0)
+                    _STATUS_TO_NAME = {109988184: 'Rüfət Həsənzadə', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
+                    assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
+                if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
+                    assignee_name_from_marker = "Nizami Qas\u0131mov"
+                task_type_name = NOTIFICATION_TASK_TYPE_NAMES.get(t.get("task_type_id"), "")
+                # Fetch last note for this entity
+                last_note = ""
+                _note_entity_id = entity_id
+                _note_entity_type = entity_type
+                if _note_entity_type == "contacts" and entity_id in contacts_cache:
+                    # Try to get lead for this contact to fetch lead notes
+                    pass
+                try:
+                    _note_url = f"{KOMMO_BASE_URL}/api/v4/{_note_entity_type}/{_note_entity_id}/notes"
+                    _note_resp = _http.get(_note_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
+                    if _note_resp.status_code == 200:
+                        _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
+                        if _notes_data:
+                            last_note = _notes_data[0].get("params", {}).get("text", "")
+                except:
+                    pass
+                # Cavabdeh (created_by) - who created the task
+                _created_by_name = _task_creators_cache.get(str(t.get("id")), "")
+                if not _created_by_name:
+                    _created_by_id = t.get("created_by")
+                    if _created_by_id:
+                        if _created_by_id == 10932455:
+                            _created_by_name = "Nizami Qas\u0131mov"
+                        elif _created_by_id == 15532668:
+                            _created_by_name = ""  # Unknown employee via bot
+                        else:
+                            _created_by_name = KOMMO_USERS.get(_created_by_id, "")
+                # Extract price from [Price] or [Name:Price] marker
+                _task_price = price_from_marker(t.get("text", ""))
+                tasks_list.append({
+                    "id": t.get("id"),
+                    "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
+                    "desc": task_text,
+                    "price": _task_price,
+                    "time": time_str,
+                    "is_overdue": is_overdue,
+                    "entity_id": entity_id,
+                    "entity_type": entity_type,
+                    "task_id": t.get("id"),
+                    "contact_name": contact_name,
+                    "phone": phone,
+                    "phones": phones,
+                    "source": contact_row.get("source") or "",
+                    "menbe": contact_row.get("source") or "",
+                    "utm": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                    "utm_tag": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
+                    "partner": get_deal_partner(entity_id) if entity_type == "leads" else "",
+                    "responsible": responsible_name,
+                    "assigneeName": assignee_name_from_marker,
+                    "kommo_link": kommo_link,
+                    "complete_till": t.get("complete_till", 0),
+                    "task_type_name": task_type_name,
+                    "task_type_id": t.get("task_type_id", 1),
+                    "last_note": last_note,
+                    "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
+                    "stage_name": get_pipeline_stages_for_chat(chat_id)[1].get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
+                    "voice_url": f"/api/voice/{entity_id}" if str(entity_id) in _voice_urls else "",
+                    "created_by": _created_by_name
+                })
+            # Sort: overdue first
+            tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
+    except Exception as e:
+        logger.error(f"Notifications fetch error: {e}")
+    # Gözləmə employees share Kommo licenses with funnel owners. Keep only
+    # tasks marked for this person or sitting in their Gözləmə column.
+    if kommo_user_id != 10932455:
+        _user_status = TG_TO_STATUS_ID.get(chat_id)
+        _employee_name = get_employee_name_by_chat_id(chat_id, "")
+        _user_lead_ids = set()
+        _stage_ok = False
+        if _user_status:
+            try:
+                _stage_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads",
+                    headers=HEADERS, params={
+                        "filter[statuses][0][pipeline_id]": GOZLEME_PIPELINE_ID,
+                        "filter[statuses][0][status_id]": _user_status,
+                        "limit": 250
+                    }, timeout=10)
+                if _stage_resp.status_code == 200:
+                    _stage_ok = True
+                    for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
+                        try:
+                            _user_lead_ids.add(int(_l['id']))
+                        except (KeyError, TypeError, ValueError):
+                            continue
+            except Exception as _fe:
+                logger.error(f"Stage filter error: {_fe}")
+        def _task_belongs_to_user(task_item):
+            if _employee_name and task_item.get('assigneeName', '') == _employee_name:
+                return True
+            if not _stage_ok:
+                return False
+            try:
+                eid = int(task_item.get('entity_id'))
+            except (TypeError, ValueError):
+                eid = task_item.get('entity_id')
+            etype = _normalize_kommo_entity_type(task_item.get('entity_type', 'contacts'))
+            if etype == 'leads' and eid in _user_lead_ids:
+                return True
+            if etype == 'contacts':
+                for lid, cid in leads_contact_cache.items():
+                    if cid == eid and lid in _user_lead_ids:
+                        return True
+            return False
+        tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
+    user_display_name = get_employee_name_by_chat_id(chat_id, "")
+    return tasks_list, user_display_name
+
+
 async def handle_api_notifications(request: web.Request) -> web.Response:
     """Return active tasks for the requesting user."""
     try:
@@ -14607,294 +14902,9 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         kommo_user_id = get_kommo_user_id_for_chat(chat_id)
         if not kommo_user_id:
             return web.json_response({"success": True, "tasks": []})
-        # Get tasks for this user (incomplete).
-        # Fetch active tasks once and filter locally. Nested Kommo task filters
-        # can return an empty/invalid response; the previous code swallowed that
-        # error and made every user see an empty task list.
-        now = datetime.now(tz=BAKU_TZ)
-        url = f"{KOMMO_BASE_URL}/api/v4/tasks"
-        tasks_list = []
-        # Employees retain visibility of their existing work as well as tasks
-        # newly routed to Admin.
-        allowed_responsible_ids = {10932455, 15532668, 15531960}
-        # Kommo may serialize numeric IDs as strings in some responses.
-        allowed_responsible_ids = {str(value) for value in allowed_responsible_ids}
-        raw_tasks = []
-        leads_contact_cache = {}
-        task_priorities = read_json(_TASK_PRIORITIES_FILE) or {}
-        if not isinstance(task_priorities, dict):
-            task_priorities = {}
-        try:
-            params = {"filter[is_completed]": 0, "limit": 250}
-            resp = _http.get(url, headers=HEADERS, params=params, timeout=10)
-            if resp.status_code == 200:
-                raw_tasks = resp.json().get("_embedded", {}).get("tasks", [])
-                if not isinstance(raw_tasks, list):
-                    raw_tasks = []
-            else:
-                logger.error("Notifications task fetch failed: status=%s body=%s", resp.status_code, resp.text[:300])
-            if not is_rufat_chat(chat_id):
-                raw_tasks = [
-                    t for t in raw_tasks
-                    if str(t.get("responsible_user_id", "")) in allowed_responsible_ids
-                    and str(t.get("is_completed", False)).lower() not in {"true", "1", "yes"}
-                ]
-            _task_creators_cache = read_json(_TASK_CREATORS_FILE) or {}
-            if is_rufat_chat(chat_id):
-                raw_tasks = [t for t in raw_tasks if task_allowed_for_chat(t.get("id"), chat_id)]
-            if raw_tasks:
-                # Batch: collect unique contact entity_ids and fetch them in one request
-                contact_ids = set()
-                lead_ids = set()
-                for t in raw_tasks:
-                    eid = t.get("entity_id")
-                    etype = t.get("entity_type", "contacts")
-                    if eid:
-                        if etype == "contacts":
-                            contact_ids.add(eid)
-                        else:
-                            lead_ids.add(eid)
-                # Batch fetch contacts
-                contacts_cache = {}
-                if contact_ids:
-                    id_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(contact_ids)[:50])}
-                    id_params["limit"] = 50
-                    try:
-                        cr = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=id_params, timeout=8)
-                        if cr.status_code == 200:
-                            for c in cr.json().get("_embedded", {}).get("contacts", []):
-                                try:
-                                    contacts_cache[int(c["id"])] = _contact_cache_entry(c)
-                                except (KeyError, TypeError, ValueError):
-                                    continue
-                    except: pass
-                # Fetch leads linked to contacts (to get stage)
-                contact_lead_stage = {}  # {contact_id: stage_name}
-                leads_pipeline_cache = {}  # {lead_id: pipeline_id}
-                contact_pipeline_ids = {}  # {contact_id: set[pipeline_id]}
-                _employee_funnels = employee_personal_pipeline_ids()
-                if contact_ids:
-                    try:
-                        # Batch: get leads with contacts filter
-                        cid_list = list(contact_ids)[:50]
-                        lead_params_c = {f"filter[contacts][{i}]": cid for i, cid in enumerate(cid_list)}
-                        lead_params_c["limit"] = 50
-                        lead_params_c["with"] = "contacts"
-                        lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params_c, timeout=8)
-                        if lr.status_code == 200:
-                            for ld in lr.json().get("_embedded", {}).get("leads", []):
-                                st_name = get_pipeline_stages_for_chat(chat_id)[1].get(ld.get("status_id", 0), "")
-                                try:
-                                    _ld_id = int(ld["id"])
-                                    _ld_pipe = _lead_pipeline_id(ld)
-                                    leads_pipeline_cache[_ld_id] = _ld_pipe
-                                except (KeyError, TypeError, ValueError):
-                                    _ld_pipe = 0
-                                for lc in ld.get("_embedded", {}).get("contacts", []):
-                                    try:
-                                        _cid = int(lc["id"])
-                                    except (KeyError, TypeError, ValueError):
-                                        continue
-                                    if _cid in contact_ids and _cid not in contact_lead_stage:
-                                        contact_lead_stage[_cid] = st_name
-                                    if _ld_pipe:
-                                        contact_pipeline_ids.setdefault(_cid, set()).add(_ld_pipe)
-                    except: pass
-                # Batch fetch leads (get first contact from each)
-                leads_contact_cache = {}
-                leads_stage_cache = {}  # {lead_id: status_id}
-                if lead_ids:
-                    lead_params = {f"filter[id][{i}]": lid for i, lid in enumerate(list(lead_ids)[:50])}
-                    lead_params.update({"with": "contacts", "limit": 50})
-                    try:
-                        lr = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads", headers=HEADERS, params=lead_params, timeout=8)
-                        if lr.status_code == 200:
-                            for lead in lr.json().get("_embedded", {}).get("leads", []):
-                                try:
-                                    lid = int(lead["id"])
-                                except (KeyError, TypeError, ValueError):
-                                    continue
-                                leads_stage_cache[lid] = lead.get("status_id", 0)
-                                _ld_pipe = _lead_pipeline_id(lead)
-                                if _ld_pipe:
-                                    leads_pipeline_cache[lid] = _ld_pipe
-                                emb_contacts = lead.get("_embedded", {}).get("contacts", [])
-                                if emb_contacts:
-                                    try:
-                                        cid = int(emb_contacts[0]["id"])
-                                    except (KeyError, TypeError, ValueError):
-                                        continue
-                                    leads_contact_cache[lid] = cid
-                                    contact_ids.add(cid)
-                                    if _ld_pipe:
-                                        contact_pipeline_ids.setdefault(cid, set()).add(_ld_pipe)
-                    except: pass
-                    # Fetch any new contact_ids from leads
-                    new_cids = set(leads_contact_cache.values()) - set(contacts_cache.keys())
-                    if new_cids:
-                        new_params = {f"filter[id][{i}]": cid for i, cid in enumerate(list(new_cids)[:50])}
-                        new_params["limit"] = 50
-                        try:
-                            cr2 = _http.get(f"{KOMMO_BASE_URL}/api/v4/contacts", headers=HEADERS, params=new_params, timeout=8)
-                            if cr2.status_code == 200:
-                                for c in cr2.json().get("_embedded", {}).get("contacts", []):
-                                    try:
-                                        contacts_cache[int(c["id"])] = _contact_cache_entry(c)
-                                    except (KeyError, TypeError, ValueError):
-                                        continue
-                        except: pass
-                for t in raw_tasks:
-                    # Skip "Cavab gözlənilir" task type
-                    if t.get("task_type_id") == 4229224:
-                        continue
-                    # Skip "xatırlat muşt." tasks — they go to Gözləmə tab
-                    if t.get("task_type_id") == XATIRLAT_TASK_TYPE_ID:
-                        continue
-                    deadline_ts = t.get("complete_till", 0)
-                    deadline_dt, is_overdue, time_str = deadline_view(deadline_ts, now)
-                    try:
-                        entity_id = int(t.get("entity_id"))
-                    except (TypeError, ValueError):
-                        entity_id = t.get("entity_id")
-                    entity_type = t.get("entity_type", "contacts")
-                    _task_pipes = _task_entity_pipeline_ids(
-                        entity_type, entity_id, leads_pipeline_cache, contact_pipeline_ids
-                    )
-                    if _task_pipes & _employee_funnels and not is_admin(chat_id):
-                        continue
-                    contact_row = {}
-                    if entity_type == "contacts":
-                        contact_row = contacts_cache.get(entity_id) or {}
-                    elif entity_type == "leads":
-                        cid = leads_contact_cache.get(entity_id)
-                        contact_row = contacts_cache.get(cid) or {}
-                    contact_name = contact_row.get("name", "")
-                    phone = contact_row.get("phone", "")
-                    phones = list(contact_row.get("phones") or ([] if not phone else [phone]))
-                    responsible_name = KOMMO_USERS.get(t.get("responsible_user_id"), "")
-                    if entity_type == "leads":
-                        kommo_link = f"https://texnikidestek50.kommo.com/leads/detail/{entity_id}"
-                    else:
-                        kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
-                    # Extract assigneeName from marker
-                    task_text = t.get("text", "")
-                    assignee_name_from_marker = assignee_from_marker(task_text)
-                    # Fallback: determine assignee from Gözləmə columns. Admin Nizami
-                    # owns that board — do not treat Soltan/Sərmayə columns as a
-                    # different icraçı (that hid his funnel tasks after sync).
-                    if not assignee_name_from_marker and entity_type == 'leads' and not is_admin(chat_id):
-                        _lead_status = leads_stage_cache.get(entity_id, 0)
-                        _STATUS_TO_NAME = {109988184: 'Rüfət Həsənzadə', 109988188: 'Soltan Abbasov', 109988192: 'Hüseyn Səfərov', 109988196: 'Nizami Qasımov', 109988200: 'Rasim Əsgərov', 109988204: 'Sərmayə Əhmədsoy', 109988208: 'Asya Agayeva', 109988212: 'Nuranə Şirinova'}
-                        assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
-                    if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
-                        assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    task_type_name = NOTIFICATION_TASK_TYPE_NAMES.get(t.get("task_type_id"), "")
-                    # Fetch last note for this entity
-                    last_note = ""
-                    _note_entity_id = entity_id
-                    _note_entity_type = entity_type
-                    if _note_entity_type == "contacts" and entity_id in contacts_cache:
-                        # Try to get lead for this contact to fetch lead notes
-                        pass
-                    try:
-                        _note_url = f"{KOMMO_BASE_URL}/api/v4/{_note_entity_type}/{_note_entity_id}/notes"
-                        _note_resp = _http.get(_note_url, headers=HEADERS, params={"limit": 1, "order[updated_at]": "desc", "filter[note_type]": "common"}, timeout=8)
-                        if _note_resp.status_code == 200:
-                            _notes_data = _note_resp.json().get("_embedded", {}).get("notes", [])
-                            if _notes_data:
-                                last_note = _notes_data[0].get("params", {}).get("text", "")
-                    except:
-                        pass
-                    # Cavabdeh (created_by) - who created the task
-                    _created_by_name = _task_creators_cache.get(str(t.get("id")), "")
-                    if not _created_by_name:
-                        _created_by_id = t.get("created_by")
-                        if _created_by_id:
-                            if _created_by_id == 10932455:
-                                _created_by_name = "Nizami Qas\u0131mov"
-                            elif _created_by_id == 15532668:
-                                _created_by_name = ""  # Unknown employee via bot
-                            else:
-                                _created_by_name = KOMMO_USERS.get(_created_by_id, "")
-                    # Extract price from [Price] or [Name:Price] marker
-                    _task_price = price_from_marker(t.get("text", ""))
-                    tasks_list.append({
-                        "id": t.get("id"),
-                        "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
-                        "desc": task_text,
-                        "price": _task_price,
-                        "time": time_str,
-                        "is_overdue": is_overdue,
-                        "entity_id": entity_id,
-                        "entity_type": entity_type,
-                        "task_id": t.get("id"),
-                        "contact_name": contact_name,
-                        "phone": phone,
-                        "phones": phones,
-                        "source": contact_row.get("source") or "",
-                        "menbe": contact_row.get("source") or "",
-                        "utm": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
-                        "utm_tag": contact_row.get("source") if contact_row.get("source") in MENBE_LABELS else "",
-                        "partner": get_deal_partner(entity_id) if entity_type == "leads" else "",
-                        "responsible": responsible_name,
-                        "assigneeName": assignee_name_from_marker,
-                        "kommo_link": kommo_link,
-                        "complete_till": t.get("complete_till", 0),
-                        "task_type_name": task_type_name,
-                        "task_type_id": t.get("task_type_id", 1),
-                        "last_note": last_note,
-                        "priority": task_priorities.get(str(t.get("id")), task_priorities.get(t.get("id"), "")),
-                        "stage_name": get_pipeline_stages_for_chat(chat_id)[1].get(leads_stage_cache.get(entity_id, 0), "") if entity_type == "leads" else contact_lead_stage.get(entity_id, ""),
-                        "voice_url": f"/api/voice/{entity_id}" if str(entity_id) in _voice_urls else "",
-                        "created_by": _created_by_name
-                    })
-                # Sort: overdue first
-                tasks_list.sort(key=lambda x: (not x["is_overdue"], x["time"]))
-        except Exception as e:
-            logger.error(f"Notifications fetch error: {e}")
-        # Gözləmə employees share Kommo licenses with funnel owners. Keep only
-        # tasks marked for this person or sitting in their Gözləmə column.
-        if kommo_user_id != 10932455:
-            _user_status = TG_TO_STATUS_ID.get(chat_id)
-            _employee_name = get_employee_name_by_chat_id(chat_id, "")
-            _user_lead_ids = set()
-            _stage_ok = False
-            if _user_status:
-                try:
-                    _stage_resp = _http.get(f"{KOMMO_BASE_URL}/api/v4/leads",
-                        headers=HEADERS, params={
-                            "filter[statuses][0][pipeline_id]": GOZLEME_PIPELINE_ID,
-                            "filter[statuses][0][status_id]": _user_status,
-                            "limit": 250
-                        }, timeout=10)
-                    if _stage_resp.status_code == 200:
-                        _stage_ok = True
-                        for _l in _stage_resp.json().get('_embedded',{}).get('leads',[]):
-                            try:
-                                _user_lead_ids.add(int(_l['id']))
-                            except (KeyError, TypeError, ValueError):
-                                continue
-                except Exception as _fe:
-                    logger.error(f"Stage filter error: {_fe}")
-            def _task_belongs_to_user(task_item):
-                if _employee_name and task_item.get('assigneeName', '') == _employee_name:
-                    return True
-                if not _stage_ok:
-                    return False
-                try:
-                    eid = int(task_item.get('entity_id'))
-                except (TypeError, ValueError):
-                    eid = task_item.get('entity_id')
-                etype = _normalize_kommo_entity_type(task_item.get('entity_type', 'contacts'))
-                if etype == 'leads' and eid in _user_lead_ids:
-                    return True
-                if etype == 'contacts':
-                    for lid, cid in leads_contact_cache.items():
-                        if cid == eid and lid in _user_lead_ids:
-                            return True
-                return False
-            tasks_list = [t for t in tasks_list if _task_belongs_to_user(t)]
-        user_display_name = get_employee_name_by_chat_id(chat_id, "")
+        tasks_list, user_display_name = await asyncio.to_thread(
+            _load_legacy_notification_tasks, chat_id, kommo_user_id
+        )
         if is_admin(chat_id):
             funnel_overlay = []
             owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID)]

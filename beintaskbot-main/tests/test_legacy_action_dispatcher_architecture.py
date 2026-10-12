@@ -64,6 +64,16 @@ class LegacyActionDispatcherArchitectureTests(unittest.TestCase):
             retired_reader.end_lineno - retired_reader.lineno + 1, 5
         )
 
+    def test_notifications_endpoint_offloads_blocking_kommo_work(self):
+        functions = self._functions()
+        handler = functions["handle_api_notifications"]
+        self.assertLessEqual(handler.end_lineno - handler.lineno + 1, 75)
+        source = ast.get_source_segment(
+            (ROOT / "bot.py").read_text(encoding="utf-8-sig"), handler
+        )
+        self.assertIn("asyncio.to_thread", source)
+        self.assertIn("_load_legacy_notification_tasks", functions)
+
 
 if __name__ == "__main__":
     unittest.main()

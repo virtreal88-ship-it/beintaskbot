@@ -530,5 +530,10 @@ policies.notifications — типы уведомлений</pre>
 <p>Парсинг JSON/multipart, ограничения текста и файла вынесены в <code>legacy_chat_send_request.py</code>. Отправка через выбранный Kommo Talk, ответы на сообщения и fallback социальных каналов находятся в <code>legacy_chat_delivery.py</code>. HTTP-обработчик сокращён с 388 до 197 строк и отвечает только за авторизацию сделки, Drive-вложение, проверку доставки и обновление истории.</p>
 <p>Недостижимая ветка WhatsApp Cloud/WABA и три использовавшиеся только ею функции удалены. Рабочая отправка WhatsApp, Instagram, TikTok, Facebook и Telegram остаётся через фактически выбранный профиль Kommo. Старый GET <code>/api/deal/chat</code> уже возвращал 410 до этого этапа; его недостижимые 315 строк удалены, а поддерживаемая полная история остаётся на <code>/api/deal/chat/history</code>.</p>
 </section>
+<section class="wrap card" id="legacy-notifications-refactor">
+<h2>Legacy список задач больше не блокирует HTTP-loop · 12 октября 2026</h2>
+<p><code>handle_api_notifications</code> сокращён с 336 до 51 строки. Пакетное чтение задач, контактов, сделок, заметок и фильтрация исполнителя вынесены в <code>_load_legacy_notification_tasks</code> и запускаются через <code>asyncio.to_thread</code>. Медленные синхронные запросы Kommo больше не удерживают event loop, обслуживающий чаты и другие API.</p>
+<p>Быстрый путь персональной воронки, административное объединение задач, формат JSON и прежние правила видимости сохранены. Архитектурный тест ограничивает HTTP-координатор 75 строками и требует явного offload.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>
