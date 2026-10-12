@@ -8,6 +8,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
+from legacy_action_tasks import DealTaskContext, handle_deal_task
+from legacy_action_request import parse_action_request
+
 
 class KommoTaskCreationTests(unittest.TestCase):
     def setUp(self):
@@ -35,6 +38,12 @@ class KommoTaskCreationTests(unittest.TestCase):
             "get_chat_id_by_name": lambda name: 6824377548,
             "invalidate_rufat_overview_cache": Mock(), "record_lead_pulse_event": Mock(),
             "_created_task_id": lambda result: ((result or {}).get("_embedded", {}).get("tasks") or [{}])[0].get("id"),
+            "DealTaskContext": DealTaskContext, "handle_deal_task": handle_deal_task,
+            "parse_action_request": parse_action_request,
+            "get_employee_name_by_chat_id": lambda chat, fallback: fallback,
+            "_send_telegram_text": Mock(), "send_push_notification": Mock(),
+            "remember_staff_notice": Mock(),
+            "update_task_kommo": Mock(return_value=True),
         }
         exec(compile(ast.Module(body=selected, type_ignores=[]), "<kommo-task-test>", "exec"), self.ns)
 

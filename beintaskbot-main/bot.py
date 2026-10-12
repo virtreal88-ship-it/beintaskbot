@@ -96,6 +96,12 @@ from legacy_app_bootstrap import (
     build_telegram_application, run_polling as run_telegram_polling,
     start_http_thread,
 )
+from legacy_action_deals import (
+    DealNoteContext, DealUnreachableContext, handle_deal_note,
+    handle_deal_unreachable,
+)
+from legacy_action_tasks import DealTaskContext, handle_deal_task
+from legacy_action_request import parse_action_request
 from legacy_inbox_pulse import append_inbox_event, inbox_events_since
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
@@ -6067,54 +6073,33 @@ async def handle_pending_change_executor(request: web.Request) -> web.Response:
 
 async def handle_api_action(request: web.Request) -> web.Response:
     """Handle Web App API requests (fetch-based SPA)."""
-    try:
-        data = await request.json()
-    except:
-        return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
-    tg_user_id = request.headers.get("X-TG-User-ID", "")
-    # Find chat_id from telegram user id
-    chat_id = None
-    users = load_users()
-    for cid, info in users.items():
-        # Telegram user ID in header matches chat_id for private chats
-        if cid == tg_user_id:
-            chat_id = int(cid)
-            break
-    if not chat_id:
-        try:
-            chat_id = int(tg_user_id)
-        except (TypeError, ValueError):
-            chat_id = None
-    if not chat_id:
-        return web.json_response({"success": False, "error": "İstifadəçi tapılmadı. Botda /start yazın."}, status=403)
+    parsed = await parse_action_request(request, load_users)
+    if parsed.error:
+        return web.json_response(
+            {"success": False, "error": parsed.error}, status=parsed.status
+        )
+    data = parsed.data
+    chat_id = parsed.chat_id
     action = data.get("action", "")
     phone = data.get("phone", "")
     try:
         if action == "deal_unreachable":
-            lead_id = int(data.get("lead_id") or 0)
-            access = await asyncio.to_thread(employee_access_profile, chat_id)
-            if not access.get('active') or 'deals' not in (access.get('permissions') or []) or not lead_id or not await asyncio.to_thread(lead_allowed_for_chat, lead_id, chat_id):
-                return web.json_response({'success': False, 'error': 'Bu sövdələşmə üçün icazəniz yoxdur.'}, status=403)
-            # Fixed business action, not a client-supplied arbitrary pipeline
-            # change. Never use personal-funnel fallback stage IDs here.
-            target_pipeline = int(SOVDELESMELER_PIPELINE_ID)
-            _pipeline_stage_cache.pop(target_pipeline, None)
-            _stages, names, _ui = await asyncio.to_thread(load_pipeline_stage_maps, target_pipeline, fallback=False)
-            normalize = lambda name: ' '.join(str(name).casefold().replace('ı', 'i').replace('\u0307', '').split())
-            matches = [int(sid) for sid, name in names.items() if normalize(name) == normalize('Təxirə salınıb') and int(sid) not in {142, 143}]
-            if len(matches) != 1:
-                return web.json_response({'success': False, 'error': 'Sövdələşmələr vərəqində Təxirə salınıb mərhələsi tapılmadı.'}, status=400)
-            status_id = matches[0]
-            updated = await asyncio.to_thread(update_lead_kommo, lead_id, {'pipeline_id': target_pipeline, 'status_id': status_id})
-            if not updated:
-                return web.json_response({'success': False, 'error': 'Sövdələşmə köçürülmədi. Yenidən cəhd edin.'}, status=502)
-            invalidate_rufat_overview_cache()
-            _clear_terminal_reentry(lead_id)
-            stage_key = next((key for key, sid in _stages.items() if int(sid) == status_id), '')
-            record_lead_pulse_event(lead_id, 'deal_edit', pipeline_id=target_pipeline, stage_key=stage_key)
-            return web.json_response({'success': True, 'pipeline_id': target_pipeline, 'status_id': status_id,
-                                      'stage_key': stage_key, 'stage_name': names[status_id],
-                                      'message': 'Sövdələşmə Təxirə salınıb mərhələsinə köçürüldü.'})
+            result = await handle_deal_unreachable(
+                data,
+                chat_id,
+                DealUnreachableContext(
+                    employee_access_profile=employee_access_profile,
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    load_pipeline_stage_maps=load_pipeline_stage_maps,
+                    update_lead=update_lead_kommo,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    clear_terminal_reentry=_clear_terminal_reentry,
+                    record_pulse=record_lead_pulse_event,
+                    target_pipeline_id=SOVDELESMELER_PIPELINE_ID,
+                    pipeline_stage_cache=_pipeline_stage_cache,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit":
             lead_id = int(data.get("lead_id") or 0)
             if not lead_id or not lead_allowed_for_chat(lead_id, chat_id):
@@ -6187,131 +6172,131 @@ async def handle_api_action(request: web.Request) -> web.Response:
         elif action == "add_partner":
             return web.json_response({"success": False, "error": "Partner sahəsi ləğv edildi. Kommo teqlərindən istifadə edin."}, status=410)
         elif action == "deal_add_note":
-            lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
-            if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            result = add_note(lead_id, text, "leads")
-            invalidate_rufat_overview_cache()
-            if result:
-                record_lead_pulse_event(lead_id, "deal_add_note")
-            return web.json_response({
-                "success": bool(result),
-                "note_id": _first_note_id(result),
-                "message": "Qeyd əlavə edildi." if result else "Qeyd əlavə olunmadı.",
-            })
+            result = handle_deal_note(
+                action,
+                data,
+                chat_id,
+                DealNoteContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    add_note=add_note,
+                    update_note=update_note,
+                    delete_note=delete_note,
+                    note_entity_kind=_note_entity_kind,
+                    first_note_id=_first_note_id,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit_note":
-            lead_id = int(data.get("lead_id") or 0)
-            note_id = int(data.get("note_id") or 0)
-            text = str(data.get("text") or "").strip()
-            entity_type = str(data.get("entity_type") or "leads")
-            try:
-                entity_id = int(data.get("entity_id") or 0)
-            except (TypeError, ValueError):
-                entity_id = 0
-            if not entity_id:
-                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
-            if not lead_id or not note_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok, err = update_note(note_id, text, entity_type, entity_id)
-            if ok:
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_edit_note")
-            return web.json_response({
-                "success": ok,
-                "message": "Qeyd yeniləndi." if ok else "Qeyd yenilənmədi.",
-                "error": "" if ok else err,
-            }, status=200 if ok else 400)
+            result = handle_deal_note(
+                action,
+                data,
+                chat_id,
+                DealNoteContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    add_note=add_note,
+                    update_note=update_note,
+                    delete_note=delete_note,
+                    note_entity_kind=_note_entity_kind,
+                    first_note_id=_first_note_id,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_delete_note":
-            lead_id = int(data.get("lead_id") or 0)
-            note_id = int(data.get("note_id") or 0)
-            entity_type = str(data.get("entity_type") or "leads")
-            try:
-                entity_id = int(data.get("entity_id") or 0)
-            except (TypeError, ValueError):
-                entity_id = 0
-            if not entity_id:
-                entity_id = lead_id if _note_entity_kind(entity_type) == "leads" else 0
-            if not lead_id or not note_id or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok, err = delete_note(note_id, entity_type, entity_id)
-            if ok:
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_delete_note")
-            return web.json_response({
-                "success": ok,
-                "message": "Qeyd silindi." if ok else "Qeyd silinmədi.",
-                "error": "" if ok else err,
-            }, status=200 if ok else 400)
+            result = handle_deal_note(
+                action,
+                data,
+                chat_id,
+                DealNoteContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    add_note=add_note,
+                    update_note=update_note,
+                    delete_note=delete_note,
+                    note_entity_kind=_note_entity_kind,
+                    first_note_id=_first_note_id,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_add_task":
-            lead_id, text = int(data.get("lead_id") or 0), str(data.get("text") or "").strip()
-            if not lead_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            try: deadline_ts = int(data.get("deadline_ts") or (datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
-            except (TypeError, ValueError): deadline_ts = int((datetime.now(tz=BAKU_TZ) + timedelta(hours=2)).timestamp())
-            try:
-                task_type_id = int(data.get("task_type_id") or data.get("task_type") or 4232112)
-            except (TypeError, ValueError):
-                task_type_id = 4232112
-            if task_type_id not in {4232112, XATIRLAT_TASK_TYPE_ID}:
-                task_type_id = 4232112
-            executor = str(data.get("executor") or "Rüfət Həsənzadə").strip()
-            executor_ids = {name: user_id for name, _short, user_id in ACTIVE_ASSIGNEES.values()}
-            responsible_user_id = executor_ids.get(executor)
-            if not responsible_user_id:
-                return web.json_response({"success": False, "error": "İcraçı tanınmadı."}, status=400)
-            owner = get_funnel_owner(chat_id)
-            creator = (owner or {}).get("name") or get_employee_name_by_chat_id(chat_id, "Rüfət Həsənzadə")
-            result = create_task(lead_id, text, deadline_ts, responsible_user_id=responsible_user_id, entity_type="leads", task_type_id=task_type_id, creator_name=creator)
-            if result:
-                executor_chat = get_chat_id_by_name(executor)
-                try:
-                    creator_chat = int(chat_id)
-                except (TypeError, ValueError):
-                    creator_chat = None
-                if executor_chat and creator_chat and int(executor_chat) != creator_chat:
-                    dl = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-                    _send_telegram_text(
-                        executor_chat,
-                        f"📋 Yeni tapşırıq ({creator}):\n\n📝 {text}\n👤 {executor}\n⏰ {dl}\n🔗 {KOMMO_BASE_URL}/leads/detail/{lead_id}",
-                    )
-                    send_push_notification(str(executor_chat), "📋 Yeni tapşırıq!", f"{creator} → {text[:80]}")
-                    remember_staff_notice(executor_chat, "new_task", "Yeni tapşırıq!", f"{creator} → {text[:80]}", int(lead_id or 0))
-            invalidate_rufat_overview_cache()
-            if result:
-                record_lead_pulse_event(lead_id, "deal_add_task")
-            return web.json_response({
-                "success": bool(result),
-                "task_id": _created_task_id(result),
-                "message": "Tapşırıq əlavə edildi." if result else "Tapşırıq əlavə olunmadı.",
-            })
+            result = handle_deal_task(
+                action,
+                data,
+                chat_id,
+                DealTaskContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    create_task=create_task,
+                    update_task=update_task_kommo,
+                    active_assignees=ACTIVE_ASSIGNEES,
+                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
+                    timezone=BAKU_TZ,
+                    get_funnel_owner=get_funnel_owner,
+                    get_employee_name=get_employee_name_by_chat_id,
+                    get_chat_id_by_name=get_chat_id_by_name,
+                    send_telegram_text=_send_telegram_text,
+                    send_push_notification=send_push_notification,
+                    remember_staff_notice=remember_staff_notice,
+                    kommo_base_url=KOMMO_BASE_URL,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                    created_task_id=_created_task_id,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit_task":
-            lead_id = int(data.get("lead_id") or 0)
-            task_id = int(data.get("task_id") or 0)
-            text = str(data.get("text") or "").strip()
-            if not lead_id or not task_id or not text or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            payload = {"text": text}
-            try:
-                deadline_ts = int(data.get("deadline_ts") or 0)
-            except (TypeError, ValueError):
-                deadline_ts = 0
-            if deadline_ts:
-                payload["complete_till"] = deadline_ts
-            ok = bool(update_task_kommo(task_id, payload))
-            if ok:
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_edit_task")
-            return web.json_response({"success": ok, "message": "Tapşırıq yeniləndi." if ok else "Tapşırıq yenilənmədi."})
+            result = handle_deal_task(
+                action,
+                data,
+                chat_id,
+                DealTaskContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    create_task=create_task,
+                    update_task=update_task_kommo,
+                    active_assignees=ACTIVE_ASSIGNEES,
+                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
+                    timezone=BAKU_TZ,
+                    get_funnel_owner=get_funnel_owner,
+                    get_employee_name=get_employee_name_by_chat_id,
+                    get_chat_id_by_name=get_chat_id_by_name,
+                    send_telegram_text=_send_telegram_text,
+                    send_push_notification=send_push_notification,
+                    remember_staff_notice=remember_staff_notice,
+                    kommo_base_url=KOMMO_BASE_URL,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                    created_task_id=_created_task_id,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_delete_task":
-            lead_id = int(data.get("lead_id") or 0)
-            task_id = int(data.get("task_id") or 0)
-            if not lead_id or not task_id or not lead_allowed_for_chat(lead_id, chat_id):
-                return web.json_response({"success": False, "error": "Məlumat natamamdır və ya giriş yoxdur."}, status=400)
-            ok = bool(update_task_kommo(task_id, {"is_completed": True, "result": {"text": "Silindi"}}))
-            if ok:
-                invalidate_rufat_overview_cache()
-                record_lead_pulse_event(lead_id, "deal_delete_task")
-            return web.json_response({"success": ok, "message": "Tapşırıq silindi." if ok else "Tapşırıq silinmədi."})
+            result = handle_deal_task(
+                action,
+                data,
+                chat_id,
+                DealTaskContext(
+                    lead_allowed_for_chat=lead_allowed_for_chat,
+                    create_task=create_task,
+                    update_task=update_task_kommo,
+                    active_assignees=ACTIVE_ASSIGNEES,
+                    reminder_task_type_id=XATIRLAT_TASK_TYPE_ID,
+                    timezone=BAKU_TZ,
+                    get_funnel_owner=get_funnel_owner,
+                    get_employee_name=get_employee_name_by_chat_id,
+                    get_chat_id_by_name=get_chat_id_by_name,
+                    send_telegram_text=_send_telegram_text,
+                    send_push_notification=send_push_notification,
+                    remember_staff_notice=remember_staff_notice,
+                    kommo_base_url=KOMMO_BASE_URL,
+                    invalidate_overview=invalidate_rufat_overview_cache,
+                    record_pulse=record_lead_pulse_event,
+                    created_task_id=_created_task_id,
+                ),
+            )
+            return web.json_response(result.payload, status=result.status)
         elif action == "deal_edit_contact":
             lead_id = int(data.get("lead_id") or 0)
             name = str(data.get("name") or data.get("contact_name") or "").strip()
@@ -11777,164 +11762,13 @@ def _update_cloud_status(wamid: str, status: str) -> None:
 
 
 def _ingest_cloud_incoming(value: dict) -> None:
-    # WhatsApp Business webhooks are no longer a CRM chat source.  Incoming
-    # customer messages arrive through Kommo's grey integration instead.
+    # Legacy Cloud webhook is intentionally ignored; Kommo owns chat ingress.
     return
-    contacts = {
-        str(row.get("wa_id") or ""): str(((row.get("profile") or {}) if isinstance(row.get("profile"), dict) else {}).get("name") or "")
-        for row in (value.get("contacts") or [])
-        if isinstance(row, dict)
-    }
-    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
-    phone_number_id = str(metadata.get("phone_number_id") or "").strip()
-    for status in value.get("statuses") or []:
-        if isinstance(status, dict):
-            _update_cloud_status(status.get("id"), status.get("status"))
-    messages = [row for row in (value.get("messages") or []) if isinstance(row, dict)]
-    history_messages: list[dict] = []
-    for block in value.get("history") or []:
-        if not isinstance(block, dict):
-            continue
-        for thread in block.get("threads") or []:
-            if isinstance(thread, dict):
-                history_messages.extend(row for row in (thread.get("messages") or []) if isinstance(row, dict))
-    messages.extend(history_messages)
-    history_ids = {id(row) for row in history_messages}
-    now_ts = int(_time_module.time())
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        wamid = str(message.get("id") or "")
-        phone = str(message.get("from") or "")
-        if not phone:
-            continue
-        preview, kind = _wa_incoming_preview(message)
-        reaction_emoji = ""
-        reaction_target_mid = ""
-        if kind == "reaction":
-            reaction_data = message.get("reaction") if isinstance(message.get("reaction"), dict) else {}
-            reaction_emoji = str(reaction_data.get("emoji") or "").strip()
-            reaction_target_mid = str(reaction_data.get("message_id") or "").strip()
-            preview = f"💬 Reaksiya: {reaction_emoji}" if reaction_emoji else "💬 Müştəri reaksiya bildirdi"
-        name = contacts.get(_wa_phone_key(phone)) or contacts.get(phone) or ""
-        try:
-            created = int(message.get("timestamp") or 0)
-        except (TypeError, ValueError):
-            created = 0
-        context = message.get("context") if isinstance(message.get("context"), dict) else {}
-        lead_id = _fast_cloud_lead(phone)
-        pending_id = 0
-        if not lead_id:
-            pending_id = _pending_wa_lead_id(phone)
-            lead_id = pending_id
-        if not lead_id:
-            logger.warning("WhatsApp incoming has no lead phone=%s", phone)
-            continue
-        _remember_phone_lead(phone, lead_id)
-        if kind == "reaction" and reaction_emoji and reaction_target_mid:
-            _remember_reaction(lead_id, reaction_target_mid, reaction_emoji)
-        if wamid and _already_have_wamid(lead_id, wamid, phone):
-            continue
-        media_fields = _wa_cloud_media_fields(message)
-        _prefetch_cloud_media(message)
-        line_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
-        target_pipe = _current_pipeline_for_inbox_lead(lead_id, line_pipe)
-        wa_line = _wa_line_for_phone_id(phone_number_id)
-        routed_line = _wa_line_for_pipeline(target_pipe) or wa_line
-        quote_id, quote_text, quote_author = _quote_from_stored(lead_id, reaction_target_mid or str(context.get("id") or ""))
-        item = _sent_message_item(
-            wamid=wamid,
-            text=preview,
-            author=name,
-            message_type=str(media_fields.get("message_type") or kind),
-            incoming=True,
-            created_at=created,
-            reply_id=quote_id,
-            reply_text=quote_text,
-            reply_author=quote_author,
-            phone=phone,
-            file_name=str(media_fields.get("file_name") or ""),
-            media_url=str(media_fields.get("media_url") or ""),
-        )
-        item["phone_number_id"] = phone_number_id
-        item["target_pipeline"] = target_pipe
-        _remember_sent_message(lead_id, item)
-        _append_chat_tail(lead_id, item)
-        _invalidate_deal_chat_cache(lead_id)
-        from_history = id(message) in history_ids
-        fresh = not from_history or not created or created >= now_ts - 180
-        if not fresh:
-            continue
-        record_lead_pulse_event(
-            lead_id,
-            "incoming_message",
-            preview=preview,
-            incoming_at=created,
-            channel="whatsapp",
-            pipeline_id=target_pipe,
-            contact_name=name or phone,
-            phone=phone,
-            wa_line=routed_line,
-            external_id=wamid,
-        )
-        _notify_cloud_chat_incoming(lead_id, name or phone, preview, phone, phone_number_id)
-        try:
-            _apply_inbox_incoming(lead_id, preview, created or int(_time_module.time()), "whatsapp", contact_name=name, phone=phone, pipeline_id=target_pipe, wa_line=routed_line, external_id=wamid)
-        except Exception:
-            pass
-        logger.info("WhatsApp incoming lead=%s phone=%s type=%s", lead_id, phone, kind)
-        _WA_LAST_HOOK["in"] = int(_WA_LAST_HOOK.get("in") or 0) + 1
-        _WA_LAST_HOOK["lead"] = int(lead_id)
 
 
 def _ingest_cloud_echoes(value: dict) -> None:
-    """Messages sent from WhatsApp Business App are echoes, not inbound `messages`."""
+    # Legacy Cloud echo is intentionally ignored; Kommo owns chat history.
     return
-    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
-    phone_number_id = str(metadata.get("phone_number_id") or "").strip()
-    echoes = value.get("message_echoes") or value.get("messages") or []
-    for message in echoes:
-        if not isinstance(message, dict):
-            continue
-        wamid = str(message.get("id") or "")
-        phone = str(message.get("to") or message.get("recipient") or "")
-        if not phone:
-            continue
-        preview, kind = _wa_incoming_preview(message)
-        if kind == "reaction" or not preview:
-            continue
-        try:
-            created = int(message.get("timestamp") or 0)
-        except (TypeError, ValueError):
-            created = 0
-        lead_id = _fast_cloud_lead(phone) or _pending_wa_lead_id(phone)
-        if not lead_id:
-            logger.warning("WhatsApp echo has no lead phone=%s", phone)
-            continue
-        if wamid and _already_have_wamid(lead_id, wamid, phone):
-            continue
-        media_fields = _wa_cloud_media_fields(message)
-        _prefetch_cloud_media(message)
-        target_pipe = int(NIZAMI_PIPELINE_ID) if str(phone_number_id).strip() == str(NIZAMI_WA_PHONE_NUMBER_ID).strip() else int(RUFAT_PIPELINE_ID)
-        wa_line = _wa_line_for_phone_id(phone_number_id)
-        item = _sent_message_item(
-            wamid=wamid,
-            text=preview,
-            author="",
-            message_type=str(media_fields.get("message_type") or kind),
-            incoming=False,
-            created_at=created,
-            phone=phone,
-            file_name=str(media_fields.get("file_name") or ""),
-            media_url=str(media_fields.get("media_url") or ""),
-        )
-        item["phone_number_id"] = phone_number_id
-        item["target_pipeline"] = target_pipe
-        _remember_sent_message(lead_id, item)
-        _append_chat_tail(lead_id, item)
-        _invalidate_deal_chat_cache(lead_id)
-        record_lead_pulse_event(lead_id, "deal_outgoing", preview=preview, incoming_at=0, channel="whatsapp", pipeline_id=target_pipe, wa_line=wa_line)
-        logger.info("WhatsApp echo lead=%s phone=%s type=%s", lead_id, phone, kind)
 
 
 def _process_whatsapp_payload(payload: dict) -> None:
@@ -13754,166 +13588,13 @@ def _deliver_via_cloud(
 
 
 async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
+    # The removed WhatsApp Business channel cannot expose template data.
     return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
-    chat_id = _deal_request_user(request)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    if not _wa_cloud_configured():
-        return web.json_response({
-            "success": True,
-            "templates": [],
-            "error": "WhatsApp Cloud API konfiqurasiya olunmayıb.",
-        })
-    force = str(request.rel_url.query.get("refresh") or "") == "1"
-    cached, fresh = _wa_templates_cached()
-    if cached and not force:
-        if not fresh:
-            asyncio.create_task(asyncio.to_thread(_wa_template_rows, True))
-        return web.json_response({"success": True, "templates": cached})
-    rows = await asyncio.to_thread(_wa_template_rows, force)
-    return web.json_response({"success": True, "templates": rows})
 
 
 async def handle_api_deal_chat_template(request: web.Request) -> web.Response:
+    # The removed WhatsApp Business channel cannot send templates.
     return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
-    chat_id = _deal_request_user(request)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Access denied"}, status=403)
-    if not _wa_cloud_configured():
-        return web.json_response({"success": False, "error": "WhatsApp Cloud API konfiqurasiya olunmayıb."}, status=400)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    name = str(data.get("template") or "").strip()
-    if not name:
-        return web.json_response({"success": False, "error": "Şablon seçilməyib."}, status=400)
-    language = str(data.get("language") or "az").strip() or "az"
-    spec = await asyncio.to_thread(_wa_template_find, name, language)
-    if not spec:
-        return web.json_response({"success": False, "error": "Şablon tapılmadı."}, status=400)
-    body_params = [str(value).strip() for value in (data.get("params") or [])]
-    header_params = [str(value).strip() for value in (data.get("header_params") or [])]
-    header_media = str(data.get("header_media") or "").strip()
-    button_values: dict[int, str] = {}
-    for item in data.get("buttons") or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            index = int(item.get("index"))
-        except (TypeError, ValueError):
-            continue
-        button_values[index] = str(item.get("value") or "").strip()
-    card_values: list[dict] = []
-    for item in data.get("cards") or []:
-        if not isinstance(item, dict):
-            continue
-        nested: dict[int, str] = {}
-        for button in item.get("buttons") or []:
-            if not isinstance(button, dict):
-                continue
-            try:
-                button_index = int(button.get("index"))
-            except (TypeError, ValueError):
-                continue
-            nested[button_index] = str(button.get("value") or "").strip()
-        card_values.append({
-            "header_media": str(item.get("header_media") or "").strip(),
-            "body_params": [str(value).strip() for value in (item.get("params") or [])],
-            "buttons": nested,
-        })
-    try:
-        lead_id = int(data.get("lead_id") or 0)
-    except (TypeError, ValueError):
-        lead_id = 0
-    phone = str(data.get("phone") or "").strip()
-    lead = None
-    if lead_id:
-        lead, err = _authorized_deal_lead(chat_id, lead_id)
-        if err:
-            return err
-        if not phone:
-            _ids, phones = _contact_ids_and_phones(lead)
-            phone = phones[0] if phones else ""
-    elif phone:
-        cached_lid = _lead_id_for_stored_phone(phone) or _lead_id_from_overview_phone(phone)
-        if cached_lid:
-            lead_id = cached_lid
-            lead = get_lead_details(cached_lid)
-
-    sender_digits = _hinted_wa_sender_digits(chat_id, data.get("sender_phone"))
-    sender_phone_id = _wa_phone_id_for_digits(sender_digits) or _wa_phone_id_for_digits(_wa_sender_digits_for_chat(chat_id))
-
-    if not _normalize_wa_number(phone):
-        return web.json_response({"success": False, "error": "Nömrə tapılmadı."}, status=400)
-    ok, error, wamid = await asyncio.to_thread(
-        _wa_cloud_send_template,
-        phone,
-        spec,
-        {
-            "body_params": body_params,
-            "header_params": header_params,
-            "header_media": header_media,
-            "buttons": button_values,
-            "cards": card_values,
-        },
-        sender_phone_id,
-    )
-    if not ok:
-        return web.json_response({"success": False, "error": error or "Şablon göndərilmədi."}, status=400)
-    preview = str(data.get("preview") or "").strip() or name
-    preview_cards = _wa_preview_cards(data.get("preview_cards"))
-    lid = int((lead.get("id") if lead else 0) or lead_id)
-    author = employee_name_for_lead(lead) if lead else ""
-    if not author:
-        for _nm, _cid in NAME_TO_CHAT.items():
-            if _cid == chat_id and len(_nm) > 2:
-                author = _nm
-                break
-    if not author:
-        author = "Menecer"
-    sent_item = _sent_message_item(wamid=wamid, text=preview, author=author, cards=preview_cards)
-    tail = {
-        "id": f"sent-{wamid or uuid.uuid4().hex}",
-        "external_id": str(wamid or ""),
-        "incoming": False,
-        "direction": "outgoing",
-        "text": preview,
-        "created_at": int(_time_module.time()),
-        "message_type": "carousel" if preview_cards else "text",
-        "channel": "whatsapp",
-        "author": author,
-        "delivery_status": "sent",
-    }
-    if preview_cards:
-        tail["cards"] = preview_cards
-    if lid:
-        _remember_sent_message(lid, sent_item)
-        _append_chat_tail(lid, tail)
-    elif phone:
-        def _bg_link_template_lead():
-            try:
-                bg_lid = _resolve_cloud_lead(phone, "", sender_phone_id=sender_phone_id)
-                if bg_lid:
-                    _remember_phone_lead(phone, bg_lid)
-                    _remember_sent_message(bg_lid, sent_item)
-                    _append_chat_tail(bg_lid, tail)
-                    _patch_cloud_inbox_into_rufat_cache()
-            except Exception as e:
-                logger.warning("Background template lead creation failed: %s", e)
-        asyncio.create_task(asyncio.to_thread(_bg_link_template_lead))
-    return web.json_response({
-        "success": True,
-        "lead_id": lid,
-        "wamid": wamid,
-        "phone": _wa_display_number(_normalize_wa_number(phone)),
-    })
 
 
 def _kommo_read(path: str, params: dict | None = None, timeout: int = 8) -> tuple[int, dict]:
