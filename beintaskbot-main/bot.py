@@ -15297,6 +15297,39 @@ async def handle_api_gozleme(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+async def handle_search_contacts(request: web.Request) -> web.Response:
+    """Search Kommo contacts and expose the best visible linked deal."""
+    try:
+        data = await request.json()
+        query = str(data.get("query") or data.get("phone") or data.get("q") or "").strip()
+        digits = re.sub(r"[^\d]", "", query)
+        if len(digits) < 7 and len(query) < 2:
+            return web.json_response(
+                {"success": False, "error": "Axtarış çox qısadır"}, status=400
+            )
+        chat_id = _deal_request_user(request) or 0
+        results = []
+        for contact in search_contacts_by_query(query):
+            picked = _pick_search_lead(contact, chat_id)
+            leads = [
+                {"id": linked.get("id")}
+                for linked in (contact.get("_embedded", {}).get("leads") or [])
+                if isinstance(linked, dict) and linked.get("id")
+            ]
+            results.append({
+                "id": contact.get("id"),
+                "name": str(contact.get("name") or "").strip(),
+                "phone": _contact_phone_value(contact),
+                "lead_id": picked.get("lead_id") or 0,
+                "lead_name": picked.get("lead_name") or "",
+                "leads": leads,
+            })
+        return web.json_response({"success": True, "contacts": results})
+    except Exception as exc:
+        logger.error("Search contacts API error: %s", exc)
+        return web.json_response({"success": False, "error": "Server xətası."}, status=500)
+
+
 def _employee_manager_id(request: web.Request) -> int | None:
     try:
         chat_id = int(request.get("authenticated_chat_id") or 0)

@@ -123,3 +123,4 @@ class Assets(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"/api/platform/integrations/kommo/callback"', tenant_text)
         self.assertIn('"/api/platform/register"', tenant_text)
         self.assertIn('"/api/action", handle_api_action', legacy_text)
+        self.assertIn("handle_search_contacts", functions)
