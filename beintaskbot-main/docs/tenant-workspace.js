@@ -69,30 +69,29 @@
     }
   };
   const settings = $('view-settings');
-  const groups = [['integrations','İnteqrasiyalar','Xidmətləri qoşun və bağlantıları yoxlayın.'],['employees','Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],['workflow','İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],['ai','Süni intellekt','AI bağlantısı və cavab qaydaları.'],['notifications','Bildirişlər','Xəbər kanalı və nəşr bildirişləri.'],['advanced','Diaqnostika','Bağlantı və xidmətlərin vəziyyəti.']];
-  let section = 'integrations';
+  const groups = [['employees','Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],['workflow','İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],['advanced','Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.']];
+  let section = 'employees';
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
   sections.innerHTML = groups.map(([key,label]) => `<button type="button" role="tab" data-settings-tab="${key}">${label}</button>`).join('');
   const help = document.createElement('p'); help.className='settings-help';
   const advancedTitle = document.createElement('div'); advancedTitle.className = 'advanced-settings-title';
-  advancedTitle.innerHTML = '<h2>Geniş ayarlar</h2><p>Avtomatlaşdırma, AI və xidmət parametrlərini ehtiyac olduqda dəyişin.</p>';
+  advancedTitle.innerHTML = '<h2>Geniş ayarlar</h2><p>Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.</p>';
   const settingsAnchor = $('chakra-settings-root') || settings.querySelector('.top');
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
+    if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
     if (panel.id === 'workflowPanel') return 'workflow';
-    if (/AiPanel/.test(panel.id)) return 'ai';
-    if (panel.id === 'tnChannelPanel') return 'notifications';
-    if (panel.id === 'tenantLinearPanel' || panel.querySelector('#integrationInfo')) return 'integrations';
     if (panel.querySelector('#inviteName,#members,#accessRequests')) return 'employees';
     return 'advanced';
   }
   function showSettings() {
     const panels = [...settings.querySelectorAll(':scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
-    const available = groups.find(([key]) => panels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
-    if (!panels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
-    panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection !== section;});
+    const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
+    const available = groups.find(([key]) => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
+    if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];
+    panels.forEach(panel => {panel.dataset.settingsSection = classify(panel);panel.hidden = panel.dataset.settingsSection === 'external-integration' || panel.dataset.settingsSection !== section;});
     sections.querySelectorAll('button').forEach(button => {
-      button.hidden = !panels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
+      button.hidden = !settingsPanels.some(panel => panel.dataset.settingsSection === button.dataset.settingsTab);
       button.setAttribute('aria-selected',String(button.dataset.settingsTab === section));
     });
     help.textContent = groups.find(g => g[0] === section)?.[2] || '';
@@ -100,6 +99,10 @@
   }
   sections.querySelectorAll('button').forEach(button => button.onclick = () => {section=button.dataset.settingsTab;showSettings();});
   window.tenantOpenSettingsSection = target => {
+    if (['integrations','ai','notifications'].includes(target)) {
+      document.querySelector('.nav [data-view="integrations"]')?.click();
+      return;
+    }
     const view = document.querySelector('.nav [data-view="settings"]');
     if (view && !view.hidden) view.click();
     if (groups.some(group => group[0] === target)) section = target;
@@ -109,5 +112,40 @@
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
   document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
+  const integrationRepository = document.createElement('div');
+  integrationRepository.id = 'integrationSettingsRepository';
+  integrationRepository.hidden = true;
+  document.body.append(integrationRepository);
+  const integrationPanels = {
+    linear: ['tenantLinearPanel'],
+    openai: ['tcAiPanel','tnAiPanel'],
+    telegram: ['tnChannelPanel'],
+  };
+  let activeIntegration = '';
+  function placeIntegrationPanels(provider, hostId) {
+    const host = document.getElementById(hostId);
+    if (!host) return false;
+    const ids = integrationPanels[provider] || [];
+    const panels = ids.map(id => document.getElementById(id)).filter(Boolean);
+    if (!panels.length) return false;
+    host.replaceChildren(...panels);
+    panels.forEach(panel => {panel.hidden=false;panel.removeAttribute('data-settings-section');panel.classList.add('integration-modal-panel');});
+    activeIntegration = provider;
+    return true;
+  }
+  function restoreIntegrationPanels() {
+    document.querySelectorAll('.integration-modal-panel').forEach(panel => {
+      panel.classList.remove('integration-modal-panel');panel.hidden=true;integrationRepository.append(panel);
+    });
+    activeIntegration = '';
+  }
+  document.addEventListener('tenant-integration-panel', event => {
+    const detail = event.detail || {};
+    if (!detail.open) { restoreIntegrationPanels(); return; }
+    restoreIntegrationPanels();
+    let attempts=0;
+    const place=()=>{if(activeIntegration||placeIntegrationPanels(detail.provider,detail.hostId))return;if(++attempts<20)setTimeout(place,50);};
+    place();
+  });
   showSettings();
 })();

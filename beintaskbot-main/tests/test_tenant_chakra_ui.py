@@ -26,6 +26,17 @@ class TenantChakraUiTests(unittest.TestCase):
         for provider in ("Kommo", "Linear", "OpenAI", "Telegram", "Wappi", "BeinSystems ERP"):
             self.assertIn(provider, source)
 
+    def test_integration_configuration_lives_in_market_dialog(self):
+        source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
+        workspace = (ROOT / "docs" / "tenant-workspace.js").read_text(encoding="utf-8")
+        self.assertIn('setTab("connection")', source)
+        self.assertIn('>Qoşulma</Button>', source)
+        self.assertIn('>Ayarlar</Button>', source)
+        self.assertIn('id="integrationSettingsHost"', source)
+        self.assertIn("tenant-integration-panel", workspace)
+        self.assertIn("external-integration", workspace)
+        self.assertNotIn("[['integrations','İnteqrasiyalar'", workspace)
+
     def test_prebuilt_asset_exists_for_python_only_deploy(self):
         bundle = ROOT / "docs" / "tenant-chakra-ui.js"
         self.assertTrue(bundle.is_file())
