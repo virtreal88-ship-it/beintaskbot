@@ -501,5 +501,10 @@ policies.notifications — типы уведомлений</pre>
 <p>Единый 403-строчный DDL-модуль разделён на три небольших миграционных слоя: компании/участники/workflow, операционные данные и CRM/Linear/news. Корневой <code>tenant_platform_schema.py</code> теперь только защищает одноразовую инициализацию, открывает один cursor и вызывает слои в фиксированном порядке.</p>
 <p>Атомарность не изменилась: все <code>CREATE TABLE IF NOT EXISTS</code>, безопасные <code>ALTER</code>, индексы и миграция удалений выполняются внутри прежней единой транзакции с одним <code>commit</code>. Таблицы не удаляются и данные не переносятся между хранилищами.</p>
 </section>
+<section class="wrap card" id="legacy-storage-split-refactor">
+<h2>Legacy JSON/PostgreSQL storage разделён по доменам · 12 октября 2026</h2>
+<p><code>gh_storage.py</code> сокращён с 682 строк до совместимого import-фасада. Загрузка документов из PostgreSQL с обратимым fallback в GitHub data branch, финансовый ledger, KPI-сессии и push-подписки теперь находятся в четырёх независимых модулях.</p>
+<p>Публичные функции и форматы <code>balance.json</code>, <code>kpi.json</code> и push-документа сохранены. Финансы и KPI используют один общий lock/cache документного слоя; второй кеш и параллельная запись не создаются. Текущий lazy-import данных из GitHub в PostgreSQL остаётся без удаления источника.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>

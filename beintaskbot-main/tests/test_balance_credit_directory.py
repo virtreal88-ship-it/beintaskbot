@@ -27,7 +27,7 @@ class BalanceCreditTests(unittest.TestCase):
                                                "3": {"transactions": [{"amount": 7}]}}},
                    "_lock": threading.RLock(), "_load_file": Mock(), "_save_file": self.saved,
                    "uuid": uuid, "datetime": datetime}
-        extract("gh_storage.py", {"_transaction_status", "_transaction_total", "_ensure_balance_account", "add_balance_transaction"}, self.ns)
+        extract("legacy_finance_ledger.py", {"_transaction_status", "_transaction_total", "_ensure_balance_account", "add_balance_transaction"}, self.ns)
         self.ns.update({"json": json, "math": math,
             "web": types.SimpleNamespace(Request=object, Response=object,
                 json_response=lambda data, status=200: (status, data)),
