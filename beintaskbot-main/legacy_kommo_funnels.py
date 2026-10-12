@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from legacy_employee_access import get_rufat_compat_chat_ids
+from legacy_employee_access import (
+    _load_employee_access_records, employee_access_profile, get_rufat_compat_chat_ids,
+)
+from legacy_user_registry import load_users
 from legacy_kommo_pipeline_catalog import load_pipeline_stage_maps
 from legacy_runtime_config import (
     ADMIN_CHAT_ID,
@@ -34,6 +37,24 @@ def get_funnel_owner(chat_id) -> dict | None:
         employee_id = int(chat_id)
     except (TypeError, ValueError):
         return None
+    stored = _load_employee_access_records().get(str(employee_id))
+    if isinstance(stored, dict) and "pipeline_id" in stored:
+        try:
+            pipeline_id = int(stored.get("pipeline_id") or 0)
+        except (TypeError, ValueError):
+            pipeline_id = 0
+        if pipeline_id <= 0 or not employee_access_profile(employee_id).get("active"):
+            return None
+        user = load_users().get(str(employee_id)) or {}
+        stages, names, ui = load_pipeline_stage_maps(pipeline_id)
+        return {
+            "chat_id": employee_id,
+            "pipeline_id": pipeline_id,
+            "name": str(user.get("name") or "Əməkdaş").strip(),
+            "stages": stages,
+            "stage_names": names,
+            "ui_stages": ui,
+        }
     if is_rufat_chat(employee_id):
         stages, names, ui = load_pipeline_stage_maps(RUFAT_PIPELINE_ID)
         return {
@@ -68,15 +89,36 @@ def is_funnel_chat(chat_id) -> bool:
     return get_funnel_owner(chat_id) is not None
 
 
+def configured_funnel_owners() -> list[dict]:
+    """Return active funnel owners from saved settings plus legacy fallbacks."""
+    candidate_ids = set(_load_employee_access_records()) | set(load_users())
+    candidate_ids.update({str(ADMIN_CHAT_ID), str(RUFAT_CHAT_ID), str(HUSEYN_CHAT_ID), str(RASIM_CHAT_ID)})
+    owners: list[dict] = []
+    seen_pipelines: set[int] = set()
+    for raw_id in candidate_ids:
+        try:
+            owner = get_funnel_owner(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+        if not owner:
+            continue
+        pipeline_id = int(owner.get("pipeline_id") or 0)
+        if not pipeline_id or pipeline_id in seen_pipelines:
+            continue
+        seen_pipelines.add(pipeline_id)
+        owners.append(owner)
+    return sorted(owners, key=lambda row: (str(row.get("name") or "").casefold(), int(row["pipeline_id"])))
+
+
 def all_personal_pipeline_ids() -> set[int]:
-    return {
-        int(RUFAT_PIPELINE_ID), int(NIZAMI_PIPELINE_ID),
-        int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID),
-    }
+    return {int(owner["pipeline_id"]) for owner in configured_funnel_owners()}
 
 
 def employee_personal_pipeline_ids() -> set[int]:
-    return {int(RUFAT_PIPELINE_ID), int(HUSEYN_PIPELINE_ID), int(RASIM_PIPELINE_ID)}
+    return {
+        int(owner["pipeline_id"]) for owner in configured_funnel_owners()
+        if int(owner.get("chat_id") or 0) != int(ADMIN_CHAT_ID)
+    }
 
 
 def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
@@ -84,12 +126,9 @@ def kommo_user_id_for_employee_funnel(pipeline_id: int) -> int | None:
 
 
 def owner_name_for_pipeline(pipeline_id: int) -> str:
-    return {
-        int(RUFAT_PIPELINE_ID): "Rüfət Həsənzadə",
-        int(NIZAMI_PIPELINE_ID): "Nizami Qasımov",
-        int(HUSEYN_PIPELINE_ID): "Hüseyn Səfərov",
-        int(RASIM_PIPELINE_ID): "Rasim Əsgərov",
-    }.get(int(pipeline_id), "")
+    wanted = int(pipeline_id)
+    owner = next((row for row in configured_funnel_owners() if int(row["pipeline_id"]) == wanted), None)
+    return str((owner or {}).get("name") or "")
 
 
 def _lead_pipeline_id(lead) -> int:

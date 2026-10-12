@@ -96,7 +96,9 @@ def employee_access_profile(chat_id: int) -> dict:
         canonical_admin = employee_id == ADMIN_CHAT_ID
         stored_role = str(stored.get("role") or "").strip().casefold()
         role = "Admin" if canonical_admin or stored_role == "admin" else (
-            "Usta" if stored_role in {"master", "usta"} else "Əməkdaş"
+            "Usta" if stored_role in {"master", "usta"} else (
+                "İstifadəçi" if stored_role in {"manager", "pipeline_user", "istifadəçi"} else "Əməkdaş"
+            )
         )
         if not stored.get("approval_permissions_version"):
             values = set(stored.get("permissions") or [])
@@ -139,6 +141,7 @@ def employee_access_profile(chat_id: int) -> dict:
             "ai_enabled": bool(stored.get("ai_enabled", employee_id in {ADMIN_CHAT_ID, RUFAT_CHAT_ID})),
             "hot_order_skills": _normalize_hot_order_skills(stored.get("hot_order_skills")),
             "completion_requires_admin": bool(stored.get("completion_requires_admin", False)),
+            "pipeline_id": int(stored.get("pipeline_id") or 0),
         }
     users = load_users()
     known = employee_id in _KNOWN_EMPLOYEE_REGISTRATIONS or str(employee_id) in users
@@ -156,6 +159,7 @@ def employee_access_profile(chat_id: int) -> dict:
         "ai_enabled": employee_id in {ADMIN_CHAT_ID, RUFAT_CHAT_ID},
         "hot_order_skills": ["all"],
         "completion_requires_admin": False,
+        "pipeline_id": 0,
     }
 
 

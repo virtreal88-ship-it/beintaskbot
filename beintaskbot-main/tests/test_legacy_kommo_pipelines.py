@@ -55,7 +55,7 @@ class LegacyKommoPipelineTests(unittest.TestCase):
         moved = {
             "_fold_stage_name", "_stage_key_from_kommo", "_stage_maps_from_statuses", "load_pipeline_stage_maps",
             "load_all_kommo_pipelines", "get_funnel_owner", "get_pipeline_id_for_chat",
-            "get_rufat_completion_stage", "_lead_pipeline_id",
+            "get_rufat_completion_stage", "configured_funnel_owners", "_lead_pipeline_id",
         }
         self.assertFalse(moved & bot_names)
         self.assertIn("configure_pipeline_catalog(", (ROOT / "bot.py").read_text(encoding="utf-8-sig"))

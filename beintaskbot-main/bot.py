@@ -125,7 +125,7 @@ from legacy_kommo_pipeline_catalog import (
     configure_pipeline_catalog, load_all_kommo_pipelines, load_pipeline_stage_maps,
 )
 from legacy_kommo_funnels import (
-    _lead_pipeline_id, all_personal_pipeline_ids, employee_name_for_lead,
+    _lead_pipeline_id, all_personal_pipeline_ids, configured_funnel_owners, employee_name_for_lead,
     employee_personal_pipeline_ids, get_funnel_owner, get_pipeline_id_for_chat,
     get_pipeline_stages_for_chat, get_rufat_completion_stage, is_funnel_chat,
     is_rufat_chat, kommo_user_id_for_employee_funnel, owner_name_for_pipeline,
@@ -2007,11 +2007,11 @@ def lead_belongs_to_pipeline(lead_id: int, pipeline_id: int) -> bool:
     if lead:
         return _lead_pipeline_id(lead) == int(pipeline_id)
     owner = None
-    for chat_id in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID):
-        candidate = get_funnel_owner(chat_id)
-        if candidate and int(candidate["pipeline_id"]) == int(pipeline_id):
-            owner = candidate
-            break
+    owner = next(
+        (candidate for candidate in configured_funnel_owners()
+         if int(candidate["pipeline_id"]) == int(pipeline_id)),
+        None,
+    )
     return bool(owner and _cached_funnel_has_lead(owner["chat_id"], lead_id))
 
 
@@ -8316,9 +8316,10 @@ async def get_admin_chat_deals(*, force: bool = False) -> list[dict]:
     async with _admin_chat_deals_lock:
         if _admin_chat_deals_cache_ready and not force and now - _admin_chat_deals_cache_at < _RUFAT_OVERVIEW_CACHE_TTL:
             return list(_admin_chat_deals_cache)
-        owner_chat_ids = [RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID]
-        owners = [get_funnel_owner(chat_id) for chat_id in owner_chat_ids]
-        owners = [owner for owner in owners if isinstance(owner, dict) and owner.get("pipeline_id")]
+        owners = [
+            owner for owner in configured_funnel_owners()
+            if int(owner.get("chat_id") or 0) != int(ADMIN_CHAT_ID)
+        ]
 
         async def _load_pipeline_leads(pipeline_id: int) -> list[dict]:
             rows: list[dict] = []
@@ -10510,12 +10511,11 @@ def _rehome_orphaned_cloud_inbox() -> None:
 
 def _overview_deal_from_any_lead(lead: dict, preview: str, ts: int, channel: str = "", incoming_at: int = 0) -> dict:
     pipe = _lead_pipeline_id(lead)
-    owner = None
-    for cid in (RUFAT_CHAT_ID, ADMIN_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID):
-        candidate = get_funnel_owner(cid)
-        if candidate and int(candidate.get("pipeline_id") or 0) == int(pipe or 0):
-            owner = candidate
-            break
+    owner = next(
+        (candidate for candidate in configured_funnel_owners()
+         if int(candidate.get("pipeline_id") or 0) == int(pipe or 0)),
+        None,
+    )
     if int(pipe or 0) == int(SOVDELESMELER_PIPELINE_ID):
         stages, names, _ui = load_pipeline_stage_maps(int(SOVDELESMELER_PIPELINE_ID))
     else:
@@ -14963,7 +14963,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
         )
         if is_admin(chat_id):
             funnel_overlay = []
-            owners = [get_funnel_owner(cid) for cid in (RUFAT_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, ADMIN_CHAT_ID)]
+            owners = configured_funnel_owners()
             overviews = await asyncio.gather(*[
                 get_rufat_overview(owner_chat_id=owner["chat_id"]) for owner in owners if owner
             ], return_exceptions=True)
@@ -15403,12 +15403,17 @@ def _employee_directory_rows() -> list[dict]:
         if isinstance(access.get(str(chat_id)), dict) and access[str(chat_id)].get("deleted"):
             continue
         profile = employee_access_profile(chat_id)
+        owner = get_funnel_owner(chat_id)
+        displayed_role = profile["role"]
+        if owner and displayed_role == "Əməkdaş" and chat_id != int(ADMIN_CHAT_ID):
+            displayed_role = "İstifadəçi"
         rows.append({
             "chat_id": chat_id,
             "name": str(info.get("name") or _KNOWN_EMPLOYEE_REGISTRATIONS.get(chat_id, ("", 0))[0] or "Əməkdaş").strip(),
             "kommo_user_id": int(info.get("kommo_user_id") or 0) or None,
             "whatsapp_number": get_employee_whatsapp_number(chat_id),
-            "role": profile["role"],
+            "role": displayed_role,
+            "pipeline_id": int((owner or {}).get("pipeline_id") or 0),
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
             "ai_enabled": bool(profile.get("ai_enabled")),
@@ -15423,10 +15428,16 @@ async def handle_api_employee_directory(request: web.Request) -> web.Response:
     manager_id = _employee_manager_id(request)
     if not manager_id:
         return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
+    try:
+        pipelines = await asyncio.to_thread(load_all_kommo_pipelines)
+    except Exception as exc:
+        logger.warning("Employee pipeline catalog failed: %s", exc)
+        pipelines = []
     return web.json_response({
         "success": True,
         "permissions": list(_EMPLOYEE_PERMISSIONS),
         "employees": _employee_directory_rows(),
+        "pipelines": [{"id": int(row["id"]), "name": str(row.get("name") or row["id"])} for row in pipelines],
     })
 
 
@@ -15461,6 +15472,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
     if action in {"deactivate", "activate"}:
         if employee_id == manager_id:
             return web.json_response({"success": False, "error": "Öz girişinizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
+        current_owner = get_funnel_owner(employee_id)
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "permissions_version": 2,
@@ -15469,6 +15481,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "ai_enabled": bool(existing.get("ai_enabled")),
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
+            "pipeline_id": int(existing.get("pipeline_id") or (current_owner or {}).get("pipeline_id") or 0),
             "updated_at": now, "updated_by": manager_id,
         }
         if action == "activate" and employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -15501,6 +15514,8 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             role = "Admin"
         elif requested_role in {"master", "usta"}:
             role = "Usta"
+        elif requested_role in {"manager", "pipeline_user", "istifadəçi"}:
+            role = "İstifadəçi"
         else:
             role = "Əməkdaş"
         active = bool(data.get("active", True))
@@ -15510,6 +15525,17 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
         completion_requires_admin = bool(data.get("completion_requires_admin", False))
         ai_enabled = bool(data.get("ai_enabled", False))
+        try:
+            pipeline_id = int(data.get("pipeline_id") or 0)
+        except (TypeError, ValueError):
+            pipeline_id = 0
+        if role == "İstifadəçi" and pipeline_id <= 0:
+            return web.json_response({"success": False, "error": "İstifadəçi üçün Kommo hunisi seçin."}, status=400)
+        if role in {"Əməkdaş", "Usta"}:
+            pipeline_id = 0
+        for owner in configured_funnel_owners():
+            if pipeline_id and int(owner.get("chat_id") or 0) != employee_id and int(owner.get("pipeline_id") or 0) == pipeline_id:
+                return web.json_response({"success": False, "error": "Bu huni artıq başqa əməkdaşa bağlıdır."}, status=409)
         records[str(employee_id)] = {
             "role": role, "permissions": permissions, "active": active,
             "permissions_version": 2,
@@ -15518,6 +15544,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "ai_enabled": ai_enabled,
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
+            "pipeline_id": pipeline_id,
             "updated_at": now, "updated_by": manager_id,
         }
         if employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -15539,6 +15566,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                 "completion_requires_admin": bool(
                     old_record.get("completion_requires_admin", completion_requires_admin)
                 ),
+                "pipeline_id": 0,
                 "migrated_to": employee_id,
                 "updated_at": now,
                 "updated_by": manager_id,
@@ -17963,16 +17991,15 @@ def _notice_bucket_id(chat_id: int) -> str:
 
 
 def _chat_for_pipeline(pipeline_id: int) -> int:
-    mapping = {
-        int(RUFAT_PIPELINE_ID): int(RUFAT_CHAT_ID),
-        int(HUSEYN_PIPELINE_ID): int(HUSEYN_CHAT_ID),
-        int(RASIM_PIPELINE_ID): int(RASIM_CHAT_ID),
-        int(NIZAMI_PIPELINE_ID): int(ADMIN_CHAT_ID),
-    }
     try:
-        return int(mapping.get(int(pipeline_id or 0), 0))
+        wanted = int(pipeline_id or 0)
     except (TypeError, ValueError):
         return 0
+    owner = next(
+        (row for row in configured_funnel_owners() if int(row.get("pipeline_id") or 0) == wanted),
+        None,
+    )
+    return int((owner or {}).get("chat_id") or 0)
 
 
 def _owner_chat_for_lead(lead_id: int) -> int:
@@ -18262,10 +18289,10 @@ async def handle_api_pipelines(request: web.Request) -> web.Response:
         logger.warning("Admin pipelines failed: %s", exc)
         return web.json_response({"success": False, "error": "Hunilər yüklənmədi"}, status=502)
     owners = {
-        int(NIZAMI_PIPELINE_ID): {"chat_id": int(ADMIN_CHAT_ID), "name": "Nizami Qasımov"},
-        int(RUFAT_PIPELINE_ID): {"chat_id": int(RUFAT_CHAT_ID), "name": "Rüfət Həsənzadə"},
-        int(RASIM_PIPELINE_ID): {"chat_id": int(RASIM_CHAT_ID), "name": "Rasim Əsgərov"},
-        int(HUSEYN_PIPELINE_ID): {"chat_id": int(HUSEYN_CHAT_ID), "name": "Hüseyn Səfərov"},
+        int(owner["pipeline_id"]): {
+            "chat_id": int(owner["chat_id"]), "name": str(owner.get("name") or "Əməkdaş")
+        }
+        for owner in configured_funnel_owners()
     }
     enriched = []
     for pipeline in pipelines:

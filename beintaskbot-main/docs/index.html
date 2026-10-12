@@ -1856,6 +1856,7 @@ const PERSISTED_FORM_IDS = [
 let isAdmin = localStorage.getItem('is_admin') === 'true';
 let employeePermissions = new Set();
 let employeeDirectory = [];
+let employeePipelineDirectory = [];
 let employeeWhatsAppNumber = '';
 let employeeType = 'piecework'; // will be set from /api/kpi
 let kpiData = null;
@@ -12701,6 +12702,7 @@ function openEmployeeEditor(chatId = null) {
     const isEditing = !!employee;
     const isSelf = employee && String(employee.chat_id) === String(CURRENT_USER_ID);
     const skills = new Set(employee?.hot_order_skills || ['all']);
+    const pipelineOptions = employeePipelineDirectory.map(row => `<option value="${Number(row.id)}" ${Number(employee?.pipeline_id || 0) === Number(row.id) ? 'selected' : ''}>${escapeHtml(row.name || String(row.id))}</option>`).join('');
     const modal = document.createElement('div');
     modal.id = 'employee-editor-modal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.48);z-index:10020;display:flex;align-items:flex-end;justify-content:center;padding:0;';
@@ -12711,7 +12713,8 @@ function openEmployeeEditor(chatId = null) {
         <label class="block text-[11px] font-bold text-slate-500 mb-1">Ad və soyad</label><input id="employee-editor-name" value="${escapeHtml(employee?.name || '')}" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Ad və soyad">
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">Telegram ID <span class="text-rose-500">— giriş üçün yeganə kod</span></label><input id="employee-editor-chat-id" value="${employee?.chat_id || ''}" inputmode="numeric" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Məsələn: 123456789">
         <p class="text-[10px] leading-4 text-slate-400 mt-1.5">Telegram ID yalnız bu əməkdaşa girişi bağlamaq üçündür. Yadda saxladıqdan sonra ona dəvət linkini göndərin.</p>
-        <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${employee?.role === 'Admin' || employee?.role === 'Usta' ? '' : 'selected'}>Əməkdaş</option><option value="master" ${employee?.role === 'Usta' ? 'selected' : ''}>Usta</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
+        <div class="grid grid-cols-2 gap-2 mt-3"><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Rol</label><select id="employee-editor-role" onchange="syncEmployeePipelineField()" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="employee" ${['Admin','Usta','İstifadəçi'].includes(employee?.role) ? '' : 'selected'}>Əməkdaş</option><option value="pipeline_user" ${employee?.role === 'İstifadəçi' ? 'selected' : ''}>İstifadəçi</option><option value="master" ${employee?.role === 'Usta' ? 'selected' : ''}>Usta</option><option value="admin" ${employee?.role === 'Admin' ? 'selected' : ''}>Admin</option></select></div><div><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo user ID <span class="font-normal">(istəyə görə)</span></label><input id="employee-editor-kommo-id" value="${employee?.kommo_user_id || ''}" inputmode="numeric" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="Yazmaya bilərsiniz"></div></div>
+        <div id="employee-editor-pipeline-wrap" class="mt-3"><label class="block text-[11px] font-bold text-slate-500 mb-1">Kommo hunisi</label><select id="employee-editor-pipeline" class="w-full p-3 text-xs font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none"><option value="">Huni seçin</option>${pipelineOptions}</select><p class="text-[10px] leading-4 text-slate-400 mt-1">İstifadəçi yalnız seçilmiş huninin sövdələşmə və tapşırıqlarını görür. Əməkdaş və Usta üçün huni lazım deyil.</p></div>
         <label class="block text-[11px] font-bold text-slate-500 mt-3 mb-1">WhatsApp nömrəsi <span class="font-normal">— Kommo xətti</span></label><input id="employee-editor-whatsapp" value="${escapeHtml(employee?.whatsapp_number || '')}" inputmode="tel" class="w-full p-3 text-sm font-bold text-gray-800 bg-slate-50 border border-gray-200 rounded-xl outline-none" placeholder="994501234567"><p class="text-[10px] leading-4 text-slate-400 mt-1">Cavablar bu əməkdaşın Kommo-da qoşulu WhatsApp nömrəsindən göndərilir.</p>
         <label class="mt-3 flex items-center gap-2 text-xs font-bold text-slate-700"><input id="employee-editor-active" type="checkbox" ${employee?.active === false ? '' : 'checked'} ${isSelf ? 'disabled' : ''}> Web girişi aktivdir</label>
         <label class="mt-3 flex items-start gap-2 rounded-xl border border-violet-100 bg-violet-50 p-3 text-xs font-bold text-violet-900"><input id="employee-editor-ai" type="checkbox" class="mt-0.5" ${employee?.ai_enabled ? 'checked' : ''}><span>AI funksiyalarını aktiv et<span class="mt-1 block text-[10px] font-normal leading-4 text-violet-700">AI cavab, xülasə və transkripsiya düymələri yalnız bu seçim aktiv olan əməkdaşa göstərilir.</span></span></label>
@@ -12722,6 +12725,12 @@ function openEmployeeEditor(chatId = null) {
         <div style="position:sticky;bottom:-18px;background:#fff;border-top:1px solid #f1f5f9;padding:12px 0 calc(12px + env(safe-area-inset-bottom));margin-top:12px"><div class="flex gap-2"><button type="button" onclick="closeEmployeeEditor()" class="flex-1 bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-xs">Ləğv et</button><button type="button" onclick="saveEmployee()" class="flex-1 bg-[#2481cc] text-white font-bold py-3 rounded-xl text-xs">Yadda saxla</button></div></div>
     </div>`;
     document.body.appendChild(modal);
+    syncEmployeePipelineField();
+}
+function syncEmployeePipelineField() {
+    const role = document.getElementById('employee-editor-role')?.value || 'employee';
+    const wrap = document.getElementById('employee-editor-pipeline-wrap');
+    if(wrap) wrap.style.display = ['pipeline_user','admin'].includes(role) ? '' : 'none';
 }
 function renderEmployees() {
     const list = document.getElementById('employees-list');
@@ -12740,6 +12749,7 @@ async function loadEmployees() {
         const data = await response.json().catch(() => ({}));
         if(!response.ok || !data.success) throw new Error(data.error || 'Əməkdaşlar yüklənmədi');
         employeeDirectory = Array.isArray(data.employees) ? data.employees : [];
+        employeePipelineDirectory = Array.isArray(data.pipelines) ? data.pipelines : [];
         renderEmployees();
     } catch(error) {
         if(list) list.innerHTML = `<div class="text-center py-8 text-xs font-bold text-rose-500">${escapeHtml(error.message || 'Xəta')}</div>`;
@@ -12752,7 +12762,7 @@ async function saveEmployee() {
     const permissions = [...document.querySelectorAll('[data-employee-permission]:checked')].map(el => el.getAttribute('data-employee-permission'));
     const hotOrderSkills = [...document.querySelectorAll('[data-employee-hot-skill]:checked')].map(option => option.getAttribute('data-employee-hot-skill'));
     const originalId = String(document.getElementById('employee-editor-original-id')?.value || '').trim();
-    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, ai_enabled:!!document.getElementById('employee-editor-ai')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
+    const payload = {action:'upsert', employee_id:chatId, previous_employee_id:originalId, name, kommo_user_id:String(document.getElementById('employee-editor-kommo-id')?.value || '').trim(), whatsapp_number:String(document.getElementById('employee-editor-whatsapp')?.value || '').trim(), role:document.getElementById('employee-editor-role')?.value || 'employee', pipeline_id:String(document.getElementById('employee-editor-pipeline')?.value || '').trim(), permissions, hot_order_skills:hotOrderSkills, active:!!document.getElementById('employee-editor-active')?.checked, ai_enabled:!!document.getElementById('employee-editor-ai')?.checked, completion_requires_admin:!!document.getElementById('employee-editor-completion-approval')?.checked};
     try {
         const response = await fetch(API_BASE + '/api/admin/employees', {method:'POST', headers:{'Content-Type':'application/json','X-TG-User-ID':CURRENT_USER_ID}, body:JSON.stringify(payload)});
         const data = await response.json().catch(() => ({}));
