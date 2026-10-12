@@ -2,6 +2,7 @@
 from functools import lru_cache
 import os
 from pathlib import Path
+import re
 
 DEFAULT_HISTORY_REPLY_MODEL = 'gpt-4.1-2025-04-14'
 
@@ -31,3 +32,32 @@ def history_reply_instructions() -> str:
     if not text:
         raise ValueError('BeinSystems history reply instruction is missing')
     return BOUNDARIES + '\n' + text
+
+
+def reply_turn_instruction(has_prior_manager_reply: bool) -> str:
+    if has_prior_manager_reply:
+        return (
+            "Bu, davam edən dialoqdur və satış meneceri artıq əvvəl cavab verib. "
+            "Cavaba salamlaşma ilə başlama: ‘Salam’, ‘Salamlar’, ‘Hər vaxtınız xeyir’ və "
+            "oxşar girişləri yazma. Birbaşa müştərinin son mesajına cavab ver."
+        )
+    return (
+        "Bu dialoqda satış menecerinin ilk cavabıdır. Müştəriyə yalnız bu ilk cavabda "
+        "bir dəfə qısa salam vermək olar."
+    )
+
+
+_REPEATED_GREETING = re.compile(
+    r"^\s*(?:(?:salam(?:lar)?|hər vaxtınız xeyir|sabahınız xeyir|axşamınız xeyir)"
+    r"\s*[.!,:;–—-]*\s*)+",
+    re.IGNORECASE,
+)
+
+
+def remove_repeated_greeting(text: str, has_prior_manager_reply: bool) -> str:
+    """Enforce the turn rule if a model still repeats a simple greeting."""
+    value = str(text or "").strip()
+    if not has_prior_manager_reply:
+        return value
+    cleaned = _REPEATED_GREETING.sub("", value).strip()
+    return cleaned or value

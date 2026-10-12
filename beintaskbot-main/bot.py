@@ -81,14 +81,17 @@ from tenant_push_worker import deliver_push_notifications
 from tenant_hot_order_notification_worker import deliver_hot_order_notifications
 from tenant_linear_observer_worker import observe_and_notify as observe_tenant_linear
 from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
-from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
+from legacy_chat_reply_prompt import (
+    history_reply_instructions, history_reply_model, remove_repeated_greeting,
+    reply_turn_instruction,
+)
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
 from legacy_chat_delivery import deliver_kommo_message
 from legacy_chat_send_request import ChatSendInputError, parse_chat_send_input
 from legacy_chat_ai_context import (
     _ai_history_lines as build_ai_history_lines,
-    _history_message_is_incoming, _is_history_audio,
+    _history_message_is_incoming, _is_history_audio, has_prior_manager_reply,
 )
 from legacy_chat_ai_examples import (
     _ai_reply_example_scope, _select_ai_reply_examples,
@@ -14290,7 +14293,8 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
 
     if mode == "reply":
         examples = _select_ai_reply_examples(lead, history, draft)
-        system = history_reply_instructions()
+        ongoing_dialogue = has_prior_manager_reply(history_rows)
+        system = history_reply_instructions() + "\n\n" + reply_turn_instruction(ongoing_dialogue)
         user = (
             f"Müştəri: {contact_name or lead.get('name') or '—'}\n"
             f"Sövdələşmə: {lead.get('name') or '—'}\n"
@@ -14322,6 +14326,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
             return web.json_response({"success": False, "error": _ai_error_message(exc)}, status=502)
         if not suggestion:
             return web.json_response({"success": False, "error": "AI boş cavab verdi."}, status=502)
+        suggestion = remove_repeated_greeting(suggestion, ongoing_dialogue)
         return web.json_response({
             "success": True,
             "mode": "reply",

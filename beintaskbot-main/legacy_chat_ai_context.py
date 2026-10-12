@@ -44,6 +44,21 @@ def _history_message_is_incoming(item: dict) -> bool:
     return False
 
 
+def has_prior_manager_reply(rows: list[dict]) -> bool:
+    """Return whether the visible conversation already contains a manager reply."""
+    for item in rows:
+        if not isinstance(item, dict) or _history_message_is_incoming(item):
+            continue
+        if any(
+            str(item.get(key) or "").strip()
+            for key in ("text", "transcript", "transcription", "media_url", "media", "file_uuid")
+        ):
+            return True
+        if str(item.get("message_type") or item.get("type") or "").strip():
+            return True
+    return False
+
+
 async def _ai_history_lines(
     rows: list[dict],
     lead: dict | None = None,

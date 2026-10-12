@@ -2,7 +2,10 @@ import ast
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
+from legacy_chat_reply_prompt import (
+    history_reply_instructions, history_reply_model, remove_repeated_greeting,
+    reply_turn_instruction,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,6 +48,15 @@ class HistoryReply(unittest.TestCase):
         for name in ('tenant_chat_ai_provider.py','tenant_news_ai_provider.py'):
             text = (ROOT/name).read_text(encoding='utf-8')
             self.assertNotIn('history_reply_instructions',text);self.assertNotIn('+994502072240',text)
+
+    def test_continuing_dialogue_does_not_repeat_greeting(self):
+        self.assertIn('davam edən dialoqdur', reply_turn_instruction(True))
+        self.assertIn('ilk cavabıdır', reply_turn_instruction(False))
+        self.assertEqual(
+            remove_repeated_greeting('Salam. Hər vaxtınız xeyir. Qiymət tələblərə görə dəyişir.', True),
+            'Qiymət tələblərə görə dəyişir.',
+        )
+        self.assertEqual(remove_repeated_greeting('Salam. Buyurun.', False), 'Salam. Buyurun.')
 
 
 if __name__=='__main__':unittest.main()

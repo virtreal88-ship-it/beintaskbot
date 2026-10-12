@@ -5,9 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
-from legacy_chat_ai_context import _ai_history_lines
+from legacy_chat_ai_context import _ai_history_lines, has_prior_manager_reply
 import legacy_chat_ai_examples as ai_examples
 from legacy_chat_reply_media import reply_media_content
+from legacy_chat_reply_prompt import remove_repeated_greeting, reply_turn_instruction
 from legacy_chat_reply_provider import generate, log_failure
 
 TREE = ast.parse((Path(__file__).resolve().parents[1] / 'bot.py').read_text(encoding='utf-8-sig'))
@@ -28,6 +29,14 @@ def context_builder(transcription=''):
 
 
 class ReplyContext(unittest.IsolatedAsyncioTestCase):
+    def test_prior_manager_reply_is_detected_from_visible_history(self):
+        self.assertFalse(has_prior_manager_reply([{'incoming': True, 'text': 'Salam'}]))
+        self.assertTrue(has_prior_manager_reply([
+            {'incoming': True, 'text': 'Salam'},
+            {'incoming': False, 'text': 'Salam. Buyurun.'},
+        ]))
+        self.assertTrue(has_prior_manager_reply([{'direction': 'outgoing', 'transcript': 'Cavab'}]))
+
     async def test_actual_reply_request_uses_model_prompt_and_voice_context(self):
         handler = next(node for node in TREE.body if isinstance(node, ast.AsyncFunctionDef) and node.name == 'handle_api_deal_chat_suggest')
         branch = next(node for node in handler.body if isinstance(node, ast.If) and ast.unparse(node.test) == "mode == 'reply'")
@@ -42,6 +51,9 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
             'transcribed_count': 1, 'untranscribed_voice_count': 0,
             'history_reply_instructions': lambda: 'Sales instructions',
             'history_reply_model': lambda: 'gpt-4.1-2025-04-14',
+            'has_prior_manager_reply': has_prior_manager_reply,
+            'reply_turn_instruction': reply_turn_instruction,
+            'remove_repeated_greeting': remove_repeated_greeting,
             'generate_history_reply': generate, 'log_history_reply_failure': log_failure, 'logger': Mock(),
             '_select_ai_reply_examples': lambda *args: [], 'llm_client': client,
             'reply_media_content': reply_media_content,
@@ -54,7 +66,8 @@ class ReplyContext(unittest.IsolatedAsyncioTestCase):
         result = await namespace['reply']()
         request = client.chat.completions.create.call_args.kwargs
         self.assertEqual(request['model'], 'gpt-4.1-2025-04-14')
-        self.assertEqual(request['messages'][0]['content'], 'Sales instructions')
+        self.assertTrue(request['messages'][0]['content'].startswith('Sales instructions\n\n'))
+        self.assertIn('ilk cavabıdır', request['messages'][0]['content'])
         self.assertIn(namespace['history'], request['messages'][1]['content'][0]['text'])
         self.assertEqual(result['context_message_count'], 2)
         self.assertEqual(result['transcribed_voice_count'], 1)
