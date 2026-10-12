@@ -17,6 +17,12 @@ DOMAIN_MODULES = (
     "tenant_platform_core.py",
     "tenant_workflow_store.py",
 )
+SCHEMA_MODULES = (
+    "tenant_platform_schema.py",
+    "tenant_platform_schema_identity.py",
+    "tenant_platform_schema_operations.py",
+    "tenant_platform_schema_crm.py",
+)
 
 
 class TenantPlatformModuleTests(unittest.TestCase):
@@ -40,10 +46,21 @@ class TenantPlatformModuleTests(unittest.TestCase):
                 self.assertLessEqual(len(lines), 250)
 
     def test_schema_remains_additive_and_separate(self):
-        source = (ROOT / "tenant_platform_schema.py").read_text(encoding="utf-8-sig")
+        source = "\n".join(
+            (ROOT / filename).read_text(encoding="utf-8-sig")
+            for filename in SCHEMA_MODULES
+        )
         self.assertIn("CREATE TABLE IF NOT EXISTS", source)
         self.assertNotIn("DROP TABLE", source.upper())
         self.assertNotIn("TRUNCATE ", source.upper())
+
+    def test_schema_slices_remain_small_and_share_one_commit(self):
+        for filename in SCHEMA_MODULES:
+            with self.subTest(filename=filename):
+                lines = (ROOT / filename).read_text(encoding="utf-8-sig").splitlines()
+                self.assertLessEqual(len(lines), 250)
+        root_source = (ROOT / "tenant_platform_schema.py").read_text(encoding="utf-8-sig")
+        self.assertEqual(root_source.count("conn.commit()"), 1)
 
 
 if __name__ == "__main__":
