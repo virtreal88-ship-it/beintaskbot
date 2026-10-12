@@ -22,9 +22,9 @@ def load_linear_functions():
     source = ast.parse((Path(__file__).resolve().parents[1] / "bot.py").read_text(encoding="utf-8-sig"))
     access_source = ast.parse((Path(__file__).resolve().parents[1] / "legacy_employee_access.py").read_text(encoding="utf-8-sig"))
     funnel_source = ast.parse((Path(__file__).resolve().parents[1] / "legacy_kommo_funnels.py").read_text(encoding="utf-8-sig"))
+    settings_source = ast.parse((Path(__file__).resolve().parents[1] / "legacy_linear_employee_settings.py").read_text(encoding="utf-8-sig"))
     names = {
-        "_LINEAR_ACCOUNT_ALIASES", "_LINEAR_OPERATOR_BY_CHAT", "_LINEAR_CREATE_ACCOUNT_BY_CHAT",
-        "get_rufat_compat_chat_ids", "is_rufat_chat", "_linear_identity_chat_id",
+        "get_rufat_compat_chat_ids", "is_rufat_chat",
         "_linear_operator_for_chat", "_linear_create_identity_for_chat", "_linear_can_create_for_chat",
         "_linear_account_key", "_linear_account_matches", "_linear_account_scope", "_linear_issue_matches_scope", "_linear_save_test_result",
         "_linear_client_hint", "_linear_description_metadata", "_linear_issue_environment", "_load_linear_tesdiq_issues",
@@ -42,6 +42,13 @@ def load_linear_functions():
     selected.extend(
         node for node in funnel_source.body
         if isinstance(node, ast.FunctionDef) and node.name == "is_rufat_chat"
+    )
+    selected.extend(
+        node for node in settings_source.body
+        if (isinstance(node, ast.FunctionDef) and node.name in {"_record_for_employee", "employee_linear_identity"})
+        or (isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_LEGACY_DEFAULTS" for target in node.targets
+        ))
     )
     permissions = {ADMIN: {"linear", "linear_edit"}, RUFAT: {"linear", "linear_create"}, HUSEYN: {"linear", "linear_create"}, RASIM: {"linear", "linear_create"}, MOVED_RUFAT: {"linear", "linear_create"}}
     web = types.SimpleNamespace(Request=dict, Response=dict, json_response=lambda data, status=200: {"status": status, "data": data})
@@ -169,6 +176,17 @@ class LinearAccessTests(unittest.TestCase):
         matches = self.ns["_linear_issue_matches_scope"]
         self.assertTrue(matches(issue("a", "other", "huseyn@beinsystems"), {"huseyn"}, "huseyn@beinsystems"))
         self.assertFalse(matches(issue("a", "other", "huseyn@beinsystems.fake"), {"huseyn"}, "huseyn@beinsystems"))
+
+    def test_saved_employee_linear_identity_replaces_fixed_mapping(self):
+        self.ns["_load_employee_access_records"] = lambda: {
+            str(HUSEYN): {
+                "linear_account": "custom-account",
+                "linear_accounts": ["custom-account", "custom alias"],
+                "linear_operator": "custom@operator",
+            }
+        }
+        self.assertEqual(self.ns["_linear_create_identity_for_chat"](HUSEYN), ("custom-account", "custom@operator"))
+        self.assertEqual(self.ns["_linear_account_scope"](HUSEYN), {"custom-account", "custom alias"})
 
     def test_staff_legacy_edit_permission_cannot_change_status(self):
         self.permissions[RUFAT].add("linear_edit")

@@ -97,6 +97,7 @@ from legacy_chat_ai_examples import (
     _ai_reply_example_scope, _select_ai_reply_examples,
     configure_ai_reply_examples, save_ai_reply_example,
 )
+from legacy_linear_employee_settings import employee_linear_identity
 from legacy_app_bootstrap import (
     build_telegram_application, run_polling as run_telegram_polling,
     start_http_thread,
@@ -15404,6 +15405,7 @@ def _employee_directory_rows() -> list[dict]:
             continue
         profile = employee_access_profile(chat_id)
         owner = get_funnel_owner(chat_id)
+        linear_identity = employee_linear_identity(chat_id)
         displayed_role = profile["role"]
         if owner and displayed_role == "Əməkdaş" and chat_id != int(ADMIN_CHAT_ID):
             displayed_role = "İstifadəçi"
@@ -15414,6 +15416,8 @@ def _employee_directory_rows() -> list[dict]:
             "whatsapp_number": get_employee_whatsapp_number(chat_id),
             "role": displayed_role,
             "pipeline_id": int((owner or {}).get("pipeline_id") or 0),
+            "linear_account": str(linear_identity.get("account") or ""),
+            "linear_operator": str(linear_identity.get("operator") or ""),
             "active": bool(profile["active"]),
             "permissions": profile["permissions"],
             "ai_enabled": bool(profile.get("ai_enabled")),
@@ -15473,6 +15477,7 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         if employee_id == manager_id:
             return web.json_response({"success": False, "error": "Öz girişinizi bu səhifədən dəyişə bilməzsiniz."}, status=400)
         current_owner = get_funnel_owner(employee_id)
+        linear_identity = employee_linear_identity(employee_id)
         records[str(employee_id)] = {
             "role": existing["role"], "permissions": existing["permissions"], "active": action == "activate",
             "permissions_version": 2,
@@ -15482,6 +15487,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "hot_order_skills": existing.get("hot_order_skills") or [],
             "completion_requires_admin": bool(existing.get("completion_requires_admin")),
             "pipeline_id": int(existing.get("pipeline_id") or (current_owner or {}).get("pipeline_id") or 0),
+            "linear_account": str(linear_identity.get("account") or ""),
+            "linear_operator": str(linear_identity.get("operator") or ""),
+            "linear_accounts": sorted(linear_identity.get("accounts") or set()),
             "updated_at": now, "updated_by": manager_id,
         }
         if action == "activate" and employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -15525,6 +15533,16 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
         hot_order_skills = _normalize_hot_order_skills(data.get("hot_order_skills"))
         completion_requires_admin = bool(data.get("completion_requires_admin", False))
         ai_enabled = bool(data.get("ai_enabled", False))
+        linear_account = str(data.get("linear_account") or "").strip()[:120]
+        linear_operator = str(data.get("linear_operator") or "").strip()[:160]
+        previous_linear_identity = employee_linear_identity(employee_id)
+        linear_accounts = (
+            sorted(previous_linear_identity.get("accounts") or set())
+            if linear_account and linear_account == str(previous_linear_identity.get("account") or "").strip()
+            else ([linear_account] if linear_account else [])
+        )
+        if "linear_create" in permissions and (not linear_account or not linear_operator):
+            return web.json_response({"success": False, "error": "Linear yaratmaq üçün hesab və operator yazın."}, status=400)
         try:
             pipeline_id = int(data.get("pipeline_id") or 0)
         except (TypeError, ValueError):
@@ -15545,6 +15563,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
             "hot_order_skills": hot_order_skills,
             "completion_requires_admin": completion_requires_admin,
             "pipeline_id": pipeline_id,
+            "linear_account": linear_account,
+            "linear_operator": linear_operator,
+            "linear_accounts": linear_accounts,
             "updated_at": now, "updated_by": manager_id,
         }
         if employee_id in _RETIRED_EMPLOYEE_CHAT_IDS:
@@ -15567,6 +15588,9 @@ async def handle_api_employee_update(request: web.Request) -> web.Response:
                     old_record.get("completion_requires_admin", completion_requires_admin)
                 ),
                 "pipeline_id": 0,
+                "linear_account": "",
+                "linear_operator": "",
+                "linear_accounts": [],
                 "migrated_to": employee_id,
                 "updated_at": now,
                 "updated_by": manager_id,
@@ -15926,47 +15950,14 @@ def _linear_news_ai_content(issue: dict) -> dict[str, str]:
     return {"title": title[:500], "summary": fallback[:1200], "body": ""}
 
 
-_LINEAR_ACCOUNT_ALIASES = {
-    # Account names are created by the administrator and may contain either
-    # Latin or Azerbaijani spellings.  Keep the mapping here so the access
-    # rule does not depend on the exact display spelling in the dictionary.
-    int(RUFAT_CHAT_ID): {"rufet", "rufat", "ryufat"},
-    int(RASIM_CHAT_ID): {"rasim"},
-    int(HUSEYN_CHAT_ID): {"huseyn", "husein", "hussein"},
-    int(ADMIN_CHAT_ID): set(),
-}
-
-_LINEAR_OPERATOR_BY_CHAT = {
-    int(RUFAT_CHAT_ID): "rufet@beinsystems",
-    int(HUSEYN_CHAT_ID): "huseyn@beinsystems",
-    int(RASIM_CHAT_ID): "rasim@beinsystems",
-    int(ADMIN_CHAT_ID): "admin@nizam",
-}
-
-_LINEAR_CREATE_ACCOUNT_BY_CHAT = {
-    int(RUFAT_CHAT_ID): "rufet",
-    int(HUSEYN_CHAT_ID): "huseyn",
-    int(RASIM_CHAT_ID): "rasim",
-    int(ADMIN_CHAT_ID): "nizam",
-}
-
-
-def _linear_identity_chat_id(chat_id: int) -> int:
-    """Follow the admin-approved account migration used by the sales funnel."""
-    cid = int(chat_id)
-    if cid not in _LINEAR_ACCOUNT_ALIASES and is_rufat_chat(cid):
-        return int(RUFAT_CHAT_ID)
-    return cid
-
-
 def _linear_operator_for_chat(chat_id: int) -> str:
-    return str(_LINEAR_OPERATOR_BY_CHAT.get(_linear_identity_chat_id(chat_id)) or "").strip()
+    return str(employee_linear_identity(chat_id).get("operator") or "").strip()
 
 
 def _linear_create_identity_for_chat(chat_id: int) -> tuple[str, str]:
     """Resolve creation metadata from the authenticated employee, not input."""
-    account = str(_LINEAR_CREATE_ACCOUNT_BY_CHAT.get(_linear_identity_chat_id(chat_id)) or "").strip()
-    return account, _linear_operator_for_chat(chat_id)
+    identity = employee_linear_identity(chat_id)
+    return str(identity.get("account") or "").strip(), str(identity.get("operator") or "").strip()
 
 
 def _linear_can_create_for_chat(chat_id: int) -> bool:
@@ -16020,7 +16011,7 @@ def _linear_account_scope(chat_id: int) -> set[str] | None:
         return None
     # Linear's existing Account metadata is the source of visibility. A missing
     # local dictionary entry must not hide the employee's own issues.
-    return set(_LINEAR_ACCOUNT_ALIASES.get(_linear_identity_chat_id(chat_id), set()))
+    return set(employee_linear_identity(chat_id).get("accounts") or set())
 
 
 def _linear_uuid(value: str, label: str) -> str:
