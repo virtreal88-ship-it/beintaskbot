@@ -84,6 +84,8 @@ from tenant_news_telegram_worker import deliver as deliver_tenant_news_telegram
 from legacy_chat_reply_prompt import history_reply_instructions, history_reply_model
 from legacy_chat_reply_provider import generate as generate_history_reply, log_failure as log_history_reply_failure
 from legacy_chat_reply_media import reply_media_content
+from legacy_chat_delivery import deliver_kommo_message
+from legacy_chat_send_request import ChatSendInputError, parse_chat_send_input
 from legacy_chat_ai_context import (
     _ai_history_lines as build_ai_history_lines,
     _history_message_is_incoming, _is_history_audio,
@@ -9983,14 +9985,6 @@ def _schedule_sent_messages_save() -> None:
     return
 
 
-def _persist_cloud_outgoing(lead_id: int, sent_item: dict, phone: str, sent_row: dict) -> None:
-    """Store a WhatsApp reply after the Cloud API has already accepted it."""
-    try:
-        _remember_sent_message(int(lead_id), sent_item)
-        _remember_phone_lead(phone, int(lead_id))
-        _append_chat_tail(int(lead_id), sent_row)
-    except Exception as exc:
-        logger.warning("WhatsApp sent row was not stored lead=%s: %s", lead_id, exc)
 
 
 def _remember_sent_message(lead_id: int, item: dict) -> None:
@@ -10152,52 +10146,6 @@ def _wa_preview_cards(raw) -> list[dict]:
     return cards
 
 
-def _sent_message_item(
-    *,
-    wamid: str,
-    text: str,
-    author: str,
-    channel: str = "whatsapp",
-    message_type: str = "text",
-    file_uuid: str = "",
-    file_name: str = "",
-    reply_id: str = "",
-    reply_text: str = "",
-    reply_author: str = "",
-    incoming: bool = False,
-    created_at: int = 0,
-    phone: str = "",
-    cards: list | None = None,
-    media_url: str = "",
-) -> dict:
-    created = int(created_at or _time_module.time())
-    gallery = _wa_preview_cards(cards)
-    item = {
-        "id": f"wa-{wamid or uuid.uuid4().hex}",
-        "external_id": str(wamid or ""),
-        "direction": "incoming" if incoming else "outgoing",
-        "incoming": bool(incoming),
-        "author": author or "",
-        "phone": _wa_phone_key(phone) if phone else "",
-        "text": text or "",
-        "message_type": message_type,
-        "created_at": created,
-        "created": _deal_fmt_ts(created),
-        "origin": channel,
-        "channel": channel,
-        "reply_to_message_id": str(reply_id or ""),
-        "reply_to_text": str(reply_text or "")[:200],
-        "reply_to_author": str(reply_author or "")[:80],
-        "media_url": str(media_url or ""),
-        "file_uuid": str(file_uuid or ""),
-        "file_name": str(file_name or ""),
-        "delivery_status": "" if incoming else "sent",
-        "via_cloud": True,
-    }
-    if gallery:
-        item["cards"] = gallery
-        item["message_type"] = "carousel"
-    return item
 
 
 _WA_PHONE_LEADS_KEY = "_phone_leads"
@@ -12484,7 +12432,6 @@ _chat_tail_queue: list[int] = []
 _chat_tail_queued: set[int] = set()
 _chat_tail_warm_lock = threading.Lock()
 _chat_tail_warm_task: asyncio.Task | None = None
-_tail_refresh_pending: set[int] = set()
 _chat_tail_inflight: set[int] = set()
 _deal_side_cache: dict[int, dict] = {}
 
@@ -12856,49 +12803,11 @@ def _schedule_chat_tail_warm(deals_or_ids) -> None:
             _chat_tail_warm_task = loop.create_task(_warm_chat_tail_loop())
 
 
-async def _refresh_one_talk_tail(lead_id: int, talk_id: int, origin: str) -> None:
-    channel = _origin_channel_key(origin) or "whatsapp"
-
-    def _load() -> list:
-        messages, _blocked, _more = _fetch_talk_messages(int(talk_id), pages=1, page_limit=_CHAT_TAIL_KEEP)
-        rows = []
-        for message in messages:
-            formatted = _format_chat_message(message, channel)
-            if not formatted:
-                continue
-            formatted["channel"] = channel
-            formatted["talk_id"] = int(talk_id)
-            rows.append(formatted)
-        rows.sort(key=lambda item: int(item.get("created_at") or 0))
-        return rows[-_CHAT_TAIL_KEEP:]
-
-    try:
-        rows = await asyncio.to_thread(_load)
-        if rows:
-            _store_chat_tail(lead_id, rows)
-            _invalidate_deal_chat_cache(int(lead_id))
-            record_lead_pulse_event(int(lead_id), "deal_update")
-    except Exception as exc:
-        logger.warning("Talk tail refresh failed lead=%s talk=%s: %s", lead_id, talk_id, exc)
-    finally:
-        _tail_refresh_pending.discard(int(lead_id))
 
 
 def _schedule_talk_tail_refresh(lead_id: int, talk_id: int, origin: str) -> None:
+    """Tail refresh is disabled; full history is loaded by the history endpoint."""
     return
-    try:
-        lid = int(lead_id)
-        talk = int(talk_id)
-    except (TypeError, ValueError):
-        return
-    if not lid or not talk or lid in _tail_refresh_pending:
-        return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    _tail_refresh_pending.add(lid)
-    loop.create_task(_refresh_one_talk_tail(lid, talk, origin))
 
 
 def _lead_phones_fast(lead: dict) -> tuple[list[int], list[str]]:
@@ -12959,323 +12868,11 @@ def _contact_ids_and_phones(lead: dict) -> tuple[list[int], list[str]]:
 
 
 async def handle_api_deal_chat(request: web.Request) -> web.Response:
+    """Retired legacy chat reader; the supported history endpoint is separate."""
     return web.json_response({"success": False, "error": "Çat bağlanıb."}, status=410)
-    chat_id = _deal_request_user(request)
-    if not chat_id:
-        return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    try:
-        lead_id = int(request.rel_url.query.get("lead_id") or 0)
-    except (TypeError, ValueError):
-        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    if not lead_id:
-        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower() or "whatsapp"
-    if channel == "whatsapp" and (is_funnel_chat(chat_id) or is_admin(chat_id)):
-        sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
-        try:
-            before = int(request.rel_url.query.get("before") or 0)
-        except (TypeError, ValueError):
-            before = 0
-        keep = 8
-        viewer_line = _viewer_wa_line(chat_id)
-        source = _wa_thread_rows(lead_id) if before else _wa_live_rows(lead_id)
-        rows = [item for item in source if _row_visible_on_line(item, viewer_line)]
-        rows.sort(key=lambda item: int(item.get("created_at") or 0))
-        if before:
-            older = [item for item in rows if int(item.get("created_at") or 0) < before]
-            page = older[-keep:] if older else []
-            has_more = len(older) > keep
-        else:
-            page = rows[-keep:] if rows else []
-            has_more = len(rows) > keep
-        _apply_saved_replies(page)
-        _overlay_sent_delivery(page, lead_id)
-        cloud_ready = _wa_cloud_ready(sender_digits)
-        return web.json_response({
-            "success": True,
-            "preview": str(request.rel_url.query.get("preview") or "") == "1",
-            "tail": str(request.rel_url.query.get("tail") or "") == "1",
-            "chat": page,
-            "has_more": has_more,
-            "chat_blocked": False,
-            "channel": "whatsapp",
-            "channels": [{
-                "key": "whatsapp",
-                "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
-                "talk_id": 0,
-                "chat_id": "",
-                "open": True,
-                "sender_phone": _wa_display_number(sender_digits),
-            }],
-            "reply_talk_id": 0,
-            "can_reply": cloud_ready,
-            "cloud_ready": cloud_ready,
-            "bot_stopped": _is_lead_bot_stopped(lead_id),
-            "last_note": (_deal_side_cache.get(lead_id) or {}).get("note"),
-            "last_task": (_deal_side_cache.get(lead_id) or {}).get("task"),
-            "side_ready": lead_id in _deal_side_cache,
-        })
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
-    if err:
-        return err
-    contact_ids, phones = _lead_phones_fast(lead)
-    for phone in phones:
-        _remember_phone_lead(phone, int(lead.get("id") or lead_id))
-    try:
-        limit = int(request.rel_url.query.get("limit") or 20)
-    except (TypeError, ValueError):
-        limit = 20
-    try:
-        before = int(request.rel_url.query.get("before") or 0)
-    except (TypeError, ValueError):
-        before = 0
-    channel = str(request.rel_url.query.get("channel") or "whatsapp").strip().lower()
-    sender_digits = _hinted_wa_sender_digits(chat_id, request.rel_url.query.get("sender_phone"))
-    if str(request.rel_url.query.get("preview") or "") == "1":
-        remembered: list = []
-        lid = int(lead.get("id") or lead_id)
-        if channel == "whatsapp":
-            rows = _sent_messages_for_lead(lid)
-            rows.sort(key=lambda item: int(item.get("created_at") or 0))
-            remembered = rows[-_CHAT_TAIL_KEEP:]
-            _overlay_sent_delivery(remembered, lid)
-            cloud_ready = _wa_cloud_ready(sender_digits)
-            return web.json_response({
-                "success": True,
-                "preview": True,
-                "chat": remembered,
-                "has_more": len(rows) > _CHAT_TAIL_KEEP,
-                "chat_blocked": False,
-                "channel": channel,
-                "channels": [{
-                    "key": "whatsapp",
-                    "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
-                    "talk_id": 0,
-                    "chat_id": "",
-                    "open": True,
-                    "sender_phone": _wa_display_number(sender_digits),
-                }],
-                "reply_talk_id": 0,
-                "can_reply": cloud_ready,
-                "cloud_ready": cloud_ready,
-                "bot_stopped": _is_lead_bot_stopped(lid),
-                "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
-                "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
-                "side_ready": lid in _deal_side_cache,
-            })
-        with _deal_chat_cache_lock:
-            remembered = list(_chat_open_preview.get(lid) or [])[-_CHAT_TAIL_KEEP:]
-            if not remembered:
-                for key, cached in _deal_chat_cache.items():
-                    if not key or key[0] != lid:
-                        continue
-                    rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
-                    if rows:
-                        remembered = list(rows)[-_CHAT_TAIL_KEEP:]
-                        break
-        if not remembered or lid not in _deal_side_cache:
-            _priority_chat_tail(lid)
-        _overlay_sent_delivery(remembered, lid)
-        return web.json_response({
-            "success": True,
-            "preview": True,
-            "chat": remembered,
-            "has_more": True,
-            "chat_blocked": False,
-            "channel": channel,
-            "channels": [],
-            "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
-            "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
-            "side_ready": lid in _deal_side_cache,
-        })
-    if str(request.rel_url.query.get("tail") or "") == "1":
-        lid = int(lead.get("id") or lead_id)
-        if channel == "whatsapp":
-            rows = _sent_messages_for_lead(lid)
-            rows.sort(key=lambda item: int(item.get("created_at") or 0))
-            remembered = rows[-_CHAT_TAIL_KEEP:]
-            _overlay_sent_delivery(remembered, lid)
-            cloud_ready = _wa_cloud_ready(sender_digits)
-            return web.json_response({
-                "success": True,
-                "tail": True,
-                "chat": remembered,
-                "has_more": len(rows) > _CHAT_TAIL_KEEP,
-                "chat_blocked": False,
-                "channel": channel,
-                "channels": [],
-                "reply_talk_id": 0,
-                "can_reply": cloud_ready,
-                "cloud_ready": cloud_ready,
-                "bot_stopped": _is_lead_bot_stopped(lid),
-                "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
-                "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
-                "side_ready": lid in _deal_side_cache,
-            })
-        talk_id = _lead_open_talk.get(lid) or 0
-        if not talk_id:
-            with _deal_chat_cache_lock:
-                for m in reversed(_chat_open_preview.get(lid) or []):
-                    if m.get("talk_id"):
-                        try:
-                            talk_id = int(m["talk_id"])
-                        except (TypeError, ValueError):
-                            talk_id = 0
-                        if talk_id:
-                            break
-        if not talk_id:
-            with _lead_talks_cache_lock:
-                cached_talks = (_lead_talks_cache.get(lid) or (0, []))[1]
-            if cached_talks:
-                ranked = _ranked_reply_talk_ids(cached_talks)
-                if ranked:
-                    talk_id = ranked[0]
-        now = _time_module.monotonic()
-        last_check = _last_talk_tail_check.get(lid, 0)
-        if talk_id and (now - last_check >= 2.0):
-            _last_talk_tail_check[lid] = now
-            _lead_open_talk[lid] = talk_id
-            try:
-                raw_msgs, _, _ = await asyncio.get_running_loop().run_in_executor(
-                    _chat_collect_executor,
-                    lambda: _fetch_talk_messages(talk_id, pages=1, page_limit=10),
-                )
-                if raw_msgs:
-                    formatted_new: list[dict] = []
-                    emp_name = employee_name_for_lead(lead)
-                    for rm in raw_msgs:
-                        f = _format_chat_message(rm, channel)
-                        if f:
-                            f["channel"] = channel
-                            f["talk_id"] = talk_id
-                            if not f.get("incoming") and not f.get("is_bot"):
-                                author = str(f.get("author") or "")
-                                if channel == "whatsapp" or _is_generic_chat_author(author):
-                                    f["author"] = emp_name or author
-                            formatted_new.append(f)
-                    if formatted_new:
-                        with _deal_chat_cache_lock:
-                            cur_prev = list(_chat_open_preview.get(lid) or [])
-                            merged_tail = _merge_tail_rows(cur_prev, formatted_new)
-                            _chat_open_preview[lid] = merged_tail[-_CHAT_TAIL_KEEP:]
-                        _invalidate_deal_chat_cache(lid)
-            except Exception as exc:
-                logger.warning("Tail talk check failed for lead %s: %s", lid, exc)
-        elif not talk_id and (now - last_check >= 4.0):
-            _last_talk_tail_check[lid] = now
-            try:
-                discovered_talks = await asyncio.get_running_loop().run_in_executor(
-                    _chat_collect_executor,
-                    lambda: _fetch_talks(lid, contact_ids, include_contacts=False),
-                )
-                if discovered_talks:
-                    ranked = _ranked_reply_talk_ids(discovered_talks)
-                    if ranked:
-                        talk_id = ranked[0]
-                        _lead_open_talk[lid] = talk_id
-            except Exception:
-                pass
 
-        remembered: list = []
-        with _deal_chat_cache_lock:
-            remembered = list(_chat_open_preview.get(lid) or [])[-_CHAT_TAIL_KEEP:]
-            if not remembered:
-                for key, cached in _deal_chat_cache.items():
-                    if not key or key[0] != lid:
-                        continue
-                    rows = (cached[1] or {}).get("chat") if isinstance(cached[1], dict) else []
-                    if rows:
-                        remembered = list(rows)[-_CHAT_TAIL_KEEP:]
-                        break
-        _overlay_sent_delivery(remembered, lid)
-        cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
-        return web.json_response({
-            "success": True,
-            "tail": True,
-            "chat": remembered,
-            "has_more": True,
-            "chat_blocked": False,
-            "channel": channel,
-            "channels": [],
-            "reply_talk_id": talk_id or 0,
-            "can_reply": bool(talk_id) or cloud_ready,
-            "cloud_ready": cloud_ready,
-            "bot_stopped": _is_lead_bot_stopped(lid),
-            "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
-            "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
-            "side_ready": lid in _deal_side_cache,
-        })
-    if channel == "whatsapp":
-        lid = int(lead.get("id") or lead_id)
-        chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
-            lid,
-            contact_ids,
-            limit=limit,
-            before=before,
-            channel="whatsapp",
-            sender_digits=sender_digits,
-            employee_name=employee_name_for_lead(lead),
-        )
-        cloud_ready = _wa_cloud_ready(sender_digits)
-        return web.json_response({
-            "success": True,
-            "chat": chat,
-            "chat_blocked": False,
-            "reply_talk_id": 0,
-            "can_reply": cloud_ready,
-            "cloud_ready": cloud_ready,
-            "has_more": has_more,
-            "channels": channels,
-            "channel": "whatsapp",
-            "bot_stopped": _is_lead_bot_stopped(lid),
-            "last_note": (_deal_side_cache.get(lid) or {}).get("note"),
-            "last_task": (_deal_side_cache.get(lid) or {}).get("task"),
-            "side_ready": lid in _deal_side_cache,
-        })
-    cache_key = (int(lead.get("id") or lead_id), channel, int(before or 0), str(sender_digits or ""), int(limit))
-    now = _time_module.monotonic()
-    with _deal_chat_cache_lock:
-        cached = _deal_chat_cache.get(cache_key)
-    if cached and now - cached[0] < _DEAL_CHAT_CACHE_TTL:
-        return web.json_response(cached[1])
-    employee_name = employee_name_for_lead(lead)
-    chat, chat_blocked, reply_talk_id, has_more, channels, channel = await asyncio.get_running_loop().run_in_executor(
-        _chat_collect_executor,
-        lambda: _collect_deal_chat(
-            int(lead.get("id") or lead_id),
-            contact_ids,
-            limit=limit,
-            before=before,
-            channel=channel,
-            sender_digits=sender_digits,
-            employee_name=employee_name,
-        ),
-    )
-    cloud_ready = channel == "whatsapp" and _wa_cloud_ready(sender_digits)
-    lid = int(lead.get("id") or lead_id)
-    if reply_talk_id and lid:
-        _lead_open_talk[lid] = int(reply_talk_id)
-    payload = {
-        "success": True,
-        "chat": chat,
-        "chat_blocked": chat_blocked,
-        "reply_talk_id": reply_talk_id,
-        "has_more": has_more,
-        "channel": channel,
-        "channels": channels,
-        "sender_phone": _wa_display_number(sender_digits),
-        "can_reply": bool(reply_talk_id) or cloud_ready,
-        "cloud_ready": cloud_ready,
-        "bot_stopped": _is_lead_bot_stopped(int(lead.get("id") or lead_id)),
-    }
-    with _deal_chat_cache_lock:
-        _deal_chat_cache[cache_key] = (now, payload)
-        if not before and chat:
-            _chat_open_preview[int(lead.get("id") or lead_id)] = _merge_tail_rows(
-                list(_chat_open_preview.get(int(lead.get("id") or lead_id)) or []),
-                list(chat[-_CHAT_TAIL_KEEP:]),
-            )
-    return web.json_response(payload)
+
+
 
 
 VOICE_CAPTION_TEXT = "🎤 Səs mesajı"
@@ -13385,62 +12982,6 @@ def _stamp_sent_reply(chat: list[dict], text: str, reply_id: str, reply_text: st
     _remember_chat_reply(fallback.get("id"), fallback["reply_to_message_id"], fallback["reply_to_text"], fallback["reply_to_author"])
 
 
-def _deliver_via_cloud(
-    lead: dict,
-    text: str,
-    raw: bytes,
-    filename: str,
-    content_type: str,
-    quote_id: str,
-    sender_digits: str = "",
-) -> tuple[bool, str, str, str, str]:
-    """Send one message through WhatsApp Cloud API; returns ok, error, wamid, type, media_id."""
-    phone_id = _wa_phone_id_for_digits(sender_digits)
-    _wa_send_phone.phone_id = phone_id
-    _ids, phones = _contact_ids_and_phones(lead)
-    if not phones:
-        _wa_send_phone.phone_id = ""
-        return False, "Müştəri nömrəsi tapılmadı.", "", "text", ""
-    kind = "text"
-    media_id = ""
-    voice = False
-    if raw:
-        kind = _wa_cloud_media_kind(filename, content_type)
-        payload, mime, name = raw, content_type or "application/octet-stream", filename or "file"
-        if kind == "audio":
-            converted, conv_mime, conv_name, voice = _ffmpeg_voice_for_cloud(raw, filename)
-            if not converted:
-                _wa_send_phone.phone_id = ""
-                return False, "Səs WhatsApp formatına çevrilmədi.", "", "audio", ""
-            payload, mime, name = converted, conv_mime, conv_name
-        media_id, upload_error = _wa_cloud_upload_media(payload, name, mime, phone_id)
-        if not media_id:
-            _wa_send_phone.phone_id = ""
-            return False, upload_error or "Fayl WhatsApp-a yüklənmədi.", "", kind, ""
-    last_error = ""
-    for phone in phones:
-        if kind == "text":
-            ok, error, wamid = _wa_cloud_send_text(phone, text, quote_id, phone_id)
-        else:
-            ok, error, wamid = _wa_cloud_send_media(
-                phone,
-                kind,
-                media_id,
-                caption="" if voice else text,
-                filename="" if voice else filename,
-                reply_to=quote_id,
-                voice=voice,
-                phone_id=phone_id,
-            )
-            if ok and voice and text:
-                _wa_cloud_send_text(phone, text)
-        if ok:
-            _wa_send_phone.phone_id = ""
-            return True, "", wamid, kind, media_id
-        if error:
-            last_error = error
-    _wa_send_phone.phone_id = ""
-    return False, last_error or "WhatsApp mesajı göndərilmədi.", "", kind, media_id
 
 
 async def handle_api_whatsapp_templates(request: web.Request) -> web.Response:
@@ -13726,390 +13267,199 @@ async def handle_api_deal_kommo_reply(request: web.Request) -> web.Response:
 async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
-        return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    text = ""
-    channel = "whatsapp"
-    lead_id = 0
+        return web.json_response(
+            {"success": False, "error": "User not identified"}, status=401
+        )
+    try:
+        message = await parse_chat_send_input(request)
+    except ChatSendInputError as exc:
+        return web.json_response(
+            {"success": False, "error": exc.message}, status=exc.status
+        )
+
+    sender_digits = _hinted_wa_sender_digits(chat_id, message.sender_phone)
+    lead, err = _authorized_deal_lead(chat_id, message.lead_id)
+    if err:
+        return err
+    reply_talk_id, reply_chat_id = _resolve_channel_talk(
+        lead, message.channel, sender_digits, message.talk_id
+    )
+    if not reply_talk_id:
+        channel_label = CHAT_CHANNEL_LABELS.get(message.channel, message.channel)
+        return web.json_response(
+            {"success": False, "error": f"{channel_label} çatı tapılmadı."},
+            status=400,
+        )
+    logger.info(
+        "Chat delivery route: lead=%s channel=%s talk=%s chat=%s",
+        message.lead_id,
+        message.channel,
+        reply_talk_id,
+        reply_chat_id or "-",
+    )
+
+    upload_raw = message.upload_raw
+    upload_name = message.upload_name
+    upload_type = message.upload_type
     attachment = None
-    upload_raw = b""
-    upload_name = ""
-    upload_type = ""
-    reply_to_message_id = ""
-    reply_external = ""
-    reply_preview = ""
-    reply_author = ""
-    hinted_talk = 0
-    hinted_sender = ""
-    hinted_customer = ""
-    incoming_phone = ""
-    form_is_voice = False
-    data = {}
-    ctype = str(request.content_type or "")
-    if ctype.startswith("multipart/"):
-        form = await request.post()
-        try:
-            lead_id = int(form.get("lead_id") or 0)
-        except (TypeError, ValueError):
-            lead_id = 0
-        text = str(form.get("text") or "").strip()
-        channel = str(form.get("channel") or "whatsapp").strip().lower()
-        form_is_voice = str(form.get("is_voice") or "").strip().lower() in {"1", "true", "yes"}
-        reply_to_message_id = str(form.get("reply_to_message_id") or "").strip()
-        reply_external = str(form.get("reply_external_id") or "").strip()
-        reply_preview = str(form.get("reply_to_text") or "").strip()[:200]
-        reply_author = str(form.get("reply_to_author") or "").strip()[:80]
-        hinted_sender = str(form.get("sender_phone") or "")
-        hinted_customer = str(form.get("customer_phone") or "")
-        incoming_phone = str(form.get("incoming_phone") or "")
-        try:
-            hinted_talk = int(form.get("talk_id") or 0)
-        except (TypeError, ValueError):
-            hinted_talk = 0
-        uploaded = form.get("file")
-        if uploaded is not None and getattr(uploaded, "file", None):
-            upload_raw = uploaded.file.read()
-            upload_name = str(getattr(uploaded, "filename", None) or "file")
-            upload_type = str(getattr(uploaded, "content_type", None) or "application/octet-stream")
-            if len(upload_raw) > 15 * 1024 * 1024:
-                return web.json_response({"success": False, "error": "Fayl 15MB-dan böyükdür"}, status=400)
-    else:
-        try:
-            data = await request.json()
-        except Exception:
-            data = {}
-        if not isinstance(data, dict):
-            data = {}
-        try:
-            lead_id = int(data.get("lead_id") or 0)
-        except (TypeError, ValueError):
-            lead_id = 0
-        text = str(data.get("text") or "").strip()
-        channel = str(data.get("channel") or "whatsapp").strip().lower()
-        form_is_voice = str(data.get("is_voice") or "").strip().lower() in {"1", "true", "yes"}
-        reply_to_message_id = str(data.get("reply_to_message_id") or "").strip()
-        reply_external = str(data.get("reply_external_id") or "").strip()
-        reply_preview = str(data.get("reply_to_text") or "").strip()[:200]
-        reply_author = str(data.get("reply_to_author") or "").strip()[:80]
-        hinted_sender = str(data.get("sender_phone") or "")
-        hinted_customer = str(data.get("customer_phone") or "")
-        incoming_phone = str(data.get("incoming_phone") or "")
-        try:
-            hinted_talk = int(data.get("talk_id") or 0)
-        except (TypeError, ValueError):
-            hinted_talk = 0
-    if not lead_id:
-        return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    if not text and not upload_raw:
-        return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
-    if len(text) > 2000:
-        return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
-    sender_digits = _hinted_wa_sender_digits(chat_id, hinted_sender)
-    # Customer conversations in this CRM use Kommo's grey WhatsApp
-    # integration.  Sending via a leftover Cloud/WABA token bypasses the
-    # selected employee line and may deliver from the wrong account (or fail
-    # entirely).  Templates keep their own explicit WABA route elsewhere.
-    use_cloud = False
-    if use_cloud:
-        if not is_funnel_chat(chat_id) and not is_admin(chat_id):
-            return web.json_response({"success": False, "error": "Access denied"}, status=403)
-        hinted_customer = str(hinted_customer or "").strip()
-        incoming_phone = str(incoming_phone or "").strip()
-        header_digits = re.sub(r"\D", "", hinted_customer)[-9:]
-        incoming_digits = re.sub(r"\D", "", incoming_phone)[-9:]
-        header_matches = len(header_digits) >= 9 and header_digits == incoming_digits
-        if incoming_phone and not header_matches:
-            known_phones = [incoming_phone]
-        elif hinted_customer and (header_matches or not incoming_phone):
-            known_phones = [hinted_customer]
-        else:
-            known_phones = await asyncio.to_thread(_phones_for_wa_lead, lead_id)
-        if not known_phones:
-            return web.json_response({"success": False, "error": "Müştəri nömrəsi tapılmadı."}, status=400)
-        lead = {"id": lead_id, "phone": known_phones[0], "phones": known_phones}
-    else:
-        lead, err = _authorized_deal_lead(chat_id, lead_id)
-        if err:
-            return err
-    if use_cloud:
-        reply_talk_id, reply_chat_id = 0, ""
-    else:
-        reply_talk_id, reply_chat_id = _resolve_channel_talk(lead, channel, sender_digits, hinted_talk)
-    if not reply_talk_id and not use_cloud:
-        return web.json_response({"success": False, "error": f"{CHAT_CHANNEL_LABELS.get(channel, channel)} çatı tapılmadı."}, status=400)
-    logger.info("Chat delivery route: lead=%s channel=%s talk=%s chat=%s", lead_id, channel, reply_talk_id, reply_chat_id or "-")
-    wa_quote_id = _first_wamid(reply_external, reply_to_message_id)
-    want_quote = bool(reply_to_message_id or reply_external or reply_preview)
     drive_uuid = ""
-    drive_version = ""
-    attachment = None
     is_voice = False
     if upload_raw:
-        is_voice = form_is_voice or _looks_voice_upload(upload_name, upload_type)
-        if not use_cloud:
-            if is_voice:
-                converted, conv_mime, conv_name = _ffmpeg_voice_for_kommo(upload_raw, upload_name)
-                if converted:
-                    upload_raw = converted
-                    upload_type = conv_mime
-                    upload_name = conv_name
-            # Drive keeps a durable copy so the file stays playable inside the app.
-            drive_uuid, drive_version = _upload_kommo_drive_bytes(upload_name, upload_raw, upload_type)
-            if not drive_uuid or not drive_version:
-                return web.json_response({"success": False, "error": "Fayl yüklənmədi"}, status=400)
-            attachment = {
-                "type": "voice" if is_voice else _attachment_kind(upload_name, upload_type),
-                "drive_uuid": drive_uuid,
-                "drive_version_uuid": drive_version,
-                "is_voice": is_voice,
-            }
-    ok = False
-    last_error = ""
-    sent_wamid = ""
-    sent_via_cloud = False
-    sent_text = text
-    sent_type = "text"
-    sent_media_id = ""
-    cloud_quote = wa_quote_id if str(wa_quote_id or "").lower().startswith("wamid") else ""
-    if use_cloud:
-        ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.get_running_loop().run_in_executor(
-            _wa_io,
-            _deliver_via_cloud,
-            lead,
-            text,
-            upload_raw,
-            upload_name,
-            upload_type,
-            cloud_quote,
-            sender_digits,
-        )
-        sent_via_cloud = ok
-        if not ok and cloud_quote and "24 saat" not in str(last_error or ""):
-            ok, last_error, sent_wamid, sent_type, sent_media_id = await asyncio.get_running_loop().run_in_executor(
-                _wa_io,
-                _deliver_via_cloud,
-                lead,
-                text,
-                upload_raw,
-                upload_name,
-                upload_type,
-                "",
-                sender_digits,
+        is_voice = message.is_voice or _looks_voice_upload(upload_name, upload_type)
+        if is_voice:
+            converted, conv_mime, conv_name = _ffmpeg_voice_for_kommo(
+                upload_raw, upload_name
             )
-            sent_via_cloud = ok
-        if ok and not str(sent_wamid or "").lower().startswith("wamid"):
-            ok = False
-            sent_via_cloud = False
-            if not last_error:
-                last_error = "WhatsApp mesajı göndərilmədi."
-    # Send through the resolved Kommo Talk for every supported channel.
-    # The prior condition excluded WhatsApp while the Cloud path is disabled,
-    # leaving the actual grey-WhatsApp send branch unreachable.
-    if not ok and reply_talk_id:
-        kommo_text = text
-        if upload_raw and not kommo_text:
-            if is_voice:
-                kommo_text = ""
-            else:
-                kommo_text = upload_name or "Fayl"
-        quote_ids = _kommo_quote_ids(reply_external, reply_to_message_id)
-        social_quote = channel in {"tiktok", "telegram", "instagram", "facebook"}
-        if channel == "whatsapp":
-            if is_voice:
-                # In WhatsApp, audio with any text caption is sent as a file/document card.
-                # Sending with empty text allows Kommo WhatsApp Lite to deliver it as a native PTT voice note.
-                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                    reply_talk_id,
-                    "",
-                    attachment,
-                )
-                if kommo_ok:
-                    ok = True
-                    last_error = ""
-                    sent_text = VOICE_CAPTION_TEXT
-                    if text:
-                        _send_kommo_talk_message(reply_talk_id, text)
-                elif kommo_error:
-                    last_error = kommo_error
-            else:
-                if reply_preview:
-                    kommo_text = _with_quiet_quote(kommo_text, reply_preview)
-                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                    reply_talk_id,
-                    kommo_text,
-                    attachment,
-                )
-                if kommo_ok:
-                    ok = True
-                    last_error = ""
-                    sent_text = kommo_text
-                elif kommo_error:
-                    last_error = kommo_error
-        else:
-            for quote_id in quote_ids[:2]:
-                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                    reply_talk_id,
-                    kommo_text,
-                    attachment,
-                    reply_to=quote_id,
-                    chat_id=reply_chat_id,
-                    reply_text=reply_preview,
-                    plain_fallback=False,
-                )
-                if kommo_ok:
-                    ok = True
-                    last_error = ""
-                    sent_text = kommo_text
-                    break
-                if kommo_error and not last_error:
-                    last_error = kommo_error
-            if not ok:
-                fallback_text = kommo_text
-                if social_quote and reply_preview:
-                    fallback_text = _with_visible_quote(kommo_text, reply_preview)
-                kommo_ok, kommo_error, _status = _send_kommo_talk_message(
-                    reply_talk_id,
-                    fallback_text,
-                    attachment,
-                )
-                if kommo_ok:
-                    ok = True
-                    last_error = ""
-                    sent_text = fallback_text
-                elif kommo_error and not last_error:
-                    last_error = kommo_error
-    if not ok:
-        detail = last_error
-        logger.warning("Chat delivery failed: lead=%s channel=%s talk=%s error=%s", lead_id, channel, reply_talk_id, str(last_error or "unknown")[:300])
-        if not last_error or last_error.startswith("{") or "validation" in last_error.lower():
-            last_error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
-        return web.json_response({"success": False, "error": last_error, "detail": detail}, status=400)
-    # Kommo returns 2xx before an external social network confirms delivery.
-    # Verify just once, without polling, so provider-side failures are not
-    # shown to employees as a false successful send.
+            if converted:
+                upload_raw = converted
+                upload_type = conv_mime
+                upload_name = conv_name
+        drive_uuid, drive_version = _upload_kommo_drive_bytes(
+            upload_name, upload_raw, upload_type
+        )
+        if not drive_uuid or not drive_version:
+            return web.json_response(
+                {"success": False, "error": "Fayl yüklənmədi"}, status=400
+            )
+        attachment = {
+            "type": "voice" if is_voice else _attachment_kind(upload_name, upload_type),
+            "drive_uuid": drive_uuid,
+            "drive_version_uuid": drive_version,
+            "is_voice": is_voice,
+        }
+
+    quote_ids = _kommo_quote_ids(
+        message.reply_external_id, message.reply_to_message_id
+    )
+    delivery = deliver_kommo_message(
+        channel=message.channel,
+        talk_id=reply_talk_id,
+        chat_id=reply_chat_id,
+        text=message.text,
+        upload_name=upload_name,
+        is_voice=is_voice,
+        attachment=attachment,
+        reply_ids=quote_ids,
+        reply_preview=message.reply_preview,
+        voice_caption=VOICE_CAPTION_TEXT,
+        send_message=_send_kommo_talk_message,
+        quiet_quote=_with_quiet_quote,
+        visible_quote=_with_visible_quote,
+    )
+    if not delivery.ok:
+        detail = delivery.error
+        logger.warning(
+            "Chat delivery failed: lead=%s channel=%s talk=%s error=%s",
+            message.lead_id,
+            message.channel,
+            reply_talk_id,
+            str(delivery.error or "unknown")[:300],
+        )
+        error = delivery.error
+        if not error or error.startswith("{") or "validation" in error.lower():
+            error = "Fayl göndərilmədi." if upload_raw else "Mesaj göndərilmədi."
+        return web.json_response(
+            {"success": False, "error": error, "detail": detail}, status=400
+        )
+
     delivery_status = "sent"
-    # Kommo answers with 202 before the external messenger confirms delivery.
-    # Check WhatsApp as well as the social channels: a disconnected WhatsApp
-    # number is otherwise reported as sent for a few seconds and only later
-    # turns into a failed message in the chat.  This is especially important
-    # for the grey integration, where the provider error is asynchronous.
-    if not sent_via_cloud and channel in {"whatsapp", "instagram", "tiktok", "facebook", "telegram"}:
-        delivery_status = "pending"
-        sent_at_for_check = int(_time_module.time())
+    if message.channel in {"whatsapp", "instagram", "tiktok", "facebook", "telegram"}:
         delivery_status = await asyncio.to_thread(
             _recent_talk_delivery_status,
             reply_talk_id,
-            sent_text or text,
-            sent_at_for_check,
+            delivery.sent_text or message.text,
+            int(_time_module.time()),
         )
         if delivery_status == "error":
-            channel_label = CHAT_CHANNEL_LABELS.get(channel, channel)
-            if channel == "whatsapp":
-                message = (
+            channel_label = CHAT_CHANNEL_LABELS.get(
+                message.channel, message.channel
+            )
+            if message.channel == "whatsapp":
+                error = (
                     "WhatsApp mesajı Kommo tərəfindən qəbul edildi, amma seçilmiş WhatsApp söhbəti "
                     "göndərişi rədd etdi (xəta 3136). Nömrə aktiv görünür; səbəb söhbətin kanal qaydası "
                     "və ya son müştəri mesajından sonra istifadə olunan göndəriş növü ola bilər."
                 )
             else:
-                message = (
+                error = (
                     f"{channel_label} mesajı Kommo-da qəbul edildi, amma kanal çatdırmadı. "
-                    "Kommo-da həmin kanalın bağlantısını yenidən qoşun və müştərinin son mesajından sonra cavab müddətini yoxlayın."
+                    "Kommo-da həmin kanalın bağlantısını yenidən qoşun və müştərinin son "
+                    "mesajından sonra cavab müddətini yoxlayın."
                 )
-            logger.warning("Social chat provider rejected: lead=%s channel=%s talk=%s", lead_id, channel, reply_talk_id)
-            return web.json_response({"success": False, "error": message, "delivery_status": "error"}, status=409)
-    tail_text = text or _clean_body_text(sent_text) or (VOICE_CAPTION_TEXT if upload_raw and is_voice else upload_name or text)
-    cloud_media_url = f"/api/wa/media/{sent_media_id}" if sent_media_id else ""
-    if sent_via_cloud:
-        # The app renders Kommo message types, so translate the Cloud API kind.
-        local_type = {"image": "picture", "document": "file", "audio": "audio"}.get(sent_type, sent_type)
-        sent_item = _sent_message_item(
-            wamid=sent_wamid,
-            text=tail_text,
-            author=employee_name_for_lead(lead),
-            message_type=local_type,
-            file_uuid=drive_uuid,
-            media_url=cloud_media_url,
-            file_name="" if local_type == "audio" else upload_name,
-            reply_id=reply_to_message_id or wa_quote_id,
-            reply_text=reply_preview,
-            reply_author=reply_author,
-            phone=str((lead.get("phones") or [""])[0] or ""),
-        )
-        sent_item["phone_number_id"] = _wa_phone_id_for_digits(sender_digits)
+            logger.warning(
+                "Social chat provider rejected: lead=%s channel=%s talk=%s",
+                message.lead_id,
+                message.channel,
+                reply_talk_id,
+            )
+            return web.json_response(
+                {"success": False, "error": error, "delivery_status": "error"},
+                status=409,
+            )
+
+    quote_message_id = _first_wamid(
+        message.reply_external_id, message.reply_to_message_id
+    )
+    tail_text = (
+        message.text
+        or _clean_body_text(delivery.sent_text)
+        or (VOICE_CAPTION_TEXT if upload_raw and is_voice else upload_name)
+    )
     sent_row = {
-        "id": f"sent-{sent_wamid or uuid.uuid4().hex}",
-        "external_id": str(sent_wamid or ""),
+        "id": f"sent-{uuid.uuid4().hex}",
+        "external_id": "",
         "incoming": False,
         "direction": "outgoing",
         "text": tail_text,
         "created_at": int(_time_module.time()),
-        "message_type": local_type if sent_via_cloud else ("audio" if upload_raw and is_voice else "text"),
-        "channel": channel,
+        "message_type": "audio" if upload_raw and is_voice else "text",
+        "channel": message.channel,
         "author": employee_name_for_lead(lead),
         "delivery_status": delivery_status,
         "file_name": "" if upload_raw and is_voice else upload_name,
         "file_uuid": drive_uuid,
-        "media_url": cloud_media_url,
-        "reply_to_message_id": reply_to_message_id or wa_quote_id,
-        "reply_to_text": reply_preview,
-        "reply_to_author": reply_author,
+        "media_url": "",
+        "reply_to_message_id": message.reply_to_message_id or quote_message_id,
+        "reply_to_text": message.reply_preview,
+        "reply_to_author": message.reply_author,
     }
-    if sent_via_cloud:
-        lid_int = int(lead.get("id") or lead_id)
-        chat = [sent_row]
-        customer_phone = str((lead.get("phones") or [""])[0] or "")
-        asyncio.create_task(asyncio.to_thread(_persist_cloud_outgoing, lid_int, sent_item, customer_phone, sent_row))
-        _invalidate_deal_chat_cache(lid_int)
-        record_lead_pulse_event(
-            lid_int, "deal_outgoing", preview=tail_text, incoming_at=0, channel="whatsapp",
-            wa_line=_wa_line_for_phone_id(_wa_phone_id_for_digits(sender_digits)),
-        )
-        cloud_ready = _wa_cloud_ready(sender_digits)
-        return web.json_response({
-            "success": True,
-            "chat": chat,
-            "chat_blocked": False,
-            "reply_talk_id": 0,
-            "has_more": False,
-            "channel": "whatsapp",
-            "channels": [{
-                "key": "whatsapp",
-                "label": CHAT_CHANNEL_LABELS.get("whatsapp", "WhatsApp"),
-                "talk_id": 0,
-                "chat_id": "",
-                "open": True,
-                "sender_phone": _wa_display_number(sender_digits),
-            }],
-            "can_reply": cloud_ready,
-            "delivery_status": "sent",
-            "media_url": cloud_media_url,
-        })
-    _append_chat_tail(int(lead.get("id") or lead_id), sent_row)
+    lead_id = int(lead.get("id") or message.lead_id)
+    _append_chat_tail(lead_id, sent_row)
     contact_ids = _lead_contact_ids(lead)
-    chat, chat_blocked, reply_talk_id, has_more, channels, channel = _collect_deal_chat(
-        int(lead.get("id") or lead_id),
-        contact_ids,
-        limit=20,
-        channel=channel,
-        sender_digits=sender_digits,
-        employee_name=employee_name_for_lead(lead),
+    chat, chat_blocked, resolved_talk_id, has_more, channels, channel = (
+        _collect_deal_chat(
+            lead_id,
+            contact_ids,
+            limit=20,
+            channel=message.channel,
+            sender_digits=sender_digits,
+            employee_name=employee_name_for_lead(lead),
+        )
     )
     _apply_saved_replies(chat)
-    _store_chat_tail(int(lead.get("id") or lead_id), chat)
-    if reply_to_message_id:
-        _stamp_sent_reply(chat, text, reply_to_message_id, reply_preview, reply_author)
-    lid_int = int(lead.get("id") or lead_id)
-    _invalidate_deal_chat_cache(lid_int)
-    record_lead_pulse_event(lid_int, "deal_outgoing", preview=tail_text, incoming_at=0)
+    _store_chat_tail(lead_id, chat)
+    if message.reply_to_message_id:
+        _stamp_sent_reply(
+            chat,
+            message.text,
+            message.reply_to_message_id,
+            message.reply_preview,
+            message.reply_author,
+        )
+    _invalidate_deal_chat_cache(lead_id)
+    record_lead_pulse_event(
+        lead_id, "deal_outgoing", preview=tail_text, incoming_at=0
+    )
     return web.json_response({
         "success": True,
         "chat": chat,
         "chat_blocked": chat_blocked,
-        "reply_talk_id": reply_talk_id,
+        "reply_talk_id": resolved_talk_id,
         "has_more": has_more,
         "channel": channel,
         "channels": channels,
         "delivery_status": delivery_status,
-        "media_url": cloud_media_url,
+        "media_url": "",
     })
 
 

@@ -525,5 +525,10 @@ policies.notifications — типы уведомлений</pre>
 <h2>Legacy карточки задач получили единый presenter · 12 октября 2026</h2>
 <p>Разбор маркера исполнителя, стоимости, срока и просрочки вынесен в чистый модуль <code>legacy_task_presenter.py</code>. Регулярные выражения компилируются один раз, а список задач использует единые функции форматирования. Отдельные тесты покрывают короткие имена, оба старых формата цены и сроки.</p>
 </section>
+<section class="wrap card" id="legacy-chat-send-refactor">
+<h2>Legacy отправка сообщений разделена по слоям · 12 октября 2026</h2>
+<p>Парсинг JSON/multipart, ограничения текста и файла вынесены в <code>legacy_chat_send_request.py</code>. Отправка через выбранный Kommo Talk, ответы на сообщения и fallback социальных каналов находятся в <code>legacy_chat_delivery.py</code>. HTTP-обработчик сокращён с 388 до 197 строк и отвечает только за авторизацию сделки, Drive-вложение, проверку доставки и обновление истории.</p>
+<p>Недостижимая ветка WhatsApp Cloud/WABA и три использовавшиеся только ею функции удалены. Рабочая отправка WhatsApp, Instagram, TikTok, Facebook и Telegram остаётся через фактически выбранный профиль Kommo. Старый GET <code>/api/deal/chat</code> уже возвращал 410 до этого этапа; его недостижимые 315 строк удалены, а поддерживаемая полная история остаётся на <code>/api/deal/chat/history</code>.</p>
+</section>
 <footer class="wrap">CRM Smart Assistant · BeinSystems · Документ обновляется вместе с SaaS-архитектурой.</footer>
 </body></html>

@@ -55,6 +55,15 @@ class LegacyActionDispatcherArchitectureTests(unittest.TestCase):
         self.assertIn("_resolve_pending_stage_change", functions)
         self.assertIn("_resolve_pending_executor_change", functions)
 
+    def test_deal_chat_send_endpoint_is_a_bounded_coordinator(self):
+        functions = self._functions()
+        handler = functions["handle_api_deal_chat_send"]
+        self.assertLessEqual(handler.end_lineno - handler.lineno + 1, 210)
+        retired_reader = functions["handle_api_deal_chat"]
+        self.assertLessEqual(
+            retired_reader.end_lineno - retired_reader.lineno + 1, 5
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
