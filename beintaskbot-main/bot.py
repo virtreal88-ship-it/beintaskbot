@@ -107,6 +107,12 @@ from legacy_action_task_sessions import TaskSessionContext, handle_task_session_
 from legacy_action_finance import PayoutContext, handle_payout
 from legacy_action_task_updates import TaskUpdateContext, handle_task_update_action
 from legacy_action_deal_routing import DealRoutingContext, handle_deal_edit
+from legacy_task_presenter import (
+    TASK_TYPE_NAMES as NOTIFICATION_TASK_TYPE_NAMES,
+    assignee_from_marker,
+    deadline_view,
+    price_from_marker,
+)
 from legacy_inbox_pulse import append_inbox_event, inbox_events_since
 from legacy_kommo_transport import install_legacy_kommo_transport
 from legacy_kommo_pipeline_catalog import (
@@ -822,6 +828,99 @@ def _apply_pending_kpi_stars(action_data: dict, stars: int) -> bool:
     return bool(saved)
 
 
+def _resolve_pending_stage_change(
+    action_id: str,
+    requested_stage: str,
+    lead_id: int | str | None,
+) -> tuple[bool, str]:
+    """Change a pending card's deal stage without resolving the card."""
+    stage_alias = {"uğurlu": "ugurlu", "i̇mtina": "imtina", "imtina": "imtina"}
+    alias_key = stage_alias.get(requested_stage.casefold())
+    status_id = STAGES.get(alias_key) if alias_key else STAGES.get(requested_stage.casefold())
+    if not status_id:
+        status_id = next(
+            (sid for sid, name in STAGE_NAMES.items() if name.casefold() == requested_stage.casefold()),
+            None,
+        )
+    if not status_id:
+        status_id = next(
+            (sid for sid, name in STAGE_NAMES.items() if requested_stage.casefold() in name.casefold()),
+            None,
+        )
+    if not lead_id:
+        return False, "Lead ID tapılmadı. Köhnə sorğu ola bilər."
+    if not status_id:
+        return False, f"Mərhələ tapılmadı: {requested_stage}"
+    if not update_lead_kommo(
+        int(lead_id),
+        {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
+    ):
+        return False, "Kommo mərhələsi dəyişdirilmədi."
+    new_stage_display = STAGE_NAMES.get(int(status_id), requested_stage)
+    actions = get_pending_actions()
+    for pending_action in actions:
+        if pending_action.get("id") == action_id:
+            pending_action.setdefault("data", {})["stage_name"] = new_stage_display
+            break
+    write_json(_PENDING_ACTIONS_FILE, actions)
+    return True, f"Mərhələ dəyişdirildi: {new_stage_display}. Sorğu hələ açıqdır."
+
+
+def _resolve_pending_executor_change(
+    action_id: str,
+    choice: str,
+    action_data: dict,
+) -> tuple[bool, str]:
+    """Assign the task behind a pending card and close that card."""
+    task_id = action_data.get("task_id")
+    if choice == "Özüm":
+        new_responsible = 10932455
+        new_name = "Nizami Qasımov"
+    else:
+        new_name = _PENDING_EXECUTOR_NAMES.get(choice)
+        if not new_name:
+            return False, "İcraçı tanınmadı."
+        new_responsible = 10932455
+    if task_id:
+        update_task_kommo(task_id, {"responsible_user_id": new_responsible})
+        new_chat = NAME_TO_CHAT.get(new_name)
+        if new_chat and new_chat != ADMIN_CHAT_ID:
+            client = action_data.get("contact_name", "")
+            task_desc = action_data.get("task_text", "")
+            link = action_data.get("link", "")
+            try:
+                asyncio.ensure_future(_bot_app.bot.send_message(
+                    new_chat,
+                    f"📨 *Sizə yeni tapşırıq təyin edildi!*\n\n📝 {task_desc}\n👤 {client}\n🔗 {link}",
+                    parse_mode="Markdown", disable_web_page_preview=True,
+                ))
+                send_push_notification(str(new_chat), "📨 Yeni tapşırıq!", f"{client} - {task_desc}")
+                remember_staff_notice(
+                    new_chat, "new_task", "Yeni tapşırıq!", f"{client} - {task_desc}",
+                    int(action_data.get("lead_id") or 0),
+                )
+            except Exception:
+                pass
+    sender_name = action_data.get("sender_name", "")
+    sender_chat = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(sender_name)
+    if sender_chat and int(sender_chat) != ADMIN_CHAT_ID:
+        client = action_data.get("contact_name", "")
+        task_text = action_data.get("task_text", "")
+        try:
+            asyncio.ensure_future(_bot_app.bot.send_message(
+                int(sender_chat),
+                f"✅ Sizin tapşırığınız təyin edildi:\n\n📝 {task_text}\n👤 {client}\n👷 İcraçı: {new_name}",
+                parse_mode="Markdown", disable_web_page_preview=True,
+            ))
+            send_push_notification(
+                str(sender_chat), "✅ Tapşırıq təyin edildi", f"{client} - {new_name}"
+            )
+        except Exception:
+            pass
+    mark_pending_action_resolved(action_id, f"İcraçı: {new_name}")
+    return True, f"İcraçı təyin edildi: {new_name}"
+
+
 def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, stars: int = 0, amount: float = 0) -> tuple[bool, str]:
     """Execute one persisted admin action and resolve it only after success."""
     actions = get_pending_actions()
@@ -847,91 +946,12 @@ def resolve_pending_action(action_id: str, choice: str, kpi_score: int = 0, star
     # ── Universal stage change: choice="stage_change:{stage_key_or_name}" works for ANY action type ──
     if choice.startswith("stage_change:"):
         requested_stage = choice.split(":", 1)[1].strip()
-        # Short display names from PWA dropdown -> STAGES keys
-        _stage_alias = {"uğurlu": "ugurlu", "i\u0307mtina": "imtina", "imtina": "imtina"}
-        alias_key = _stage_alias.get(requested_stage.casefold())
-        status_id = STAGES.get(alias_key) if alias_key else STAGES.get(requested_stage.casefold())
-        if not status_id:
-            status_id = next(
-                (sid for sid, dn in STAGE_NAMES.items() if dn.casefold() == requested_stage.casefold()),
-                None,
-            )
-        if not status_id:
-            # Try partial match
-            status_id = next(
-                (sid for sid, dn in STAGE_NAMES.items() if requested_stage.casefold() in dn.casefold()),
-                None,
-            )
-        if not lead_id:
-            return False, "Lead ID tapılmadı. Köhnə sorğu ola bilər."
-        if not status_id:
-            return False, f"Mərhələ tapılmadı: {requested_stage}"
-        if not update_lead_kommo(
-            int(lead_id),
-            {"status_id": int(status_id), "pipeline_id": PIPELINE_ID},
-        ):
-            return False, "Kommo mərhələsi dəyişdirilmədi."
-        new_stage_display = STAGE_NAMES.get(int(status_id), requested_stage)
-        # Do NOT resolve the action — only change stage. Card stays until swipe-right Təsdiq et.
-        # Update stage_name in action data for display
-        actions = get_pending_actions()
-        for a in actions:
-            if a.get("id") == action_id:
-                a.setdefault("data", {})["stage_name"] = new_stage_display
-                break
-        write_json(_PENDING_ACTIONS_FILE, actions)
-        return True, f"Mərhələ dəyişdirildi: {new_stage_display}. Sorğu hələ açıqdır."
+        return _resolve_pending_stage_change(action_id, requested_stage, lead_id)
 
     # ── Universal executor change: choice is an executor short name, card does NOT close ──
     _executor_short_names = set(_PENDING_EXECUTOR_NAMES) | {"Özüm"}
     if choice in _executor_short_names and action_type != "assign_executor":
-        # Update existing task's responsible user in Kommo
-        task_id = action_data.get("task_id")
-        if choice == "\u00d6z\u00fcm":
-            new_responsible = 10932455
-            new_name = "Nizami Qas\u0131mov"
-        else:
-            full_name = _PENDING_EXECUTOR_NAMES.get(choice)
-            if not full_name:
-                return False, "\u0130cra\u00e7\u0131 tan\u0131nmad\u0131."
-            new_responsible = 10932455
-            new_name = full_name
-        if task_id:
-            update_data = {"responsible_user_id": new_responsible}
-            update_task_kommo(task_id, update_data)
-            # Notify new assignee about the transfer
-            _new_chat = NAME_TO_CHAT.get(new_name)
-            if _new_chat and _new_chat != ADMIN_CHAT_ID:
-                _client = action_data.get("contact_name", "")
-                _task_desc = action_data.get("task_text", "")
-                _link = action_data.get("link", "")
-                try:
-                    import asyncio
-                    asyncio.ensure_future(_bot_app.bot.send_message(
-                        _new_chat,
-                        f"\ud83d\udce8 *Siz\u0259 yeni tap\u015f\u0131r\u0131q t\u0259yin edildi!*\n\n\ud83d\udcdd {_task_desc}\n\ud83d\udc64 {_client}\n\ud83d\udd17 {_link}",
-                        parse_mode="Markdown", disable_web_page_preview=True))
-                    send_push_notification(str(_new_chat), '\ud83d\udce8 Yeni tap\u015f\u0131r\u0131q!', f'{_client} - {_task_desc}')
-                    remember_staff_notice(_new_chat, "new_task", "Yeni tapşırıq!", f"{_client} - {_task_desc}", int(action_data.get("lead_id") or 0))
-                except: pass
-        # Notify cavabdeh (creator) about executor assignment
-        _sender_name_uc = action_data.get("sender_name", "")
-        _sender_chat_uc = action_data.get("sender_chat_id") or NAME_TO_CHAT.get(_sender_name_uc)
-        if _sender_chat_uc and int(_sender_chat_uc) != ADMIN_CHAT_ID:
-            _client_uc = action_data.get("contact_name", "")
-            _task_uc = action_data.get("task_text", "")
-            try:
-                import asyncio
-                asyncio.ensure_future(_bot_app.bot.send_message(
-                    int(_sender_chat_uc),
-                    f"\u2705 Sizin tap\u015f\u0131r\u0131\u011f\u0131n\u0131z t\u0259yin edildi:\n\n\ud83d\udcdd {_task_uc}\n\ud83d\udc64 {_client_uc}\n\ud83d\udc77 \u0130cra\u00e7\u0131: {new_name}",
-                    parse_mode="Markdown", disable_web_page_preview=True))
-                send_push_notification(str(_sender_chat_uc), '\u2705 Tap\u015f\u0131r\u0131q t\u0259yin edildi', f'{_client_uc} - {new_name}')
-            except Exception:
-                pass
-        # Resolve card (remove from pending)
-        mark_pending_action_resolved(action_id, f"\u0130cra\u00e7\u0131: {new_name}")
-        return True, f"\u0130cra\u00e7\u0131 t\u0259yin edildi: {new_name}"
+        return _resolve_pending_executor_change(action_id, choice, action_data)
 
     if action_type == "assign_executor":
         if choice == "Təsdiq et":
@@ -6795,6 +6815,158 @@ async def _handle_legacy_update_task(data: dict, chat_id: int, phone: str) -> we
         return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
 
 
+def _notify_legacy_task_completion(
+    *,
+    chat_id: int,
+    task_id: int,
+    task_data: dict,
+    task_type_id: int,
+    task_deadline_ts: int,
+    kpi_result: dict | None,
+    delay_reason: str,
+    lead_id: int | None,
+    contact_name: str,
+    phone: str,
+    note_text: str,
+    task_result_text: str,
+    link: str,
+    _task_creator_is_rufat: bool,
+) -> None:
+    """Send completion approval and creator notifications for a legacy task."""
+    try:
+      logger.info("complete_task: ENTERING notification block")
+      task_text_full = task_data.get("text", "").strip()
+      task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
+      task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
+      completion_sender = get_employee_name_by_chat_id(
+          chat_id,
+          KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
+      )
+      # Queue piecework earnings for Admin confirmation and persist the
+      # task context needed by the redesigned balance history.
+      try:
+          # Price can be in [Price] or [Name:Price] format
+          price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
+          if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
+              amount = float(price_match.group(1))
+              if amount > 0:
+                  add_balance_transaction(
+                      chat_id,
+                      int(task_id),
+                      amount,
+                      price_match.group(2) or task_text_full,
+                      executor_name=completion_sender,
+                      client=contact_name or "—",
+                      phone=phone or "—",
+                      task_type=task_type_name,
+                      result_text=note_text or task_result_text,
+                      kpi=0,
+                      status="pending",
+                  )
+      except Exception as balance_error:
+          logger.error(f"Pending balance transaction error: {balance_error}")
+
+      admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
+      logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
+
+      # Completion review is an explicit per-employee setting. No
+      # stage change ever creates an Admin confirmation.
+      if admin_chat and employee_requires_completion_approval(chat_id):
+          deadline_display = (
+              datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
+              if task_deadline_ts else "—"
+          )
+          kpi_info = ""
+          if kpi_result:
+              timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
+              kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
+              if delay_reason:
+                  kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
+
+          # Get current deal stage
+          current_stage_name = "—"
+          if lead_id:
+              try:
+                  lead_detail = get_lead_details(int(lead_id))
+                  if lead_detail:
+                      current_status_id = lead_detail.get("status_id")
+                      current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
+              except Exception:
+                  pass
+          completion_message = (
+              f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
+              f"👤 {contact_name or '—'}\n"
+              f"📝 {task_desc_display or '—'}\n"
+              f"📞 {phone or '—'}\n"
+              f"⏰ {deadline_display}\n"
+              f"📋 {task_type_name}\n"
+              f"📌 Mərhələ: {current_stage_name}"
+          )
+          if note_text:
+              completion_message += f"\n💬 İcraçı qeydi: {note_text}"
+          completion_message += kpi_info
+          if link:
+              completion_message += f"\n🔗 {link}"
+
+          raw_task_text = task_data.get("text", "").strip()
+          task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
+          try:
+              _http.post(
+                  f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                  json={
+                      "chat_id": admin_chat,
+                      "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
+                      "disable_web_page_preview": True,
+                  },
+                  timeout=8
+              )
+              save_pending_action("change_stage", {
+                  "contact_name": contact_name or "—",
+                  "phone": phone or "—",
+                  "lead_id": lead_id,
+                  "task_id": int(task_id),
+                  "sender_name": completion_sender,
+                  "sender_chat_id": int(chat_id),
+                  "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
+                  "task_price": task_price_match.group(1) if task_price_match else "",
+                  "note": note_text or "",
+                  "completion_kind": "employee_review",
+                  "stage_name": current_stage_name,
+                  "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
+                  "link": link,
+              }, ["Təsdiq et", "Rədd et"])
+              send_push_to_admin(
+                  f"{completion_sender}: {contact_name or '—'}",
+                  title="✅ Sifariş tamamlandı — təsdiq gözləyir",
+                  url="#pending",
+              )
+          except Exception as notify_error:
+              logger.error(f"Completion notification error: {notify_error}")
+
+      # Notify the task creator independently of the Admin confirmation
+      # flow. In particular, Rüfət receives his own tasks' completion
+      # notice, even though Nizami receives no confirmation request.
+      try:
+          _creators_data = read_json(_TASK_CREATORS_FILE) or {}
+          _creator_name = _creators_data.get(str(task_id), "")
+          _creator_chat = RUFAT_CHAT_ID if _task_creator_is_rufat else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
+          if _creator_chat and int(_creator_chat) != int(chat_id):
+              _c_cn = contact_name or "—"
+              _c_td = task_desc_display or "—"
+              _c_ph = phone or "—"
+              _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
+                  f"👤 {_c_cn}\n"
+                  f"📝 {_c_td}\n"
+                  f"👷 İcraçı: {completion_sender}\n"
+                  f"📞 {_c_ph}")
+              if link: _creator_msg += f"\n🔗 {link}"
+              _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                  json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
+      except Exception as _cav_err:
+          logger.warning(f"Cavabdeh notification error: {_cav_err}")
+    except Exception as notif_block_err:
+      logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
+
 async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> web.Response:
     try:
         task_id = int(data.get("task_id"))
@@ -6967,147 +7139,25 @@ async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> 
 
     # A task created by Rüfət is handled by his admin account; do not
     # send its completion to Nizami for confirmation.
-    if not is_admin(chat_id):  # Admin doesn't need self-confirmation
-      try:
-        logger.info("complete_task: ENTERING notification block")
-        task_text_full = task_data.get("text", "").strip()
-        task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
-        task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
-        completion_sender = get_employee_name_by_chat_id(
-            chat_id,
-            KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
+    if not is_admin(chat_id):
+        _notify_legacy_task_completion(
+            chat_id=chat_id,
+            task_id=int(task_id),
+            task_data=task_data,
+            task_type_id=task_type_id,
+            task_deadline_ts=task_deadline_ts,
+            kpi_result=kpi_result,
+            delay_reason=delay_reason,
+            lead_id=int(lead_id) if lead_id else None,
+            contact_name=contact_name,
+            phone=phone,
+            note_text=note_text,
+            task_result_text=task_result_text,
+            link=link,
+            _task_creator_is_rufat=_task_creator_is_rufat,
         )
-        # Queue piecework earnings for Admin confirmation and persist the
-        # task context needed by the redesigned balance history.
-        try:
-            # Price can be in [Price] or [Name:Price] format
-            price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
-            if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
-                amount = float(price_match.group(1))
-                if amount > 0:
-                    add_balance_transaction(
-                        chat_id,
-                        int(task_id),
-                        amount,
-                        price_match.group(2) or task_text_full,
-                        executor_name=completion_sender,
-                        client=contact_name or "—",
-                        phone=phone or "—",
-                        task_type=task_type_name,
-                        result_text=note_text or task_result_text,
-                        kpi=0,
-                        status="pending",
-                    )
-        except Exception as balance_error:
-            logger.error(f"Pending balance transaction error: {balance_error}")
-
-        admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
-        logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
-
-        # Completion review is an explicit per-employee setting. No
-        # stage change ever creates an Admin confirmation.
-        if admin_chat and employee_requires_completion_approval(chat_id):
-            deadline_display = (
-                datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-                if task_deadline_ts else "—"
-            )
-            kpi_info = ""
-            if kpi_result:
-                timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
-                kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
-                if delay_reason:
-                    kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
-
-            # Get current deal stage
-            current_stage_name = "—"
-            if lead_id:
-                try:
-                    lead_detail = get_lead_details(int(lead_id))
-                    if lead_detail:
-                        current_status_id = lead_detail.get("status_id")
-                        current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
-                except Exception:
-                    pass
-            completion_message = (
-                f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
-                f"👤 {contact_name or '—'}\n"
-                f"📝 {task_desc_display or '—'}\n"
-                f"📞 {phone or '—'}\n"
-                f"⏰ {deadline_display}\n"
-                f"📋 {task_type_name}\n"
-                f"📌 Mərhələ: {current_stage_name}"
-            )
-            if note_text:
-                completion_message += f"\n💬 İcraçı qeydi: {note_text}"
-            completion_message += kpi_info
-            if link:
-                completion_message += f"\n🔗 {link}"
-
-            raw_task_text = task_data.get("text", "").strip()
-            task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
-            try:
-                _http.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": admin_chat,
-                        "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
-                        "disable_web_page_preview": True,
-                    },
-                    timeout=8
-                )
-                save_pending_action("change_stage", {
-                    "contact_name": contact_name or "—",
-                    "phone": phone or "—",
-                    "lead_id": lead_id,
-                    "task_id": int(task_id),
-                    "sender_name": completion_sender,
-                    "sender_chat_id": int(chat_id),
-                    "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
-                    "task_price": task_price_match.group(1) if task_price_match else "",
-                    "note": note_text or "",
-                    "completion_kind": "employee_review",
-                    "stage_name": current_stage_name,
-                    "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
-                    "link": link,
-                }, ["Təsdiq et", "Rədd et"])
-                send_push_to_admin(
-                    f"{completion_sender}: {contact_name or '—'}",
-                    title="✅ Sifariş tamamlandı — təsdiq gözləyir",
-                    url="#pending",
-                )
-            except Exception as notify_error:
-                logger.error(f"Completion notification error: {notify_error}")
-
-        # Notify the task creator independently of the Admin confirmation
-        # flow. In particular, Rüfət receives his own tasks' completion
-        # notice, even though Nizami receives no confirmation request.
-        try:
-            _creators_data = read_json(_TASK_CREATORS_FILE) or {}
-            _creator_name = _creators_data.get(str(task_id), "")
-            _creator_chat = RUFAT_CHAT_ID if _task_creator_is_rufat else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
-            if _creator_chat and int(_creator_chat) != int(chat_id):
-                _c_cn = contact_name or "—"
-                _c_td = task_desc_display or "—"
-                _c_ph = phone or "—"
-                _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
-                    f"👤 {_c_cn}\n"
-                    f"📝 {_c_td}\n"
-                    f"👷 İcraçı: {completion_sender}\n"
-                    f"📞 {_c_ph}")
-                if link: _creator_msg += f"\n🔗 {link}"
-                _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
-        except Exception as _cav_err:
-            logger.warning(f"Cavabdeh notification error: {_cav_err}")
-      except Exception as notif_block_err:
-        logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
-      localStorage_key = f'timer_{task_id}'
-      msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-      return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
-    else:
-      # Admin completing task - just return success
-      msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
-      return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
+    msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
+    return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
 
 
 async def _handle_legacy_close_job_report(data: dict, chat_id: int, phone: str) -> web.Response:
@@ -15351,20 +15401,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                     if t.get("task_type_id") == XATIRLAT_TASK_TYPE_ID:
                         continue
                     deadline_ts = t.get("complete_till", 0)
-                    deadline_dt = datetime.fromtimestamp(deadline_ts, tz=BAKU_TZ) if deadline_ts else None
-                    is_overdue = deadline_dt < now if deadline_dt else False
-                    if deadline_dt:
-                        time_str = deadline_dt.strftime("%d.%m %H:%M")
-                        if is_overdue:
-                            diff = now - deadline_dt
-                            hours = int(diff.total_seconds() // 3600)
-                            if hours > 0:
-                                time_str = f"{hours} saat gecikir"
-                            else:
-                                mins = int(diff.total_seconds() // 60)
-                                time_str = f"{mins} d\u0259q gecikir"
-                    else:
-                        time_str = ""
+                    deadline_dt, is_overdue, time_str = deadline_view(deadline_ts, now)
                     try:
                         entity_id = int(t.get("entity_id"))
                     except (TypeError, ValueError):
@@ -15391,11 +15428,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         kommo_link = f"https://texnikidestek50.kommo.com/contacts/detail/{entity_id}"
                     # Extract assigneeName from marker
                     task_text = t.get("text", "")
-                    _marker_match = re.match(r'^\[(Rüfət Həsənzadə|Soltan Abbasov|Hüseyn Səfərov|Nizami Qasımov|Rasim Əsgərov|Sərmayə Əhmədsoy|Asya Agayeva|Nuranə Şirinova|Texniki Dəstək|Texniki tapşırıq|Rüfət|Soltan|Hüseyn|Nizami|Rasim|Sərmayə|Asya|Nuranə|Texniki)(?::\d+)?\]\s*', task_text)
-                    assignee_name_from_marker = _marker_match.group(1) if _marker_match else ""
-                    _SHORT_TO_FULL = {'Rüfət':'Rüfət Həsənzadə','Soltan':'Soltan Abbasov','Hüseyn':'Hüseyn Səfərov','Nizami':'Nizami Qasımov','Rasim':'Rasim Əsgərov','Sərmayə':'Sərmayə Əhmədsoy','Asya':'Asya Agayeva','Nuranə':'Nuranə Şirinova','Texniki': TECHNICAL_SUPPORT_NAME}
-                    if assignee_name_from_marker in _SHORT_TO_FULL:
-                        assignee_name_from_marker = _SHORT_TO_FULL[assignee_name_from_marker]
+                    assignee_name_from_marker = assignee_from_marker(task_text)
                     # Fallback: determine assignee from Gözləmə columns. Admin Nizami
                     # owns that board — do not treat Soltan/Sərmayə columns as a
                     # different icraçı (that hid his funnel tasks after sync).
@@ -15405,8 +15438,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                         assignee_name_from_marker = _STATUS_TO_NAME.get(_lead_status, '')
                     if not assignee_name_from_marker and t.get("responsible_user_id") == 10932455:
                         assignee_name_from_marker = "Nizami Qas\u0131mov"
-                    _TASK_TYPE_NAMES_NOTIF = {1: "Əlaqə saxla", 2: "Görüş", 3263995: "Təqdimat", 3263999: "Quraşdırma", 3267595: "Zəng et", 4229224: "Cavab gözlənilir", 4232112: "aktiv", 4232108: "Import", 4239844: "passiv"}
-                    task_type_name = _TASK_TYPE_NAMES_NOTIF.get(t.get("task_type_id"), "")
+                    task_type_name = NOTIFICATION_TASK_TYPE_NAMES.get(t.get("task_type_id"), "")
                     # Fetch last note for this entity
                     last_note = ""
                     _note_entity_id = entity_id
@@ -15435,8 +15467,7 @@ async def handle_api_notifications(request: web.Request) -> web.Response:
                             else:
                                 _created_by_name = KOMMO_USERS.get(_created_by_id, "")
                     # Extract price from [Price] or [Name:Price] marker
-                    _price_m = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", t.get("text", ""))
-                    _task_price = _price_m.group(1) if _price_m else ""
+                    _task_price = price_from_marker(t.get("text", ""))
                     tasks_list.append({
                         "id": t.get("id"),
                         "title": "\u26a0\ufe0f Gecikmi\u015f tap\u015f\u0131r\u0131q" if is_overdue else "\ud83d\udccb Aktiv tap\u015f\u0131r\u0131q",
