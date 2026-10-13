@@ -1,6 +1,6 @@
 /* AI results remain editable drafts. Exact request survives uncertain network replies. */
 (() => {
-  const $=id=>document.getElementById(id);let session,epoch=0,lead=0,pending=null,busy=false;
+  const $=id=>document.getElementById(id);let session,epoch=0,lead=0,pending=null,busy=false,agentControlEpoch=0;
   const storageKey='tenant-chat-ai-pending';
   document.head.insertAdjacentHTML('beforeend','<style>#dealModal .modal-card{max-height:calc(100dvh - 40px);overflow:auto}#dealModal .modal-head{position:sticky;top:0;background:#fff;z-index:1;padding-bottom:12px}.tc-ai-spinner{display:inline-block;width:13px;height:13px;border:2px solid #c5d8d1;border-top-color:#087d5e;border-radius:50%;animation:tc-ai-spin .8s linear infinite;margin-right:7px}@keyframes tc-ai-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.tc-ai-spinner{animation:none}}</style>');
   function identity(member){return member?.tenant_id+':'+member?.telegram_id;}
@@ -16,6 +16,33 @@
     $('chatText').parentElement.after(actions);$('chatText').oninput=()=>grow($('chatText'));
     $('chatRows')?.querySelectorAll('[data-chat-audio]').forEach(node=>{if(node.querySelector('[data-transcribe]'))return;const button=document.createElement('button');button.type='button';button.className='outline';button.dataset.transcribe='1';button.textContent='Mətnə çevir';button.onclick=()=>request('transcribe',node.dataset.chatAudio);node.append(button);});
   }
+  async function renderAgentControl(){
+    const controlEpoch=++agentControlEpoch;document.getElementById('tcAgentConversationControl')?.remove();
+    if(!lead||!session?.member||!$('chatText'))return;
+    try{
+      const base='/api/webapp/ai/';
+      const profile=await fetch(base+'agents/test-mode',{credentials:'same-origin',cache:'no-store'});
+      if(!profile.ok)return;
+      const profilePayload=await profile.json(),binding=profilePayload.result;
+      // Only expose the control on the verified, exact Test Mode deal. The server
+      // repeats the full tenant/account/contact/talk/chat/channel check on mutation.
+      if(!binding?.enabled||!binding?.verified||String(binding.lead_id)!==String(lead)||!binding.chat_id||controlEpoch!==agentControlEpoch)return;
+      const conversation=String(binding.chat_id),stateResponse=await fetch(base+'conversations/'+encodeURIComponent(conversation)+'/state',{credentials:'same-origin',cache:'no-store'});
+      if(!stateResponse.ok)return;
+      const statePayload=await stateResponse.json(),state=statePayload.result?.state||'active';
+      if(controlEpoch!==agentControlEpoch||Number(lead)!==Number(binding.lead_id)||!$('chatText'))return;
+      const box=document.createElement('div');box.id='tcAgentConversationControl';box.style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px';
+      const status=document.createElement('span');status.textContent=state==='active'?'AI для этого диалога активен':'AI для этого диалога остановлен';status.style='font-size:12px;color:var(--muted,#68736f)';
+      const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=state==='active'?'Остановить агента':'Возобновить агента';button.setAttribute('aria-label',button.textContent+' для текущего тестового диалога');
+      button.onclick=async()=>{button.disabled=true;status.textContent='Сохраняю состояние…';try{
+        const response=await fetch(base+'conversations/'+encodeURIComponent(conversation)+'/'+(state==='active'?'handoff':'resume'),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'chat_toolbar_toggle',expected_tenant_id:session.member.tenant_id,expected_user_id:session.member.telegram_id})});
+        const result=await response.json().catch(()=>({}));if(!response.ok||!result.success)throw new Error(result.error||'Не удалось изменить состояние агента.');
+        if(controlEpoch===agentControlEpoch)await renderAgentControl();
+      }catch(error){status.textContent=error.message;button.disabled=false;}
+      };
+      box.append(status,button);const actions=$('tcAiActions');(actions||$('chatText').parentElement).after(box);
+    }catch{/* Fail closed: no control when Test Mode cannot be verified. */}
+  }
   function show(result){$('tcAiResult')?.remove();const box=document.createElement('section');box.id='tcAiResult';box.className='panel';box.style='margin-top:12px';const title=document.createElement('b');title.textContent=result.mode==='summary'?'Dialoq xülasəsi':result.mode==='transcribe'?'Səsin mətni':'Cavab qaralaması';const text=document.createElement('textarea');text.value=result.text;text.rows=3;text.style='width:100%;box-sizing:border-box;resize:none';text.oninput=()=>grow(text);
     const warning=document.createElement('p');warning.textContent=result.missing_audio?`${result.missing_audio} səs yazısı emal olunmadı. Nəticə tam tarixçəni əhatə etmir.`:`${result.message_count||1} mesaj · ${result.transcribed_audio||0} səs`;
     const insert=document.createElement('button');insert.className='outline';insert.textContent='Mesaj sahəsinə köçür';insert.onclick=()=>{if($('chatText')){$('chatText').value=text.value;grow($('chatText'));}};const close=document.createElement('button');close.className='outline';close.textContent='Bağla';close.onclick=()=>box.remove();box.append(title,text,warning,insert,close);$('chatText').parentElement.after(box);grow(text);
@@ -27,8 +54,8 @@
     catch(error){if(current===epoch)alert(error.message+' Sorğu kodu: '+data.request_id);}finally{if(current===epoch){busy=false;buttons.forEach(b=>b.disabled=false);notice.remove();render();}}
   }
   document.addEventListener('tenant-profile',event=>install(event.detail));
-  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;$('tcAiResult')?.remove();render();});
-  document.addEventListener('tenant-chat-loaded',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
+  document.addEventListener('tenant-chat-open',event=>{epoch++;busy=false;lead=event.detail.lead_id;$('tcAiResult')?.remove();render();renderAgentControl();});
+  document.addEventListener('tenant-chat-loaded',event=>{if(Number(event.detail.lead_id)===Number(lead)){render();renderAgentControl();}});
   document.addEventListener('tenant-chat-history-added',event=>{if(Number(event.detail.lead_id)===Number(lead))render();});
   const initial=epoch;fetch('/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(initial===epoch&&data?.member)install(data);}).catch(()=>{});
 })();
