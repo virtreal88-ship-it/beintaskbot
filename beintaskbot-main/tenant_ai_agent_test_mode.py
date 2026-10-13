@@ -225,8 +225,9 @@ def read_test_mode(profile):
     for key in ('lead_id', 'contact_id'):
         if result.get(key) is not None:
             result[key] = int(result[key])
-    if result.get('verified_at'):
-        result['verified_at'] = result['verified_at'].isoformat()
+    for key in ('verified_at', 'updated_at'):
+        if result.get(key):
+            result[key] = result[key].isoformat()
     result['protection_state'] = ('emergency_stopped' if result.get('emergency_stop') else
         'active_exact_binding' if result.get('enabled') and result.get('verified') else
         'blocked_unverified' if any(result.get(k) for k in ('lead_id','talk_id','chat_id')) else 'blocked_unbound')
