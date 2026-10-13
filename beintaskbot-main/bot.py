@@ -5692,11 +5692,12 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
                         fallback_domain=KOMMO_BASE_URL)
                     queued = await asyncio.to_thread(
                         ingest_kommo_messages, data, guarded_rows,
-                        fallback_domain=KOMMO_BASE_URL,
+                        fallback_domain=KOMMO_BASE_URL, with_reason=bool(test_rows),
                     )
                     if test_rows:
-                        logger.info("AI agent test ingress: stage=webhook account_verified=true candidates=%d enriched=%d queued=%d",
-                            len(test_rows), len(guarded_rows), queued)
+                        queued_count, queue_reason = queued
+                        logger.info("AI agent test ingress: stage=webhook account_verified=true candidates=%d enriched=%d queued=%d reason=%s",
+                            len(test_rows), len(guarded_rows), queued_count, queue_reason)
                 except Exception:
                     # Kommo must retry when the durable SaaS inbox did not commit.
                     logger.error("Tenant AI Agents inbound event was not committed")

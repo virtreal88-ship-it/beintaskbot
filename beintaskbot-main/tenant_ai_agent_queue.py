@@ -39,18 +39,21 @@ def _scope_matches(scopes, pipeline, stage, channel):
     return False
 
 
-def ingest_kommo_messages(data, rows, *, fallback_domain=''):
+def ingest_kommo_messages(data, rows, *, fallback_domain='', with_reason=False):
     """Commit eligible incoming event(s) before the existing webhook returns 2xx.
 
     Only identifiers and source metadata are queued. The worker re-reads the
     exact Talk over the existing tenant OAuth connection before using content.
     """
+    def result(count, reason):
+        return (count, reason) if with_reason else count
+
     domain = _account_domain(data if isinstance(data, dict) else {}, fallback_domain)
     bound_domain = _account_domain({}, fallback_domain)
     if bound_domain and domain != bound_domain:
-        return 0
+        return result(0, 'account_domain_mismatch')
     if not domain or not isinstance(rows, list):
-        return 0
+        return result(0, 'invalid_event')
     normalized = []
     for row in rows:
         if not isinstance(row, dict) or str(row.get('type') or 'incoming').strip().lower() == 'outgoing':
@@ -76,8 +79,9 @@ def ingest_kommo_messages(data, rows, *, fallback_domain=''):
                            'channel': str(row.get('origin') or '').strip().lower()[:120],
                            'created_at': str(row.get('created_at') or '')[:40]})
     if not normalized:
-        return 0
+        return result(0, 'invalid_event')
     queued = 0
+    reasons = set()
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -90,7 +94,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain=''):
             if len(connections) > 1:
                 raise TenantPlatformError('Ambiguous Kommo account mapping')
             if not connections or connections[0]['tenant_status'] != 'active':
-                return 0
+                return result(0, 'company_settings_unavailable')
             tenant = str(connections[0]['tenant_id'])
             cur.execute('''SELECT id,scopes,delay_seconds,mode FROM saas_ai_agents
               WHERE tenant_id=%s::uuid AND enabled=TRUE ORDER BY created_at,id''', (tenant,))
@@ -99,12 +103,15 @@ def ingest_kommo_messages(data, rows, *, fallback_domain=''):
                 # Test Mode is deliberately fail-closed: Kommo webhook must
                 # carry every binding identifier, including contact and origin.
                 if not allowed_event(cur,tenant,domain,event):
+                    reasons.add('test_binding_rejected')
                     continue
                 # Webhook payloads do not consistently include channel/origin.
                 # Queue stage/channel candidates and let the worker verify the
                 # exact Talk and live deal against Kommo before using the AI.
                 matches = [agent for agent in agents if isinstance(agent['scopes'],list) and any(
                     isinstance(scope,dict) for scope in agent['scopes'])]
+                if not matches:
+                    reasons.add('no_enabled_agent')
                 fingerprint = hashlib.sha256(('kommo:' + event['message_id']).encode('utf-8')).hexdigest()
                 payload = {key: event[key] for key in ('lead_id','contact_id','talk_id','chat_id','message_id','channel','created_at')}
                 cur.execute('''INSERT INTO saas_tenant_webhook_events
@@ -113,6 +120,7 @@ def ingest_kommo_messages(data, rows, *, fallback_domain=''):
                   ON CONFLICT(tenant_id,fingerprint) DO NOTHING RETURNING fingerprint''',
                   (tenant, fingerprint, event['message_id'], _json(payload)))
                 if not cur.fetchone():
+                    reasons.add('duplicate_event')
                     continue
                 cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now()
                   WHERE tenant_id=%s::uuid AND provider='kommo' AND state IN ('queued','processing')
@@ -154,8 +162,12 @@ def ingest_kommo_messages(data, rows, *, fallback_domain=''):
                       (tenant, agent['id'], event['chat_id'], event['lead_id'], event['talk_id'], event['chat_id'],
                        event['channel'], fingerprint, delay))
                     queued += 1
+        if queued:
+            reasons.add('queued')
         conn.commit()
-    return queued
+    reason_order = ('queued', 'test_binding_rejected', 'no_enabled_agent', 'duplicate_event')
+    reason = next((item for item in reason_order if item in reasons), 'no_eligible_event')
+    return result(queued, reason)
 
 
 def observe_kommo_outgoing(data, rows, *, fallback_domain=''):
