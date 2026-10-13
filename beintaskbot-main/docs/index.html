@@ -771,8 +771,8 @@
         #mobile-more-button { display:none; width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; align-items:center; justify-content:center; flex:none; }
         #mobile-more-button.on { background:rgba(219,234,254,.22); color:#bfdbfe; }
         #mobile-more-button svg { width:19px; height:19px; }
-        #mobile-ai-agents-link { width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; display:inline-flex; align-items:center; justify-content:center; flex:none; text-decoration:none; font-size:20px; line-height:1; }
-        #mobile-ai-agents-link:focus-visible { outline:2px solid #bfdbfe; outline-offset:2px; }
+        #mobile-profile-button { display:inline-flex; width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; align-items:center; justify-content:center; flex:none; }
+        #mobile-profile-button:focus-visible { outline:2px solid #bfdbfe; outline-offset:2px; }
         #tab-more-sheet { position:fixed; inset:0; z-index:11070; }
         #tab-more-sheet[hidden] { display:none !important; }
         #tab-more-sheet .tab-more-dim { position:absolute; inset:0; background:rgba(15,23,42,.35); }
@@ -930,6 +930,58 @@
         .deal-info-field { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:13px; color:#111827; }
         .deal-info-field span { color:#9ca3af; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; flex:none; }
         .deal-info-field b { font-weight:600; text-align:right; word-break:break-word; }
+        @media (prefers-color-scheme: dark) {
+            :root { color-scheme:dark; --crm-dark-bg:#0e1512; --crm-dark-panel:#18211d; --crm-dark-raised:#202b26; --crm-dark-line:#34423c; --crm-dark-ink:#e5ece8; --crm-dark-muted:#a2b0a9; }
+            html, body { background:var(--crm-dark-bg) !important; color:var(--crm-dark-ink) !important; }
+            body { background-image:none !important; }
+            #content-area { background:transparent !important; color:var(--crm-dark-ink) !important; }
+            #desktop-sidebar { background:#0a120f !important; color:#e3ece7 !important; border-color:#26322d !important; }
+            #desktop-sidebar .sidebar-item, #desktop-sidebar .sidebar-icon-btn { color:#b8c6bf !important; }
+            #desktop-sidebar .sidebar-item:hover, #desktop-sidebar .sidebar-icon-btn:hover { background:#1a2821 !important; color:#f3f8f5 !important; }
+            #desktop-sidebar .sidebar-item.active { background:#18392c !important; color:#a6e7c4 !important; }
+            #sidebar-user, #tab-bar, #tab-more-sheet { background:#111a16 !important; color:var(--crm-dark-ink) !important; border-color:var(--crm-dark-line) !important; }
+            #content-area .bg-white, #content-area .bg-gray-50, #content-area .bg-gray-100, #content-area .bg-slate-50, #content-area .bg-slate-100,
+            #content-area [class*="bg-white"], #content-area [style*="background:#fff"], #content-area [style*="background: #fff"], #content-area [style*="background-color:#fff"], #content-area [style*="background-color: #fff"] {
+                background-color:var(--crm-dark-panel) !important; color:var(--crm-dark-ink) !important;
+            }
+            #content-area [class*="border-gray-"], #content-area [class*="border-slate-"], #content-area [style*="border-color:#e"], #content-area [style*="border:1px solid #e"] { border-color:var(--crm-dark-line) !important; }
+            #content-area .text-gray-900, #content-area .text-gray-800, #content-area .text-gray-700, #content-area .text-slate-900, #content-area .text-slate-800,
+            #content-area [style*="color:#111827"], #content-area [style*="color: #111827"], #content-area [style*="color:#1f2937"] { color:var(--crm-dark-ink) !important; }
+            #content-area .text-gray-600, #content-area .text-gray-500, #content-area .text-slate-600, #content-area .text-slate-500, #content-area .text-gray-400 { color:var(--crm-dark-muted) !important; }
+            #content-area input, #content-area select, #content-area textarea { color:var(--crm-dark-ink) !important; background-color:#111a16 !important; border-color:var(--crm-dark-line) !important; }
+            #content-area input::placeholder, #content-area textarea::placeholder { color:#83928a !important; }
+            #content-area option { background:#18211d; color:var(--crm-dark-ink); }
+            #content-area .samil-deal-card, #content-area .crm-task-card, #content-area .deal-shell, #content-area .deal-side, #content-area .deal-chat-head,
+            #content-area .wa-composer-wrap, #content-area .wa-composer-field, #content-area .wa-voice-preview, #content-area .wa-card,
+            #content-area .chats-list, #content-area .chats-pane, #content-area .chats-filter-tabs, #content-area .chats-row,
+            #content-area .chats-search-results, #content-area .chats-stage-filter, #content-area .chats-ctx, #content-area .chat-pin-bar,
+            #content-area .notice-reply-wrap, #content-area .deal-note-row, #content-area .deal-task-row, #content-area .task-edit-card,
+            #content-area .create-task-modal-card, #content-area .chat-react-pop, #content-area .deal-side-loader, #content-area .deal-shell {
+                background-color:var(--crm-dark-panel) !important; color:var(--crm-dark-ink) !important; border-color:var(--crm-dark-line) !important;
+            }
+            #content-area .chats-row:hover, #content-area .chats-search-hit:hover { background:#24312b !important; }
+            #content-area .chats-search-hit, #content-area .chats-filter-tab, #content-area .chats-detail, #content-area .chat-quote-bar,
+            #content-area .wa-attachment, #content-area .notice-history-actions button, #content-area .notice-save-example,
+            #content-area .deal-info-field, #content-area .deal-side-input, #content-area .wa-chip, #content-area .audio-speed,
+            #content-area .deal-tabs button, #content-area .chats-back, #content-area .chats-deal-link, #content-area .search-icon-btn {
+                background-color:var(--crm-dark-raised) !important; color:var(--crm-dark-ink) !important; border-color:var(--crm-dark-line) !important;
+            }
+            #content-area .deal-chat-row.in, #content-area .hist-bubbles i.in { background:#202b26 !important; color:var(--crm-dark-ink) !important; }
+            #content-area .deal-chat-row.out { background:#075943 !important; color:#f0fff8 !important; }
+            #content-area .bg-blue-50, #content-area .bg-sky-50 { background:#172c3b !important; color:#bfdbfe !important; }
+            #content-area .bg-green-50, #content-area .bg-emerald-50 { background:#163326 !important; color:#bbf7d0 !important; }
+            #content-area .bg-red-50, #content-area .bg-rose-50 { background:#3a2020 !important; color:#fecaca !important; }
+            #content-area .bg-amber-50, #content-area .bg-yellow-50 { background:#382e1b !important; color:#fde68a !important; }
+            #screen-create, #task-edit-modal, #deal-view-modal, #wa-tpl-modal, #linear-action-modal { background:rgba(0,0,0,.68) !important; }
+            #screen-create .create-task-modal-card, #task-edit-modal .task-edit-card, #wa-tpl-modal .wa-tpl-card, #deal-view-modal .deal-shell,
+            #linear-action-modal > div { background:var(--crm-dark-panel) !important; color:var(--crm-dark-ink) !important; border-color:var(--crm-dark-line) !important; }
+            #content-area .deal-shell-head { background:#17211c !important; color:var(--crm-dark-ink) !important; }
+            #content-area .deal-shell-head .deal-head-name, #content-area .deal-shell-head .deal-head-phone { color:var(--crm-dark-ink) !important; }
+            #content-area .page-toolbar { background:#123a31 !important; color:#f0fff8 !important; }
+            #content-area .page-toolbar input, #content-area .page-toolbar select { background:#1a2923 !important; color:var(--crm-dark-ink) !important; }
+            #content-area a:not([class*="bg-"]) { color:#8fc8ff; }
+            .custom-scroll::-webkit-scrollbar-thumb { background:#52645a; }
+        }
         .deal-side-input { width:100%; min-width:0; text-align:right; border:0; border-bottom:1px solid #e5e7eb; background:transparent; color:#111827; font:inherit; font-weight:600; padding:2px 0; outline:none; }
         .deal-side-input:focus { border-bottom-color:#2b8cff; }
         .deal-task-create { display:inline-flex; align-items:center; gap:6px; width:auto; margin:0 0 10px; padding:8px 12px; border:0; border-radius:10px; background:#2481cc; color:#fff; font-size:12px; font-weight:600; font-family:inherit; }
@@ -1009,6 +1061,25 @@
             #content-area { min-height:0; box-sizing:border-box; padding-bottom:calc(80px + env(safe-area-inset-bottom, 0px)); }
             #tab-bar { height:calc(64px + env(safe-area-inset-bottom, 0px)); padding-bottom:env(safe-area-inset-bottom, 0px); box-sizing:border-box; }
             #screen-pending > #guide-editor-entry { flex-shrink:0; }
+        }
+
+        #user-display-area { background:transparent; border:0; padding:0; cursor:pointer; font:inherit; text-align:right; }
+        #screen-ai_agents { --ink:#102621; --muted:#698079; --line:#e6eeea; --paper:#f7faf8; --brand:#0a926e; --card:#fff; color:var(--ink); }
+        #screen-ai_agents .panel { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:16px; padding:19px; }
+        #screen-ai_agents .panel h2 { font-size:17px; margin:0 0 6px; }
+        #screen-ai_agents .panel p { color:var(--muted); }
+        #screen-ai_agents .panel label { display:grid; gap:6px; margin:12px 0; color:var(--ink); font-size:13px; font-weight:650; }
+        #screen-ai_agents .panel input, #screen-ai_agents .panel select, #screen-ai_agents .panel textarea { width:100%; box-sizing:border-box; border:1px solid var(--line); border-radius:9px; padding:10px; background:var(--card); color:var(--ink); }
+        #screen-ai_agents .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+        #screen-ai_agents .outline { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:9px; padding:9px 12px; }
+        #screen-ai_agents .primary { background:#0a926e; color:#fff; border:0; border-radius:9px; padding:10px 13px; }
+        #screen-ai_agents .sub { color:var(--muted); font-size:12px; }
+        @media (max-width:560px) { #screen-ai_agents .grid { grid-template-columns:1fr; } }
+        @media (prefers-color-scheme: dark) {
+            #screen-ai_agents { --ink:var(--crm-dark-ink); --muted:var(--crm-dark-muted); --line:var(--crm-dark-line); --paper:var(--crm-dark-bg); --card:var(--crm-dark-panel); --brand:#38bb91; }
+            #screen-ai_agents .panel, #screen-ai_agents .outline { background:var(--card); color:var(--ink); border-color:var(--line); }
+            #screen-ai_agents .primary { background:#218a69; color:#fff; }
+            #screen-ai_agents .panel input, #screen-ai_agents .panel select, #screen-ai_agents .panel textarea { background:#111a16; color:var(--ink); border-color:var(--line); }
         }
 </style>
 </head>
@@ -1110,9 +1181,9 @@
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Müştərilər</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
-        <a id="side-ai-agents-link" class="sidebar-item" href="/app?view=ai_agents" title="AI Agents" aria-label="AI Agents">
-            <span class="sidebar-icon" aria-hidden="true">✦</span><span class="sidebar-item-label">AI Agents</span>
-        </a>
+<button id="side-tab-profile" class="sidebar-item" onclick="openWebappProfile()" aria-label="Profil">
+            <span class="sidebar-icon" aria-hidden="true">◌</span><span class="sidebar-item-label">Profil</span>
+        </button>
         <button id="side-tab-settings" class="sidebar-item" style="display:none;" onclick="switchTab('tab-settings')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="sidebar-item-label">Ayarlar</span>
         </button>
@@ -1132,12 +1203,12 @@
     </div>
     <div class="text-right flex flex-col items-end gap-1">
         <div style="display:flex;align-items:center;gap:8px">
-            <a id="mobile-ai-agents-link" href="/app?view=ai_agents" title="AI Agents" aria-label="AI Agents">✦</a>
-            <button id="mobile-more-button" type="button" onclick="toggleMobileMoreMenu()" aria-label="Daha">
+            <button type="button" id="mobile-profile-button" class="icon-action-btn" onclick="openWebappProfile()" aria-label="Profil" title="Profil"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.7-3.3 3.2-5 7-5s6.3 1.7 7 5"/></svg></button>
+<button id="mobile-more-button" type="button" onclick="toggleMobileMoreMenu()" aria-label="Daha">
                 <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
             </button>
         </div>
-        <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
+        <button type="button" class="text-[11px] font-medium text-gray-300" id="user-display-area" onclick="openWebappProfile()" aria-label="Profil"></button>
         <div id="sync-indicator" style="display:none;" class="flex items-center justify-center mt-1">
             <span class="sync-meter"><span class="sync-spinner"></span><span class="sync-pct">0%</span></span>
         </div>
@@ -1519,6 +1590,29 @@
         <div id="settings-integrations-card" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="flex items-center justify-between"><div><div class="text-sm font-extrabold text-slate-800">İnteqrasiyalar</div><div class="text-[11px] text-slate-400 mt-1">Aktiv və qoşulmamış bağlantılar</div></div><button type="button" onclick="loadSettingsIntegrations()" class="text-xs font-bold text-[#2481cc]">Yenilə</button></div><div id="settings-integrations-list" class="mt-3 space-y-2 text-xs text-slate-500"></div></div>
     </div>
 
+    <div id="screen-profile" class="screen space-y-3">
+        <div class="page-toolbar bg-white p-4 rounded-2xl border border-gray-100 shadow-sm"><div class="page-toolbar-title text-base font-extrabold text-slate-800">Profil</div><div class="page-toolbar-subtitle text-[11px] text-slate-400 mt-1">Şəxsi hesab və şirkət alətləri</div></div>
+        <article id="profile-ai-agents-entry" class="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm" hidden>
+            <div class="flex items-center justify-between gap-3"><div><div class="text-sm font-extrabold text-slate-800">AI Agents</div><div class="text-[11px] text-slate-500 mt-1">Test Mode, bilik bazası və manual AI qaralamaları</div></div><button type="button" class="icon-action-btn primary" onclick="openWebappAiAgents()" aria-label="AI Agents-i aç">✦</button></div>
+        </article>
+        <button type="button" class="w-full text-left bg-white p-4 rounded-2xl border border-gray-100 shadow-sm" onclick="switchTab('tab-settings')"><div class="text-sm font-extrabold text-slate-800">Şirkət ayarları</div><div class="text-[11px] text-slate-500 mt-1">Komanda və inteqrasiyalar</div></button>
+    </div>
+    <div id="screen-ai_agents" class="screen space-y-3">
+        <section id="view-ai_agents">
+      <div class="top"><div><div class="eyebrow">AVTONOM MÜŞTƏRİ DƏSTƏYİ</div><h1>AI Agents</h1><p>Agentlər və müştəri dialoqları üçün təhlükəsiz AI köməkçisi.</p></div><button class="refresh" id="aiAgentsRefresh">Yenilə</button></div>
+      <div id="aiAgentsNotice" class="notice" role="status"></div>
+      <article class="panel" id="aiTestModePanel" hidden><h2>Изолированный Test Mode</h2><p id="aiTestModeState" class="sub">Защита заблокирована до проверки одного диалога Kommo.</p><div class="grid"><label>Номер компании<input id="aiTestCompanyPhone" value="" readonly></label><label>Тестовый клиент<input id="aiTestClientPhone" value="" readonly></label><label>Kommo account<input id="aiTestAccount" readonly></label><label>Channel / Talk origin<input id="aiTestChannel"></label><label>Deal ID<input id="aiTestLead" inputmode="numeric"></label><label>Contact ID<input id="aiTestContact" inputmode="numeric"></label><label>Talk ID<input id="aiTestTalk"></label><label>Chat ID<input id="aiTestChat"></label></div><p class="sub">Вводите значения только из Kommo. Verify сверяет аккаунт, сделку, контакт и его номер, Talk, chat и channel. Номер компании должен соответствовать этому каналу Kommo.</p><label><input id="aiCompanyPhoneAttested" type="checkbox"> Подтверждаю, что этот channel в Kommo подключён к номеру компании</label><label><input id="aiTestModeEnabled" type="checkbox"> Разрешить AI Agent только для подтверждённого тестового диалога</label><label><input id="aiEmergencyStop" type="checkbox"> Аварийная остановка AI Agents для этой компании</label><button class="outline" id="aiTestModeDiscover">Найти Talk в Kommo по сделке и контакту</button><div id="aiTestTalkChoices"></div><button class="outline" id="aiTestModeSave">Сохранить привязку / состояние</button><button class="primary" id="aiTestModeVerify">Проверить привязку в Kommo</button></article>
+      <article class="panel" id="aiCompanySettings" hidden><h2>Настройки AI Agents</h2><p>Автоответы и CRM-действия выключены. Для их активации нужны отдельные серверные разрешения.</p><label><input id="aiAgentsEnabled" type="checkbox"> AI Agents активен для компании</label><label><input id="aiAutoSend" type="checkbox"> Автоматически отправлять сообщения</label><label><input id="aiCrmActions" type="checkbox"> Разрешить CRM-действия</label><label>Дневной лимит ответов на диалог<select id="aiReplyLimit"><option>20</option><option>60</option><option>300</option><option>500</option></select></label><label>Инструкции компании<textarea id="aiCompanyInstructions" rows="5" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px"></textarea></label><button class="primary" id="aiSaveSettings">Сохранить настройки</button><p id="aiKillSwitch" class="sub"></p></article>
+      <article class="panel" id="aiAgentManagement" hidden><h2>Агенты</h2><p>Новый агент создаётся в режиме Manual. Ответы остаются черновиками до ручной проверки.</p><div id="aiAgentList"></div><button class="primary" id="aiNewAgent">+ Создать агента</button><button class="outline" id="aiLoadDrafts">Последние черновики</button></article>
+      <article class="panel" id="aiAgentEditor" hidden style="margin-top:16px"><h2 class="ai-editor-heading" id="aiEditorTitle">Новый агент</h2><input id="aiAgentId" type="hidden"><input id="aiAgentVersion" type="hidden">
+        <div class="ai-agent-pane" data-ai-editor-section="behavior"><div class="grid"><label>Имя<input id="aiAgentName" maxlength="120"></label><label>Режим<select id="aiAgentMode"><option value="manual">Manual — только черновики</option><option value="automatic">Automatic — нужны разрешения компании и сервера</option></select></label><label>Модель<input id="aiAgentModel" placeholder="Модель существующего Chat AI"></label><label>Язык<select id="aiAgentLanguage"><option value="auto">Язык клиента</option><option value="az">Азербайджанский</option><option value="ru">Русский</option><option value="en">Английский</option><option value="tr">Турецкий</option></select></label><label>Стиль<select id="aiAgentStyle"><option value="balanced">Сбалансированный</option><option value="precise">Точный</option><option value="creative">Дружелюбный</option></select></label><label><input id="aiAgentEnabled" type="checkbox"> Агент включён</label></div><label>Инструкции агента<textarea id="aiAgentInstructions" rows="7" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px"></textarea></label><div class="grid"><label>Pipeline ID<input id="aiPipelineId"></label><label>Stage ID<input id="aiStageId"></label><label>Channel ID (пусто — все каналы)<input id="aiChannelId"></label></div><p class="sub">После нового сообщения выдерживается задержка минимум 40 секунд. Scope повторно проверяется сервером.</p><button class="primary" id="aiSaveAgent">Сохранить агента</button><button class="outline" id="aiCancelAgent">Закрыть</button></div>
+        <div class="ai-agent-pane" data-ai-editor-section="knowledge"><label>Название источника<input id="aiKnowledgeTitle"></label><label>Текст<textarea id="aiKnowledgeContent" rows="5" style="width:100%;border:1px solid var(--line);border-radius:9px;padding:10px"></textarea></label><button class="outline" id="aiAddKnowledge">Добавить текст</button><label>TXT / PDF / DOCX<input id="aiKnowledgeFile" type="file" accept=".txt,.pdf,.docx"></label><label>Название файла<input id="aiKnowledgeFileTitle" maxlength="180"></label><button class="outline" id="aiUploadKnowledge">Загрузить файл</button><div id="aiKnowledgeList"></div></div>
+        <div class="ai-agent-pane" data-ai-editor-section="triggers"><div class="grid"><label>Название триггера<input id="aiTriggerName"></label><label>Тип<select id="aiTriggerType"><option value="new_inquiry">Новое обращение</option><option value="phone_received">Получен телефон</option><option value="phrase">Ключевая фраза</option></select></label><label>Ключевая фраза<input id="aiTriggerPhrase"></label><label>Целевой Stage ID (необязательно)<input id="aiTriggerStage"></label><label>Текст задачи (необязательно)<input id="aiTriggerTask"></label></div><p>Разрешённые действия:</p><label><input type="checkbox" name="aiTriggerAction" value="handoff"> Передать менеджеру</label><label><input type="checkbox" name="aiTriggerAction" value="update_phone"> Записать проверенный телефон контакта</label><label><input type="checkbox" name="aiTriggerAction" value="move_stage"> Изменить этап сделки</label><label><input type="checkbox" name="aiTriggerAction" value="create_task"> Создать задачу Kommo</label><label><input id="aiTriggerEnabled" type="checkbox"> Триггер включён</label><button class="outline" id="aiAddTrigger">Добавить триггер</button><div id="aiTriggerList"></div></div>
+        <div class="ai-agent-pane" data-ai-editor-section="dialogs"><h3>Переданные менеджеру диалоги</h3><div id="aiHandoffList"></div><h3>Черновики и журнал отправки</h3><div id="aiDraftList"></div></div>
+      </article>
+      <div class="ai-agents-modal" id="aiAgentsModal" hidden><div class="ai-agents-modal-backdrop" data-ai-modal-close></div><section class="ai-agents-dialog" role="dialog" aria-modal="true" aria-labelledby="aiAgentsModalTitle" tabindex="-1"><header class="ai-agents-dialog-head"><h2 id="aiAgentsModalTitle">AI Agents</h2><button type="button" class="outline" id="aiAgentsModalClose" aria-label="Закрыть окно">Закрыть</button></header><div class="ai-agents-dialog-body" id="aiAgentsModalBody"></div></section></div>
+    </section>
+    </div>
     <div id="screen-hot-orders" class="screen space-y-3">
         <div class="page-toolbar flex items-center justify-between bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
             <div><div class="text-sm font-extrabold text-gray-800">İsti sifarişlər</div><div class="text-[10px] text-gray-400 mt-0.5">İlk götürən əməkdaşın sifarişi olur</div></div>
@@ -13993,5 +14087,15 @@ async function uploadVoiceNote(entityId, entityType) {
 }
 </script>
 <script src="/assets/task-date-fields.js"></script>
+<script>window.TENANT_AI_AGENTS_CONFIG={endpoint:'/api/webapp/ai/',profileUrl:'/api/webapp/ai/profile',backLabel:'Profilə qayıt',backAction:()=>openWebappProfile()};</script>
+<script src="/assets/tenant-ai-agents.js"></script>
+<script>
+function openWebappProfile(){nav('screen-profile');}
+function openWebappAiAgents(){
+    const entry=document.getElementById('profile-ai-agents-entry');
+    if(!entry || entry.hidden){toast('AI Agents üçün bu şirkətdə səlahiyyətli profil tapılmadı.',true);return;}
+    nav('screen-ai_agents');
+}
+</script>
 </body>
 </html>

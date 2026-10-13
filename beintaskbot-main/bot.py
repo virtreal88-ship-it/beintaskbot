@@ -51,7 +51,9 @@ from gh_storage import read_json, write_json
 from crm_stage_labels import stage_display_name
 from kommo_deal_tags import public_tags, tag_list, tags_handler
 from tenant_policy import TenantPolicy, ROLE_PERMISSIONS
-from tenant_web_routes import TenantWebContext, register_feature_routes
+from tenant_web_routes import (TenantWebContext, register_feature_routes,
+                               ai_agent_routes, ai_agent_profile_handler)
+from tenant_legacy_ai_identity import member_from_request as legacy_ai_member_from_request
 from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECONDS
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
@@ -17849,6 +17851,16 @@ def _tenant_member_from_request(request: web.Request, *, owner_only: bool = Fals
     return _tenant_browser_session.profile(request, owner_only=owner_only)
 
 
+def _webapp_ai_member_from_request(request: web.Request) -> dict | None:
+    """Map the authenticated legacy webapp employee to one SaaS tenant.
+
+    This deliberately refuses identities with no active SaaS membership or
+    more than one active company, so /webapp cannot silently operate on a
+    different Kommo tenant than the profile the employee selected.
+    """
+    return legacy_ai_member_from_request(request, tenants_for_user, tenant_member, logger)
+
+
 _tenant_kommo_service = TenantKommo(KommoContext(
     member=_tenant_member_from_request, origin=CANONICAL_WEB_ORIGIN, logger=logger,
     platform_error=TenantPlatformError, begin_oauth=begin_kommo_oauth,
@@ -18409,6 +18421,29 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 def _register_legacy_web_routes(app_web: web.Application) -> None:
     """Register the existing BeinSystems webapp and integration endpoints."""
+    if os.environ.get("AI_AGENTS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        webapp_ai_context = TenantWebContext(
+            member=_webapp_ai_member_from_request, origin=CANONICAL_WEB_ORIGIN,
+            logger=logger, crm_request=_tenant_kommo_request,
+            wait_slot=_wait_for_tenant_kommo_slot,
+            bot=lambda: _bot_app.bot if _bot_app else None,
+        )
+        app_web.router.add_get(
+            "/api/webapp/ai/profile",
+            ai_agent_profile_handler(_webapp_ai_member_from_request, logger),
+        )
+        for method, path, handle in ai_agent_routes(webapp_ai_context, prefix="/api/webapp/ai/"):
+            if method == "GET":
+                app_web.router.add_get(path, handle)
+            elif method == "POST":
+                app_web.router.add_post(path, handle)
+            elif method == "PATCH":
+                app_web.router.add_patch(path, handle)
+            elif method == "DELETE":
+                app_web.router.add_delete(path, handle)
+            else:
+                raise ValueError("Unsupported AI Agents webapp route method")
+
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())

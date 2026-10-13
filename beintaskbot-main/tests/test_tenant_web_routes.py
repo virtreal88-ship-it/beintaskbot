@@ -8,6 +8,7 @@ from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 from test_tenant_hot_orders import load, ROOT
 from tenant_notice_transport import TelegramBot
+from tenant_linear_policy import TenantLinearError
 from tenant_web_assets import ASSETS, register_assets
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
@@ -43,11 +44,13 @@ EXPECTED_AI_API = {
 class Routes(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.factories = {name: Mock(side_effect=lambda *args, **kwargs: AsyncMock(return_value=web.json_response({'success': True}))) for name in FACTORIES}
+        self.list_agents = Mock(return_value=[])
         imports = {node.module for node in ast.parse((ROOT/'tenant_web_routes.py').read_text()).body
                    if isinstance(node, ast.ImportFrom) and (node.module or '').startswith('tenant_')}
         self.provider = Mock(return_value=AsyncMock())
         self.module = load('tenant_web_routes', {**self.factories, 'deal_provider': self.provider,
-                           'TelegramBot': TelegramBot}, imports)
+                           'TelegramBot': TelegramBot, 'list_agents': self.list_agents,
+                           'TenantLinearError': TenantLinearError}, imports)
         self.context = self.module.TenantWebContext(member=Mock(), origin='https://crm.pro.az',
             logger=Mock(), crm_request=AsyncMock(), wait_slot=Mock(), bot=Mock())
         self.app = web.Application()
@@ -117,6 +120,30 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actual, expected)
         self.factories['ai_agents_handler'].assert_any_call(self.context.member,self.context.origin,
             self.context.logger,'draft_send',self.context.crm_request,self.context.wait_slot)
+
+    def test_ai_agents_routes_can_be_reused_for_authenticated_webapp_profile(self):
+        routes = self.module.ai_agent_routes(self.context, prefix='/api/webapp/ai/')
+        actual = {(method, path) for method, path, _handle in routes}
+        expected = {(method, path.replace('/api/platform/ai/', '/api/webapp/ai/'))
+                    for method, path in EXPECTED_AI_API if method != 'HEAD'}
+        self.assertEqual(actual, expected)
+        self.assertEqual(len({handle for _method, _path, handle in routes}), len(routes))
+
+    async def test_webapp_profile_requires_ai_management_permission(self):
+        member = {'tenant_id':'tenant-a','telegram_id':7,'role':'owner','tenant_name':'Company',
+                  'tenant_status':'active','secrets':'must not be returned'}
+        handler = self.module.ai_agent_profile_handler(lambda _request: member, Mock())
+        response = await handler(make_mocked_request('GET','/api/webapp/ai/profile'))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers.get('Cache-Control'), 'no-store')
+        self.assertEqual(response.body, b'{"success": true, "member": {"tenant_id": "tenant-a", "telegram_id": 7, "role": "owner", "tenant_name": "Company"}}')
+        self.list_agents.assert_called_once_with(member)
+
+    async def test_webapp_profile_fails_closed_without_authorized_member(self):
+        handler = self.module.ai_agent_profile_handler(lambda _request: None, Mock())
+        response = await handler(make_mocked_request('GET','/api/webapp/ai/profile'))
+        self.assertEqual(response.status, 403)
+        self.list_agents.assert_not_called()
 
 
 class Assets(unittest.IsolatedAsyncioTestCase):

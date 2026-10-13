@@ -1,6 +1,23 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'../docs/tenant-app.html'),'utf8');
+const legacy=fs.readFileSync(path.join(__dirname,'../docs/index.html'),'utf8');
+const agents=fs.readFileSync(path.join(__dirname,'../docs/tenant-ai-agents.js'),'utf8');
 let count=0;
 for(const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {new vm.Script(match[1]);count++;}
+new vm.Script(agents);
+const legacyAgentsScript=legacy.match(/<script>window\.TENANT_AI_AGENTS_CONFIG=([\s\S]*?)<\/script>/);
+assert(legacyAgentsScript,'/webapp must configure AI Agents for its authenticated profile routes');
+new vm.Script(`window.TENANT_AI_AGENTS_CONFIG=${legacyAgentsScript[1]}`);
+const webappProfileScript=legacy.match(/<script>\s*function openWebappProfile\([\s\S]*?function openWebappAiAgents\([\s\S]*?<\/script>/);
+assert(webappProfileScript,'/webapp profile navigation handlers must be present');
+new vm.Script(webappProfileScript[0].replace(/^<script>|<\/script>$/g,'').trim());
 assert(count>0);assert(html.includes('data-task-complete='));assert(html.includes('/assets/tenant-task-completion.js'));
-console.log('PASS: tenant app inline scripts compile and completion module is linked.');
+assert(html.includes('id="aiAgentsModal"')&&html.includes('aria-modal="true"'));
+assert(html.includes('@media (prefers-color-scheme: dark)')&&html.includes('--paper:#111714'));
+assert(legacy.includes('@media (prefers-color-scheme: dark)')&&legacy.includes('--crm-dark-panel'));
+assert(legacy.includes('id="side-tab-profile"')&&legacy.includes('id="mobile-profile-button"')&&legacy.includes('id="screen-profile"'));
+assert(legacy.includes('id="profile-ai-agents-entry"')&&legacy.includes('id="screen-ai_agents"'));
+assert(legacy.includes("endpoint:'/api/webapp/ai/'")&&legacy.includes("profileUrl:'/api/webapp/ai/profile'"));
+assert(!legacy.includes('href="/app?view=ai_agents"'));
+assert(agents.includes('openModalContent')&&!agents.includes('scrollIntoView('));
+console.log('PASS: tenant scripts compile; AI Agents open from the /webapp profile in accessible modals; /app and /webapp follow the system color scheme.');

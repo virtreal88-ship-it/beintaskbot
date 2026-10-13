@@ -3,6 +3,7 @@
 No bot import, tenant lookup, database access or network call during mounting.
 Authentication and resource policy remain in the existing API/store modules.
 """
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from logging import Logger
@@ -24,6 +25,8 @@ from tenant_diagnostics_api import handler as diagnostics_handler
 from tenant_deal_completion_api import handler as deal_completion_handler
 from tenant_deal_completion_provider import provider as deal_provider
 from tenant_ai_agents_api import handler as ai_agents_handler
+from tenant_ai_agents_store import list_agents
+from tenant_linear_policy import TenantLinearError
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 MemberReader = Callable[[web.Request], dict | None]
@@ -64,27 +67,63 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/crm/deal-approvals', deal_completion_handler(member, origin, deal_provider(context.crm_request, context.wait_slot), logger, review=True), ('GET', 'POST')),
     ]
     if os.environ.get('AI_AGENTS_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-        bindings.extend([
-            ('/api/platform/ai/agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
-            ('/api/platform/ai/agents/test-mode', ai_agents_handler(member, origin, logger, 'test_mode'), ('GET','PATCH')),
-            ('/api/platform/ai/agents/test-mode/verify', ai_agents_handler(member, origin, logger, 'test_mode_verify', context.crm_request), ('POST',)),
-            ('/api/platform/ai/agents/test-mode/discover', ai_agents_handler(member, origin, logger, 'test_mode_discover', context.crm_request), ('POST',)),
-            ('/api/platform/ai/agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
-            ('/api/platform/ai/agents/drafts', ai_agents_handler(member, origin, logger, 'drafts'), ('GET',)),
-            ('/api/platform/ai/agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
-            ('/api/platform/ai/agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),
-            ('/api/platform/ai/handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
-            ('/api/platform/ai/agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
-            ('/api/platform/ai/agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET','POST')),
-            ('/api/platform/ai/agents/{agent_id}/triggers/{trigger_id}', ai_agents_handler(member, origin, logger, 'trigger'), ('PATCH','DELETE')),
-            ('/api/platform/ai/conversations/{conversation_id}/state', ai_agents_handler(member, origin, logger, 'conversation_state'), ('GET',)),
-            ('/api/platform/ai/conversations/{conversation_id}/handoff', ai_agents_handler(member, origin, logger, 'handoff'), ('POST',)),
-            ('/api/platform/ai/conversations/{conversation_id}/resume', ai_agents_handler(member, origin, logger, 'resume'), ('POST',)),
-            ('/api/platform/ai/knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
-            ('/api/platform/ai/knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),
-            ('/api/platform/ai/knowledge/{source_id}', ai_agents_handler(member, origin, logger, 'knowledge_item'), ('PATCH', 'DELETE')),
-        ])
+        bindings.extend(ai_agent_routes(context))
     return [(method, path, handle) for path, handle, methods in bindings for method in methods]
+
+
+def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/') -> list[tuple[str, str, Handler]]:
+    """Build the same tenant-scoped AI Agents API under a trusted UI prefix.
+
+    The legacy /webapp profile uses a signed employee session and resolves that
+    identity to an existing SaaS tenant before these handlers run. The stores
+    still enforce tenant membership and AI Agents management permissions on
+    every operation.
+    """
+    member, origin, logger = context.member, context.origin, context.logger
+    routes = [
+        ('agents/settings', ai_agents_handler(member, origin, logger, 'settings'), ('GET', 'PATCH')),
+        ('agents/test-mode', ai_agents_handler(member, origin, logger, 'test_mode'), ('GET', 'PATCH')),
+        ('agents/test-mode/verify', ai_agents_handler(member, origin, logger, 'test_mode_verify', context.crm_request), ('POST',)),
+        ('agents/test-mode/discover', ai_agents_handler(member, origin, logger, 'test_mode_discover', context.crm_request), ('POST',)),
+        ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
+        ('agents/drafts', ai_agents_handler(member, origin, logger, 'drafts'), ('GET',)),
+        ('agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
+        ('agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),
+        ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
+        ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
+        ('agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),
+        ('agents/{agent_id}/triggers/{trigger_id}', ai_agents_handler(member, origin, logger, 'trigger'), ('PATCH', 'DELETE')),
+        ('conversations/{conversation_id}/state', ai_agents_handler(member, origin, logger, 'conversation_state'), ('GET',)),
+        ('conversations/{conversation_id}/handoff', ai_agents_handler(member, origin, logger, 'handoff'), ('POST',)),
+        ('conversations/{conversation_id}/resume', ai_agents_handler(member, origin, logger, 'resume'), ('POST',)),
+        ('knowledge', ai_agents_handler(member, origin, logger, 'knowledge'), ('GET', 'POST')),
+        ('knowledge/upload', ai_agents_handler(member, origin, logger, 'knowledge_upload'), ('POST',)),
+        ('knowledge/{source_id}', ai_agents_handler(member, origin, logger, 'knowledge_item'), ('PATCH', 'DELETE')),
+    ]
+    return [(method, prefix + path, handler) for path, handler, methods in routes for method in methods]
+
+
+def ai_agent_profile_handler(member_from_request, logger):
+    """Return only the identity fields the shared AI Agents UI needs."""
+    async def handle(request: web.Request) -> web.Response:
+        profile = member_from_request(request)
+        if not profile:
+            return web.json_response({'success': False, 'error': 'AI Agents üçün aktiv şirkət üzvlüyü tapılmadı.'}, status=403,
+                                     headers={'Cache-Control': 'no-store'})
+        try:
+            # list_agents checks owner/admin AI permissions through the same
+            # store policy used by every other AI Agents endpoint.
+            await asyncio.to_thread(list_agents, profile)
+        except TenantLinearError as error:
+            return web.json_response({'success': False, 'error': str(error)}, status=error.status,
+                                     headers={'Cache-Control': 'no-store'})
+        except Exception:
+            logger.error('AI Agents profile lookup failed')
+            return web.json_response({'success': False, 'error': 'AI Agents profili yüklənmədi.'}, status=503,
+                                     headers={'Cache-Control': 'no-store'})
+        safe_profile = {key: profile.get(key) for key in ('tenant_id', 'telegram_id', 'role', 'tenant_name')}
+        return web.json_response({'success': True, 'member': safe_profile}, headers={'Cache-Control': 'no-store'})
+    return handle
 
 
 def register_feature_routes(app: web.Application, context: TenantWebContext) -> None:
