@@ -64,7 +64,12 @@
    const label=document.createElement('span');label.textContent=state.state==='active'?'AI агент активен для этого тестового диалога':'AI агент остановлен для этого тестового диалога';label.style='font-size:12px;color:var(--muted,#68736f)';
    const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=state.state==='active'?'Остановить агента':'Возобновить агента';button.setAttribute('aria-label',button.textContent+' в текущем подтверждённом тестовом диалоге');
    button.onclick=async()=>{button.disabled=true;label.textContent='Сохраняю состояние…';try{const result=await api(`conversations/${encodeURIComponent(conversation)}/${state.state==='active'?'handoff':'resume'}`,'POST',{reason:'webapp_chat_toggle'});if(result.conversation_id!==conversation)throw new Error('Сервер вернул другой диалог.');await syncChatAgentControl(true);}catch(error){label.textContent=error.message;button.disabled=false}};
-   box.append(label,button);const host=input.closest('.notice-reply-wrap')||input.closest('.wa-composer-wrap')||input.parentElement;host.after(box);
+   box.append(label,button);
+   // Keep the control inside the composer.  Placing it after the composer put
+   // it below the visible chat pane on long conversations, which made the
+   // exact Test Mode stop/resume control effectively unreachable.
+   const host=input.closest('.notice-reply-wrap')||input.closest('.wa-composer-wrap')||input.parentElement;
+   host.prepend(box);
   }catch{/* Fail closed: do not expose a control when the exact bound conversation cannot be verified. */}
  }
  const chatObserver=new MutationObserver(()=>syncChatAgentControl());chatObserver.observe(document.body,{childList:true,subtree:true});
