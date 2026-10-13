@@ -27,6 +27,7 @@ if hasattr(asyncio,'WindowsSelectorEventLoopPolicy'):
 import tenant_ai_agent_queue as queue
 import tenant_ai_agent_worker as worker
 import tenant_chat_send_service as send_service
+import tenant_chat_send_store as send_store
 from tenant_chat_send_store import agent_send_reservation_block_reason
 import tenant_ai_agents_store as agent_store
 import tenant_ai_agents_api as agents_api
@@ -265,6 +266,36 @@ class SendTests(unittest.IsolatedAsyncioTestCase):
             self.reservation['route'],integration,runtime_enabled=True),'test_mode_binding_mismatch')
         self.assertEqual(agent_send_reservation_block_reason(current,self.job,self.reservation['route'],integration,
             runtime_enabled=False),'global_auto_send_disabled')
+        legacy={'status':'connected','credential_source':'legacy_environment','credentials_available':True}
+        self.assertEqual(agent_send_reservation_block_reason(current,self.job,self.reservation['route'],legacy,
+            runtime_enabled=True),'')
+        self.assertEqual(agent_send_reservation_block_reason({**current,'test_mode_allowed':False},self.job,
+            self.reservation['route'],legacy,runtime_enabled=True),'test_mode_binding_mismatch')
+        self.assertEqual(agent_send_reservation_block_reason(current,self.job,self.reservation['route'],
+            {**legacy,'credentials_available':False},runtime_enabled=True),'kommo_credentials_missing')
+
+    def test_agent_receipt_queries_bind_exactly_their_sql_parameters(self):
+        conn=MagicMock();conn.__enter__.return_value=conn
+        cur=MagicMock();cur.__enter__.return_value=cur;conn.cursor.return_value=cur
+        current={'state':'processing','revision':1,'lease_token':'lease','agent_enabled':True,
+            'mode':'automatic','settings_enabled':True,'auto_send_enabled':True,'tenant_status':'active',
+            'conversation_state':'active','conversation_revision':3,'test_mode_allowed':True}
+        cur.fetchone.side_effect=[current,{'request_id':'send-id'}]
+        with patch.object(send_store,'_connect',return_value=conn),patch.object(send_store,'ensure_schema'),\
+                patch.object(send_store,'runtime_flag',return_value=True):
+            send_store.mark_agent_sending(self.item)
+        for call in cur.execute.call_args_list:
+            query,params=call.args
+            self.assertEqual(query.count('%s'),len(params))
+
+        conn=MagicMock();conn.__enter__.return_value=conn
+        cur=MagicMock();cur.__enter__.return_value=cur;conn.cursor.return_value=cur
+        cur.fetchone.side_effect=[None,{'state':'sending','message_id':None}]
+        with patch.object(send_store,'_connect',return_value=conn),patch.object(send_store,'ensure_schema'):
+            send_store.finish_agent(self.item,'blocked')
+        for call in cur.execute.call_args_list:
+            query,params=call.args
+            self.assertEqual(query.count('%s'),len(params))
 
     async def test_timeout_is_unknown_and_never_retried(self):
         with patch.object(send_service,'reserve_agent',return_value=self.item),patch.object(send_service,'mark_agent_sending',self.mark),patch.object(send_service,'finish_agent',self.finish),patch.object(send_service,'read_talks',self.talk),patch.object(send_service,'read_messages',self.messages),patch.object(send_service,'send',Mock(side_effect=RuntimeError('timeout'))),patch.object(send_service,'assert_job_allowed'),patch.object(send_service,'assert_live_job_allowed',AsyncMock()),patch.object(send_service.asyncio,'to_thread',self.inline_to_thread):

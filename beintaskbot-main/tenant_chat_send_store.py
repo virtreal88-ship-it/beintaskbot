@@ -276,7 +276,7 @@ def mark_agent_sending(item):
                     or current.get('test_mode_allowed') is not True
                     or current['conversation_revision']!=item['route'].get('conversation_revision')):
                 raise TenantLinearError('Agent və ya avtomatik göndərmə icazəsi dəyişib.',409)
-            cur.execute("UPDATE saas_chat_send_receipts SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state='preparing' RETURNING request_id",item['key'])
+            cur.execute("UPDATE saas_chat_send_receipts SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state='preparing' RETURNING request_id",(item['key'][0],item['key'][2]))
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə receipt-i aktiv deyil.',409)
         conn.commit()
@@ -288,10 +288,10 @@ def finish_agent(item,state,message_id=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute("UPDATE saas_chat_send_receipts SET state=%s,message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state IN ('preparing','sending') RETURNING lead_id",(state,message_id,*item['key']))
+            cur.execute("UPDATE saas_chat_send_receipts SET state=%s,message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state IN ('preparing','sending') RETURNING lead_id",(state,message_id,item['key'][0],item['key'][2]))
             row=cur.fetchone()
             if not row:
-                cur.execute('SELECT state,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid',item['key'])
+                cur.execute('SELECT state,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid',(item['key'][0],item['key'][2]))
                 current=cur.fetchone() or {}
                 conn.commit()
                 return current.get('state') or 'unknown'
