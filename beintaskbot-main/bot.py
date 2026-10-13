@@ -17967,7 +17967,13 @@ async def telegram_auth_middleware(request, handler):
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             body_identity = {}
         if isinstance(body_identity, dict):
-            for key in ("chat_id", "uid", "user_id", "tg_id", "telegram_id"):
+            # The Test Mode payload uses chat_id for Kommo's opaque chat UUID,
+            # not for a Telegram user. Its handler still checks the signed
+            # session, tenant membership, and expected_user_id.
+            identity_keys = ("uid", "user_id", "tg_id", "telegram_id")
+            if request.path != "/api/webapp/ai/agents/test-mode":
+                identity_keys = ("chat_id", *identity_keys)
+            for key in identity_keys:
                 supplied = body_identity.get(key)
                 if supplied in (None, ""):
                     continue
