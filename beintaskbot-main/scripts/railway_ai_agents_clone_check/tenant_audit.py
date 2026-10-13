@@ -21,6 +21,22 @@ def mark_stage(name: str) -> None:
     CURRENT_STAGE = name
 
 
+def safe_error_category(exc: Exception) -> str:
+    """Classify connection errors without exposing driver text or connection data."""
+    message = " ".join(str(part) for part in getattr(exc, "args", ())).casefold()
+    categories = (
+        (("password authentication failed", "authentication failed", "invalid password"), "authentication_failed"),
+        (("could not translate host", "name or service not known", "temporary failure in name resolution"), "dns_resolution_failed"),
+        (("timeout", "timed out"), "connection_timeout"),
+        (("connection refused",), "connection_refused"),
+        (("no pg_hba.conf entry", "not allowed to connect"), "connection_policy_rejected"),
+        (("does not exist", "unknown database"), "database_unavailable"),
+        (("ssl", "certificate verify failed"), "tls_error"),
+    )
+    return next((category for phrases, category in categories
+                 if any(phrase in message for phrase in phrases)), "connection_error_unspecified")
+
+
 def safe_json(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
@@ -256,6 +272,7 @@ if __name__ == "__main__":
         else:
             state = getattr(exc, "sqlstate", None) or "none"
             message = f"read-only query failed (stage={CURRENT_STAGE}, " \
-                      f"error={type(exc).__name__}, sqlstate={state}); details suppressed"
+                      f"error={type(exc).__name__}, sqlstate={state}, " \
+                      f"category={safe_error_category(exc)}); details suppressed"
         print(f"FAIL: {message}", file=sys.stderr, flush=True)
         raise SystemExit(1)

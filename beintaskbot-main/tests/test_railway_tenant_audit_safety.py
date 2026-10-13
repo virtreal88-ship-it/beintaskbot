@@ -53,6 +53,9 @@ class TenantAuditSafetyTests(unittest.TestCase):
         self.assertIn('stage={CURRENT_STAGE}', source)
         self.assertIn('error={type(exc).__name__}, sqlstate={state}', source)
         self.assertIn('details suppressed', source)
+        self.assertIn('authentication_failed', source)
+        self.assertIn('dns_resolution_failed', source)
+        self.assertIn('connection_timeout', source)
         self.assertNotIn('print(str(exc))', source)
 
 
