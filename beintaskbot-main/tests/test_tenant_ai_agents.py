@@ -63,6 +63,25 @@ class PolicyTests(unittest.TestCase):
         cur.fetchone.side_effect=[{'role':'admin','active':True,'status':'active'}, {'value':{}}]
         with self.assertRaises(TenantLinearError):agent_store._authorize(cur,{'tenant_id':TENANT,'telegram_id':20})
 
+    def test_trigger_insert_reads_returning_row_before_audit(self):
+        conn=MagicMock();conn.__enter__.return_value=conn
+        cur=MagicMock();cur.__enter__.return_value=cur;conn.cursor.return_value=cur
+        row={'id':AGENT,'agent_id':AGENT,'name':'Price','trigger_type':'phrase',
+             'condition':{'phrase':'price'},'actions':['create_task'],'enabled':True,
+             'version':1,'created_at':None,'updated_at':None}
+        def execute(sql,*args):
+            if 'INSERT INTO saas_ai_agent_triggers' in sql:cur.fetchone.return_value=row
+            elif 'INSERT INTO saas_tenant_audit_events' in sql:cur.fetchone.return_value=None
+            elif 'crm_actions_enabled' in sql:cur.fetchone.return_value={'crm_actions_enabled':True}
+            else:cur.fetchone.return_value={'exists':1}
+        cur.execute.side_effect=execute
+        with patch.object(agent_store,'_connect',return_value=conn),patch.object(agent_store,'ensure_schema'),patch.object(agent_store,'_authorize',return_value=(TENANT,20)):
+            result=agent_store.save_trigger({'tenant_id':TENANT,'telegram_id':20},AGENT,
+                {'name':'Price','trigger_type':'phrase','condition':{'phrase':'price','task_text':'Follow up'},
+                 'actions':['create_task'],'enabled':True})
+        self.assertEqual(result['name'],'Price')
+        conn.commit.assert_called_once()
+
 
 class QueueTests(unittest.TestCase):
     def test_domain_and_scope_are_bound(self):

@@ -405,6 +405,7 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                   VALUES(%s::uuid,%s,%s::uuid,%s,%s,%s::jsonb,%s::jsonb,%s)
                   RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',
                   (tenant,trigger_uuid,agent,patch['name'],patch['trigger_type'],_json(patch['condition']),_json(patch['actions']),patch['enabled']))
+                result=dict(cur.fetchone())
                 _audit(cur,tenant,actor,'ai_agent_trigger_created','ai_agent_trigger',trigger_uuid,{'type':patch['trigger_type']})
             else:
                 trigger_uuid=identifier(trigger_id)
@@ -421,8 +422,8 @@ def save_trigger(profile,agent_id,data,*,trigger_id=None):
                   enabled=%s,version=version+1,updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND id=%s::uuid
                   RETURNING id,agent_id,name,trigger_type,condition,actions,enabled,version,created_at,updated_at''',
                   (merged['name'],merged['trigger_type'],_json(merged['condition']),_json(merged['actions']),merged['enabled'],tenant,agent,trigger_uuid))
+                result=dict(cur.fetchone())
                 _audit(cur,tenant,actor,'ai_agent_trigger_updated','ai_agent_trigger',trigger_uuid,{'version':previous['version']+1})
-            result=dict(cur.fetchone())
         conn.commit()
     result['id']=str(result['id']);result['agent_id']=str(result['agent_id'])
     for key in ('created_at','updated_at'):
