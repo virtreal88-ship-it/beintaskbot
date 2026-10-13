@@ -76,16 +76,17 @@
   const help = document.createElement('p'); help.className='settings-help';
   const advancedTitle = document.createElement('div'); advancedTitle.className = 'advanced-settings-title';
   advancedTitle.innerHTML = '<h2>Geniş ayarlar</h2><p>Şirkətin iş axınını və texniki parametrlərini ehtiyac olduqda dəyişin.</p>';
-  const settingsAnchor = $('chakra-settings-root') || settings.querySelector('.top');
+  const settingsAnchor = settings.querySelector('.top');
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
+    if (panel.id === 'chakra-settings-root') return 'employees';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
     if (panel.id === 'workflowPanel') return 'workflow';
     if (panel.querySelector('#inviteName,#members,#accessRequests')) return 'employees';
     return 'advanced';
   }
   function showSettings() {
-    const panels = [...settings.querySelectorAll(':scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
+    const panels = [...settings.querySelectorAll(':scope > #chakra-settings-root,:scope > .panel,:scope > .grid > .panel')].filter(panel => !panel.hasAttribute('data-basic-settings'));
     const settingsPanels = panels.filter(panel => classify(panel) !== 'external-integration');
     const available = groups.find(([key]) => settingsPanels.some(panel => panel.dataset.settingsSection === key || classify(panel) === key));
     if (!settingsPanels.some(panel => (panel.dataset.settingsSection || classify(panel)) === section) && available) section = available[0];

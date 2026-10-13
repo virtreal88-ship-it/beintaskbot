@@ -1,0 +1,194 @@
+/* /app presentation only. Never loaded by the legacy /webapp. */
+html[data-app-theme],body[data-app-ui="kwid"] {
+  --app-bg:#f9fafb; --app-surface:#fff; --app-raised:#f4f4f5;
+  --app-ink:#18181b; --app-muted:#71717a; --app-line:#e4e4e7;
+  --app-input:#fff; --app-hover:#f4f4f5; --app-accent:#0284c7;
+  --app-accent-hover:#0369a1; --app-accent-soft:#e0f2fe;
+  --app-danger:#dc2626; --app-sidebar:288px; --app-motion:180ms;
+  --ink:var(--app-ink); --muted:var(--app-muted); --line:var(--app-line);
+  --paper:var(--app-bg); --card:var(--app-surface); --brand:var(--app-accent); --brand-deep:var(--app-accent-hover);
+}
+body[data-app-ui="kwid"] {
+  background:var(--app-bg)!important; color:var(--app-ink)!important;
+  font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+html[data-app-theme="dark"],html[data-app-theme="dark"] body[data-app-ui="kwid"] {
+  --app-bg:#09090b; --app-surface:#18181b; --app-raised:#27272a;
+  --app-ink:#fafafa; --app-muted:#a1a1aa; --app-line:#ffffff1a;
+  --app-input:#ffffff0d; --app-hover:#ffffff0d; --app-accent:#38bdf8;
+  --app-accent-hover:#7dd3fc; --app-accent-soft:#0c4a6e;
+  --app-danger:#f87171; color-scheme:dark;
+}
+body[data-app-ui="kwid"] [hidden] {display:none!important}
+body[data-app-ui="kwid"] .shell {display:grid;grid-template-columns:var(--app-sidebar) minmax(0,1fr);min-height:100dvh;transition:grid-template-columns var(--app-motion) ease}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] {--app-sidebar:88px}
+body[data-app-ui="kwid"] aside {display:flex;flex-direction:column;align-items:stretch;width:100%;height:100dvh;position:sticky;top:0;padding:0;background:var(--app-bg);color:var(--app-ink);gap:0;z-index:40;overflow:hidden;border-right:1px solid var(--app-line)}
+body[data-app-ui="kwid"] .app-sidebar-header {height:64px;min-height:64px;padding:0 24px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--app-surface);border-bottom:1px solid var(--app-line)}
+body[data-app-ui="kwid"] .brand {font-size:17px;font-weight:700;letter-spacing:-.45px;line-height:1.3;white-space:nowrap;gap:0;min-width:0}
+body[data-app-ui="kwid"] .mark {display:none}
+body[data-app-ui="kwid"] .company {display:block;margin:24px 20px 20px;padding:12px 4px;font-size:13px;font-weight:600;color:var(--app-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-app-ui="kwid"] .app-nav-label {font-size:13px}
+body[data-app-ui="kwid"] .nav {flex:1;overflow:auto;display:flex;flex-direction:column;gap:20px;padding:0 16px 24px;min-height:0;scrollbar-width:thin}
+body[data-app-ui="kwid"] .app-nav-group {display:grid;gap:4px}
+body[data-app-ui="kwid"] .app-nav-group-title {display:flex;justify-content:space-between;align-items:center;width:100%;padding:8px;color:var(--app-muted);background:none;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:6px;min-height:30px}
+body[data-app-ui="kwid"] .app-nav-group-title svg {width:14px;height:14px;transition:transform var(--app-motion) ease}
+body[data-app-ui="kwid"] .app-nav-group-title span {font-size:11px}
+body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-title svg {transform:rotate(-90deg)}
+body[data-app-ui="kwid"] .app-nav-group-items {display:grid;grid-template-rows:1fr;gap:4px}
+body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-items {display:none}
+body[data-app-ui="kwid"] .nav [data-view] {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
+body[data-app-ui="kwid"] .nav [data-view]:hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] .nav [data-view].active {background:var(--app-hover);color:var(--app-accent)}
+body[data-app-ui="kwid"] .nav [data-view]>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
+body[data-app-ui="kwid"] .nav svg {width:22px;height:22px;stroke-width:1.5}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-sidebar-header {justify-content:center;padding:0 16px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .brand,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-label,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-title {display:none}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .company {font-size:0;margin:24px 16px 20px;text-align:center}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .company::first-letter {font-size:14px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav [data-view] {justify-content:center;padding:8px}
+body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-items {display:grid!important}
+body[data-app-ui="kwid"] main {padding:96px 32px 32px!important;width:100%;max-width:1440px!important;margin:0 auto;min-width:0}
+body[data-app-ui="kwid"] .app-topbar {position:fixed;top:0;left:var(--app-sidebar);right:0;z-index:35;height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 32px;background:var(--app-surface);border-bottom:1px solid var(--app-line);transition:left var(--app-motion) ease}
+body[data-app-ui="kwid"] .app-topbar-context {font-size:13px;font-weight:500;color:var(--app-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body[data-app-ui="kwid"] .app-topbar-actions {display:flex;align-items:center;gap:12px;margin-left:auto}
+body[data-app-ui="kwid"] .app-icon-button {border:0;background:transparent;color:var(--app-muted);border-radius:8px;width:36px;height:36px;display:grid;place-items:center;flex:none;padding:8px;transition:color 75ms,background 75ms}
+body[data-app-ui="kwid"] .app-icon-button:hover {background:var(--app-hover);color:var(--app-ink)}
+body[data-app-ui="kwid"] .app-icon-button svg {width:20px;height:20px}
+body[data-app-ui="kwid"] .app-avatar-button {width:32px;height:32px;border:1px solid var(--app-line);border-radius:50%;background:var(--app-raised);color:var(--app-ink);font-size:11px;font-weight:700;padding:0}
+body[data-app-ui="kwid"] .app-user-menu {position:absolute;right:24px;top:56px;width:256px;padding:6px;background:var(--app-surface);border:1px solid var(--app-line);border-radius:10px;box-shadow:0 8px 24px #00000014;z-index:80;animation:app-appear 120ms ease-out}
+body[data-app-ui="kwid"] .app-user-name {padding:10px 10px 12px;margin-bottom:4px;border-bottom:1px solid var(--app-line);display:grid;gap:2px;font-weight:600}
+body[data-app-ui="kwid"] .app-user-name small {font-size:12px;color:var(--app-muted);font-weight:400}
+body[data-app-ui="kwid"] .app-user-menu button {display:flex;align-items:center;gap:10px;width:100%;border:0;border-radius:6px;padding:9px 10px;background:transparent;color:var(--app-ink);text-align:left;font-size:13px}
+body[data-app-ui="kwid"] .app-user-menu button:hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] .app-user-menu svg {width:18px;height:18px;color:var(--app-muted)}
+body[data-app-ui="kwid"] .app-theme-options {display:flex;padding:6px;gap:6px;border-top:1px solid var(--app-line);margin-top:4px}
+body[data-app-ui="kwid"] .app-theme-options button {justify-content:center;padding:7px}
+body[data-app-ui="kwid"] .app-theme-options button[aria-pressed="true"] {color:var(--app-accent);background:var(--app-hover)}
+body[data-app-ui="kwid"] .app-mobile-menu {display:none}
+body[data-app-ui="kwid"] .app-sidebar-backdrop {display:none}
+body[data-app-ui="kwid"] .top {margin:0 0 28px;gap:20px;align-items:center;justify-content:space-between}
+body[data-app-ui="kwid"] .top h1,body[data-app-ui="kwid"] #aiAgentsOverview h1 {font-size:30px;line-height:36px;letter-spacing:-.75px;font-weight:700;color:var(--app-ink);margin:0}
+body[data-app-ui="kwid"] .top p {font-size:14px;margin-top:6px;color:var(--app-muted)}
+body[data-app-ui="kwid"] .eyebrow,body[data-app-ui="kwid"] .advanced-settings-title {display:none}
+body[data-app-ui="kwid"] .toolbar {margin:0 0 20px}
+body[data-app-ui="kwid"] :is(.primary,.refresh,.outline,[data-scope="button"]) {min-height:36px;padding:8px 12px;border-radius:8px;font-size:14px;line-height:20px;font-weight:600;box-shadow:0 1px 2px #0000000d;transition:background-color 75ms,border-color 75ms,color 75ms}
+body[data-app-ui="kwid"] :is(.primary,.refresh) {background:#0284c7;color:#fff;border:1px solid transparent}
+body[data-app-ui="kwid"] :is(.primary,.refresh):hover {background:#0369a1}
+body[data-app-ui="kwid"] .outline {background:var(--app-surface);border-color:var(--app-line);color:var(--app-ink)}
+body[data-app-ui="kwid"] .outline:hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] .danger {color:var(--app-danger)}
+body[data-app-ui="kwid"] .spinner {border-color:#ffffff40;border-top-color:currentColor}
+body[data-app-ui="kwid"] button:disabled {opacity:.5;cursor:not-allowed;transform:none!important}
+body[data-app-ui="kwid"] :is(button,a,input,select,textarea):focus-visible {outline:2px solid var(--app-accent);outline-offset:2px}
+body[data-app-ui="kwid"] :is(.search,.panel input,.panel select,.panel textarea,.modal input,.modal select,.modal textarea,.integration-modal-panel input,.integration-modal-panel select,.integration-modal-panel textarea,[data-scope="input"]) {background:var(--app-input)!important;color:var(--app-ink)!important;border:1px solid var(--app-line)!important;border-radius:8px;padding:7px 12px;min-height:36px;font:inherit;box-shadow:0 1px 2px #0000000d}
+body[data-app-ui="kwid"] textarea {line-height:1.65!important}
+body[data-app-ui="kwid"] input::placeholder,body[data-app-ui="kwid"] textarea::placeholder {color:var(--app-muted);opacity:.8}
+body[data-app-ui="kwid"] :is(input[type="checkbox"],input[type="radio"]) {accent-color:#0284c7;width:16px!important;height:16px;min-height:0!important;padding:0!important;box-shadow:none;flex:none;vertical-align:middle}
+body[data-app-ui="kwid"] .panel label {color:var(--app-ink);font-size:14px;font-weight:500;line-height:20px;margin:14px 0}
+body[data-app-ui="kwid"] :is(.panel,.table,.tl-card,.hot-card,.wf-card,[data-scope="card"][data-part="root"]) {background:var(--app-surface)!important;color:var(--app-ink)!important;border:1px solid var(--app-line)!important;border-radius:12px;box-shadow:0 1px 2px #00000008}
+body[data-app-ui="kwid"] .panel {padding:24px}
+body[data-app-ui="kwid"] .panel h2,body[data-app-ui="kwid"] .panel h3 {font-size:16px;font-weight:600;line-height:24px}
+body[data-app-ui="kwid"] .panel p {font-size:14px;line-height:1.5;color:var(--app-muted)}
+body[data-app-ui="kwid"] :is([data-scope="card"][data-part="header"],[data-scope="card"][data-part="footer"]) {border-color:var(--app-line);background:transparent}
+body[data-app-ui="kwid"] [data-scope="table"] {color:var(--app-ink)!important}
+body[data-app-ui="kwid"] :is([data-scope="table"][data-part="header"],[data-scope="table"][data-part="columnheader"]) {color:var(--app-ink)!important;background:var(--app-raised)!important;font-size:12px;font-weight:600;border-color:var(--app-line)!important}
+body[data-app-ui="kwid"] [data-scope="table"][data-part="cell"] {color:var(--app-ink)!important;border-color:var(--app-line)!important;padding:16px 20px;font-size:14px}
+body[data-app-ui="kwid"] [data-scope="table"][data-part="row"] {border-color:var(--app-line)!important}
+body[data-app-ui="kwid"] [data-scope="table"][data-part="row"]:hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] :is(.row,.member) {color:var(--app-ink);background:transparent;border-color:var(--app-line)}
+body[data-app-ui="kwid"] .row:hover {background:var(--app-hover)}
+body[data-app-ui="kwid"] :is(.settings-sections,.wf-tabs,.workspace-modes,.app-page-tabs,.app-integration-tabs) {display:flex;gap:4px;align-items:center;width:max-content;max-width:100%;padding:8px;margin:0 0 24px;border:1px solid var(--app-line);border-radius:12px;background:var(--app-surface);overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin}
+body[data-app-ui="kwid"] :is(.settings-sections,.wf-tabs,.workspace-modes,.app-page-tabs,.app-integration-tabs) button {min-height:36px;padding:8px 12px;white-space:nowrap;border:0;border-radius:8px;color:var(--app-muted);background:transparent;font-size:14px;font-weight:500;box-shadow:none}
+body[data-app-ui="kwid"] :is(.settings-sections,.wf-tabs,.workspace-modes,.app-page-tabs,.app-integration-tabs) button:is([aria-selected="true"],[aria-pressed="true"],.active) {background:var(--app-hover);color:var(--app-accent)}
+body[data-app-ui="kwid"] .app-integration-tabs {margin:0}
+body[data-app-ui="kwid"] .app-tab-picker {display:none}
+body[data-app-ui="kwid"] .settings-help {margin:0 0 20px;font-size:14px}
+body[data-app-ui="kwid"] #chakra-settings-root {margin-top:0}
+body[data-app-ui="kwid"] :is(.workspace-lane,.tl-column) {background:var(--app-hover);border:1px solid var(--app-line);border-radius:12px;padding:12px}
+body[data-app-ui="kwid"] :is(.workspace-card,.tl-card) {box-shadow:none;background:var(--app-surface);color:var(--app-ink);border-color:var(--app-line);border-radius:10px}
+body[data-app-ui="kwid"] :is(.tl-column>h2,.workspace-lane-header) {font-size:14px;font-weight:600;line-height:22px}
+body[data-app-ui="kwid"] :is(.tl-actions,.hot-actions,.tn-actions) {gap:8px}
+body[data-app-ui="kwid"] .badge {border-radius:6px;font-size:12px;line-height:18px;padding:2px 7px;background:var(--app-accent-soft);color:var(--app-accent)}
+body[data-app-ui="kwid"] .modal {background:#0009;z-index:100;padding:24px}
+body[data-app-ui="kwid"] :is(.modal-card,.ai-agents-dialog,[data-scope="dialog"][data-part="content"]) {background:var(--app-surface)!important;color:var(--app-ink)!important;border:1px solid var(--app-line);border-radius:12px!important;box-shadow:0 20px 40px #0003;max-height:calc(100dvh - 48px);overflow:auto;animation:app-appear 150ms ease-out}
+body[data-app-ui="kwid"] :is(.modal-head,.ai-agents-dialog-head) {background:var(--app-surface)!important;border-color:var(--app-line);padding-bottom:16px;margin-bottom:16px}
+body[data-app-ui="kwid"] .modal-head h2 {font-size:18px;line-height:26px;font-weight:600}
+body[data-app-ui="kwid"] :is(.hot-footer,.finance-footer,.tl-footer,.task-actions,.tn-actions,#dealModal .modal-head) {background:var(--app-surface)!important}
+body[data-app-ui="kwid"] .modal-card [style*="position:sticky"] {background:var(--app-surface)!important}
+body[data-app-ui="kwid"] :is(.chat-placeholder,.meta div) {background:var(--app-hover);color:var(--app-ink)}
+body[data-app-ui="kwid"] #chatRows>div>div {background:var(--app-raised)!important;color:var(--app-ink)!important}
+body[data-app-ui="kwid"] #chatRows>div[style*="flex-end"]>div {background:var(--app-accent-soft)!important}
+body[data-app-ui="kwid"] #chatText {background:var(--app-input)!important;color:var(--app-ink);border:1px solid var(--app-line)!important;padding:10px 12px!important;min-height:80px;line-height:1.6}
+body[data-app-ui="kwid"] #tcAiResult textarea {background:var(--app-input);color:var(--app-ink);border:1px solid var(--app-line);border-radius:8px;padding:12px}
+body[data-app-ui="kwid"] #aiAgentsOverview {border-radius:12px;box-shadow:none;padding:24px;margin-bottom:24px;background:var(--app-surface)}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles {gap:16px}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles button {border-radius:12px;min-height:100px;background:var(--app-surface)}
+body[data-app-ui="kwid"] .ai-agents-dialog {width:min(896px,100%)}
+body[data-app-ui="kwid"] .ai-agents-dialog-body {padding:24px}
+body[data-app-ui="kwid"] .ai-agents-modal-backdrop {background:#0009;backdrop-filter:none}
+body[data-app-ui="kwid"] .ai-agents-dialog-body>.panel {border:0!important;padding:0;box-shadow:none}
+body[data-app-ui="kwid"] .integration-modal-panel {padding:0!important;border:0!important;box-shadow:none!important}
+body[data-app-ui="kwid"] .integration-modal-panel input,body[data-app-ui="kwid"] .integration-modal-panel textarea,body[data-app-ui="kwid"] .integration-modal-panel select {margin-top:6px}
+/* Chakra's stateless parts use class names, while Ark-powered controls use data-scope. */
+body[data-app-ui="kwid"] .chakra-card__root {background:var(--app-surface);color:var(--app-ink);border-color:var(--app-line);border-radius:12px}
+body[data-app-ui="kwid"] .chakra-table__root {color:var(--app-ink);font-size:14px}
+body[data-app-ui="kwid"] .chakra-table__header {background:var(--app-raised)}
+body[data-app-ui="kwid"] .chakra-table__columnHeader {color:var(--app-muted);font-size:12px;font-weight:600;padding:12px 20px}
+body[data-app-ui="kwid"] .chakra-table__cell {border-color:var(--app-line);padding:16px 20px}
+body[data-app-ui="kwid"] .chakra-button {border-radius:8px;font-size:14px;font-weight:600;min-height:36px}
+body[data-app-ui="kwid"] :is(.chakra-input,.chakra-native-select__field) {background:var(--app-input)!important;color:var(--app-ink)!important;border:1px solid var(--app-line)!important;border-radius:8px;min-height:36px}
+body[data-app-ui="kwid"] :is(#chakra-settings-root,#chakra-integrations-root) :is(input,select,textarea) {background:var(--app-input)!important;color:var(--app-ink)!important;border-color:var(--app-line)!important}
+body[data-app-ui="kwid"] :is(#view-linear,#view-news,#view-hot_orders,#view-finance) a {color:var(--app-accent)}
+body[data-app-ui="kwid"] :is(.tl-toolbar,.tn-toolbar) {margin:0 0 24px;gap:8px}
+body[data-app-ui="kwid"] :is(.tl-card,.tn-card,.hot-card) h2,body[data-app-ui="kwid"] .tl-card h3 {font-size:16px;font-weight:600;line-height:24px}
+body[data-app-ui="kwid"] .tl-card {margin:12px 0 0;padding:20px}
+body[data-app-ui="kwid"] .tl-card .badge[style*="background"] {background:var(--app-hover)!important;color:var(--app-ink)}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles {display:flex;gap:4px;width:100%;margin-bottom:0;overflow:auto;padding:8px;grid-template-columns:none}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles button {display:flex;align-items:center;min-height:36px;padding:8px 12px;gap:8px;flex:none;border:0;border-radius:8px;background:transparent;transition:background-color 75ms}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles button:is(:hover,:focus-visible) {background:var(--app-hover)}
+body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles :is(svg,small) {display:none}
+body[data-app-ui="kwid"] :is(.wf-card,.hot-card) input,body[data-app-ui="kwid"] .wf-card select {background:var(--app-input);color:var(--app-ink);border-color:var(--app-line)}
+body[data-app-ui="kwid"] .close {color:var(--app-muted);width:36px;height:36px;padding:0;border-radius:8px;display:grid;place-items:center}
+body[data-app-ui="kwid"] :is(#financeModal,#tenantTaskModal,#tenantCompleteModal,#dealModal,#tlTaskModal,#tnModal,#hotOrderModal) {z-index:150}
+html[data-app-theme="dark"] body[data-app-ui="kwid"] [data-integration-logo="openai"] {color:#e4e4e7;background:#ffffff0d;border-color:var(--app-line)}
+html[data-app-theme="dark"] body[data-app-ui="kwid"] {
+  --chakra-colors-green-50:#052e16;--chakra-colors-green-100:#14532d;--chakra-colors-green-700:#86efac;
+  --chakra-colors-orange-50:#431407;--chakra-colors-orange-100:#7c2d12;--chakra-colors-orange-700:#fdba74;--chakra-colors-orange-800:#fed7aa;
+  --chakra-colors-red-50:#450a0a;--chakra-colors-red-100:#7f1d1d;--chakra-colors-red-700:#fca5a5;
+}
+@keyframes app-appear {from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:1023px) {
+  body[data-app-ui="kwid"] .shell {grid-template-columns:minmax(0,1fr)}
+  body[data-app-ui="kwid"] aside {position:fixed;inset:0 auto 0 0;width:288px;transform:translateX(-100%);transition:transform var(--app-motion) ease;background:var(--app-surface);z-index:100;height:100dvh}
+  body[data-app-ui="kwid"][data-mobile-menu="open"] aside {transform:translateX(0)}
+  body[data-app-ui="kwid"][data-mobile-menu="open"] {overflow:hidden}
+  body[data-app-ui="kwid"] .app-topbar {left:0;padding:0 24px}
+  body[data-app-ui="kwid"] .app-mobile-menu {display:grid}
+  body[data-app-ui="kwid"][data-mobile-menu="open"] .app-sidebar-backdrop {display:block;position:fixed;inset:0;background:#0009;z-index:90;border:0}
+  body[data-app-ui="kwid"] main {padding:96px 24px 32px!important}
+  body[data-app-ui="kwid"] .nav {flex-direction:column;margin:0}
+  body[data-app-ui="kwid"] .nav [data-view] {font-size:13px;justify-content:flex-start}
+}
+@media(max-width:639px) {
+  body[data-app-ui="kwid"] main {padding:88px 16px 24px!important}
+  body[data-app-ui="kwid"] .app-topbar {padding:0 16px;gap:8px}
+  body[data-app-ui="kwid"] .app-topbar-actions {gap:8px}
+  body[data-app-ui="kwid"] .top {align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:24px}
+  body[data-app-ui="kwid"] .top>div:first-child {flex-basis:100%}
+  body[data-app-ui="kwid"] .top h1,body[data-app-ui="kwid"] #aiAgentsOverview h1 {font-size:24px;line-height:32px}
+  body[data-app-ui="kwid"] .top p {display:block;font-size:13px}
+  body[data-app-ui="kwid"] .panel {padding:20px}
+  body[data-app-ui="kwid"] .grid {grid-template-columns:1fr}
+  body[data-app-ui="kwid"] .app-user-menu {right:12px;max-width:calc(100vw - 24px)}
+  body[data-app-ui="kwid"] .settings-sections[data-app-tab-ready],body[data-app-ui="kwid"] .wf-tabs[data-app-tab-ready] {display:none}
+  body[data-app-ui="kwid"] .app-tab-picker {display:block;width:100%;margin:0 0 24px;border:1px solid var(--app-line);border-radius:8px;background:var(--app-input);color:var(--app-ink);padding:8px 12px;min-height:36px;font:inherit}
+  body[data-app-ui="kwid"] :is(.modal,.ai-agents-modal) {padding:12px}
+  body[data-app-ui="kwid"] :is(.modal-card,.ai-agents-dialog,[data-scope="dialog"][data-part="content"]) {max-height:calc(100dvh - 24px)!important;border-radius:12px!important;max-width:calc(100vw - 24px)}
+  body[data-app-ui="kwid"] .ai-agents-dialog-body {padding:20px}
+  body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-header {flex-direction:column}
+  body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-actions {flex-direction:row;align-items:center;flex-wrap:wrap}
+  body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-facts>div {font-size:13px}
+  body[data-app-ui="kwid"] #aiAgentsOverview .ai-overview-tiles {grid-template-columns:1fr 1fr;gap:10px}
+}
+@media(prefers-reduced-motion:reduce) {body[data-app-ui="kwid"] {--app-motion:0ms}body[data-app-ui="kwid"] *,body[data-app-ui="kwid"] *::before,body[data-app-ui="kwid"] *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}}
