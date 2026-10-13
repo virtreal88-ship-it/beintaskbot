@@ -98,7 +98,7 @@ def retry_or_fail(job, error_code):
         conn.commit()
 
 
-def load_agent_config(job):
+def load_agent_config(job, *, with_block_reason=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -120,14 +120,32 @@ def load_agent_config(job):
                 AND j.state='processing' AND j.lease_token=%s AND j.revision=%s''',
               (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
             row = cur.fetchone()
-    if not row or row['tenant_status']!='active' or row['agent_enabled'] is not True or row['settings_enabled'] is not True or row.get('conversation_state') in {'human','paused'} or row.get('test_mode_allowed') is not True:
-        return None
+    reason = None
+    if not row:
+        reason = 'config_row_missing'
+    elif row['tenant_status'] != 'active':
+        reason = 'tenant_inactive'
+    elif row['agent_enabled'] is not True:
+        reason = 'agent_disabled'
+    elif row['settings_enabled'] is not True:
+        reason = 'company_ai_disabled'
+    elif row.get('conversation_state') in {'human', 'paused'}:
+        reason = 'conversation_paused_or_human'
+    elif row.get('test_mode_allowed') is not True:
+        reason = 'test_binding_mismatch'
+    if reason:
+        return (None, reason) if with_block_reason else None
     config = row['metadata'] if isinstance(row['metadata'],dict) else {}
-    if config.get('enabled') is not True or config.get('consent') is not True:
-        return None
-    return {'scopes':row['scopes'],'agent_model':str(row['agent_model'] or ''),
+    if config.get('enabled') is not True:
+        reason = 'chat_ai_disabled'
+    elif config.get('consent') is not True:
+        reason = 'chat_ai_consent_missing'
+    if reason:
+        return (None, reason) if with_block_reason else None
+    result = {'scopes':row['scopes'],'agent_model':str(row['agent_model'] or ''),
       'chat_model':str(config.get('model') or ''),'schedule':row['schedule'],'mode':row['mode'],
       'crm_actions_enabled':row['crm_actions_enabled'] is True}
+    return (result, None) if with_block_reason else result
 
 
 def defer_job(job, due_at):

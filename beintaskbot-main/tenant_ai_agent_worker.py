@@ -239,10 +239,15 @@ async def process_one(job, kommo_request, wait_slot, logger):
             return
         model_config = None
         from tenant_ai_agent_run_store import load_agent_config
-        model_config = await asyncio.to_thread(load_agent_config,job)
+        loaded_config = await asyncio.to_thread(load_agent_config, job, with_block_reason=True)
+        if isinstance(loaded_config, tuple) and len(loaded_config) == 2:
+            model_config, config_block_reason = loaded_config
+        else:  # Keep compatible with existing integrations and mocked loaders.
+            model_config, config_block_reason = loaded_config, None
         if not model_config:
-            await asyncio.to_thread(skip_job,job,'agent_disabled')
-            _test_diag(logger, job, 'job_skipped', 'agent_disabled')
+            reason = config_block_reason or 'agent_config_unavailable'
+            await asyncio.to_thread(skip_job,job,reason)
+            _test_diag(logger, job, 'job_skipped', reason)
             return
         if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
             await asyncio.to_thread(skip_job,job,'deal_outside_agent_scope')
