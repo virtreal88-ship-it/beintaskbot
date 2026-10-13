@@ -17,8 +17,10 @@ def start_http_thread(start_server: Callable, logger) -> threading.Thread:
         try:
             loop.run_until_complete(start_server())
             loop.run_forever()
-        except Exception as exc:
-            logger.error("HTTP server failed: %s", exc)
+        except Exception:
+            # Keep the traceback so startup failures can be diagnosed from
+            # Railway logs without exposing request data or secrets.
+            logger.exception("HTTP server failed")
 
     thread = threading.Thread(target=run, name="http-server", daemon=True)
     thread.start()
