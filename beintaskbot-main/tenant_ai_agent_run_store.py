@@ -281,7 +281,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
     return result
 
 
-def complete_run(job, reservation, draft, source_ids):
+def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -324,10 +324,10 @@ def complete_run(job, reservation, draft, source_ids):
             draft_id = uuid.uuid4()
             payload = job.get('payload') or {}
             cur.execute('''INSERT INTO saas_ai_agent_drafts
-              (tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,source_ids)
-              VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::jsonb)''',
+              (tenant_id,id,agent_id,run_id,lead_id,talk_id,chat_id,source_message_id,source_fingerprint,draft,source_ids,handoff_after_send)
+              VALUES(%s::uuid,%s,%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)''',
               (job['tenant_id'],draft_id,job['agent_id'],reservation['run_id'],job['lead_id'],job['talk_id'],job['chat_id'],
-               str(payload.get('message_id') or ''),job['event_fingerprint'],draft,_json(source_ids)))
+               str(payload.get('message_id') or ''),job['event_fingerprint'],draft,_json(source_ids),bool(stop_after_reply)))
             cur.execute('''UPDATE saas_ai_agent_jobs SET state='drafted',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now()
               WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
                 AND lease_token=%s AND revision=%s''',

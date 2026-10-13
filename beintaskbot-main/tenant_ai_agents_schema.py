@@ -177,6 +177,7 @@ def ensure_schema(conn):
               source_fingerprint TEXT NOT NULL,
               draft TEXT NOT NULL,
               source_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+              handoff_after_send BOOLEAN NOT NULL DEFAULT FALSE,
               state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','rejected','superseded')),
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
               PRIMARY KEY(tenant_id,id),
@@ -188,6 +189,7 @@ def ensure_schema(conn):
               ON saas_ai_agent_drafts(tenant_id,state,created_at DESC)''')
             cur.execute('ALTER TABLE saas_ai_agent_drafts DROP CONSTRAINT IF EXISTS saas_ai_agent_drafts_state_check')
             cur.execute("ALTER TABLE saas_ai_agent_drafts ADD CONSTRAINT saas_ai_agent_drafts_state_check CHECK(state IN ('pending','sending','unknown','approved','rejected','superseded'))")
+            cur.execute("ALTER TABLE saas_ai_agent_drafts ADD COLUMN IF NOT EXISTS handoff_after_send BOOLEAN NOT NULL DEFAULT FALSE")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_triggers(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
               id UUID NOT NULL,agent_id UUID NOT NULL,trigger_type TEXT NOT NULL

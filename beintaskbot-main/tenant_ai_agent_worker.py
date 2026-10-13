@@ -385,6 +385,8 @@ async def process_one(job, kommo_request, wait_slot, logger):
             try:
                 result=await send_agent(job,{**reservation,'route':route},str(draft)[:8000],kommo_request,
                     wait_slot,logger)
+                if any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched):
+                    await asyncio.to_thread(handoff,job,'trigger_reply_sent_then_handoff')
                 logger.info('AI agent message accepted: tenant=%s agent=%s receipt=%s',tenant,job['agent_id'],result['state'])
                 _test_diag(logger, job, 'automatic_send', 'accepted')
                 return
@@ -403,7 +405,8 @@ async def process_one(job, kommo_request, wait_slot, logger):
                     await asyncio.to_thread(finish_superseded,job,reservation,
                         f'automatic_send_blocked_{reason}')
                 return
-        saved = await asyncio.to_thread(complete_run,job,reservation,str(draft)[:16000],source_ids)
+        stop_after_reply=any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched)
+        saved = await asyncio.to_thread(complete_run,job,reservation,str(draft)[:16000],source_ids,stop_after_reply=stop_after_reply)
         _test_diag(logger, job, 'draft_persist', 'saved' if saved else 'revision_changed')
         if not saved:
             logger.info('AI agent draft discarded after revision change: tenant=%s agent=%s',tenant,job['agent_id'])

@@ -348,7 +348,7 @@ def list_drafts(profile, *, limit=50):
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute('''SELECT d.id,d.agent_id,a.name AS agent_name,d.lead_id,d.talk_id,d.chat_id,
-              d.source_message_id,d.draft,d.source_ids,d.state,d.created_at
+              d.source_message_id,d.draft,d.source_ids,d.handoff_after_send,d.state,d.created_at
               FROM saas_ai_agent_drafts d JOIN saas_ai_agents a
                 ON a.tenant_id=d.tenant_id AND a.id=d.agent_id
               WHERE d.tenant_id=%s::uuid AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s
@@ -573,7 +573,7 @@ def reserve_draft_send(profile,draft_id):
                   WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                     AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
                     AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id AND b.channel_id=j.channel_id))
-              RETURNING d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,
+              RETURNING d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,d.handoff_after_send,
                 (SELECT j.channel_id FROM saas_ai_agent_jobs j WHERE j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id ORDER BY j.updated_at DESC LIMIT 1) AS channel_id''',(tenant,draft))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Qaralama köhnəlib, menecerə verilib və ya artıq nəzərdən keçirilib.',409)
@@ -582,7 +582,7 @@ def reserve_draft_send(profile,draft_id):
     return {'tenant_id':tenant,'id':str(row['id']),'lead_id':int(row['lead_id']),'draft':str(row['draft']),
       'expected_route':{'talk_id':str(row['talk_id']),'chat_id':str(row['chat_id']),
         'message_id':str(row['source_message_id']),'channel_id':str(row.get('channel_id') or ''),
-        'agent_id':str(row['agent_id'])}}
+        'agent_id':str(row['agent_id'])},'handoff_after_send':bool(row.get('handoff_after_send'))}
 
 
 def finish_draft_send(tenant_id,draft_id,state):
@@ -599,7 +599,10 @@ def finish_draft_send(tenant_id,draft_id,state):
                   WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='sending' RETURNING state''',(tenant_id,draft_id))
                 row=cur.fetchone();final=row['state'] if row else 'superseded'
             else:
-                cur.execute("UPDATE saas_ai_agent_drafts SET state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='sending'",(final,tenant_id,draft_id))
+                cur.execute("UPDATE saas_ai_agent_drafts SET state=%s WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='sending' RETURNING chat_id,handoff_after_send",(final,tenant_id,draft_id))
+                row=cur.fetchone()
+                if state=='accepted' and row and row.get('handoff_after_send'):
+                    cur.execute("UPDATE saas_ai_conversation_state SET state='human',reason='trigger_reply_sent_then_handoff',revision=revision+1,updated_at=now() WHERE tenant_id=%s::uuid AND provider='kommo' AND conversation_id=%s AND state='active'",(tenant_id,row['chat_id']))
         conn.commit()
     return final
 

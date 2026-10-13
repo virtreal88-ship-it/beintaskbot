@@ -157,7 +157,7 @@ def trigger(data, *, creating=False):
         out['condition'] = {'phrase': phrase,'target_stage_id':target_stage,'task_text':task_text}
     if creating or 'actions' in data:
         actions = data.get('actions', [])
-        allowed = {'handoff','create_task','update_phone','move_stage'}
+        allowed = {'handoff','handoff_after_reply','create_task','update_phone','move_stage'}
         if not isinstance(actions, list) or len(actions) > 4 or any(action not in allowed for action in actions):
             raise TenantLinearError('Trigger əməliyyatları düzgün deyil.')
         out['actions'] = list(dict.fromkeys(actions))
