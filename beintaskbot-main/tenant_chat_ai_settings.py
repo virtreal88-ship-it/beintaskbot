@@ -12,7 +12,7 @@ def public(row):
     return {'configured': bool(row.get('secrets')), 'updated_at': str(row.get('updated_at') or ''),
             **{k: (row.get('metadata') or {}).get(k, v) for k, v in {
                 'enabled': False, 'consent': False, 'audio_enabled': False, 'model': '',
-                'transcription_model': '', 'daily_limit': 50, 'media_hosts': []}.items()}}
+                'transcription_model': '', 'models': [], 'daily_limit': 50, 'media_hosts': []}.items()}}
 
 
 def read(session):

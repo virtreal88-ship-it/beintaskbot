@@ -2,7 +2,7 @@
 import asyncio
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
-    list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings,
+    list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options,
     list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, review_draft, list_handoffs,
     reserve_draft_send,finish_draft_send)
 from tenant_ai_knowledge_files import extract
@@ -45,6 +45,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
                     result = await asyncio.to_thread(list_agents, profile)
+                elif resource == 'options':
+                    result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'drafts':
                     result = await asyncio.to_thread(list_drafts, profile, limit=request.query.get('limit', 50))
                 elif resource == 'triggers':

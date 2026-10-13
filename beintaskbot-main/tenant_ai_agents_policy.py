@@ -12,6 +12,21 @@ MAX_EXTRACTED_TEXT = 200_000
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 120
 
+# These controls are deliberately non-optional.  The editor exposes them so
+# an owner can understand the boundary, but a browser request cannot weaken it.
+CRITICAL_SAFETY = ('protect_internal', 'verified_facts', 'block_adult',
+                   'block_prompt_injection', 'scope_only')
+
+
+def safety_policy(value=None):
+    if value is None:
+        return {key: True for key in CRITICAL_SAFETY}
+    if not isinstance(value, dict) or set(value) - set(CRITICAL_SAFETY):
+        raise TenantLinearError('Təhlükəsizlik siyasəti düzgün deyil.')
+    if any(value.get(key) is False for key in CRITICAL_SAFETY):
+        raise TenantLinearError('Kritik təhlükəsizlik məhdudiyyətləri söndürülə bilməz.', 403)
+    return {key: True for key in CRITICAL_SAFETY}
+
 
 def _text(value, field, limit, *, required=False):
     if not isinstance(value, str) or len(value) > limit:
@@ -28,7 +43,7 @@ def agent(data, *, creating=False):
     if not isinstance(data, dict):
         raise TenantLinearError('Agent ayarları düzgün deyil.')
     allowed = {'name', 'instructions', 'enabled', 'mode', 'language', 'style',
-               'delay_seconds', 'schedule', 'scopes', 'model'}
+               'delay_seconds', 'schedule', 'scopes', 'model', 'safety'}
     if set(data) - allowed:
         raise TenantLinearError('Naməlum agent ayarı var.')
     result = {}
@@ -104,6 +119,8 @@ def agent(data, *, creating=False):
         result['scopes'] = normalized
     if creating or 'model' in data:
         result['model'] = _text(data.get('model', ''), 'Model', 100)
+    if creating or 'safety' in data:
+        result['safety'] = safety_policy(data.get('safety'))
     return result
 
 

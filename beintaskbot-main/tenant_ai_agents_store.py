@@ -3,7 +3,7 @@ import hashlib
 import uuid
 
 from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_agent,
-    company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger)
+    company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger, safety_policy)
 from tenant_ai_agents_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
 from tenant_platform import _connect, _json
@@ -140,10 +140,36 @@ def list_agents(profile):
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute('''SELECT id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,
-              schedule,scopes,model,version,created_at,updated_at FROM saas_ai_agents
+              schedule,scopes,model,safety,version,created_at,updated_at FROM saas_ai_agents
               WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
             rows = [_row(row) for row in cur.fetchall()]
     return rows
+
+
+def configuration_options(profile):
+    """Tenant-scoped labels for the agent editor; never trusts browser IDs."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, _ = _authorize(cur, profile)
+            cur.execute("SELECT pipeline_id,name FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name,pipeline_id",(tenant,))
+            pipelines=[dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT pipeline_id,stage_id,name FROM saas_tenant_pipeline_stages WHERE tenant_id=%s::uuid ORDER BY pipeline_id,sort_order,stage_id",(tenant,))
+            stages=[dict(r) for r in cur.fetchall()]
+            cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'",(tenant,))
+            chat=cur.fetchone() or {}; meta=chat.get('metadata') or {}
+            # Kommo channel machine IDs are discovered from tenant-owned
+            # inbound jobs only.  We never accept a browser-supplied channel.
+            cur.execute('''SELECT DISTINCT channel_id AS id,channel_id AS name
+              FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id<>''
+              ORDER BY channel_id''', (tenant,))
+            channels=[dict(row) for row in cur.fetchall()]
+    configured=str(meta.get('model') or '').strip()
+    models=meta.get('models') if isinstance(meta.get('models'),list) else []
+    models=[str(x).strip() for x in models if isinstance(x,str) and x.strip()]
+    if configured and configured not in models: models.insert(0,configured)
+    return {'pipelines':pipelines,'stages':stages,'channels':channels,
+            'models':models if chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True else []}
 
 
 def save_agent(profile, data, *, agent_id=None):
@@ -154,22 +180,21 @@ def save_agent(profile, data, *, agent_id=None):
         raise TenantLinearError('Dəyişdiriləcək agent ayarı yoxdur.')
     if not creating and type(data.get('expected_version')) is not int:
         raise TenantLinearError('Agent versiyası yoxdur.', 409)
-    model = patch.get('model')
-    if model:
-        # Agents share the current Chat AI credential and may select only the
-        # model already configured there. They never create a provider key.
-        with _connect() as conn:
-            ensure_schema(conn)
-            with conn.cursor() as cur:
-                tenant, _ = _authorize(cur, profile)
-                cur.execute("SELECT metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
-                config = (cur.fetchone() or {}).get('metadata') or {}
-                if model != str(config.get('model') or ''):
-                    raise TenantLinearError('Əvvəlcə mövcud Chat AI ayarlarında modeli seçin.', 409)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _authorize(cur, profile)
+            if patch.get('model'):
+                cur.execute("SELECT metadata,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='chat_ai'", (tenant,))
+                integration = cur.fetchone() or {}
+                config = integration.get('metadata') or {}
+                allowed_models = [str(item).strip() for item in config.get('models', []) if isinstance(item, str) and item.strip()]
+                configured = str(config.get('model') or '').strip()
+                if configured and configured not in allowed_models:
+                    allowed_models.append(configured)
+                if (not integration.get('secrets') or config.get('enabled') is not True or config.get('consent') is not True
+                        or patch['model'] not in allowed_models):
+                    raise TenantLinearError('Model yalnız aktiv mövcud Chat AI provayderindən seçilə bilər.', 409)
             for scope in patch.get('scopes', []):
                 cur.execute('''SELECT 1 FROM saas_tenant_pipelines p
                   JOIN saas_tenant_pipeline_stages s ON s.tenant_id=p.tenant_id AND s.pipeline_id=p.pipeline_id
@@ -192,10 +217,10 @@ def save_agent(profile, data, *, agent_id=None):
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 agent_uuid = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_ai_agents(id,tenant_id,name,instructions,enabled,mode,language,style,
-                  delay_seconds,schedule,scopes,model,created_by) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s)
-                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,version,created_at,updated_at''',
+                  delay_seconds,schedule,scopes,model,safety,created_by) VALUES(%s,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s)
+                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,version,created_at,updated_at''',
                   (agent_uuid, tenant, patch['name'], patch['instructions'], patch['enabled'], patch['mode'], patch['language'], patch['style'],
-                   patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], actor))
+                   patch['delay_seconds'], _json(patch['schedule']), _json(patch['scopes']), patch['model'], _json(patch['safety']), actor))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_created', 'ai_agent', agent_uuid, {'name': patch['name']})
             else:
@@ -206,8 +231,9 @@ def save_agent(profile, data, *, agent_id=None):
                     raise TenantLinearError('Agent tapılmadı.', 404)
                 if previous['version'] != data['expected_version']:
                     raise TenantLinearError('Agent dəyişib. Səhifəni yeniləyin.', 409)
-                merged = {key: previous[key] for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model')}
+                merged = {key: previous[key] for key in ('name','instructions','enabled','mode','language','style','delay_seconds','schedule','scopes','model','safety')}
                 merged.update(patch)
+                merged['safety'] = safety_policy(merged.get('safety'))
                 if merged['enabled']:
                     _ensure_no_active_scope_overlap(cur,tenant,merged['scopes'],exclude_agent=agent_uuid)
                 if merged['enabled'] and not previous['enabled']:
@@ -219,11 +245,11 @@ def save_agent(profile, data, *, agent_id=None):
                     if readiness.get('enabled') is not True or not readiness.get('secrets') or metadata.get('enabled') is not True or metadata.get('consent') is not True:
                         raise TenantLinearError('Əvvəlcə AI Agents və mövcud Chat AI ayarlarını tamamlayın.', 409)
                 cur.execute('''UPDATE saas_ai_agents SET name=%s,instructions=%s,enabled=%s,mode=%s,language=%s,
-                  style=%s,delay_seconds=%s,schedule=%s::jsonb,scopes=%s::jsonb,model=%s,version=version+1,updated_at=now()
+                  style=%s,delay_seconds=%s,schedule=%s::jsonb,scopes=%s::jsonb,model=%s,safety=%s::jsonb,version=version+1,updated_at=now()
                   WHERE tenant_id=%s::uuid AND id=%s::uuid
-                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,version,created_at,updated_at''',
+                  RETURNING id,tenant_id,name,instructions,enabled,mode,language,style,delay_seconds,schedule,scopes,model,safety,version,created_at,updated_at''',
                   (merged['name'], merged['instructions'], merged['enabled'], merged['mode'], merged['language'], merged['style'], merged['delay_seconds'],
-                   _json(merged['schedule']), _json(merged['scopes']), merged['model'], tenant, agent_uuid))
+                  _json(merged['schedule']), _json(merged['scopes']), merged['model'], _json(merged['safety']), tenant, agent_uuid))
                 result = _row(cur.fetchone())
                 _audit(cur, tenant, actor, 'ai_agent_updated', 'ai_agent', agent_uuid, {'version': result['version']})
         conn.commit()

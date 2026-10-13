@@ -19,6 +19,18 @@ def configuration(data):
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', value):
             raise TenantLinearError('Modelin adını yazın.')
         result[field] = value
+    if 'models' in data:
+        models = data['models']
+        if not isinstance(models, list) or not models or len(models) > 20:
+            raise TenantLinearError('İcazəli modellər düzgün deyil.')
+        result['models'] = []
+        for model in models:
+            if not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}', model):
+                raise TenantLinearError('İcazəli modellər düzgün deyil.')
+            if model not in result['models']:
+                result['models'].append(model)
+        if result['model'] not in result['models']:
+            result['models'].insert(0, result['model'])
     limit = data.get('daily_limit')
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise TenantLinearError('Gündəlik limit 1–1000 olmalıdır.')

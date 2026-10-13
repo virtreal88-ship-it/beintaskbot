@@ -73,6 +73,7 @@ def ensure_schema(conn):
               schedule JSONB NOT NULL DEFAULT '{}'::jsonb,
               scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
               model TEXT NOT NULL DEFAULT '',
+              safety JSONB NOT NULL DEFAULT '{}'::jsonb,
               version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
               created_by BIGINT NOT NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -81,6 +82,9 @@ def ensure_schema(conn):
               FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT)''')
             cur.execute('ALTER TABLE saas_ai_agents DROP CONSTRAINT IF EXISTS saas_ai_agents_mode_check')
             cur.execute("ALTER TABLE saas_ai_agents ADD CONSTRAINT saas_ai_agents_mode_check CHECK(mode IN ('manual','automatic'))")
+            # This is deliberately additive: existing agents receive the
+            # server-enforced default policy on their next read.
+            cur.execute("ALTER TABLE saas_ai_agents ADD COLUMN IF NOT EXISTS safety JSONB NOT NULL DEFAULT '{}'::jsonb")
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_ai_agents_tenant_idx
               ON saas_ai_agents(tenant_id,updated_at DESC)''')
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_knowledge_sources(
