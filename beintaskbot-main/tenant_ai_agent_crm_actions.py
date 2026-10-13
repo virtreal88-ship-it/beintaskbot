@@ -107,7 +107,7 @@ def _finish_action(job,action_id,state,result=None):
         conn.commit()
 
 
-async def _execute_one(job,trigger,index,action,text,phone,request):
+async def _execute_one(job,trigger,index,action,text,phone,request,generated_task_text=''):
     condition=trigger.get('condition') or {};key=f"{trigger['id']}:{index}"
     payload={'lead_id':job['lead_id'],'talk_id':job['talk_id'],'chat_id':job['chat_id']}
     if action=='update_phone':
@@ -117,7 +117,9 @@ async def _execute_one(job,trigger,index,action,text,phone,request):
         payload['target_stage_id']=str(condition.get('target_stage_id') or '')
         if not payload['target_stage_id']:return 'blocked'
     elif action=='create_task':
-        payload['text']=str(condition.get('task_text') or '')[:500]
+        configured_text=str(condition.get('task_text') or '')
+        payload['text']=(str(generated_task_text).strip() if configured_text=='<AI_GENERATED_TASK>'
+                         else configured_text)[:500]
         if not payload['text']:return 'blocked'
     else:return 'blocked'
     action_id,state=await asyncio.to_thread(_reserve_action,job,key,action,payload)
@@ -183,7 +185,8 @@ async def _execute_one(job,trigger,index,action,text,phone,request):
         return 'unknown'
 
 
-async def execute_matching_actions(job,source,request,*,automatic,crm_enabled,crm_kill_switch):
+async def execute_matching_actions(job,source,request,*,automatic,crm_enabled,crm_kill_switch,
+                                   generated_task_text=''):
     await asyncio.to_thread(assert_job_allowed,job)
     triggers=await asyncio.to_thread(enabled_triggers,job['tenant_id'],job['agent_id'])
     phone=phone_candidate(source.get('body'))
@@ -193,13 +196,15 @@ async def execute_matching_actions(job,source,request,*,automatic,crm_enabled,cr
         await asyncio.to_thread(handoff,job,'agent_trigger_handoff')
         return {'handoff':True,'blocked':False,'unknown':False}
     if not automatic or not crm_enabled or not crm_kill_switch:
-        return {'handoff':False,'blocked':False,'unknown':False,'actions':[{'trigger':row['name'],'action':action,'state':'proposed'}
+        return {'handoff':False,'blocked':False,'unknown':False,'actions':[{'trigger':row['name'],'action':action,'state':'proposed',
+          'dynamic_task_text':action=='create_task' and (row.get('condition') or {}).get('task_text')=='<AI_GENERATED_TASK>'}
           for row in matching for action in (row.get('actions') or []) if action in CRM_ACTIONS]}
     outcomes=[]
     for trigger in matching:
         for index,action in enumerate(trigger.get('actions') or []):
             if action=='handoff':continue
-            status=await _execute_one(job,trigger,index,action,source.get('body'),phone,request)
+            status=await _execute_one(job,trigger,index,action,source.get('body'),phone,request,
+                                      generated_task_text)
             outcomes.append({'trigger':trigger['name'],'action':action,'state':status})
             if status=='unknown':
                 await asyncio.to_thread(handoff,job,'crm_action_result_unknown')

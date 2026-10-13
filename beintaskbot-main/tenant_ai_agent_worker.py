@@ -1,6 +1,7 @@
 """Server-side inbound processing that creates manual drafts without /app."""
 import asyncio
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,48 @@ def _history_row(message, channel):
       'message_type':message_type, 'media_url':media_url,
       'has_attachment':bool(attachment) or (message_type not in {'', 'text'}),
       'happened_at':stamp, 'channel':channel}
+
+
+def _context_for_source(rows, source_id):
+    """Keep the conversation through the current message, and focus media on it."""
+    ordered = [row for _, row in sorted(enumerate(rows),
+        key=lambda entry: (entry[1].get('happened_at') or '', entry[0]))]
+    position = next((index for index, row in enumerate(ordered)
+        if row.get('external_id') == source_id), None)
+    if position is None:
+        return [], []
+    context = ordered[max(0, position - 29):position + 1]
+    session_start = 0
+    for index in range(1, len(context)):
+        before, after = context[index - 1].get('happened_at'), context[index].get('happened_at')
+        if before and after and datetime.fromisoformat(after) - datetime.fromisoformat(before) > timedelta(hours=12):
+            session_start = index
+    offset = max(0, session_start - 8)
+    context = [{**row, 'segment': 'earlier' if index < session_start else 'current'}
+        for index, row in enumerate(context[offset:], start=offset)]
+    current = context[-1]
+    media = [current] if current.get('media_url') or current.get('has_attachment') else []
+    # A question explicitly referring to a recent attachment needs that
+    # attachment. Do not fetch unrelated old media from the same Talk.
+    reference = str(current.get('body') or '').casefold()
+    refers_to_media = any(word in reference for word in (
+        'şəkil', 'sekil', 'foto', 'image', 'photo', 'картин', 'фото',
+        'audio', 'səs', 'ses', 'voice', 'голос'))
+    if refers_to_media and current.get('happened_at'):
+        current_at = datetime.fromisoformat(current['happened_at'])
+        for previous in reversed(context[:-1]):
+            if previous.get('direction') == 'outgoing':
+                break
+            if not previous.get('happened_at'):
+                continue
+            age = current_at - datetime.fromisoformat(previous['happened_at'])
+            if age > timedelta(minutes=30):
+                break
+            if timedelta(0) <= age and previous.get('direction') == 'incoming' and (
+                    previous.get('media_url') or previous.get('has_attachment')):
+                media.insert(0, previous)
+                break
+    return context, media
 
 
 async def _prepare_agent_media(rows, config, api_key, logger):
@@ -118,6 +161,22 @@ async def _settle_thread(task):
         raise
 
 
+def _agent_output(raw, needs_task):
+    if not needs_task:
+        return str(raw), ''
+    try:
+        plan = json.loads(str(raw))
+    except (TypeError, ValueError):
+        raise ValueError('Invalid AI task plan') from None
+    if not isinstance(plan, dict) or set(plan) != {'reply', 'task_text'}:
+        raise ValueError('Invalid AI task plan')
+    reply, task = plan['reply'], plan['task_text']
+    if (not isinstance(reply, str) or not reply.strip() or len(reply) > 8000
+            or not isinstance(task, str) or not task.strip() or len(task) > 500):
+        raise ValueError('Invalid AI task plan')
+    return reply.strip(), task.strip()
+
+
 async def process_one(job, kommo_request, wait_slot, logger):
     reservation = None
     try:
@@ -170,30 +229,26 @@ async def process_one(job, kommo_request, wait_slot, logger):
             return
         job['channel_id']=channel
         assert_job_allowed(job)
-        action_result=await execute_matching_actions(job,source,kommo_request,
-            automatic=model_config.get('mode')=='automatic',crm_enabled=model_config.get('crm_actions_enabled') is True,
-            crm_kill_switch=runtime_flag('AI_AGENTS_CRM_ENABLED'))
-        if action_result.get('handoff'):
-            return
-        if action_result.get('actions') and any(item.get('state')=='accepted' and item.get('action')=='move_stage' for item in action_result['actions']):
-            live=await kommo_request(tenant,'GET',f'leads/{lead_id}')
-            pipeline_id,stage_id=str(live.get('pipeline_id') or ''),str(live.get('status_id') or '')
-            if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
-                await asyncio.to_thread(handoff,job,'stage_changed_outside_agent_scope')
-                return
         # If a later manager/customer message arrived while this job waited,
-        # do not prepare an obsolete draft.
+        # do not create a task or prepare an obsolete draft.
         if any(item['external_id']!=source_id and item['happened_at']>=source['happened_at'] for item in normalized):
             await asyncio.to_thread(skip_job,job,'conversation_advanced')
             return
-        relevant_history = normalized[-30:]
+        action_preview=await execute_matching_actions(job,source,kommo_request,
+            automatic=False,crm_enabled=False,crm_kill_switch=False)
+        if action_preview.get('handoff'):
+            return
+        relevant_history, relevant_media = _context_for_source(normalized, source_id)
         model = str(model_config.get('agent_model') or model_config['chat_model'])
         reservation = await asyncio.to_thread(reserve_run,job,pipeline_id=pipeline_id,stage_id=stage_id,model=model)
         assert_job_allowed(job)
         transcripts, images, analyzed_images = await _prepare_agent_media(
-            relevant_history, reservation.get('config') or {}, reservation['api_key'], logger)
-        lines,missing = history(relevant_history,transcripts,analyzed_media=analyzed_images)
-        client_query = '\n'.join(line['text'] for line in lines if line['speaker']=='CLIENT')[-6000:]
+            relevant_media, reservation.get('config') or {}, reservation['api_key'], logger)
+        focus_ids = {str(row['external_id']) for row in relevant_media}
+        lines,missing = history(relevant_history,transcripts,analyzed_media=analyzed_images,
+            focus_media_ids=focus_ids)
+        client_query = str(source.get('body') or '')[:6000] or '\n'.join(
+            line['text'] for line in lines[-3:] if line['speaker']=='CLIENT')[-6000:]
         knowledge = await asyncio.to_thread(knowledge_context,tenant,client_query)
         source_ids = list(dict.fromkeys(item['source_id'] for item in knowledge))
         business_rules = '\n'.join([str(reservation.get('company_instructions') or ''),
@@ -211,15 +266,29 @@ async def process_one(job, kommo_request, wait_slot, logger):
                              'auto':'Reply in the customer’s language.'}
         fixed_rules += '\n' + style_guidance.get(reservation['agent_style'],'') + ' ' + language_guidance.get(reservation['agent_language'],'')
         prompt = INSTRUCTIONS + ('\n\nBusiness instructions, in order: company, agent, current stage.\n' + business_rules if business_rules else '') + fixed_rules
+        prompt += ('\nAnswer the latest client message. Messages marked current belong to the active session; '
+            'messages marked earlier are older background and may be about a different topic. '
+            'Use earlier messages only when they are relevant to the new request. Do not repeat questions already answered '
+            'in the active session. For this agent, greet only if this is the first manager reply in the active session, '
+            'regardless of older sessions.')
+        needs_task = (reservation['mode']=='automatic' and reservation['crm_actions_enabled'] is True
+            and runtime_flag('AI_AGENTS_CRM_ENABLED') and any(item.get('dynamic_task_text') is True
+            for item in action_preview.get('actions',[])))
+        if needs_task:
+            prompt += ('\nReturn only a JSON object with exactly two string fields: reply and task_text. '
+                'reply is the client-facing draft. task_text is a short, specific internal task for the responsible manager '
+                'based on the latest request and established facts in the conversation. Do not invent prices or customer details.')
         extra_context = {'language':reservation['agent_language'],'style':reservation['agent_style'],
                          'knowledge':knowledge,'unprocessed_media_count':missing,
+                         'latest_client_message_id':source_id,
+                         'latest_client_message':str(source.get('body') or '')[:2000],
                          'image_message_ids_for_analysis':[item['message_id'] for item in images if item.get('message_id')],
-                         'trigger_actions':action_result.get('actions',[])}
+                         'trigger_actions':action_preview.get('actions',[])}
         assert_job_allowed(job)
         call = asyncio.create_task(asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
             instructions=prompt,extra_context=extra_context,images=images))
         try:
-            draft = await _settle_thread(call)
+            draft, generated_task_text = _agent_output(await _settle_thread(call), needs_task)
         except Exception:
             await asyncio.to_thread(finish_unknown,job,reservation,'generation_result_unknown')
             logger.warning('AI agent draft generation failed: tenant=%s agent=%s',tenant,job['agent_id'])
@@ -232,6 +301,23 @@ async def process_one(job, kommo_request, wait_slot, logger):
         if not current_source or current_source['direction']!='incoming' or any(item['external_id']!=source_id and item['happened_at']>=current_source['happened_at'] for item in latest_current):
             await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_generation')
             return
+        action_result=await execute_matching_actions(job,source,kommo_request,
+            automatic=reservation['mode']=='automatic',crm_enabled=reservation['crm_actions_enabled'] is True,
+            crm_kill_switch=runtime_flag('AI_AGENTS_CRM_ENABLED'),generated_task_text=generated_task_text)
+        if action_result.get('handoff'):
+            return
+        if action_result.get('actions') and any(item.get('state')=='accepted' and item.get('action')=='move_stage' for item in action_result['actions']):
+            live=await kommo_request(tenant,'GET',f'leads/{lead_id}')
+            pipeline_id,stage_id=str(live.get('pipeline_id') or ''),str(live.get('status_id') or '')
+            if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
+                await asyncio.to_thread(handoff,job,'stage_changed_outside_agent_scope')
+                return
+        if any(item.get('state')=='accepted' for item in action_result.get('actions',[])):
+            # A manager might intervene while Kommo accepts the CRM mutations.
+            latest_current = [_history_row(row,channel) for row in await read_messages(tenant,talk,kommo_request)]
+            if any(item['external_id']!=source_id and item['happened_at']>=source['happened_at'] for item in latest_current):
+                await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_actions')
+                return
         auto_enabled = (reservation['mode']=='automatic' and reservation['auto_send_enabled'] is True
             and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
         if auto_enabled:

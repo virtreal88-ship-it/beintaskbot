@@ -341,5 +341,80 @@ class AgentMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing,1)
         self.assertIn('Attachment not analyzed',lines[0]['text'])
 
+class AgentContextTests(unittest.TestCase):
+    def test_model_plan_requires_reply_and_generated_task(self):
+        reply,task=worker._agent_output('{"reply":"Qiymət tələblərdən asılıdır.","task_text":"Müştəriyə qiymət təklifi hazırlayın."}',True)
+        self.assertIn('Qiymət',reply)
+        self.assertIn('təklifi',task)
+        with self.assertRaises(ValueError):
+            worker._agent_output('{"reply":"Salam"}',True)
+
+    def test_price_variants_match_one_trigger(self):
+        rows=[{'trigger_type':'phrase','condition':{'phrase':'qiymət|qiymet|цен|price'},'actions':['create_task']}]
+        self.assertEqual(matching_triggers(rows,'Qiymət necədir?'),rows)
+        self.assertEqual(matching_triggers(rows,'Сколько стоит, какая цена?'),rows)
+
+    def test_old_unavailable_media_does_not_hide_new_text_question(self):
+        rows=[{'external_id':'old-photo','direction':'incoming','body':'', 'has_attachment':True},
+              {'external_id':'old-audio','direction':'incoming','body':'', 'message_type':'audio'},
+              {'external_id':'latest','direction':'incoming','body':'Qiymət nə qədərdir?'}]
+        lines,missing=chat_history(rows,{},analyzed_media=set(),focus_media_ids=set())
+        self.assertEqual(missing,0)
+        self.assertEqual([line['text'] for line in lines],['Qiymət nə qədərdir?'])
+
+    def test_current_unavailable_attachment_is_still_reported(self):
+        rows=[{'external_id':'old-photo','direction':'incoming','has_attachment':True},
+              {'external_id':'latest-photo','direction':'incoming','has_attachment':True}]
+        lines,missing=chat_history(rows,{},analyzed_media=set(),focus_media_ids={'latest-photo'})
+        self.assertEqual(missing,1)
+        self.assertEqual(len(lines),1)
+        self.assertIn('Attachment not analyzed',lines[0]['text'])
+
+    def test_keeps_old_text_but_not_old_media_for_new_question(self):
+        rows=[{'external_id':'latest','direction':'incoming','body':'Qiymət?', 'happened_at':'2026-10-13T15:00:00+00:00'},
+              {'external_id':'old-photo','direction':'incoming','body':'', 'has_attachment':True,
+               'happened_at':'2026-10-12T15:00:00+00:00'},
+              {'external_id':'context','direction':'incoming','body':'Mağazam var',
+               'happened_at':'2026-10-12T15:01:00+00:00'}]
+        context,media=worker._context_for_source(rows,'latest')
+        self.assertEqual([row['external_id'] for row in context],['old-photo','context','latest'])
+        self.assertEqual([row['segment'] for row in context],['earlier','earlier','current'])
+        self.assertEqual(media,[])
+
+    def test_recent_referenced_image_is_analyzed(self):
+        rows=[{'external_id':'photo','direction':'incoming','body':'', 'has_attachment':True,
+               'media_url':'https://cdn.example.com/p.jpg','happened_at':'2026-10-13T15:00:00+00:00'},
+              {'external_id':'latest','direction':'incoming','body':'Bu foto barədə nə düşünürsünüz?',
+               'happened_at':'2026-10-13T15:01:00+00:00'}]
+        _,media=worker._context_for_source(rows,'latest')
+        self.assertEqual([row['external_id'] for row in media],['photo'])
+
+
+class GeneratedTaskTests(unittest.TestCase):
+    def test_task_uses_model_text_only_after_exact_action_gate(self):
+        job={'tenant_id':TENANT,'agent_id':AGENT,'provider':'kommo','conversation_id':'chat',
+             'chat_id':'chat','talk_id':'9','lead_id':7,'event_fingerprint':FINGERPRINT,
+             'revision':1,'lease_token':'lease'}
+        trigger_row={'id':'trigger','condition':{'task_text':'<AI_GENERATED_TASK>'}}
+        request=AsyncMock(side_effect=[{'id':7,'responsible_user_id':20},
+                                       {'_embedded':{'tasks':[{'id':55}]}}])
+        with patch.object(crm_actions,'_reserve_action',return_value=('action-id','running')) as reserve, \
+             patch.object(crm_actions,'_action_still_allowed',return_value=True) as allowed, \
+             patch.object(crm_actions,'_finish_action') as finish:
+            state=asyncio.run(crm_actions._execute_one(job,trigger_row,0,'create_task',
+                'Qiymət nə qədərdir?','',request,'Müştəriyə fərdi qiymət təklifi hazırlayın.'))
+        self.assertEqual(state,'accepted')
+        self.assertEqual(reserve.call_args.args[3]['text'],'Müştəriyə fərdi qiymət təklifi hazırlayın.')
+        allowed.assert_called_once()
+        self.assertEqual(request.call_args_list[-1].args[1:3],('POST','tasks'))
+        finish.assert_called_once()
+
+    def test_empty_model_task_never_reaches_kommo(self):
+        request=AsyncMock()
+        state=asyncio.run(crm_actions._execute_one({'lead_id':7},
+            {'condition':{'task_text':'<AI_GENERATED_TASK>'}},0,'create_task','','',request,''))
+        self.assertEqual(state,'blocked')
+        request.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()

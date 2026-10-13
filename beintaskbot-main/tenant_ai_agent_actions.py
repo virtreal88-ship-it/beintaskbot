@@ -27,7 +27,8 @@ def matching_triggers(triggers,text,*,first_inquiry=False,phone=''):
         kind=trigger.get('trigger_type');condition=trigger.get('condition') or {}
         if kind=='new_inquiry' and first_inquiry:matches.append(trigger)
         elif kind=='phone_received' and phone:matches.append(trigger)
-        elif kind=='phrase' and str(condition.get('phrase') or '').casefold() in body:matches.append(trigger)
+        elif kind=='phrase' and any(phrase.strip().casefold() in body for phrase in
+            str(condition.get('phrase') or '').split('|') if phrase.strip()):matches.append(trigger)
     return matches
 
 

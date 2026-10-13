@@ -74,11 +74,21 @@ def media_address(url, hosts):
     return parsed
 
 
-def history(rows, transcripts, *, analyzed_media=None):
+def history(rows, transcripts, *, analyzed_media=None, focus_media_ids=None):
     lines, missing = [], 0
+    focused = None if focus_media_ids is None else {str(value) for value in focus_media_ids}
     for row in rows[-30:]:
         role = {'incoming': 'CLIENT', 'outgoing': 'SALES MANAGER'}.get(row.get('direction'), 'UNKNOWN SPEAKER')
         text = str(row.get('body') or '')[:2000]
+        # Earlier attachments remain part of the chronology, but must not
+        # masquerade as missing content of the current customer question.
+        if focused is not None and str(row.get('external_id') or '') not in focused:
+            if text:
+                line={'speaker': role, 'text': text, 'at': str(row.get('happened_at') or '')}
+                if row.get('segment'):
+                    line['segment']=row['segment']
+                lines.append(line)
+            continue
         if audio(row):
             transcript = transcripts.get(str(row['external_id']))
             if transcript:
@@ -93,5 +103,8 @@ def history(rows, transcripts, *, analyzed_media=None):
                 text += '\n[Attachment not analyzed]'
                 if analyzed_media is not None:
                     missing += 1
-        lines.append({'speaker': role, 'text': text, 'at': str(row.get('happened_at') or '')})
+        line={'speaker': role, 'text': text, 'at': str(row.get('happened_at') or '')}
+        if row.get('segment'):
+            line['segment']=row['segment']
+        lines.append(line)
     return lines, missing
