@@ -48,6 +48,13 @@ class TenantAuditSafetyTests(unittest.TestCase):
         self.assertIn('EXPECTED_ROLE = "ai_agents_backup_ro"', source)
         self.assertIn('"-c default_transaction_read_only=on"', source)
 
+    def test_failure_diagnostics_are_stage_and_sqlstate_only(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('stage={CURRENT_STAGE}', source)
+        self.assertIn('error={type(exc).__name__}, sqlstate={state}', source)
+        self.assertIn('details suppressed', source)
+        self.assertNotIn('print(str(exc))', source)
+
 
 if __name__ == "__main__":
     unittest.main()

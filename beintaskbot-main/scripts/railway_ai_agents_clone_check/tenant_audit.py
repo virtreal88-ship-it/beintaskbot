@@ -13,6 +13,12 @@ from psycopg import sql
 EXPECTED_DATABASE = "railway"
 EXPECTED_ROLE = "ai_agents_backup_ro"
 CURRENT_USER_ID = 1628569350  # legacy_runtime_config.ADMIN_CHAT_ID
+CURRENT_STAGE = "startup"
+
+
+def mark_stage(name: str) -> None:
+    global CURRENT_STAGE
+    CURRENT_STAGE = name
 
 
 def safe_json(value):
@@ -25,6 +31,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def run() -> None:
+    mark_stage("configuration")
     dsn = os.environ.get("SOURCE_READONLY_DATABASE_URL", "").strip()
     require(bool(dsn), "FAIL: read-only connection is not configured")
 
@@ -35,14 +42,17 @@ def run() -> None:
     require(parsed.get("dbname") == EXPECTED_DATABASE,
             "FAIL: configured source database is not railway")
 
+    mark_stage("connect_source")
     with psycopg.connect(
         dsn,
         connect_timeout=10,
         options="-c default_transaction_read_only=on",
         application_name="ai-agents-tenant-audit-readonly",
     ) as conn:
+        mark_stage("read_only_transaction_guard")
         conn.execute("SET TRANSACTION READ ONLY")
         with conn.cursor() as cur:
+            mark_stage("verify_connection_identity")
             cur.execute("""SELECT current_user, current_database(),
                 current_setting('transaction_read_only'),
                 current_setting('default_transaction_read_only'),
@@ -52,19 +62,23 @@ def run() -> None:
                     (EXPECTED_ROLE, EXPECTED_DATABASE, "on", "on"),
                     "FAIL: source identity or read-only transaction guard did not match")
 
+            mark_stage("verify_role_attributes")
             cur.execute("""SELECT rolsuper, rolcreatedb, rolcreaterole,
                 rolreplication, rolbypassrls, rolcanlogin
                 FROM pg_roles WHERE rolname=current_user""")
             attrs = cur.fetchone()
             require(attrs is not None and not any(attrs[:5]) and attrs[5],
                     "FAIL: backup login has elevated attributes")
+            mark_stage("verify_role_memberships")
             cur.execute("""SELECT count(*) FROM pg_auth_members
                 WHERE member=current_user::regrole::oid""")
             require(cur.fetchone()[0] == 0, "FAIL: backup login has role memberships")
+            mark_stage("verify_database_create_privilege")
             cur.execute("""SELECT has_database_privilege(current_user,
                 current_database(), 'CREATE')""")
             require(not cur.fetchone()[0], "FAIL: backup login can create database objects")
 
+            mark_stage("read_tenants")
             cur.execute("""SELECT id::text, name, industry, status, created_at,
                 owner_telegram_id, modules, onboarding
                 FROM public.saas_tenants ORDER BY id""")
@@ -72,10 +86,12 @@ def run() -> None:
             require(len(tenant_rows) == 4,
                     f"FAIL: expected the four previously identified tenants; found {len(tenant_rows)}")
 
+            mark_stage("read_memberships")
             cur.execute("""SELECT tenant_id::text, role, active, count(*)
                 FROM public.saas_tenant_members GROUP BY tenant_id, role, active
                 ORDER BY tenant_id, role, active""")
             member_groups = cur.fetchall()
+            mark_stage("read_integrations")
             cur.execute("""SELECT tenant_id::text, provider, status,
                     account_domain, metadata->>'credential_source',
                     metadata->>'account_id'
@@ -84,12 +100,14 @@ def run() -> None:
             integrations = cur.fetchall()
 
             # Count all tenant-scoped records without selecting their content.
+            mark_stage("enumerate_tenant_tables")
             cur.execute("""SELECT DISTINCT table_name FROM information_schema.columns
                 WHERE table_schema='public' AND column_name='tenant_id'
                   AND table_name NOT IN ('saas_tenants') ORDER BY table_name""")
             tables = [row[0] for row in cur.fetchall()]
             counts: dict[str, dict[str, int]] = {row[0]: {} for row in tenant_rows}
             for table in tables:
+                mark_stage("count_tenant_table")
                 cur.execute(sql.SQL("SELECT tenant_id::text, count(*) FROM public.{} "
                                     "WHERE tenant_id IS NOT NULL GROUP BY tenant_id").format(
                                         sql.Identifier(table)))
@@ -146,6 +164,7 @@ def run() -> None:
 
             # Verify the role has no write grant on any user object and no
             # readable rows in other databases. Never inspect row contents.
+            mark_stage("verify_no_write_privileges")
             cur.execute("""SELECT count(*) FROM pg_class c
                 JOIN pg_namespace n ON n.oid=c.relnamespace
                 WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
@@ -162,6 +181,7 @@ def run() -> None:
             writeable_objects = cur.fetchone()[0]
             require(writeable_objects == 0, "FAIL: backup role has a write privilege")
 
+            mark_stage("enumerate_other_databases")
             cur.execute("""SELECT datname, has_database_privilege(current_user,oid,'CONNECT')
                 FROM pg_database WHERE datallowconn AND NOT datistemplate
                   AND datname <> current_database() ORDER BY datname""")
@@ -183,6 +203,7 @@ def run() -> None:
                             options="-c default_transaction_read_only=on",
                             application_name="ai-agents-tenant-audit-readonly",
                         ) as other_conn:
+                            mark_stage("verify_other_database_read_isolation")
                             other_conn.execute("SET TRANSACTION READ ONLY")
                             with other_conn.cursor() as other_cur:
                                 other_cur.execute("""SELECT count(*) FROM pg_class c
@@ -195,11 +216,17 @@ def run() -> None:
                                            has_any_column_privilege(current_user,c.oid,'SELECT'))""")
                                 accessible_objects = other_cur.fetchone()[0]
                             other_conn.commit()
-                    except Exception:
-                        raise RuntimeError("FAIL: cross-database read isolation could not be verified") from None
+                    except Exception as exc:
+                        # Emit only safe diagnostics: no DSN, SQL text, or server message.
+                        state = getattr(exc, "sqlstate", None) or "none"
+                        raise RuntimeError(
+                            f"FAIL: cross-database read isolation could not be verified "
+                            f"(stage={CURRENT_STAGE}, error={type(exc).__name__}, sqlstate={state})"
+                        ) from None
                 cross_database_access[other_database] = accessible_objects
                 require(accessible_objects == 0,
                         "FAIL: backup login can read user objects in another database")
+            mark_stage("read_database_size")
             cur.execute("SELECT pg_database_size(current_database())")
             db_bytes = cur.fetchone()[0]
 
@@ -224,6 +251,11 @@ if __name__ == "__main__":
         run()
     except Exception as exc:
         # Suppress driver errors, DSNs, and values that could contain secrets.
-        message = str(exc) if isinstance(exc, RuntimeError) else "read-only query failed; details suppressed"
+        if isinstance(exc, RuntimeError):
+            message = str(exc)
+        else:
+            state = getattr(exc, "sqlstate", None) or "none"
+            message = f"read-only query failed (stage={CURRENT_STAGE}, " \
+                      f"error={type(exc).__name__}, sqlstate={state}); details suppressed"
         print(f"FAIL: {message}", file=sys.stderr, flush=True)
         raise SystemExit(1)
