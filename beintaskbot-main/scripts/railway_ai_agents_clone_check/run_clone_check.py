@@ -21,6 +21,7 @@ SUPPORTED_PG_MAJORS = {14, 15, 16, 17, 18}
 MAX_SOURCE_BYTES = 180 * 1024 * 1024
 RESERVE_BYTES = 160 * 1024 * 1024
 MAX_VOLUME_ESTIMATE = 900 * 1024 * 1024
+MAX_VOLUME_BYTES = 5 * 1024 * 1024 * 1024
 ALLOWED_TEST_LINES = {
     'PASS: initial schema and migration replay',
     'PASS: tenant-scoped uniqueness and duplicate run rejection',
@@ -41,6 +42,32 @@ def status(message: str) -> None:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SafeStop(message)
+
+
+def validate_volume_capacity(total_bytes: int, mounted: bool = True) -> None:
+    require(mounted, 'FAIL: /data is not a mounted Railway volume; no source connection was made')
+    require(0 < total_bytes <= MAX_VOLUME_BYTES,
+            'FAIL: mounted /data volume exceeds the approved 5 GiB limit; no source connection was made')
+
+
+def validate_backup_role_policy(role_attrs: tuple[bool, ...] | None,
+                                memberships: list[str],
+                                can_create_database: bool,
+                                can_create_temp: bool,
+                                temp_granted_to_public: bool,
+                                temp_granted_directly: bool,
+                                default_readonly: bool,
+    forbidden_object_counts: tuple[int, ...]) -> None:
+    require(role_attrs is not None and len(role_attrs) == 7
+            and not any(role_attrs[:5]) and role_attrs[5] and role_attrs[6],
+            'FAIL: source login has elevated role attributes or cannot log in')
+    require(not memberships,
+            'FAIL: source login has role memberships; only direct object grants are allowed')
+    require(not can_create_database and not temp_granted_directly
+            and can_create_temp == temp_granted_to_public and default_readonly,
+            'FAIL: source login has a direct TEMP grant, other database creation rights, or lacks the read-only default')
+    require(not any(forbidden_object_counts),
+            'FAIL: source login privileges do not meet the narrow backup policy')
 
 
 def clean_postgres_environment() -> dict[str, str]:
@@ -86,7 +113,7 @@ def source_readonly_audit(source_url: str) -> tuple[int, int, str]:
     except Exception:
         raise SafeStop('FAIL: PostgreSQL Python driver is unavailable') from None
 
-    host, port, database, user, _password, _sslmode = parse_source_url(source_url)
+    host, port, database, user, password, sslmode = parse_source_url(source_url)
     try:
         with psycopg.connect(source_url, connect_timeout=10,
                              options='-c default_transaction_read_only=on') as conn:
@@ -99,30 +126,40 @@ def source_readonly_audit(source_url: str) -> tuple[int, int, str]:
                 require(current_user == user and current_db == database,
                         'FAIL: source identity does not match the supplied read-only login')
                 cur.execute('''SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication,
-                    rolbypassrls, rolinherit FROM pg_roles WHERE rolname=current_user''')
+                    rolbypassrls, rolinherit, rolcanlogin
+                    FROM pg_roles WHERE rolname=current_user''')
                 attrs = cur.fetchone()
-                require(attrs is not None and not any(attrs[:5]) and attrs[5],
-                        'FAIL: source login has elevated role attributes')
-                cur.execute("SELECT pg_has_role(current_user,'pg_read_all_data','member')")
-                require(bool(cur.fetchone()[0]),
-                        'FAIL: source login lacks the required read-only role')
                 cur.execute('''SELECT coalesce(array_agg(parent.rolname ORDER BY parent.rolname), ARRAY[]::name[])
                     FROM pg_auth_members m JOIN pg_roles parent ON parent.oid=m.roleid
                     WHERE m.member=current_user::regrole::oid''')
                 memberships = list(cur.fetchone()[0])
-                require(memberships == ['pg_read_all_data'],
-                        'FAIL: source login has unexpected role memberships')
                 cur.execute('''SELECT has_database_privilege(current_user,current_database(),'CREATE'),
+                    has_database_privilege(current_user,current_database(),'TEMP'),
                     EXISTS (SELECT 1 FROM pg_db_role_setting s
                       WHERE s.setrole=current_user::regrole::oid AND s.setdatabase=0
-                      AND 'default_transaction_read_only=on'=ANY(s.setconfig))''')
-                can_create_db, default_readonly = cur.fetchone()
-                require(not can_create_db and default_readonly,
-                        'FAIL: source login lacks the required read-only safeguards')
+                      AND 'default_transaction_read_only=on'=ANY(s.setconfig)),
+                    EXISTS (SELECT 1 FROM pg_database d CROSS JOIN LATERAL aclexplode(
+                      coalesce(d.datacl,acldefault('d',d.datdba))) a
+                      WHERE d.datname=current_database() AND a.grantee=0
+                        AND a.privilege_type='TEMPORARY'),
+                    EXISTS (SELECT 1 FROM pg_database d CROSS JOIN LATERAL aclexplode(
+                      coalesce(d.datacl,acldefault('d',d.datdba))) a
+                      WHERE d.datname=current_database() AND a.grantee=current_user::regrole::oid
+                        AND a.privilege_type='TEMPORARY')''')
+                (can_create_db, can_create_temp, default_readonly,
+                 temp_granted_to_public, temp_granted_directly) = cur.fetchone()
                 cur.execute('''SELECT
                     (SELECT count(*) FROM pg_namespace n
                      WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
-                       AND has_schema_privilege(current_user,n.oid,'CREATE')),
+                       AND (has_schema_privilege(current_user,n.oid,'CREATE') OR
+                            NOT has_schema_privilege(current_user,n.oid,'USAGE'))),
+                    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                     WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+                       AND c.relkind IN ('r','p','m')
+                       AND NOT has_table_privilege(current_user,c.oid,'SELECT')),
+                    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                     WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+                       AND c.relkind='S' AND NOT has_sequence_privilege(current_user,c.oid,'SELECT')),
                     (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                      WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
                        AND c.relkind IN ('r','p','v','m','f') AND (
@@ -131,7 +168,10 @@ def source_readonly_audit(source_url: str) -> tuple[int, int, str]:
                          has_table_privilege(current_user,c.oid,'DELETE') OR
                          has_table_privilege(current_user,c.oid,'TRUNCATE') OR
                          has_table_privilege(current_user,c.oid,'REFERENCES') OR
-                         has_table_privilege(current_user,c.oid,'TRIGGER'))),
+                         has_table_privilege(current_user,c.oid,'TRIGGER') OR
+                         has_any_column_privilege(current_user,c.oid,'INSERT') OR
+                         has_any_column_privilege(current_user,c.oid,'UPDATE') OR
+                         has_any_column_privilege(current_user,c.oid,'REFERENCES'))),
                     (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                      WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
                        AND c.relkind='S' AND (
@@ -142,10 +182,75 @@ def source_readonly_audit(source_url: str) -> tuple[int, int, str]:
                        AND c.relowner=current_user::regrole::oid),
                     (SELECT count(*) FROM pg_namespace n
                      WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
-                       AND n.nspowner=current_user::regrole::oid)''')
+                       AND n.nspowner=current_user::regrole::oid),
+                    (SELECT count(*) FROM pg_largeobject_metadata lo
+                     WHERE EXISTS (SELECT 1 FROM aclexplode(
+                         coalesce(lo.lomacl, acldefault('L',lo.lomowner))) a
+                       WHERE a.grantee IN (0,current_user::regrole::oid)
+                         AND a.privilege_type='UPDATE')),
+                    (SELECT count(*) FROM pg_largeobject_metadata lo
+                     WHERE NOT EXISTS (SELECT 1 FROM aclexplode(
+                         coalesce(lo.lomacl, acldefault('L',lo.lomowner))) a
+                       WHERE a.grantee IN (0,current_user::regrole::oid)
+                         AND a.privilege_type='SELECT')),
+                    (SELECT count(*) FROM pg_largeobject_metadata lo
+                     WHERE lo.lomowner=current_user::regrole::oid),
+                    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                     WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+                       AND c.relkind IN ('r','p','m') AND c.relrowsecurity),
+                    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                     WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+                       AND c.relkind='f'),
+                    (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                     WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'
+                       AND p.prosecdef AND has_function_privilege(current_user,p.oid,'EXECUTE'))''')
                 write_counts = cur.fetchone()
-                require(not any(write_counts),
-                        'FAIL: source login has schema, table, sequence, or ownership write access')
+                validate_backup_role_policy(attrs, memberships, can_create_db,
+                                            can_create_temp, temp_granted_to_public,
+                                            temp_granted_directly, default_readonly,
+                                            (write_counts[0], write_counts[3], write_counts[4],
+                                             write_counts[5], write_counts[6], write_counts[7],
+                                             write_counts[9]))
+                require(not any((write_counts[1], write_counts[2], write_counts[8])),
+                        'FAIL: source login cannot read every table, sequence, or large object in the backup')
+                require(not any(write_counts[10:13]),
+                        'FAIL: row-level security, foreign tables, or executable security-definer functions prevent a complete safe dump')
+                cur.execute('''SELECT datname, has_database_privilege(current_user,oid,'CONNECT')
+                    FROM pg_database WHERE datallowconn AND NOT datistemplate
+                      AND datname <> current_database()''')
+                other_databases = [(name, bool(can_connect)) for name, can_connect in cur.fetchall()]
+                for other_database, can_connect in other_databases:
+                    if not can_connect:
+                        continue
+                    try:
+                        with psycopg.connect(host=host, port=port, dbname=other_database,
+                                             user=user, password=password, sslmode=sslmode,
+                                             connect_timeout=8,
+                                             options='-c default_transaction_read_only=on') as other_conn:
+                            with other_conn.cursor() as other_cur:
+                                other_cur.execute('SET TRANSACTION READ ONLY')
+                                other_cur.execute('''SELECT
+                                    (SELECT count(*) FROM pg_class c
+                                     JOIN pg_namespace n ON n.oid=c.relnamespace
+                                     WHERE n.nspname NOT LIKE 'pg_%'
+                                       AND n.nspname <> 'information_schema'
+                                       AND c.relkind IN ('r','p','v','m','f')
+                                       AND has_schema_privilege(current_user,n.oid,'USAGE')
+                                       AND (has_table_privilege(current_user,c.oid,'SELECT') OR
+                                            has_any_column_privilege(current_user,c.oid,'SELECT'))),
+                                    (SELECT count(*) FROM pg_class c
+                                     JOIN pg_namespace n ON n.oid=c.relnamespace
+                                     WHERE n.nspname NOT LIKE 'pg_%'
+                                       AND n.nspname <> 'information_schema'
+                                       AND c.relkind='S'
+                                       AND has_sequence_privilege(current_user,c.oid,'SELECT'))''')
+                                require(not any(other_cur.fetchone()),
+                                        'FAIL: source login can read user objects in another database')
+                                other_conn.commit()
+                    except SafeStop:
+                        raise
+                    except Exception:
+                        raise SafeStop('FAIL: cross-database read access could not be verified') from None
                 conn.commit()
     except SafeStop:
         raise
@@ -223,6 +328,8 @@ def run_harness(test_url: str) -> None:
 
 def run_check() -> None:
     clean_postgres_environment()
+    volume = shutil.disk_usage(DATA)
+    validate_volume_capacity(volume.total, os.path.ismount(DATA))
     if (DATA / 'check.completed').exists() or any(BACKUP_DIR.glob('production-logical-backup-*.dump')):
         raise SafeStop('FAIL: a prior backup or completed check exists; refusing to overwrite or repeat it')
     source_url = os.environ.get('SOURCE_READONLY_DATABASE_URL', '').strip()
@@ -236,9 +343,11 @@ def run_check() -> None:
     pg_restore = str(version_bin / 'pg_restore')
     status(f'PASS: source login verified read-only; PostgreSQL {source_major}')
 
-    free_before = shutil.disk_usage(DATA).free
+    volume = shutil.disk_usage(DATA)
+    validate_volume_capacity(volume.total, os.path.ismount(DATA))
+    free_before = volume.free
     require(source_size * 2 + RESERVE_BYTES < free_before,
-            'FAIL: source database plus restore reserve does not fit on the 1 GB volume')
+            'FAIL: source database plus restore reserve does not fit on the mounted volume')
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -254,7 +363,7 @@ def run_check() -> None:
     try:
         run_quiet([pg_dump, '--no-password', '--host', source_host, '--port', str(source_port),
                    '--username', source_user, '--dbname', source_db, '--format=custom',
-                   '--no-owner', '--no-acl', '--lock-wait-timeout=5s', '--file', str(dump_path)],
+                   '--lock-wait-timeout=5s', '--file', str(dump_path)],
                   env=command_env, timeout=900)
     finally:
         pgpass_path.unlink(missing_ok=True)
@@ -265,7 +374,7 @@ def run_check() -> None:
     dump_size = dump_path.stat().st_size
     estimate = source_size * 2 + dump_size + RESERVE_BYTES
     require(estimate <= MAX_VOLUME_ESTIMATE,
-            'FAIL: dump and restored copy exceed the 1 GB volume safety estimate')
+            'FAIL: dump and restored copy exceed the 900 MiB safety estimate')
     run_quiet([pg_restore, '--list', str(dump_path)], timeout=120)
     digest_state = hashlib.sha256()
     with dump_path.open('rb') as archive:
@@ -327,4 +436,3 @@ if __name__ == '__main__':
     except SafeStop as exc:
         status(str(exc))
         sys.exit(1)
-
