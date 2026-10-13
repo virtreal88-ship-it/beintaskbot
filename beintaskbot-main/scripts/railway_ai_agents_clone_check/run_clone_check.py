@@ -292,6 +292,7 @@ def test_only_environment(test_url: str) -> dict[str, str]:
     # The harness receives no source URL, PostgreSQL password, inherited DATABASE_URL,
     # Railway variable references, or production integration credentials.
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+           'PYTHONPATH': '/opt/app',
            'AI_AGENTS_TEST_DATABASE_URL': test_url,
            'TENANT_ENCRYPTION_KEY': secrets.token_urlsafe(48)}
     return env

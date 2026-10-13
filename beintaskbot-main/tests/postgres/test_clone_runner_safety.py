@@ -26,7 +26,8 @@ class CloneRunnerSafetyTests(unittest.TestCase):
         with patch.dict(os.environ, {'SOURCE_READONLY_DATABASE_URL': source_url,
                                      'DATABASE_URL': 'must-not-be-forwarded'}, clear=True):
             env = test_only_environment(target_url)
-        self.assertEqual(set(env), {'PATH', 'AI_AGENTS_TEST_DATABASE_URL', 'TENANT_ENCRYPTION_KEY'})
+        self.assertEqual(set(env), {'PATH', 'PYTHONPATH', 'AI_AGENTS_TEST_DATABASE_URL', 'TENANT_ENCRYPTION_KEY'})
+        self.assertEqual(env['PYTHONPATH'], '/opt/app')
         self.assertEqual(env['AI_AGENTS_TEST_DATABASE_URL'], target_url)
         self.assertNotIn(source_url, env.values())
         self.assertNotIn('DATABASE_URL', env)
