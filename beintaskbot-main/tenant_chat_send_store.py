@@ -40,8 +40,14 @@ def agent_send_reservation_block_reason(current, job, route, integration, *, run
         return 'conversation_revision_changed'
     if not integration or integration.get('status') != 'connected':
         return 'kommo_disconnected'
-    if not integration.get('secrets'):
+    # The app has one explicitly linked legacy Kommo credential source. It is
+    # safe for an AI write only when the exact verified Test Mode binding is
+    # active; tenant OAuth continues to use encrypted per-tenant secrets.
+    if (not integration.get('secrets') and not integration.get('credentials_available')):
         return 'kommo_credentials_missing'
+    if (integration.get('credential_source') == 'legacy_environment'
+            and current.get('test_mode_allowed') is not True):
+        return 'legacy_credentials_test_mode_only'
     return ''
 
 
@@ -153,8 +159,13 @@ def reserve_agent(job, text, route):
         ensure_agents_schema(conn)
         with conn.cursor() as cur:
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"chat-send:{tenant}:{job['lead_id']}",))
-            cur.execute("SELECT status,secrets,account_domain FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE",(tenant,))
+            cur.execute("SELECT status,secrets,account_domain,metadata FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE",(tenant,))
             integration=cur.fetchone()
+            metadata = integration.get('metadata') if integration and isinstance(integration.get('metadata'), dict) else {}
+            legacy_reference = metadata.get('credential_source') == 'legacy_environment'
+            if legacy_reference:
+                integration = {**integration, 'credential_source': 'legacy_environment',
+                               'credentials_available': True}
             cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled AS agent_enabled,a.mode,
               s.enabled AS settings_enabled,s.auto_send_enabled,s.max_replies_per_chat,t.status AS tenant_status,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
@@ -206,12 +217,32 @@ def reserve_agent(job, text, route):
             cur.execute('''INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route)
               VALUES(%s::uuid,0,%s::uuid,%s,%s,'preparing',%s::jsonb)''',
               (tenant,request_id,job['lead_id'],input_hash,json.dumps(route)))
-            tokens=json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
-            if not isinstance(tokens,dict) or not tokens.get('access_token'):
-                error=TenantLinearError('Kommo bağlantısını yeniləyin.',409)
-                error.ai_agent_send_reason='kommo_credentials_invalid'
-                raise error
-            credentials={'account_domain':integration['account_domain'],'access_token':tokens['access_token']}
+            if legacy_reference:
+                # Resolve the already-linked server credential by tenant and
+                # account mapping. Never copy the shared token into DB secrets.
+                from tenant_integration_store import kommo_credentials
+                try:
+                    resolved = kommo_credentials(tenant_id=tenant)
+                except Exception:
+                    error=TenantLinearError('Mövcud Kommo bağlantısının hesabı təsdiqlənmədi.',409)
+                    error.ai_agent_send_reason='kommo_credentials_invalid'
+                    raise error from None
+                if (resolved.get('credential_source') != 'legacy_environment'
+                        or resolved.get('account_domain', '').casefold() != str(integration['account_domain']).casefold()):
+                    error=TenantLinearError('Mövcud Kommo bağlantısının hesabı təsdiqlənmədi.',409)
+                    error.ai_agent_send_reason='kommo_credentials_invalid'
+                    raise error
+                credentials={'account_domain':resolved['account_domain'],
+                             'access_token':resolved['access_token'],
+                             'credential_source':'legacy_environment',
+                             'expected_account_id':resolved['expected_account_id']}
+            else:
+                tokens=json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
+                if not isinstance(tokens,dict) or not tokens.get('access_token'):
+                    error=TenantLinearError('Kommo bağlantısını yeniləyin.',409)
+                    error.ai_agent_send_reason='kommo_credentials_invalid'
+                    raise error
+                credentials={'account_domain':integration['account_domain'],'access_token':tokens['access_token']}
         conn.commit()
     return {'key':(tenant,0,request_id),'job':job,'credentials':credentials,'route':route,'text':text,'input_hash':input_hash}
 
