@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -177,29 +178,46 @@ def _agent_output(raw, needs_task):
     return reply.strip(), task.strip()
 
 
+def _test_diag(logger, job, stage, code=''):
+    """Emit content-free progress only after this job passed the exact Test Mode guard."""
+    talk_id = str(job.get('talk_id') or '')
+    talk_id = talk_id if talk_id.isdigit() else 'invalid'
+    safe_code = re.sub(r'[^a-zA-Z0-9_,=-]', '_', str(code or 'ok'))[:160]
+    logger.info('AI agent test flow: talk=%s stage=%s code=%s', talk_id, stage, safe_code)
+
+
 async def process_one(job, kommo_request, wait_slot, logger):
     reservation = None
+    phase = 'binding_check'
+    diagnostic_allowed = False
     try:
         # Read the exact current Talk. Webhook content is used only as an ID;
         # no client text enters the model until Kommo confirms it.
         tenant = str(job['tenant_id'])
         lead_id = int(job['lead_id'])
         assert_job_allowed(job)
+        diagnostic_allowed = True
+        _test_diag(logger, job, 'job_claimed')
+        phase = 'read_talk'
         talks = await read_talks(tenant,lead_id,kommo_request)
         talk = next((item for item in talks if str(item.get('talk_id') or item.get('id') or '')==str(job['talk_id'])
                      and str(item.get('chat_id') or '')==str(job['chat_id'])),None)
         if not talk:
             await asyncio.to_thread(skip_job,job,'talk_not_found')
+            _test_diag(logger, job, 'job_skipped', 'talk_not_found')
             return
         try:
             live = await kommo_request(tenant,'GET',f'leads/{lead_id}',params={'with':'contacts'})
         except Exception:
             await asyncio.to_thread(retry_or_fail,job,'deal_read_failed')
+            _test_diag(logger, job, 'job_retry', 'deal_read_failed')
             return
         if int(live.get('id') or 0)!=lead_id:
             await asyncio.to_thread(skip_job,job,'deal_identity_mismatch')
+            _test_diag(logger, job, 'job_skipped', 'deal_identity_mismatch')
             return
         await assert_live_job_allowed(job,talk,live,kommo_request)
+        _test_diag(logger, job, 'live_binding_verified')
         pipeline_id,stage_id = str(live.get('pipeline_id') or ''),str(live.get('status_id') or '')
         channel = str(talk.get('origin') or job.get('channel_id') or '').lower()
         messages = await read_messages(tenant,talk,kommo_request)
@@ -208,24 +226,32 @@ async def process_one(job, kommo_request, wait_slot, logger):
         source = next((item for item in normalized if item['external_id']==source_id),None)
         if not source or source['direction']!='incoming':
             await asyncio.to_thread(skip_job,job,'source_message_not_incoming')
+            _test_diag(logger, job, 'job_skipped', 'source_message_not_incoming')
             return
         triggers=await asyncio.to_thread(enabled_triggers,tenant,job['agent_id'])
+        matched = matching_triggers(triggers, source['body'])
+        _test_diag(logger, job, 'trigger_evaluation',
+            f"matched={len(matched)} configured={len(triggers)}")
         if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or [])
             for trigger in matching_triggers(triggers,source['body'])):
             await asyncio.to_thread(handoff,job,'customer_requested_manager')
+            _test_diag(logger, job, 'job_handed_off', 'customer_requested_manager')
             return
         model_config = None
         from tenant_ai_agent_run_store import load_agent_config
         model_config = await asyncio.to_thread(load_agent_config,job)
         if not model_config:
             await asyncio.to_thread(skip_job,job,'agent_disabled')
+            _test_diag(logger, job, 'job_skipped', 'agent_disabled')
             return
         if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
             await asyncio.to_thread(skip_job,job,'deal_outside_agent_scope')
+            _test_diag(logger, job, 'job_skipped', 'deal_outside_agent_scope')
             return
         open_at = _next_open(model_config.get('schedule') or {})
         if open_at:
             await asyncio.to_thread(defer_job,job,open_at)
+            _test_diag(logger, job, 'job_deferred', 'outside_schedule')
             return
         job['channel_id']=channel
         assert_job_allowed(job)
@@ -233,10 +259,15 @@ async def process_one(job, kommo_request, wait_slot, logger):
         # do not create a task or prepare an obsolete draft.
         if any(item['external_id']!=source_id and item['happened_at']>=source['happened_at'] for item in normalized):
             await asyncio.to_thread(skip_job,job,'conversation_advanced')
+            _test_diag(logger, job, 'job_skipped', 'conversation_advanced')
             return
+        phase = 'crm_preview'
         action_preview=await execute_matching_actions(job,source,kommo_request,
             automatic=False,crm_enabled=False,crm_kill_switch=False)
+        preview_count = len(action_preview.get('actions') or [])
+        _test_diag(logger, job, 'crm_preview', f'proposed={preview_count}')
         if action_preview.get('handoff'):
+            _test_diag(logger, job, 'job_handed_off', 'preview_handoff')
             return
         relevant_history, relevant_media = _context_for_source(normalized, source_id)
         model = str(model_config.get('agent_model') or model_config['chat_model'])
@@ -274,6 +305,10 @@ async def process_one(job, kommo_request, wait_slot, logger):
         needs_task = (reservation['mode']=='automatic' and reservation['crm_actions_enabled'] is True
             and runtime_flag('AI_AGENTS_CRM_ENABLED') and any(item.get('dynamic_task_text') is True
             for item in action_preview.get('actions',[])))
+        _test_diag(logger, job, 'generation_policy',
+            f"mode_{reservation['mode']};crm_{'enabled' if reservation['crm_actions_enabled'] else 'disabled'};"
+            f"server_crm_{'enabled' if runtime_flag('AI_AGENTS_CRM_ENABLED') else 'disabled'};"
+            f"generated_task_{'yes' if needs_task else 'no'}")
         if needs_task:
             prompt += ('\nReturn only a JSON object with exactly two string fields: reply and task_text. '
                 'reply is the client-facing draft. task_text is a short, specific internal task for the responsible manager '
@@ -288,11 +323,15 @@ async def process_one(job, kommo_request, wait_slot, logger):
         call = asyncio.create_task(asyncio.to_thread(generate,reservation['api_key'],model,'reply',lines,'',
             instructions=prompt,extra_context=extra_context,images=images))
         try:
+            phase = 'model_generation'
             draft, generated_task_text = _agent_output(await _settle_thread(call), needs_task)
         except Exception:
             await asyncio.to_thread(finish_unknown,job,reservation,'generation_result_unknown')
             logger.warning('AI agent draft generation failed: tenant=%s agent=%s',tenant,job['agent_id'])
+            _test_diag(logger, job, 'job_failed', 'generation_result_unknown')
             return
+        _test_diag(logger, job, 'draft_generated',
+            f"generated_task_{'yes' if bool(generated_task_text) else 'no'}")
         # Check the Talk once more before saving. A manager reply or a newer
         # client message invalidates this draft even if its webhook is delayed.
         current_messages = await read_messages(tenant,talk,kommo_request)
@@ -300,23 +339,33 @@ async def process_one(job, kommo_request, wait_slot, logger):
         current_source=next((item for item in latest_current if item['external_id']==source_id),None)
         if not current_source or current_source['direction']!='incoming' or any(item['external_id']!=source_id and item['happened_at']>=current_source['happened_at'] for item in latest_current):
             await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_generation')
+            _test_diag(logger, job, 'job_superseded', 'conversation_advanced_during_generation')
             return
+        phase = 'crm_execution'
         action_result=await execute_matching_actions(job,source,kommo_request,
             automatic=reservation['mode']=='automatic',crm_enabled=reservation['crm_actions_enabled'] is True,
             crm_kill_switch=runtime_flag('AI_AGENTS_CRM_ENABLED'),generated_task_text=generated_task_text)
+        action_states = ','.join(str(item.get('action')) + ':' + str(item.get('state'))
+            for item in action_result.get('actions', [])
+            if item.get('action') in {'create_task','update_phone','move_stage'}
+            and item.get('state') in {'proposed','accepted','blocked','unknown'}) or 'none'
+        _test_diag(logger, job, 'crm_result', action_states[:160])
         if action_result.get('handoff'):
+            _test_diag(logger, job, 'job_handed_off', 'crm_action_requires_manager_or_unknown')
             return
         if action_result.get('actions') and any(item.get('state')=='accepted' and item.get('action')=='move_stage' for item in action_result['actions']):
             live=await kommo_request(tenant,'GET',f'leads/{lead_id}')
             pipeline_id,stage_id=str(live.get('pipeline_id') or ''),str(live.get('status_id') or '')
             if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
                 await asyncio.to_thread(handoff,job,'stage_changed_outside_agent_scope')
+                _test_diag(logger, job, 'job_handed_off', 'stage_changed_outside_agent_scope')
                 return
         if any(item.get('state')=='accepted' for item in action_result.get('actions',[])):
             # A manager might intervene while Kommo accepts the CRM mutations.
             latest_current = [_history_row(row,channel) for row in await read_messages(tenant,talk,kommo_request)]
             if any(item['external_id']!=source_id and item['happened_at']>=source['happened_at'] for item in latest_current):
                 await asyncio.to_thread(finish_superseded,job,reservation,'conversation_advanced_during_actions')
+                _test_diag(logger, job, 'job_superseded', 'conversation_advanced_during_actions')
                 return
         auto_enabled = (reservation['mode']=='automatic' and reservation['auto_send_enabled'] is True
             and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
@@ -329,6 +378,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
                 result=await send_agent(job,{**reservation,'route':route},str(draft)[:8000],kommo_request,
                     wait_slot,logger)
                 logger.info('AI agent message accepted: tenant=%s agent=%s receipt=%s',tenant,job['agent_id'],result['state'])
+                _test_diag(logger, job, 'automatic_send', 'accepted')
                 return
             except TenantLinearError as error:
                 if getattr(error,'status',500)==503 and 'qeyri-müəyyən' in str(error).casefold():
@@ -346,6 +396,7 @@ async def process_one(job, kommo_request, wait_slot, logger):
                         f'automatic_send_blocked_{reason}')
                 return
         saved = await asyncio.to_thread(complete_run,job,reservation,str(draft)[:16000],source_ids)
+        _test_diag(logger, job, 'draft_persist', 'saved' if saved else 'revision_changed')
         if not saved:
             logger.info('AI agent draft discarded after revision change: tenant=%s agent=%s',tenant,job['agent_id'])
     except asyncio.CancelledError:
@@ -363,12 +414,16 @@ async def process_one(job, kommo_request, wait_slot, logger):
             await asyncio.to_thread(skip_job,job,'ai_configuration_not_ready')
         logger.warning('AI agent job stopped safely: tenant=%s agent=%s code=%s',
                        job.get('tenant_id'),job.get('agent_id'),error.status)
+        if diagnostic_allowed:
+            _test_diag(logger, job, 'job_stopped', f'{phase};policy_status_{error.status}')
     except Exception:
         if reservation:
             await asyncio.to_thread(finish_unknown,job,reservation,'provider_or_store_unknown')
         else:
             await asyncio.to_thread(retry_or_fail,job,'read_or_context_failed')
         logger.warning('AI agent job failed: tenant=%s agent=%s',job.get('tenant_id'),job.get('agent_id'))
+        if diagnostic_allowed:
+            _test_diag(logger, job, 'job_failed', phase)
 
 
 async def run_worker(kommo_request, logger, wait_slot):
