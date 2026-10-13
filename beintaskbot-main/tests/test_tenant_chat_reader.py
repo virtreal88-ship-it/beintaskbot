@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, Mock
 from types import SimpleNamespace
 import test_tenant_hot_orders as loaders
 from test_tenant_chat_send import TENANT, SESSION, talk, page
-from tenant_chat_reader import read_messages, read_conversations
+from tenant_chat_reader import read_messages, read_conversations, read_talks
 from tenant_chat_send_policy import resolve_route
 from tenant_linear_policy import TenantLinearError
 
@@ -51,10 +51,16 @@ class Reader(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(TenantLinearError):await read_messages(TENANT,talk(1),AsyncMock(return_value=payload))
 
     async def test_incomplete_or_duplicate_catalog_rejected(self):
-        for talks in [[talk(1)]*2,[talk(i) for i in range(1,8)],[{**talk(1),'entity_id':8}],[{**talk(1),'talk_id':'bad'}]]:
+        for talks in [[talk(1)]*2,[talk(i) for i in range(1,14)],[{**talk(1),'entity_id':8}],[{**talk(1),'talk_id':'bad'}]]:
             provider=AsyncMock(return_value={'_embedded':{'talks':talks}})
             with self.assertRaises(TenantLinearError):await read_conversations(TENANT,7,provider)
             self.assertEqual(provider.await_count,1)
+
+    async def test_eight_valid_talks_on_one_deal_are_read(self):
+        provider=AsyncMock(return_value={'_embedded':{'talks':[talk(i) for i in range(1,9)]}})
+        result=await read_talks(TENANT,7,provider)
+        self.assertEqual(len(result),8)
+        provider.assert_awaited_once()
 
 
 class Sync(unittest.IsolatedAsyncioTestCase):

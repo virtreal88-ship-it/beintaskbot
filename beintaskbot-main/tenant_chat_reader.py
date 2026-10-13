@@ -5,7 +5,7 @@ from tenant_linear_policy import TenantLinearError
 
 KommoRequest = Callable[..., Awaitable[dict]]
 
-MAX_TALKS = 6
+MAX_TALKS = 12
 MAX_PAGES = 4
 PAGE_SIZE = 250
 
