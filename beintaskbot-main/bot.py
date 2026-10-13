@@ -101,7 +101,7 @@ from legacy_chat_ai_examples import (
 from legacy_linear_employee_settings import employee_linear_identity
 from legacy_app_bootstrap import (
     build_telegram_application, run_polling as run_telegram_polling,
-    start_http_thread,
+    start_http_thread, wait_for_http_only,
 )
 from legacy_action_deals import (
     DealNoteContext, DealUnreachableContext, handle_deal_note,
@@ -261,7 +261,8 @@ from tenant_platform import (
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 from legacy_runtime_config import (
-    _required_env, TELEGRAM_TOKEN, KOMMO_TOKEN, KOMMO_DOMAIN,
+    _required_env, TELEGRAM_TOKEN, TELEGRAM_POLLING_ENABLED, STAGING_MODE,
+    KOMMO_TOKEN, KOMMO_DOMAIN, GH_TOKEN,
     KOMMO_BASE_URL, BAKU_TZ, LLM_MODEL, WEBHOOK_PORT,
     CANONICAL_WEB_ORIGIN, WEB_APP_URL, LEGACY_RAILWAY_HOST, _telegram_bot_username,
     VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_CLAIMS, LINEAR_API_KEY,
@@ -5669,11 +5670,38 @@ async def handle_kommo_webhook(request: web.Request) -> web.Response:
             record_lead_pulse_event(lead_id, f"deal_{event_type}", pipeline_id=pipeline_id)
             if event_type in {"status", "add"} and pipeline_id:
                 notice_deal_entered(lead_id, pipeline_id, event["old_pipeline_id"])
+        message_rows = _kommo_form_message_rows(data)
         incoming_rows = [
-            row for row in _kommo_form_message_rows(data)
+            row for row in message_rows
             if str(row.get("type") or "incoming").strip().lower() != "outgoing"
         ]
         if incoming_rows:
+            if os.environ.get("AI_AGENTS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+                try:
+                    from tenant_ai_agent_queue import ingest_kommo_messages
+                    from tenant_ai_agent_test_mode import enrich_webhook_rows
+                    guarded_rows = await enrich_webhook_rows(data,incoming_rows,_tenant_kommo_request,
+                        fallback_domain=KOMMO_BASE_URL)
+                    await asyncio.to_thread(
+                        ingest_kommo_messages, data, guarded_rows,
+                        fallback_domain=KOMMO_BASE_URL,
+                    )
+                except Exception:
+                    # Kommo must retry when the durable SaaS inbox did not commit.
+                    logger.error("Tenant AI Agents inbound event was not committed")
+                    return web.Response(status=503, text="Retry")
+        if message_rows and os.environ.get("AI_AGENTS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+            outgoing_rows = [row for row in message_rows if str(row.get("type") or "").strip().lower() == "outgoing"]
+            if outgoing_rows:
+                try:
+                    from tenant_ai_agent_queue import observe_kommo_outgoing
+                    from tenant_ai_agent_test_mode import enrich_webhook_rows
+                    guarded_rows = await enrich_webhook_rows(data,outgoing_rows,_tenant_kommo_request,
+                        fallback_domain=KOMMO_BASE_URL)
+                    await asyncio.to_thread(observe_kommo_outgoing, data, guarded_rows, fallback_domain=KOMMO_BASE_URL)
+                except Exception:
+                    logger.error("Tenant AI Agents outgoing event was not committed")
+                    return web.Response(status=503, text="Retry")
             for row in incoming_rows:
                 entity_type = str(row.get("entity_type") or row.get("element_type") or "lead").strip().lower()
                 try:
@@ -18394,7 +18422,17 @@ def _register_legacy_web_routes(app_web: web.Application) -> None:
     app_web.router.add_route('OPTIONS', '/api/hot-orders', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/linear/tesdiq', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/linear/tasks', lambda r: web.Response())
-    app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    if not STAGING_MODE:
+        app_web.router.add_post("/webhook/kommo", handle_kommo_webhook)
+    # A staging-only callback uses a separate narrow handler. The existing
+    # /webhook/kommo route and its production integrations stay independent.
+    if (os.environ.get("AI_AGENTS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+            and os.environ.get("AI_AGENTS_TEST_WEBHOOK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}):
+        from tenant_ai_agent_webhook import build_handler as build_ai_agent_test_webhook
+        app_web.router.add_post(
+            "/webhook/kommo/ai-agents-test",
+            build_ai_agent_test_webhook(_tenant_kommo_request, logger),
+        )
     app_web.router.add_get("/api/chats/pulse", handle_api_chats_pulse)
     app_web.router.add_get("/api/notices", handle_api_notices)
     app_web.router.add_get("/webhook/whatsapp", handle_whatsapp_webhook)
@@ -18669,10 +18707,31 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/", serve_landing_page)
     app_web.router.add_get("/health", health_check)
 
+def _register_ai_agent_worker(app_web):
+    if os.environ.get("AI_AGENTS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        from tenant_ai_agent_worker import run_worker as run_ai_agent_worker
+
+        async def start_ai_agent_worker(app):
+            from tenant_ai_agent_startup import start_worker
+            await start_worker(app, run_ai_agent_worker, _tenant_kommo_request,
+                               logger, _wait_for_tenant_kommo_slot,
+                               prepare_database_first=STAGING_MODE)
+
+        async def stop_ai_agent_worker(app):
+            task = app.get("tenant_ai_agent_worker")
+            if task:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        app_web.on_startup.append(start_ai_agent_worker)
+        app_web.on_cleanup.append(stop_ai_agent_worker)
+
+
 async def start_webhook_server():
     app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
     _register_legacy_web_routes(app_web)
     _register_tenant_web_routes(app_web)
+    _register_ai_agent_worker(app_web)
     runner = web.AppRunner(app_web)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
@@ -19325,7 +19384,7 @@ from gh_storage import (
 
 # Initialize GitHub storage from Railway. Never keep a storage credential in
 # source code, including encoded form.
-_init_gh_storage(_required_env("GH_TOKEN"))
+_init_gh_storage(GH_TOKEN)
 logger.info(f"GH Storage initialized, token ok")
 
 _EMPLOYEE_NAMES_BY_TG = {
@@ -19553,7 +19612,10 @@ async def handle_api_kpi(request: web.Request) -> web.Response:
 
 def main():
     global _bot_app, _telegram_bot_username
-    start_http_thread(start_webhook_server, logger)
+    http_thread = start_http_thread(start_webhook_server, logger)
+    if not TELEGRAM_POLLING_ENABLED:
+        wait_for_http_only(http_thread, logger)
+        return
     async def post_init(application: Application) -> None:
         remove_retired_employee_access()
         ensure_known_employee_registrations()

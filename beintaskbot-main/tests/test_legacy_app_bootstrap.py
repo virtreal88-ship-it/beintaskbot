@@ -13,6 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_http_only_mode_waits_for_web_server_without_building_telegram_app(self):
+        thread, logger = Mock(), Mock()
+        bootstrap.wait_for_http_only(thread, logger)
+        thread.join.assert_called_once_with()
+        logger.info.assert_called_once()
+
     def test_handlers_and_jobs_are_registered_from_descriptors(self):
         app = SimpleNamespace(add_handler=Mock(), job_queue=SimpleNamespace(
             run_repeating=Mock(), run_daily=Mock(),
@@ -66,6 +72,19 @@ class BootstrapArchitectureTests(unittest.TestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         }
         self.assertNotIn("_run_http_server", definitions)
+
+    def test_bot_can_return_before_telegram_polling_and_post_init(self):
+        source = (ROOT / "bot.py").read_text(encoding="utf-8-sig")
+        tree = ast.parse(source)
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        polling_gate = next(node for node in main.body if isinstance(node, ast.If) and
+                            isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not) and
+                            isinstance(node.test.operand, ast.Name) and node.test.operand.id == "TELEGRAM_POLLING_ENABLED")
+        self.assertEqual(ast.unparse(polling_gate.body[0].value.func), "wait_for_http_only")
+        self.assertIsInstance(polling_gate.body[-1], ast.Return)
+        self.assertLess(polling_gate.lineno, next(node.lineno for node in main.body
+                                                  if isinstance(node, ast.AsyncFunctionDef) and node.name == "post_init"))
+
 
 
 if __name__ == "__main__":

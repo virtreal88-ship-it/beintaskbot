@@ -86,7 +86,7 @@ class Service(unittest.IsolatedAsyncioTestCase):
         self.reserve = Mock(return_value=self.item); self.finish = Mock()
         self.mark = Mock(return_value=(SESSION, {'account_domain': 'client.kommo.com', 'access_token': 'tenant-key'}))
         self.send = Mock(return_value='provider-id')
-        self.route = AsyncMock(return_value={'talk_id': 3, 'origin': 'instagram'})
+        self.route = AsyncMock(return_value={'talk_id': 3, 'chat_id': 'chat-3', 'message_id': 'latest-inbound', 'origin': 'instagram'})
         self.provider = AsyncMock(return_value={'id': 7, 'pipeline_id': 10})
         self.module = loaders.load('tenant_chat_send_service', {
             'reserve': self.reserve, 'finish': self.finish, 'mark_sending': self.mark, 'send': self.send,
@@ -94,8 +94,8 @@ class Service(unittest.IsolatedAsyncioTestCase):
             'TenantPolicy': lambda person: SimpleNamespace(can_access_deal=lambda lead: lead['pipeline_id'] == 10)},
             {'tenant_chat_send_policy', 'tenant_chat_send_store', 'tenant_chat_send_provider', 'tenant_policy'})
 
-    async def run_send(self):
-        return await self.module.run(SESSION, INPUT, self.provider, Mock(), Mock())
+    async def run_send(self, *, expected_route=None):
+        return await self.module.run(SESSION, INPUT, self.provider, Mock(), Mock(), expected_route=expected_route)
 
     async def test_success_has_acceptance_receipt(self):
         self.assertEqual((await self.run_send())['state'], 'accepted')
@@ -126,6 +126,22 @@ class Service(unittest.IsolatedAsyncioTestCase):
     async def test_preflight_failure_does_not_call_send(self):
         self.route.side_effect = TenantLinearError('ambiguous', 409)
         with self.assertRaises(TenantLinearError): await self.run_send()
+        self.send.assert_not_called(); self.mark.assert_not_called()
+
+    async def test_draft_route_must_still_match_latest_inbound(self):
+        expected={'talk_id': 3, 'chat_id': 'chat-3', 'message_id': 'older-inbound'}
+        with self.assertRaises(TenantLinearError): await self.run_send(expected_route=expected)
+        self.provider.assert_not_awaited(); self.send.assert_not_called()
+        self.mark.assert_not_called(); self.finish.assert_called_once_with(self.item, 'blocked')
+
+    async def test_manager_reply_after_draft_blocks_manual_draft_send(self):
+        expected={'talk_id': 3, 'chat_id': 'chat-3', 'message_id': 'latest-inbound'}
+        talk={'talk_id':3,'chat_id':'chat-3','entity_id':7,'entity_type':'lead','is_in_work':True}
+        messages=[{'id':'latest-inbound','chat_id':'chat-3','created_at':100,'type':'incoming'},
+                  {'id':'manager-reply','chat_id':'chat-3','created_at':101,'type':'outgoing'}]
+        with patch.object(self.module,'read_talks',AsyncMock(return_value=[talk])),\
+                patch.object(self.module,'read_messages',AsyncMock(return_value=messages)):
+            with self.assertRaises(TenantLinearError): await self.run_send(expected_route=expected)
         self.send.assert_not_called(); self.mark.assert_not_called()
 
 

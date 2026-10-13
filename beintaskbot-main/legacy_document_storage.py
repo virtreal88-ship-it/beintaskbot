@@ -16,7 +16,10 @@ from psycopg.rows import dict_row
 logger = logging.getLogger(__name__)
 
 _GH_TOKEN = None
-_GH_REPO = "virtreal88-ship-it/beintaskbot"
+_STAGING_MODE = str(os.environ.get("STAGING_MODE") or "").strip().casefold() in {"1", "true", "yes", "on"}
+# Staging must never import or write the production JSON data branch. Its
+# PostgreSQL database is the only storage authority for legacy documents.
+_GH_REPO = None if _STAGING_MODE else "virtreal88-ship-it/beintaskbot"
 _GH_BRANCH = "data"
 _GH_API = "https://api.github.com"
 _DATABASE_URL = None
@@ -31,7 +34,7 @@ _lock = threading.Lock()
 
 def init_storage(token: str):
     global _GH_TOKEN, _DATABASE_URL
-    _GH_TOKEN = token
+    _GH_TOKEN = "" if _STAGING_MODE else token
     _DATABASE_URL = str(os.environ.get("DATABASE_URL") or "").strip() or None
     # Always refresh persisted data on startup, even if the cache was populated earlier.
     # When DATABASE_URL exists, PostgreSQL is the primary store. Documents from
@@ -135,6 +138,8 @@ def _load_file(filename: str, force: bool = False) -> dict:
 
 def _github_load_file(filename: str, force: bool = False) -> dict:
     """Load a JSON file from the legacy GitHub data branch into cache."""
+    if not _GH_REPO:
+        return {}
     with _lock:
         if not force and filename in _cache:
             return _cache[filename]
@@ -178,6 +183,9 @@ def _save_file(filename: str):
         data = _cache.get(filename, {})
     if _DATABASE_URL:
         return _postgres_save_file(filename, data)
+    if not _GH_REPO:
+        logger.warning("GitHub document storage is disabled in staging mode")
+        return False
     # Always fetch fresh SHA before saving to avoid conflicts after redeploy
     logger.info(f"gh_storage _save_file({filename}): starting save...")
     try:

@@ -25,6 +25,12 @@ def start_http_thread(start_server: Callable, logger) -> threading.Thread:
     return thread
 
 
+def wait_for_http_only(http_thread: threading.Thread, logger) -> None:
+    """Keep the HTTP app and its own workers alive without Telegram polling."""
+    logger.info("Telegram polling disabled; HTTP server and AI Agents worker remain available.")
+    http_thread.join()
+
+
 def build_telegram_application(
     *, token: str, post_init: Callable,
     command_handlers: list[tuple[str, Callable]],

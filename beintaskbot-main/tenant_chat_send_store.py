@@ -1,11 +1,13 @@
 """Durable, tenant/actor-specific receipts reserved before external writes."""
 import json
 import uuid
+import hashlib
 from tenant_platform import _connect, _read_tenant_workflow, _fernet
 from tenant_chat_send_schema import ensure_schema
 from tenant_chat_send_policy import fingerprint
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
+from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 
 
 def authority(cur, session, lead_id):
@@ -102,3 +104,141 @@ def finish(item, state, message_id=None):
                   VALUES(%s,%s::uuid,%s,'chat_message_accepted','lead',%s,%s::jsonb)''',
                   (uuid.uuid4(), item['key'][0], item['key'][1], str(row['lead_id']), json.dumps({'message_id': message_id})))
         conn.commit()
+
+
+def reserve_agent(job, text, route):
+    """Reserve the shared manual/agent send receipt using actor_id=0."""
+    tenant, agent = str(job['tenant_id']), str(job['agent_id'])
+    request_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+        f"beintaskbot-ai-send:{tenant}:{agent}:{job['chat_id']}:{job['event_fingerprint']}:{job['revision']}"))
+    input_hash = hashlib.sha256((str(job['lead_id'])+'\0'+str(job['talk_id'])+'\0'+str(job['chat_id'])+'\0'+str(text)).encode()).hexdigest()
+    with _connect() as conn:
+        ensure_schema(conn)
+        from tenant_ai_agents_schema import ensure_schema as ensure_agents_schema
+        ensure_agents_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"chat-send:{tenant}:{job['lead_id']}",))
+            cur.execute("SELECT status,secrets,account_domain FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE",(tenant,))
+            integration=cur.fetchone()
+            cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled AS agent_enabled,a.mode,
+              s.enabled AS settings_enabled,s.auto_send_enabled,s.max_replies_per_chat,t.status AS tenant_status,
+              cs.state AS conversation_state,cs.revision AS conversation_revision,
+              EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
+                ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
+                JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
+                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                  AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
+                  AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id) AS test_mode_allowed
+              FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
+              JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id JOIN saas_tenants t ON t.id=j.tenant_id
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
+              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
+              FOR UPDATE OF j,a,s,t''',(tenant,agent,job['provider'],job['conversation_id']))
+            current=cur.fetchone()
+            if (not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+                    or not current or current['state']!='processing' or current['revision']!=job['revision']
+                    or current['lease_token']!=job['lease_token'] or current['agent_enabled'] is not True
+                    or current['mode']!='automatic' or current['settings_enabled'] is not True
+                    or current['auto_send_enabled'] is not True or current['tenant_status']!='active'
+                    or current['conversation_state'] in {'human','paused'}
+                    or current.get('test_mode_allowed') is not True
+                    or current['conversation_revision']!=route.get('conversation_revision')
+                    or not integration or integration['status']!='connected' or not integration['secrets']):
+                raise TenantLinearError('AI avtomatik göndərmə üçün aktiv deyil.',409)
+            cur.execute('''SELECT count(*) AS sent FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0
+              AND state='accepted' AND route->>'chat_id'=%s AND created_at >= (now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' ''',
+              (tenant,str(job['chat_id'])) )
+            if int((cur.fetchone() or {}).get('sent') or 0)>=int(current['max_replies_per_chat'] or 20):
+                raise TenantLinearError('Bu çat üçün gündəlik AI cavab limiti dolub.',429)
+            cur.execute("SELECT request_id,state,input_hash FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s AND state IN ('preparing','sending','unknown') LIMIT 1",(tenant,job['lead_id']))
+            active=cur.fetchone()
+            if active:
+                if str(active['request_id'])==request_id and active['input_hash']==input_hash and active['state']=='preparing':
+                    raise TenantLinearError('Göndərmə artıq hazırlanıb.',409)
+                raise TenantLinearError('Bu çatda əvvəlki göndərmənin nəticəsi yoxlanılmalıdır.',409)
+            cur.execute('SELECT state,input_hash,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid FOR UPDATE',(tenant,request_id))
+            old=cur.fetchone()
+            if old:
+                if old['input_hash']!=input_hash:
+                    raise TenantLinearError('Göndərmə idempotency yoxlamasından keçmədi.',409)
+                raise TenantLinearError('Bu agent sorğusunun göndərmə nəticəsi təkrarlanmır.',409)
+            cur.execute('''INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route)
+              VALUES(%s::uuid,0,%s::uuid,%s,%s,'preparing',%s::jsonb)''',
+              (tenant,request_id,job['lead_id'],input_hash,json.dumps(route)))
+            tokens=json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
+            if not isinstance(tokens,dict) or not tokens.get('access_token'):
+                raise TenantLinearError('Kommo bağlantısını yeniləyin.',409)
+            credentials={'account_domain':integration['account_domain'],'access_token':tokens['access_token']}
+        conn.commit()
+    return {'key':(tenant,0,request_id),'job':job,'credentials':credentials,'route':route,'text':text,'input_hash':input_hash}
+
+
+def mark_agent_sending(item):
+    job=item['job']; tenant=str(job['tenant_id'])
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled AS agent_enabled,a.mode,
+              s.enabled AS settings_enabled,s.auto_send_enabled,t.status AS tenant_status,
+              cs.state AS conversation_state,cs.revision AS conversation_revision,
+              EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
+                ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
+                JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
+                WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                  AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
+                  AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id) AS test_mode_allowed
+              FROM saas_ai_agent_jobs j JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
+              JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id JOIN saas_tenants t ON t.id=j.tenant_id
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
+              WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
+              FOR UPDATE OF j,a,s,t''',(tenant,job['agent_id'],job['provider'],job['conversation_id']))
+            current=cur.fetchone()
+            if (not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+                    or not current or current['state']!='processing' or current['revision']!=job['revision']
+                    or current['lease_token']!=job['lease_token'] or current['agent_enabled'] is not True
+                    or current['mode']!='automatic' or current['settings_enabled'] is not True
+                    or current['auto_send_enabled'] is not True or current['tenant_status']!='active'
+                    or current['conversation_state'] in {'human','paused'}
+                    or current.get('test_mode_allowed') is not True
+                    or current['conversation_revision']!=item['route'].get('conversation_revision')):
+                raise TenantLinearError('Agent və ya avtomatik göndərmə icazəsi dəyişib.',409)
+            cur.execute("UPDATE saas_chat_send_receipts SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state='preparing' RETURNING request_id",item['key'])
+            if not cur.fetchone():
+                raise TenantLinearError('Göndərmə receipt-i aktiv deyil.',409)
+        conn.commit()
+
+
+def finish_agent(item,state,message_id=None):
+    if state not in {'accepted','unknown','blocked'}:
+        raise ValueError('Invalid agent send state')
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE saas_chat_send_receipts SET state=%s,message_id=%s,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state IN ('preparing','sending') RETURNING lead_id",(state,message_id,*item['key']))
+            row=cur.fetchone()
+            if not row:
+                cur.execute('SELECT state,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid',item['key'])
+                current=cur.fetchone() or {}
+                conn.commit()
+                return current.get('state') or 'unknown'
+            if state=='blocked':
+                conn.commit()
+                return 'blocked'
+            if row and state=='accepted':
+                cur.execute('''UPDATE saas_ai_conversation_state SET last_agent_message_id=%s,updated_at=now()
+                  WHERE tenant_id=%s::uuid AND provider=%s AND conversation_id=%s''',
+                  (str(message_id),item['key'][0],item['job']['provider'],item['job']['conversation_id']))
+            job=item['job']
+            run_state='completed' if state=='accepted' else 'unknown'
+            job_state='sent' if state=='accepted' else 'unknown'
+            cur.execute('''UPDATE saas_ai_agent_runs SET state=%s,result=%s::jsonb,updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND event_fingerprint=%s AND revision=%s AND state='generating' ''',
+              (run_state,json.dumps({'send_state':state,'message_id':message_id}),item['key'][0],job['agent_id'],job['event_fingerprint'],job['revision']))
+            cur.execute('''UPDATE saas_ai_agent_jobs SET state=%s,lease_token=NULL,lease_until=NULL,error_code=%s,updated_at=now()
+              WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider=%s AND conversation_id=%s
+                AND state='processing' AND lease_token=%s AND revision=%s''',
+              (job_state,'' if state=='accepted' else 'send_'+state,item['key'][0],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
+            cur.execute("UPDATE saas_tenant_webhook_events SET state=%s,completed_at=CASE WHEN %s='sent' THEN now() ELSE completed_at END,error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s",
+              ('completed' if job_state=='sent' else 'unknown',job_state,'' if state=='accepted' else 'send_'+state,item['key'][0],job['event_fingerprint']))
+        conn.commit()
+    return state

@@ -6,6 +6,7 @@ mutable caches, logging setup or background work.
 """
 import os
 from datetime import timedelta, timezone
+from urllib.parse import urlsplit
 
 def _required_env(name: str) -> str:
     value = str(os.environ.get(name) or "").strip()
@@ -14,16 +15,37 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().casefold() in {"1", "true", "yes", "on"}
+
+
+STAGING_MODE = _env_enabled("STAGING_MODE")
+TELEGRAM_POLLING_ENABLED = _env_enabled("TELEGRAM_POLLING_ENABLED", default=True)
 TELEGRAM_TOKEN = _required_env("TELEGRAM_TOKEN")
-KOMMO_TOKEN = _required_env("KOMMO_TOKEN")
+if STAGING_MODE and str(os.environ.get("KOMMO_TOKEN") or "").strip():
+    raise RuntimeError("STAGING_MODE forbids KOMMO_TOKEN; use tenant-scoped Kommo OAuth when approved")
+KOMMO_TOKEN = "" if STAGING_MODE else _required_env("KOMMO_TOKEN")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
-KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}"
+if STAGING_MODE:
+    KOMMO_DOMAIN = ""
+KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}" if KOMMO_DOMAIN else ""
+GH_TOKEN = "" if STAGING_MODE else _required_env("GH_TOKEN")
 BAKU_TZ = timezone(timedelta(hours=4))
 # Keep the model configurable per Railway environment.  This project key is
 # currently granted access to this stable, low-latency chat model.
 LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
+if STAGING_MODE:
+    _stage_origin = urlsplit(CANONICAL_WEB_ORIGIN)
+    if (_stage_origin.scheme != "https" or not _stage_origin.hostname
+            or _stage_origin.hostname.casefold() == "crm.pro.az"
+            or _stage_origin.hostname.casefold().endswith(".crm.pro.az")
+            or _stage_origin.path or _stage_origin.query or _stage_origin.fragment):
+        raise RuntimeError("STAGING_MODE requires a staging-specific HTTPS CANONICAL_WEB_ORIGIN")
 # Telegram buttons must never point at a deployment-specific Railway URL.
 # Keep one stable public address even if an old WEBAPP_PUBLIC_URL variable is
 # still present in Railway.

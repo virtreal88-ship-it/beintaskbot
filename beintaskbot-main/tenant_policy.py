@@ -229,7 +229,7 @@ def validate_workflow_patch(pipelines: object, stages: object, policies: object)
             raise ValueError('Əməkdaşın vərəqləri düzgün deyil.')
         if item.get('kommo_user_id') and not positive_id(item['kommo_user_id']):
             raise ValueError('Kommo istifadəçi ID-si düzgün deyil.')
-        for flag in ('creation_requires_admin', 'completion_requires_admin', 'deal_completion_requires_admin', 'ai_enabled'):
+        for flag in ('creation_requires_admin', 'completion_requires_admin', 'deal_completion_requires_admin', 'ai_enabled', 'ai_agents_manage'):
             if flag in item and not isinstance(item[flag], bool):
                 raise ValueError('Əməkdaş qaydaları düzgün deyil.')
         if 'notifications' in item:

@@ -1,8 +1,9 @@
 """HTTP catalogue and dependency wiring without a database or external writes."""
 import ast
+import os
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import Mock, AsyncMock, patch
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 from test_tenant_hot_orders import load, ROOT
@@ -10,11 +11,33 @@ from tenant_notice_transport import TelegramBot
 from tenant_web_assets import ASSETS, register_assets
 
 EXPECTED_API = (("POST","/api/platform/crm/deals/complete"),("GET","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/deal-approvals"),("POST","/api/platform/crm/chat/send"),("POST","/api/platform/crm/chat/send-file"),("GET","/api/platform/diagnostics"),("GET","/api/platform/crm/chat/history"),("GET","/api/platform/crm/chat/attachment"),("GET","/api/platform/crm/chat/receipts"),("POST","/api/platform/crm/chat/receipts"),("GET","/api/platform/finance"),("POST","/api/platform/finance"),("GET","/api/platform/linear/settings"),("POST","/api/platform/linear/settings"),("GET","/api/platform/linear/tasks"),("POST","/api/platform/linear/tasks"),("GET","/api/platform/news"),("POST","/api/platform/news"),("GET","/api/platform/news/ai"),("POST","/api/platform/news/ai"),("GET","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai/settings"),("POST","/api/platform/chat/ai"),("GET","/api/platform/news/telegram/settings"),("POST","/api/platform/news/telegram/settings"),("GET","/api/platform/news/telegram"),("POST","/api/platform/news/telegram"),("GET","/api/platform/news/public/{company}"))
-EXPECTED_ASSETS = ["/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
+EXPECTED_ASSETS = ["/app/push-sw.js","/assets/tenant-push.js","/assets/task-date-fields.js","/assets/tenant-chat-import.js","/assets/tenant-chat-history.js","/assets/tenant-chat-attachments.js","/assets/tenant-chat-review.js","/assets/tenant-finance.js","/assets/tenant-chat-ai.js","/assets/tenant-chat-ai-settings.js","/assets/tenant-ai-agents.js","/assets/tenant-news-telegram-settings.js","/updates/{company}","/assets/tenant-news.js","/assets/tenant-news-ai-settings.js","/assets/tenant-linear-settings.js","/assets/tenant-linear-board.js","/assets/tenant-linear-rules.js","/assets/tenant-task-approvals.js","/assets/tenant-task-completion.js","/assets/tenant-deal-completion.js","/assets/tenant-diagnostics.js","/assets/tenant-chat-send.js","/assets/tenant-workflow.js","/assets/tenant-chakra-ui.js","/assets/tenant-workspace.js","/assets/tenant-hot-order-settings.js","/assets/tenant-hot-orders.js","/assets/tenant-hot-order-completion.js","/assets/tenant-crm-sync.js","/assets/tenant-tasks.js"]
 FACTORIES = ('finance_handler', 'linear_handler', 'tasks_handler', 'news_handler',
     'news_telegram_handler', 'chat_ai_handler', 'chat_send_handler', 'chat_upload_handler',
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler',
-    'diagnostics_handler', 'deal_completion_handler')
+    'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler')
+
+EXPECTED_AI_API = {
+    ('GET','/api/platform/ai/agents/settings'), ('PATCH','/api/platform/ai/agents/settings'),
+    ('GET','/api/platform/ai/agents/test-mode'), ('PATCH','/api/platform/ai/agents/test-mode'),
+    ('POST','/api/platform/ai/agents/test-mode/verify'),
+    ('POST','/api/platform/ai/agents/test-mode/discover'),
+    ('GET','/api/platform/ai/agents'), ('POST','/api/platform/ai/agents'),
+    ('GET','/api/platform/ai/agents/drafts'),
+    ('POST','/api/platform/ai/agents/drafts/{draft_id}/review'),
+    ('POST','/api/platform/ai/agents/drafts/{draft_id}/send'),
+    ('GET','/api/platform/ai/handoffs'),
+    ('PATCH','/api/platform/ai/agents/{agent_id}'), ('DELETE','/api/platform/ai/agents/{agent_id}'),
+    ('GET','/api/platform/ai/agents/{agent_id}/triggers'), ('POST','/api/platform/ai/agents/{agent_id}/triggers'),
+    ('PATCH','/api/platform/ai/agents/{agent_id}/triggers/{trigger_id}'),
+    ('DELETE','/api/platform/ai/agents/{agent_id}/triggers/{trigger_id}'),
+    ('GET','/api/platform/ai/conversations/{conversation_id}/state'),
+    ('POST','/api/platform/ai/conversations/{conversation_id}/handoff'),
+    ('POST','/api/platform/ai/conversations/{conversation_id}/resume'),
+    ('GET','/api/platform/ai/knowledge'), ('POST','/api/platform/ai/knowledge'),
+    ('POST','/api/platform/ai/knowledge/upload'),
+    ('PATCH','/api/platform/ai/knowledge/{source_id}'), ('DELETE','/api/platform/ai/knowledge/{source_id}'),
+}
 
 
 class Routes(unittest.IsolatedAsyncioTestCase):
@@ -28,7 +51,8 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.context = self.module.TenantWebContext(member=Mock(), origin='https://crm.pro.az',
             logger=Mock(), crm_request=AsyncMock(), wait_slot=Mock(), bot=Mock())
         self.app = web.Application()
-        self.module.register_feature_routes(self.app, self.context)
+        with patch.dict(os.environ, {'AI_AGENTS_ENABLED':'false'}):
+            self.module.register_feature_routes(self.app, self.context)
 
     async def resolve(self, method, path):
         request = make_mocked_request(method, path, app=self.app)
@@ -82,6 +106,17 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             self.module.register_feature_routes(app, self.context)
         self.assertEqual(list(app.router.routes()), [])
+
+    def test_ai_agents_routes_are_complete_and_explicitly_gated(self):
+        app = web.Application()
+        with patch.dict(os.environ, {'AI_AGENTS_ENABLED':'true'}):
+            self.module.register_feature_routes(app, self.context)
+        actual = {(route.method, route.resource.canonical) for route in app.router.routes()}
+        actual = {item for item in actual if item[1].startswith('/api/platform/ai/')}
+        expected = EXPECTED_AI_API | {('HEAD', path) for method, path in EXPECTED_AI_API if method == 'GET'}
+        self.assertEqual(actual, expected)
+        self.factories['ai_agents_handler'].assert_any_call(self.context.member,self.context.origin,
+            self.context.logger,'draft_send',self.context.crm_request,self.context.wait_slot)
 
 
 class Assets(unittest.IsolatedAsyncioTestCase):

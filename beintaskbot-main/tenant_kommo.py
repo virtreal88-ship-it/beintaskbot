@@ -32,6 +32,14 @@ def oauth_settings(origin: str, environ: Mapping[str, str] | None = None,
     redirect_uri = first("KOMMO_OAUTH_REDIRECT_URI", "KOMMO_REDIRECT_URI",
                          "KOMMO_OAUTH_REDIRECT_URL", "KOMMO_REDIRECT_URL") \
         or f"{origin}/api/platform/integrations/kommo/callback"
+    if str(values.get("STAGING_MODE") or "").strip().casefold() in {"1", "true", "yes", "on"}:
+        expected_origin = urlparse(origin)
+        callback = urlparse(redirect_uri)
+        if (expected_origin.scheme != "https" or not expected_origin.netloc
+                or callback.scheme != "https" or callback.netloc.casefold() != expected_origin.netloc.casefold()
+                or callback.path != "/api/platform/integrations/kommo/callback"
+                or callback.query or callback.fragment):
+            raise error("Staging Kommo callback must use the staging HTTPS host and exact callback path.")
     if not client_id or not client_secret:
         missing = []
         if not client_id:

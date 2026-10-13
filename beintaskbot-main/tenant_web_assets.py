@@ -14,6 +14,7 @@ ASSETS = (
     ('/assets/tenant-chat-review.js', 'tenant-chat-review.js', 'no-cache'),
     ('/assets/tenant-chat-ai.js', 'tenant-chat-ai.js', 'no-cache'),
     ('/assets/tenant-chat-ai-settings.js', 'tenant-chat-ai-settings.js', 'no-cache'),
+    ('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-news-telegram-settings.js', 'tenant-news-telegram-settings.js', 'no-cache'),
     ('/updates/{company}', 'tenant-news-public.html', 'no-cache'),
     ('/assets/tenant-news.js', 'tenant-news.js', 'no-cache'),

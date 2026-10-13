@@ -164,3 +164,20 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
         gateway = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
                        and node.name == "_tenant_kommo_request")
         self.assertIn("_tenant_kommo_service.request", ast.unparse(gateway))
+
+
+class StagingOAuthSafetyTests(unittest.TestCase):
+    def test_staging_oauth_callback_must_stay_on_staging_origin(self):
+        origin = "https://beintaskbot-staging.up.railway.app"
+        with self.assertRaisesRegex(ValueError, "staging HTTPS host"):
+            oauth_settings(origin, {
+                "STAGING_MODE": "true",
+                "KOMMO_OAUTH_CLIENT_ID": "stage-client",
+                "KOMMO_OAUTH_CLIENT_SECRET": "stage-secret",
+                "KOMMO_OAUTH_REDIRECT_URI": "https://crm.pro.az/api/platform/integrations/kommo/callback",
+            })
+        self.assertEqual(oauth_settings(origin, {
+                "STAGING_MODE": "true",
+                "KOMMO_OAUTH_CLIENT_ID": "stage-client",
+                "KOMMO_OAUTH_CLIENT_SECRET": "stage-secret",
+            }), ("stage-client", "stage-secret", origin + "/api/platform/integrations/kommo/callback"))

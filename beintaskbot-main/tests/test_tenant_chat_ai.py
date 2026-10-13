@@ -70,6 +70,16 @@ class Policy(unittest.TestCase):
                 with self.assertRaises(ValueError):download(ROW['media_url'],CONFIG['media_hosts'])
             connection.close.assert_called_once();response.read1.assert_not_called()
 
+    def test_image_download_uses_existing_pinned_media_path(self):
+        response=Mock(status=200);response.getheader.side_effect=lambda key,default=None:{
+            'Content-Type':'image/jpeg','Content-Length':'4','Content-Encoding':'identity'}.get(key,default)
+        response.read1.side_effect=[b'jpeg',b'']
+        connection=Mock();connection.getresponse.return_value=response
+        with patch('tenant_chat_media.public_addresses',return_value=['1.1.1.1']),patch('tenant_chat_media.PinnedHTTPS',return_value=connection):
+            self.assertEqual(download(ROW['media_url'],CONFIG['media_hosts']),(b'jpeg','jpg','image/jpeg'))
+        connection.request.assert_called_once()
+        self.assertIn('image/jpeg',connection.request.call_args.kwargs['headers']['Accept'])
+
     def test_talk_normalization_attachment_and_unknown_sender(self):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text(encoding='utf-8-sig'))
         node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='_tenant_normalize_talk_message')
