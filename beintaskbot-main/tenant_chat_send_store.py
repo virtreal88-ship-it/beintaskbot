@@ -194,6 +194,7 @@ def reserve_agent(job, text, route):
                 error=TenantLinearError('Bu çat üçün gündəlik AI cavab limiti dolub.',429)
                 error.ai_agent_send_reason='daily_chat_limit_reached'
                 raise error
+            expire_unstarted_agent_receipts(cur, tenant, job['lead_id'])
             cur.execute("SELECT request_id,state,input_hash FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s AND state IN ('preparing','sending','unknown') LIMIT 1",(tenant,job['lead_id']))
             active=cur.fetchone()
             if active:
@@ -280,6 +281,13 @@ def mark_agent_sending(item):
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə receipt-i aktiv deyil.',409)
         conn.commit()
+
+
+def expire_unstarted_agent_receipts(cur, tenant, lead_id):
+    """Unblock only stale AI preparations; a provider POST has not started yet."""
+    cur.execute("""UPDATE saas_chat_send_receipts SET state='blocked',updated_at=now()
+      WHERE tenant_id=%s::uuid AND actor_id=0 AND lead_id=%s AND state='preparing'
+        AND updated_at<now()-interval '10 minutes'""", (tenant, lead_id))
 
 
 def finish_agent(item,state,message_id=None):

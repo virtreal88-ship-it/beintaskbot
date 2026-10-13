@@ -297,6 +297,16 @@ class SendTests(unittest.IsolatedAsyncioTestCase):
             query,params=call.args
             self.assertEqual(query.count('%s'),len(params))
 
+    def test_stale_agent_recovery_only_expires_unstarted_preparing_receipts(self):
+        cur=Mock()
+        send_store.expire_unstarted_agent_receipts(cur,TENANT,7)
+        query,params=cur.execute.call_args.args
+        self.assertIn("actor_id=0",query)
+        self.assertIn("state='preparing'",query)
+        self.assertIn("state='blocked'",query)
+        self.assertNotIn("state='sending'",query)
+        self.assertEqual(params,(TENANT,7))
+
     async def test_timeout_is_unknown_and_never_retried(self):
         with patch.object(send_service,'reserve_agent',return_value=self.item),patch.object(send_service,'mark_agent_sending',self.mark),patch.object(send_service,'finish_agent',self.finish),patch.object(send_service,'read_talks',self.talk),patch.object(send_service,'read_messages',self.messages),patch.object(send_service,'send',Mock(side_effect=RuntimeError('timeout'))),patch.object(send_service,'assert_job_allowed'),patch.object(send_service,'assert_live_job_allowed',AsyncMock()),patch.object(send_service.asyncio,'to_thread',self.inline_to_thread):
             with self.assertRaises(TenantLinearError):await self.invoke()
