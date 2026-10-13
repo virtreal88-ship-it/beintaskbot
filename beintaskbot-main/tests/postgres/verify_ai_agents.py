@@ -91,6 +91,8 @@ def main():
                 else:
                     raise AssertionError('Duplicate AI Agent run was accepted')
             conn.commit()
+        print('PASS: initial schema and migration replay')
+        print('PASS: tenant-scoped uniqueness and duplicate run rejection')
 
         # Tenant-filtered reads must not cross the tenant boundary.
         with psycopg.connect(database_url) as conn:
@@ -101,6 +103,7 @@ def main():
                 assert cur.fetchone()[0] == 1
                 cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped' WHERE tenant_id=%s", (tenant_b,))
             conn.commit()
+        print('PASS: tenant-filtered job isolation')
 
         # Exercise the worker's actual PostgreSQL claim path concurrently.
         from tenant_ai_agent_run_store import claim_next
@@ -122,9 +125,6 @@ def main():
             claims = list(pool.map(lambda _index: competing_claim(), range(2)))
         claimed = [item for item in claims if item is not None]
         assert len(claimed) == 1, f'Expected one worker to claim the queued job, got {len(claimed)}'
-        print('PASS: initial schema and migration replay')
-        print('PASS: tenant-scoped uniqueness and duplicate run rejection')
-        print('PASS: tenant-filtered job isolation')
         print('PASS: concurrent SKIP LOCKED worker claim')
     finally:
         with psycopg.connect(database_url) as conn:
@@ -134,3 +134,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
