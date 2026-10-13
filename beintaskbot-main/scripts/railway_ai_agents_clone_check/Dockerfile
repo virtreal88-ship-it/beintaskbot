@@ -25,8 +25,7 @@ RUN python3 -m venv /opt/venv \
 COPY ./*.py /opt/app/
 COPY tests/postgres/verify_ai_agents.py /opt/app/tests/postgres/verify_ai_agents.py
 COPY scripts/railway_ai_agents_clone_check/run_clone_check.py /opt/runner/run_clone_check.py
-COPY scripts/railway_ai_agents_clone_check/volume_audit.py /opt/runner/volume_audit.py
 COPY scripts/railway_ai_agents_clone_check/entrypoint.sh /usr/local/bin/ai-agents-clone-check
 RUN chmod 0755 /usr/local/bin/ai-agents-clone-check
 
-ENTRYPOINT ["/opt/venv/bin/python", "/opt/runner/volume_audit.py"]
+ENTRYPOINT ["/usr/local/bin/ai-agents-clone-check"]
