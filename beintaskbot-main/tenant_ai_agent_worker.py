@@ -334,9 +334,16 @@ async def process_one(job, kommo_request, wait_slot, logger):
                 if getattr(error,'status',500)==503 and 'qeyri-müəyyən' in str(error).casefold():
                     await asyncio.to_thread(finish_unknown,job,reservation,'send_result_unknown')
                 else:
-                    # A definitive block leaves the generated text available for
-                    # review only when the source conversation is still current.
-                    await asyncio.to_thread(finish_superseded,job,reservation,'automatic_send_blocked')
+                    # Keep definitive send-guard failures distinguishable in
+                    # the job record without exposing conversation content.
+                    phase = str(getattr(error,'ai_agent_send_phase','send_guard'))
+                    # phase is assigned only from hard-coded checkpoints in the
+                    # shared sender. Never log the exception text or chat data.
+                    reason = str(getattr(error,'ai_agent_send_reason',phase))
+                    logger.warning('AI agent automatic send blocked: tenant=%s agent=%s check=%s status=%s',
+                        tenant,job['agent_id'],reason,getattr(error,'status',500))
+                    await asyncio.to_thread(finish_superseded,job,reservation,
+                        f'automatic_send_blocked_{reason}')
                 return
         saved = await asyncio.to_thread(complete_run,job,reservation,str(draft)[:16000],source_ids)
         if not saved:

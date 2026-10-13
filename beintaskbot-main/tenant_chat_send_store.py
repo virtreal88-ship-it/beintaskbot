@@ -10,6 +10,41 @@ from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 
 
+def agent_send_reservation_block_reason(current, job, route, integration, *, runtime_enabled):
+    """Return a stable, non-sensitive code for the first failed send gate."""
+    if not runtime_enabled:
+        return 'global_auto_send_disabled'
+    if not current:
+        return 'job_missing'
+    if current.get('state') != 'processing':
+        return 'job_not_processing'
+    if current.get('revision') != job.get('revision'):
+        return 'job_revision_changed'
+    if current.get('lease_token') != job.get('lease_token'):
+        return 'job_lease_changed'
+    if current.get('agent_enabled') is not True:
+        return 'agent_disabled'
+    if current.get('mode') != 'automatic':
+        return 'agent_not_automatic'
+    if current.get('settings_enabled') is not True:
+        return 'company_ai_disabled'
+    if current.get('auto_send_enabled') is not True:
+        return 'company_auto_send_disabled'
+    if current.get('tenant_status') != 'active':
+        return 'tenant_inactive'
+    if current.get('conversation_state') in {'human', 'paused'}:
+        return 'conversation_paused_for_manager'
+    if current.get('test_mode_allowed') is not True:
+        return 'test_mode_binding_mismatch'
+    if current.get('conversation_revision') != route.get('conversation_revision'):
+        return 'conversation_revision_changed'
+    if not integration or integration.get('status') != 'connected':
+        return 'kommo_disconnected'
+    if not integration.get('secrets'):
+        return 'kommo_credentials_missing'
+    return ''
+
+
 def authority(cur, session, lead_id):
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
     cur.execute('''SELECT m.*,t.status AS tenant_status,t.modules FROM saas_tenant_members m
@@ -135,39 +170,47 @@ def reserve_agent(job, text, route):
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
               FOR UPDATE OF j,a,s,t''',(tenant,agent,job['provider'],job['conversation_id']))
             current=cur.fetchone()
-            if (not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
-                    or not current or current['state']!='processing' or current['revision']!=job['revision']
-                    or current['lease_token']!=job['lease_token'] or current['agent_enabled'] is not True
-                    or current['mode']!='automatic' or current['settings_enabled'] is not True
-                    or current['auto_send_enabled'] is not True or current['tenant_status']!='active'
-                    or current['conversation_state'] in {'human','paused'}
-                    or current.get('test_mode_allowed') is not True
-                    or current['conversation_revision']!=route.get('conversation_revision')
-                    or not integration or integration['status']!='connected' or not integration['secrets']):
-                raise TenantLinearError('AI avtomatik göndərmə üçün aktiv deyil.',409)
+            block_reason=agent_send_reservation_block_reason(current,job,route,integration,
+                runtime_enabled=runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'))
+            if block_reason:
+                error=TenantLinearError('AI avtomatik göndərmə üçün aktiv deyil.',409)
+                error.ai_agent_send_reason=block_reason
+                raise error
             cur.execute('''SELECT count(*) AS sent FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0
               AND state='accepted' AND route->>'chat_id'=%s AND created_at >= (now() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC' ''',
               (tenant,str(job['chat_id'])) )
             if int((cur.fetchone() or {}).get('sent') or 0)>=int(current['max_replies_per_chat'] or 20):
-                raise TenantLinearError('Bu çat üçün gündəlik AI cavab limiti dolub.',429)
+                error=TenantLinearError('Bu çat üçün gündəlik AI cavab limiti dolub.',429)
+                error.ai_agent_send_reason='daily_chat_limit_reached'
+                raise error
             cur.execute("SELECT request_id,state,input_hash FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s AND state IN ('preparing','sending','unknown') LIMIT 1",(tenant,job['lead_id']))
             active=cur.fetchone()
             if active:
                 if str(active['request_id'])==request_id and active['input_hash']==input_hash and active['state']=='preparing':
-                    raise TenantLinearError('Göndərmə artıq hazırlanıb.',409)
-                raise TenantLinearError('Bu çatda əvvəlki göndərmənin nəticəsi yoxlanılmalıdır.',409)
+                    error=TenantLinearError('Göndərmə artıq hazırlanıb.',409)
+                    error.ai_agent_send_reason='send_already_preparing'
+                    raise error
+                error=TenantLinearError('Bu çatda əvvəlki göndərmənin nəticəsi yoxlanılmalıdır.',409)
+                error.ai_agent_send_reason='previous_send_unresolved'
+                raise error
             cur.execute('SELECT state,input_hash,message_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid FOR UPDATE',(tenant,request_id))
             old=cur.fetchone()
             if old:
                 if old['input_hash']!=input_hash:
-                    raise TenantLinearError('Göndərmə idempotency yoxlamasından keçmədi.',409)
-                raise TenantLinearError('Bu agent sorğusunun göndərmə nəticəsi təkrarlanmır.',409)
+                    error=TenantLinearError('Göndərmə idempotency yoxlamasından keçmədi.',409)
+                    error.ai_agent_send_reason='idempotency_conflict'
+                    raise error
+                error=TenantLinearError('Bu agent sorğusunun göndərmə nəticəsi təkrarlanmır.',409)
+                error.ai_agent_send_reason='duplicate_agent_send'
+                raise error
             cur.execute('''INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route)
               VALUES(%s::uuid,0,%s::uuid,%s,%s,'preparing',%s::jsonb)''',
               (tenant,request_id,job['lead_id'],input_hash,json.dumps(route)))
             tokens=json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
             if not isinstance(tokens,dict) or not tokens.get('access_token'):
-                raise TenantLinearError('Kommo bağlantısını yeniləyin.',409)
+                error=TenantLinearError('Kommo bağlantısını yeniləyin.',409)
+                error.ai_agent_send_reason='kommo_credentials_invalid'
+                raise error
             credentials={'account_domain':integration['account_domain'],'access_token':tokens['access_token']}
         conn.commit()
     return {'key':(tenant,0,request_id),'job':job,'credentials':credentials,'route':route,'text':text,'input_hash':input_hash}

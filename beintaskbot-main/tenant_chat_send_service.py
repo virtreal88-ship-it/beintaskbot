@@ -93,15 +93,22 @@ async def run(session, data, request, wait_slot, logger, *, expected_route=None)
 
 async def run_agent(job, reservation, text, request, wait_slot, logger):
     """Send one agent answer through the existing Kommo transport/receipt ledger."""
-    item = await asyncio.to_thread(reserve_agent, job, text, reservation['route'])
+    # Keep a non-sensitive checkpoint so a blocked send can be diagnosed from
+    # worker logs without logging message text, credentials, or provider bodies.
+    phase = 'reserve_receipt'
+    item = None
     external_started = False
     try:
+        item = await asyncio.to_thread(reserve_agent, job, text, reservation['route'])
         tenant=str(job['tenant_id']); lead_id=int(job['lead_id'])
         # Wait for Kommo's existing per-account limiter before the final chat
         # check, so no intentional delay separates validation from the POST.
+        phase = 'account_rate_limit'
         await asyncio.to_thread(wait_slot,item['credentials']['account_domain'])
         async with asyncio.timeout(40):
+            phase = 'talk_lookup'
             talks=await read_talks(tenant,lead_id,request)
+            phase = 'talk_identity'
             talk=next((row for row in talks if str(row.get('talk_id') or row.get('id') or '')==str(job['talk_id'])
                        and str(row.get('chat_id') or '')==str(job['chat_id'])),None)
             if not talk or talk.get('is_in_work') is False or talk.get('is_closed') is True:
@@ -109,6 +116,7 @@ async def run_agent(job, reservation, text, request, wait_slot, logger):
             current_origin=str(talk.get('origin') or '').strip().casefold()
             if item['route'].get('origin') and current_origin and current_origin!=str(item['route']['origin']).strip().casefold():
                 raise TenantLinearError('Söhbət kanalı dəyişib; mesaj saxlanıldı.',409)
+            phase = 'message_lookup'
             messages=await read_messages(tenant,talk,request)
             normalized=[]
             for row in messages:
@@ -119,29 +127,48 @@ async def run_agent(job, reservation, text, request, wait_slot, logger):
                 try: stamp=int(created)
                 except (TypeError,ValueError): stamp=0
                 normalized.append((stamp,ident,direction))
+            phase = 'source_current'
             source=next((row for row in normalized if row[1]==str(reservation['source_message_id'])),None)
             if (not source or source[2] not in {'incoming','in','inbound'}
                     or any(row[1]!=source[1] and row[0]>=source[0] for row in normalized)):
                 raise TenantLinearError('Müştəri və ya əməkdaş daha yeni mesaj yazıb; avtomatik cavab ləğv edildi.',409)
+            phase = 'deal_identity'
             live=await request(tenant,'GET',f'leads/{lead_id}',params={'with':'contacts'})
             if int(live.get('id') or 0)!=lead_id or str(live.get('pipeline_id') or '')!=str(reservation['pipeline_id']) or str(live.get('status_id') or '')!=str(reservation['stage_id']):
                 raise TenantLinearError('Sövdələşmənin mərhələsi dəyişib; avtomatik cavab ləğv edildi.',409)
+            phase = 'live_test_mode'
             await assert_live_job_allowed(job,talk,live,request)
+        phase = 'mark_sending'
         await asyncio.to_thread(mark_agent_sending,item)
+        phase = 'emergency_stop_recheck'
         await asyncio.to_thread(assert_job_allowed,job)
+        phase = 'provider_send'
         external_started=True
         message_id=await asyncio.to_thread(send,item['credentials'],reservation['route'],text,lambda _domain:None)
+        phase = 'receipt_commit'
         await asyncio.to_thread(finish_agent,item,'accepted',message_id)
         return {'state':'accepted','message_id':message_id}
-    except TenantLinearError:
-        await asyncio.to_thread(finish_agent,item,'blocked')
+    except TenantLinearError as error:
+        error.ai_agent_send_phase = phase
+        if not hasattr(error,'ai_agent_send_reason'):
+            error.ai_agent_send_reason = phase
+        if item is not None:
+            await asyncio.to_thread(finish_agent,item,'unknown' if external_started else 'blocked')
         raise
-    except Exception:
-        try:
-            settled=await asyncio.to_thread(finish_agent,item,'unknown' if external_started else 'blocked')
-        except Exception:
-            logger.error('AI agent send receipt persistence failed; automatic retry remains blocked')
-            settled='unknown'
-        if settled=='accepted':
-            return {'state':'accepted','reconciled':True}
-        raise TenantLinearError('Göndərmə nəticəsi qeyri-müəyyəndir. Avtomatik təkrar edilmir; Kommo-da yoxlayın.',503) from None
+    except Exception as error:
+        # Keep the exact stage and exception class, never the exception text:
+        # provider/DB messages can contain identifiers or response payloads.
+        logger.warning('AI agent send path failed: check=%s error_type=%s external_started=%s',
+            phase,type(error).__name__,external_started)
+        if item is not None:
+            try:
+                settled=await asyncio.to_thread(finish_agent,item,'unknown' if external_started else 'blocked')
+            except Exception:
+                logger.error('AI agent send receipt persistence failed; automatic retry remains blocked')
+                settled='unknown'
+            if settled=='accepted':
+                return {'state':'accepted','reconciled':True}
+        wrapped=TenantLinearError('Göndərmə nəticəsi qeyri-müəyyəndir. Avtomatik təkrar edilmir; Kommo-da yoxlayın.',503)
+        wrapped.ai_agent_send_phase=phase
+        wrapped.ai_agent_send_reason='send_result_unknown' if external_started else f'{phase}_failed'
+        raise wrapped from None

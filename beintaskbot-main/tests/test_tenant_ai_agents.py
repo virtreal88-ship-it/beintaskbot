@@ -27,6 +27,7 @@ if hasattr(asyncio,'WindowsSelectorEventLoopPolicy'):
 import tenant_ai_agent_queue as queue
 import tenant_ai_agent_worker as worker
 import tenant_chat_send_service as send_service
+from tenant_chat_send_store import agent_send_reservation_block_reason
 import tenant_ai_agents_store as agent_store
 import tenant_ai_agents_api as agents_api
 
@@ -239,8 +240,31 @@ class SendTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_manager_message_blocks_post(self):
         self.messages.return_value.append({'id':'manager','chat_id':'chat','created_at':101,'type':'outgoing'})
         with patch.object(send_service,'reserve_agent',return_value=self.item),patch.object(send_service,'mark_agent_sending',self.mark),patch.object(send_service,'finish_agent',self.finish),patch.object(send_service,'read_talks',self.talk),patch.object(send_service,'read_messages',self.messages),patch.object(send_service,'send',self.send),patch.object(send_service,'assert_job_allowed'),patch.object(send_service,'assert_live_job_allowed',AsyncMock()),patch.object(send_service.asyncio,'to_thread',self.inline_to_thread):
-            with self.assertRaises(TenantLinearError):await self.invoke()
+            with self.assertRaises(TenantLinearError) as caught:await self.invoke()
+        self.assertEqual(caught.exception.ai_agent_send_phase,'source_current')
         self.send.assert_not_called();self.mark.assert_not_called();self.finish.assert_called_once_with(self.item,'blocked')
+
+    async def test_changed_live_test_mode_binding_reports_specific_check(self):
+        denied=TenantLinearError('Test Mode binding changed.',409)
+        with patch.object(send_service,'reserve_agent',return_value=self.item),patch.object(send_service,'mark_agent_sending',self.mark),patch.object(send_service,'finish_agent',self.finish),patch.object(send_service,'read_talks',self.talk),patch.object(send_service,'read_messages',self.messages),patch.object(send_service,'send',self.send),patch.object(send_service,'assert_job_allowed'),patch.object(send_service,'assert_live_job_allowed',AsyncMock(side_effect=denied)),patch.object(send_service.asyncio,'to_thread',self.inline_to_thread):
+            with self.assertRaises(TenantLinearError) as caught:await self.invoke()
+        self.assertEqual(caught.exception.ai_agent_send_phase,'live_test_mode')
+        self.send.assert_not_called();self.mark.assert_not_called()
+
+    def test_reservation_gate_names_only_the_first_failed_condition(self):
+        current={'state':'processing','revision':1,'lease_token':'lease','agent_enabled':True,
+            'mode':'automatic','settings_enabled':True,'auto_send_enabled':True,
+            'tenant_status':'active','conversation_state':'active','test_mode_allowed':True,
+            'conversation_revision':3}
+        integration={'status':'connected','secrets':b'encrypted'}
+        self.assertEqual(agent_send_reservation_block_reason(current,self.job,self.reservation['route'],integration,
+            runtime_enabled=True),'')
+        self.assertEqual(agent_send_reservation_block_reason({**current,'state':'skipped'},self.job,
+            self.reservation['route'],integration,runtime_enabled=True),'job_not_processing')
+        self.assertEqual(agent_send_reservation_block_reason({**current,'test_mode_allowed':False},self.job,
+            self.reservation['route'],integration,runtime_enabled=True),'test_mode_binding_mismatch')
+        self.assertEqual(agent_send_reservation_block_reason(current,self.job,self.reservation['route'],integration,
+            runtime_enabled=False),'global_auto_send_disabled')
 
     async def test_timeout_is_unknown_and_never_retried(self):
         with patch.object(send_service,'reserve_agent',return_value=self.item),patch.object(send_service,'mark_agent_sending',self.mark),patch.object(send_service,'finish_agent',self.finish),patch.object(send_service,'read_talks',self.talk),patch.object(send_service,'read_messages',self.messages),patch.object(send_service,'send',Mock(side_effect=RuntimeError('timeout'))),patch.object(send_service,'assert_job_allowed'),patch.object(send_service,'assert_live_job_allowed',AsyncMock()),patch.object(send_service.asyncio,'to_thread',self.inline_to_thread):
