@@ -33,7 +33,7 @@ class TenantKommoAccountMappingTests(unittest.TestCase):
         connection.cursor.return_value.__enter__.return_value = cursor
         connect.return_value.__enter__.return_value = connection
 
-        result = tenants_for_kommo_account_user(7, ' TEXNIKIDESTEK50.KOMMO.COM ')
+        result = tenants_for_kommo_account_user(7, ' TEXNIKIDESTEK50.KOMMO.COM ', '32524359')
 
         self.assertEqual([row['id'] for row in result], ['tenant-a'])
         ensure_schema.assert_called_once_with(connection)
@@ -42,7 +42,8 @@ class TenantKommoAccountMappingTests(unittest.TestCase):
         self.assertIn("t.status = 'active'", sql)
         self.assertIn("i.provider = 'kommo' AND i.status = 'connected'", sql)
         self.assertIn("lower(i.account_domain) = %s", sql)
-        self.assertEqual(params, (7, 'texnikidestek50.kommo.com'))
+        self.assertIn("i.metadata->>'credential_source' IS DISTINCT FROM 'legacy_environment'", sql)
+        self.assertEqual(params, (7, 'texnikidestek50.kommo.com', '32524359', '32524359'))
 
     @patch('tenant_member_store._connect')
     def test_empty_account_never_queries_database(self, connect):

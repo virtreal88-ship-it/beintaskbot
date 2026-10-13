@@ -110,31 +110,67 @@ class TenantKommo:
     def settings(self) -> tuple[str, str, str]:
         return oauth_settings(self.context.origin, error=self.context.platform_error)
 
+    def _verify_legacy_account(self, credentials: dict) -> None:
+        """Verify the shared legacy bearer token belongs to the explicitly linked account."""
+        domain = str(credentials.get("account_domain") or "")
+        expected = str(credentials.get("expected_account_id") or "")
+        if not domain or not expected.isdigit():
+            raise self.context.platform_error("Mövcud Kommo bağlantısının hesabı təsdiqlənməyib.")
+        wait_slot(domain)
+        try:
+            response = requests.get(
+                f"https://{domain}/api/v4/account",
+                headers={"Authorization": f"Bearer {credentials['access_token']}", "Accept": "application/json"},
+                timeout=15,
+            )
+            payload = response.json() if response.status_code == 200 else {}
+        except Exception:
+            self.context.logger.warning("Legacy Kommo account verification failed")
+            raise self.context.platform_error("Mövcud Kommo hesabı təsdiqlənmədi.") from None
+        if not isinstance(payload, dict) or str(payload.get("id") or "") != expected:
+            self.context.logger.warning("Legacy Kommo account identity mismatch")
+            raise self.context.platform_error("Mövcud Kommo hesabının ID-si uyğun gəlmir.")
+        actual_subdomain = str(payload.get("subdomain") or "").strip().casefold()
+        expected_subdomain = domain.split(".", 1)[0].casefold()
+        if actual_subdomain and actual_subdomain != expected_subdomain:
+            self.context.logger.warning("Legacy Kommo account domain mismatch")
+            raise self.context.platform_error("Mövcud Kommo hesabının ünvanı uyğun gəlmir.")
+
     async def request(self, tenant_id: str, method: str, path: str, *,
                       params: dict | None = None, json_body: dict | list | None = None) -> dict:
-        client_id, client_secret, redirect_uri = self.settings()
-
-        def refresh(credentials: dict) -> dict:
-            response = requests.post(
-                f"https://{credentials['account_domain']}/oauth2/access_token",
-                json={"client_id": client_id, "client_secret": client_secret,
-                      "grant_type": "refresh_token", "refresh_token": credentials["refresh_token"],
-                      "redirect_uri": redirect_uri}, timeout=15,
-            )
-            if response.status_code != 200:
-                self.context.logger.warning("Kommo OAuth refresh failed: status=%s", response.status_code)
-                raise self.context.platform_error("Kommo bağlantısının vaxtı bitib. Yenidən qoşulun.")
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise self.context.platform_error("Kommo token cavabı düzgün deyil.")
-            self.context.replace_tokens(tenant_id=tenant_id, account_domain=credentials["account_domain"],
-                                        token_payload=payload)
-            return self.context.credentials(tenant_id=tenant_id)
-
         def run() -> dict:
             credentials = self.context.credentials(tenant_id=tenant_id)
-            if token_is_expiring(credentials.get("token_expires_at") or ""):
-                credentials = refresh(credentials)
+            source = str(credentials.get("credential_source") or "tenant_oauth")
+            if source not in {"tenant_oauth", "legacy_environment"}:
+                raise self.context.platform_error("Kommo bağlantı mənbəyi dəstəklənmir.")
+            if source == "legacy_environment":
+                # The legacy app token is shared and may have write scopes. The
+                # AI Agents adapter therefore uses it only for live reads.
+                if method.upper() not in {"GET", "HEAD"}:
+                    raise self.context.platform_error("Mövcud Kommo bağlantısı AI Agents üçün yalnız oxuma rejimindədir.")
+                self._verify_legacy_account(credentials)
+            else:
+                client_id, client_secret, redirect_uri = self.settings()
+
+                def refresh(active: dict) -> dict:
+                    response = requests.post(
+                        f"https://{active['account_domain']}/oauth2/access_token",
+                        json={"client_id": client_id, "client_secret": client_secret,
+                              "grant_type": "refresh_token", "refresh_token": active["refresh_token"],
+                              "redirect_uri": redirect_uri}, timeout=15,
+                    )
+                    if response.status_code != 200:
+                        self.context.logger.warning("Kommo OAuth refresh failed: status=%s", response.status_code)
+                        raise self.context.platform_error("Kommo bağlantısının vaxtı bitib. Yenidən qoşulun.")
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise self.context.platform_error("Kommo token cavabı düzgün deyil.")
+                    self.context.replace_tokens(tenant_id=tenant_id, account_domain=active["account_domain"],
+                                                token_payload=payload)
+                    return self.context.credentials(tenant_id=tenant_id)
+
+                if token_is_expiring(credentials.get("token_expires_at") or ""):
+                    credentials = refresh(credentials)
 
             def send(active: dict):
                 wait_slot(active["account_domain"])
@@ -146,7 +182,7 @@ class TenantKommo:
                 )
 
             response = send(credentials)
-            if response.status_code == 401:
+            if response.status_code == 401 and source == "tenant_oauth":
                 credentials = refresh(credentials)
                 response = send(credentials)
             if response.status_code >= 400:

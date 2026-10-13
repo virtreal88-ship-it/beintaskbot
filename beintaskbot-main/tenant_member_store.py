@@ -73,7 +73,8 @@ def tenants_for_user(telegram_id: int) -> list[dict]:
     return [_tenant_payload(row) for row in rows]
 
 
-def tenants_for_kommo_account_user(telegram_id: int, account_domain: str) -> list[dict]:
+def tenants_for_kommo_account_user(telegram_id: int, account_domain: str,
+                                  account_id: str = "") -> list[dict]:
     """Return only active tenant memberships connected to this Kommo account.
 
     The legacy ``/webapp`` authenticates employees independently from the
@@ -97,8 +98,10 @@ def tenants_for_kommo_account_user(telegram_id: int, account_domain: str) -> lis
                   AND t.status = 'active'
                   AND i.provider = 'kommo' AND i.status = 'connected'
                   AND lower(i.account_domain) = %s
+                  AND (i.metadata->>'credential_source' IS DISTINCT FROM 'legacy_environment'
+                       OR (%s <> '' AND i.metadata->>'account_id' = %s))
                 ORDER BY t.created_at DESC
-            """, (int(telegram_id), account))
+            """, (int(telegram_id), account, str(account_id or "").strip(), str(account_id or "").strip()))
             rows = cur.fetchall()
     return [_tenant_payload(row) for row in rows]
 

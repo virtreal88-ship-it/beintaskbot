@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import secrets
 
 from cryptography.fernet import InvalidToken
@@ -10,6 +11,21 @@ from tenant_member_store import member
 from tenant_platform_core import (
     TenantPlatformError, _connect, _ensure_schema, _fernet, _json, _kommo_domain,
 )
+
+
+_LEGACY_KOMMO_SOURCE = "legacy_environment"
+
+
+def _reject_oauth_over_legacy_reference(cur, tenant_id: str) -> None:
+    """Keep an explicit shared-credential reference from being overwritten by OAuth."""
+    cur.execute("""SELECT metadata FROM saas_tenant_integrations
+        WHERE tenant_id=%s::uuid AND provider='kommo' FOR UPDATE""", (tenant_id,))
+    row = cur.fetchone() or {}
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if metadata.get("credential_source") == _LEGACY_KOMMO_SOURCE:
+        raise TenantPlatformError(
+            "Bu şirkət mövcud Kommo bağlantısına istinad edir. OAuth-u dəyişmək üçün əvvəlcə bağlantını ayırın."
+        )
 
 def list_integrations(*, tenant_id: str, telegram_id: int) -> list[dict]:
     if not member(tenant_id, telegram_id):
@@ -68,6 +84,7 @@ def request_kommo_connection(*, tenant_id: str, owner_id: int, account_domain: s
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _reject_oauth_over_legacy_reference(cur, tenant_id)
             cur.execute("""
                 INSERT INTO saas_tenant_integrations (tenant_id, provider, status, account_domain, metadata)
                 VALUES (%s::uuid, 'kommo', 'awaiting_oauth', %s, '{}'::jsonb)
@@ -96,6 +113,7 @@ def begin_kommo_oauth(*, tenant_id: str, owner_id: int, account_domain: str) -> 
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _reject_oauth_over_legacy_reference(cur, tenant_id)
             cur.execute("""
                 INSERT INTO saas_tenant_oauth_states (id, tenant_id, provider, nonce_hash, expires_at)
                 VALUES (%s, %s::uuid, 'kommo', %s, %s)
@@ -163,6 +181,7 @@ def save_kommo_oauth_tokens(*, tenant_id: str, account_domain: str, token_payloa
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            _reject_oauth_over_legacy_reference(cur, tenant_id)
             cur.execute("""
                 UPDATE saas_tenant_integrations
                 SET status = 'connected', account_domain = %s, metadata = %s::jsonb,
@@ -198,7 +217,26 @@ def kommo_credentials(*, tenant_id: str) -> dict:
                 WHERE tenant_id = %s::uuid AND provider = 'kommo'
             """, (tenant_id,))
             row = cur.fetchone()
-    if not row or row.get("status") != "connected" or not row.get("secrets"):
+    if not row or row.get("status") != "connected":
+        raise TenantPlatformError("Kommo hələ qoşulmayıb.")
+    metadata = row["metadata"] if isinstance(row.get("metadata"), dict) else {}
+    if metadata.get("credential_source") == _LEGACY_KOMMO_SOURCE:
+        expected_account_id = str(os.environ.get("KOMMO_ACCOUNT_ID") or "").strip()
+        stored_account_id = str(metadata.get("account_id") or "").strip()
+        token = "" if str(os.environ.get("STAGING_MODE") or "").strip().casefold() in {"1", "true", "yes", "on"} \
+            else str(os.environ.get("KOMMO_TOKEN") or "").strip()
+        if (not expected_account_id.isdigit() or stored_account_id != expected_account_id
+                or not token or not row.get("account_domain")):
+            raise TenantPlatformError("Mövcud Kommo bağlantısının tenant istinadı təsdiqlənməyib.")
+        return {
+            "credential_source": _LEGACY_KOMMO_SOURCE,
+            "account_domain": _kommo_domain(row["account_domain"]),
+            "access_token": token,
+            "refresh_token": "",
+            "token_expires_at": "",
+            "expected_account_id": expected_account_id,
+        }
+    if not row.get("secrets"):
         raise TenantPlatformError("Kommo hələ qoşulmayıb.")
     try:
         raw = _fernet().decrypt(bytes(row["secrets"]))
@@ -207,7 +245,6 @@ def kommo_credentials(*, tenant_id: str) -> dict:
         raise TenantPlatformError("Kommo bağlantı məlumatı oxunmadı. Yenidən qoşulun.") from exc
     if not isinstance(tokens, dict) or not tokens.get("access_token") or not tokens.get("refresh_token"):
         raise TenantPlatformError("Kommo bağlantı məlumatı tam deyil. Yenidən qoşulun.")
-    metadata = row["metadata"] if isinstance(row.get("metadata"), dict) else {}
     return {
         "account_domain": str(row["account_domain"]),
         "access_token": str(tokens["access_token"]),

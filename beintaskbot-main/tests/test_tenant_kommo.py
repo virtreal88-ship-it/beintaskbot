@@ -87,6 +87,53 @@ class KommoTests(unittest.IsolatedAsyncioTestCase):
                 await self.service.request("company", "GET", "account")
         self.assertNotIn("must-not-log", str(self.logger.mock_calls))
 
+    async def test_legacy_reference_verifies_exact_account_and_allows_reads(self):
+        self.credentials.return_value = {
+            "credential_source": "legacy_environment",
+            "account_domain": "texnikidestek50.kommo.com",
+            "access_token": "legacy-token",
+            "expected_account_id": "32524359",
+        }
+        with patch("tenant_kommo.wait_slot"), \
+             patch("tenant_kommo.requests.get", return_value=Response(200, {
+                 "id": 32524359, "subdomain": "texnikidestek50"})) as account_check, \
+             patch("tenant_kommo.requests.request", return_value=Response(200, {"id": 116514909})) as data_request:
+            self.assertEqual(await self.service.request("company", "GET", "contacts/116514909"),
+                             {"id": 116514909})
+        self.assertEqual(account_check.call_args.args[0], "https://texnikidestek50.kommo.com/api/v4/account")
+        self.assertEqual(data_request.call_args.args[0], "GET")
+        self.service.settings.assert_not_called()
+        self.replace.assert_not_called()
+
+    async def test_legacy_reference_blocks_wrong_account_before_data_request(self):
+        self.credentials.return_value = {
+            "credential_source": "legacy_environment",
+            "account_domain": "texnikidestek50.kommo.com",
+            "access_token": "legacy-token",
+            "expected_account_id": "32524359",
+        }
+        with patch("tenant_kommo.wait_slot"), \
+             patch("tenant_kommo.requests.get", return_value=Response(200, {
+                 "id": 32524360, "subdomain": "texnikidestek50"})), \
+             patch("tenant_kommo.requests.request") as data_request:
+            with self.assertRaisesRegex(StoreError, "ID-si uyğun gəlmir"):
+                await self.service.request("company", "GET", "contacts/116514909")
+        data_request.assert_not_called()
+
+    async def test_legacy_reference_rejects_writes(self):
+        self.credentials.return_value = {
+            "credential_source": "legacy_environment",
+            "account_domain": "texnikidestek50.kommo.com",
+            "access_token": "legacy-token",
+            "expected_account_id": "32524359",
+        }
+        with patch("tenant_kommo.requests.get") as account_check, \
+             patch("tenant_kommo.requests.request") as data_request:
+            with self.assertRaisesRegex(StoreError, "yalnız oxuma"):
+                await self.service.request("company", "POST", "talks/11036/messages", json_body={"text": "no"})
+        account_check.assert_not_called()
+        data_request.assert_not_called()
+
     async def test_handlers_require_owner_before_provider_or_store(self):
         self.member.return_value = None
         api = kommo_handlers(self.service.context, self.service)

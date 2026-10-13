@@ -265,7 +265,7 @@ from tenant_platform import (
 # ─── Configuration ───────────────────────────────────────────────────────────
 from legacy_runtime_config import (
     _required_env, TELEGRAM_TOKEN, TELEGRAM_POLLING_ENABLED, STAGING_MODE,
-    KOMMO_TOKEN, KOMMO_DOMAIN, GH_TOKEN,
+    KOMMO_TOKEN, KOMMO_DOMAIN, KOMMO_ACCOUNT_ID, GH_TOKEN,
     KOMMO_BASE_URL, BAKU_TZ, LLM_MODEL, WEBHOOK_PORT,
     CANONICAL_WEB_ORIGIN, WEB_APP_URL, LEGACY_RAILWAY_HOST, _telegram_bot_username,
     VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_CLAIMS, LINEAR_API_KEY,
@@ -17863,7 +17863,7 @@ def _webapp_ai_member_from_request(request: web.Request) -> dict | None:
     return legacy_ai_member_from_request(
         request, tenants_for_user, tenant_member, logger,
         account_tenants_for_user=lambda user_id: tenants_for_kommo_account_user(
-            user_id, KOMMO_DOMAIN),
+            user_id, KOMMO_DOMAIN, KOMMO_ACCOUNT_ID),
     )
 
 

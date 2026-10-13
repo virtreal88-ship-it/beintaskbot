@@ -31,6 +31,9 @@ KOMMO_TOKEN = "" if STAGING_MODE else _required_env("KOMMO_TOKEN")
 KOMMO_DOMAIN = "texnikidestek50.kommo.com"
 if STAGING_MODE:
     KOMMO_DOMAIN = ""
+KOMMO_ACCOUNT_ID = str(os.environ.get("KOMMO_ACCOUNT_ID") or "").strip()
+if KOMMO_ACCOUNT_ID and not KOMMO_ACCOUNT_ID.isdigit():
+    raise RuntimeError("KOMMO_ACCOUNT_ID must contain only decimal digits")
 KOMMO_BASE_URL = f"https://{KOMMO_DOMAIN}" if KOMMO_DOMAIN else ""
 GH_TOKEN = "" if STAGING_MODE else _required_env("GH_TOKEN")
 BAKU_TZ = timezone(timedelta(hours=4))
