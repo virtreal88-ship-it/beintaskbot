@@ -242,7 +242,8 @@ from tenant_platform import (
     create_invite as create_tenant_invite, create_tenant,
     deactivate_member as deactivate_tenant_member, disconnect_integration as disconnect_tenant_integration,
     finalize_onboarding, list_integrations as list_tenant_integrations, list_invite_requests as list_tenant_invite_requests,
-    list_members as list_tenant_members, kommo_credentials, member as tenant_member, request_kommo_connection,
+    list_members as list_tenant_members, kommo_credentials, member as tenant_member,
+    tenants_for_kommo_account_user, request_kommo_connection,
     replace_kommo_tokens, request_invite_acceptance as request_tenant_invite_acceptance, save_kommo_oauth_tokens, tenants_for_user,
     update_onboarding, upsert_member as upsert_tenant_member,
     append_audit_event as append_tenant_audit_event, get_crm_deal as get_tenant_crm_deal,
@@ -17852,13 +17853,18 @@ def _tenant_member_from_request(request: web.Request, *, owner_only: bool = Fals
 
 
 def _webapp_ai_member_from_request(request: web.Request) -> dict | None:
-    """Map the authenticated legacy webapp employee to one SaaS tenant.
+    """Map the authenticated legacy employee through the existing Kommo link.
 
-    This deliberately refuses identities with no active SaaS membership or
-    more than one active company, so /webapp cannot silently operate on a
-    different Kommo tenant than the profile the employee selected.
+    The legacy webapp identity is accepted only when an active SaaS membership
+    is connected to the same Kommo account. The common AI Agents store still
+    rechecks owner/admin permissions on every operation.
     """
-    return legacy_ai_member_from_request(request, tenants_for_user, tenant_member, logger)
+    user_id = int(request.get("authenticated_chat_id") or 0)
+    return legacy_ai_member_from_request(
+        request, tenants_for_user, tenant_member, logger,
+        account_tenants_for_user=lambda user_id: tenants_for_kommo_account_user(
+            user_id, KOMMO_DOMAIN),
+    )
 
 
 _tenant_kommo_service = TenantKommo(KommoContext(

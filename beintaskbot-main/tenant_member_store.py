@@ -73,6 +73,36 @@ def tenants_for_user(telegram_id: int) -> list[dict]:
     return [_tenant_payload(row) for row in rows]
 
 
+def tenants_for_kommo_account_user(telegram_id: int, account_domain: str) -> list[dict]:
+    """Return only active tenant memberships connected to this Kommo account.
+
+    The legacy ``/webapp`` authenticates employees independently from the
+    tenant-app session.  When it bridges that authenticated identity into
+    AI Agents, the Kommo account is the authoritative tenant discriminator;
+    a single membership for an unrelated account must never be selected just
+    because it happens to be the only one.
+    """
+    account = str(account_domain or "").strip().casefold()
+    if not account:
+        return []
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.*, m.role, m.permissions, m.display_name
+                FROM saas_tenants t
+                JOIN saas_tenant_members m ON m.tenant_id = t.id
+                JOIN saas_tenant_integrations i ON i.tenant_id = t.id
+                WHERE m.telegram_id = %s AND m.active = TRUE
+                  AND t.status = 'active'
+                  AND i.provider = 'kommo' AND i.status = 'connected'
+                  AND lower(i.account_domain) = %s
+                ORDER BY t.created_at DESC
+            """, (int(telegram_id), account))
+            rows = cur.fetchall()
+    return [_tenant_payload(row) for row in rows]
+
+
 def _member_payload(row: dict) -> dict:
     """Make a member row safe to return from the platform API."""
     result = dict(row)

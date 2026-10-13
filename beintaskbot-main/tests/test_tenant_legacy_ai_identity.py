@@ -29,6 +29,43 @@ class LegacyAiIdentityTests(unittest.TestCase):
         self.assertIs(result, expected)
         lookup.assert_called_once_with('tenant-a', 7)
 
+    def test_legacy_webapp_scopes_membership_to_exact_connected_kommo_account(self):
+        expected = {'tenant_id': 'account-tenant', 'telegram_id': 7,
+                    'tenant_status': 'active', 'role': 'owner'}
+        lookup = Mock(return_value=expected)
+        account_lookup = Mock(return_value=[
+            {'id': 'account-tenant', 'status': 'active'},
+        ])
+        # A user can belong to other SaaS tenants; only the exact connected
+        # account's mapping is considered by the legacy webapp bridge.
+        result = member_from_request(
+            {'authenticated_chat_id': 7},
+            Mock(return_value=[{'id': 'unrelated', 'status': 'active'}]),
+            lookup, account_tenants_for_user=account_lookup)
+        self.assertIs(result, expected)
+        account_lookup.assert_called_once_with(7)
+        lookup.assert_called_once_with('account-tenant', 7)
+
+    def test_account_scoped_lookup_does_not_fall_back_to_unrelated_membership(self):
+        lookup = Mock()
+        result = member_from_request(
+            {'authenticated_chat_id': 7},
+            Mock(return_value=[{'id': 'unrelated', 'status': 'active'}]),
+            lookup, account_tenants_for_user=Mock(return_value=[]))
+        self.assertIsNone(result)
+        lookup.assert_not_called()
+
+    def test_duplicate_tenant_mappings_for_same_account_fail_closed(self):
+        lookup = Mock()
+        result = member_from_request(
+            {'authenticated_chat_id': 7}, Mock(), lookup,
+            account_tenants_for_user=Mock(return_value=[
+                {'id': 'tenant-a', 'status': 'active'},
+                {'id': 'tenant-b', 'status': 'active'},
+            ]))
+        self.assertIsNone(result)
+        lookup.assert_not_called()
+
     def test_refuses_member_that_became_inactive(self):
         lookup = Mock(return_value={'tenant_id': 'tenant-a', 'tenant_status': 'suspended'})
         result = member_from_request({'authenticated_chat_id': 7},

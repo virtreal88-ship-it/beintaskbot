@@ -35,6 +35,7 @@ from tenant_crm_store import (
 from tenant_member_store import (
     _member_payload, create_tenant, deactivate_member, finalize_onboarding,
     list_members, member, tenants_for_user, update_onboarding, upsert_member,
+    tenants_for_kommo_account_user,
 )
 from tenant_invite_store import (
     create_invite, decide_invite_request, list_invite_requests,
