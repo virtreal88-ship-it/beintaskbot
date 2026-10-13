@@ -60,16 +60,16 @@
   const conversation=String(testMode.chat_id||'');if(!conversation)return;
   try{
    const state=await api(`conversations/${encodeURIComponent(conversation)}/state`);if(request!==chatControlEpoch||input!==($('deal-chat-input')||$('notice-reply-input'))||String(history.state?.leadId||'')!==leadId)return;
-   const box=document.createElement('div');box.id='aiAgentChatToggle';box.style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0';
-   const label=document.createElement('span');label.textContent=state.state==='active'?'AI агент активен для этого тестового диалога':'AI агент остановлен для этого тестового диалога';label.style='font-size:12px;color:var(--muted,#68736f)';
-   const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=state.state==='active'?'Остановить агента':'Возобновить агента';button.setAttribute('aria-label',button.textContent+' в текущем подтверждённом тестовом диалоге');
-   button.onclick=async()=>{button.disabled=true;label.textContent='Сохраняю состояние…';try{const result=await api(`conversations/${encodeURIComponent(conversation)}/${state.state==='active'?'handoff':'resume'}`,'POST',{reason:'webapp_chat_toggle'});if(result.conversation_id!==conversation)throw new Error('Сервер вернул другой диалог.');await syncChatAgentControl(true);}catch(error){label.textContent=error.message;button.disabled=false}};
-   box.append(label,button);
-   // Keep the control inside the composer.  Placing it after the composer put
-   // it below the visible chat pane on long conversations, which made the
-   // exact Test Mode stop/resume control effectively unreachable.
-   const host=input.closest('.notice-reply-wrap')||input.closest('.wa-composer-wrap')||input.parentElement;
-   host.prepend(box);
+   const active=state.state==='active',box=document.createElement('div');box.id='aiAgentChatToggle';box.className='ai-agent-chat-toggle';
+   const button=document.createElement('button');button.type='button';button.className=`ai-agent-chat-toggle-button ${active?'is-active':'is-paused'}`;button.textContent=active?'● Агент вкл':'▶ Агент стоп';
+   const action=active?'Остановить агента':'Возобновить агента';button.title=action+' в текущем подтверждённом тестовом диалоге';button.setAttribute('aria-label',button.title);
+   button.onclick=async()=>{button.disabled=true;button.textContent='Сохраняю…';try{const result=await api(`conversations/${encodeURIComponent(conversation)}/${active?'handoff':'resume'}`,'POST',{reason:'webapp_chat_toggle'});if(result.conversation_id!==conversation)throw new Error('Сервер вернул другой диалог.');await syncChatAgentControl(true);}catch(error){button.textContent=error.message;button.disabled=false}};
+   box.append(button);
+   // The control belongs beside the manual AI action, not below the chat.
+   // It is inserted only after the exact Test Mode conversation was verified.
+   const field=input.closest('.notice-reply-field')||input.closest('.wa-composer')||input.parentElement;
+   const aiButton=field?.querySelector('#notice-reply-ai,#deal-chat-ai');
+   if(aiButton)aiButton.insertAdjacentElement('afterend',box);else field.append(box);
   }catch{/* Fail closed: do not expose a control when the exact bound conversation cannot be verified. */}
  }
  const chatObserver=new MutationObserver(()=>syncChatAgentControl());chatObserver.observe(document.body,{childList:true,subtree:true});
