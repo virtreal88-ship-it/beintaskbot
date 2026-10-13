@@ -66,9 +66,13 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/crm/deals/complete', deal_completion_handler(member, origin, deal_provider(context.crm_request, context.wait_slot), logger), ('POST',)),
         ('/api/platform/crm/deal-approvals', deal_completion_handler(member, origin, deal_provider(context.crm_request, context.wait_slot), logger, review=True), ('GET', 'POST')),
     ]
+    routes = [(method, path, handle) for path, handle, methods in bindings for method in methods]
     if os.environ.get('AI_AGENTS_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
-        bindings.extend(ai_agent_routes(context))
-    return [(method, path, handle) for path, handle, methods in bindings for method in methods]
+        # ai_agent_routes already returns the flattened (method, path, handler)
+        # shape expected by register_feature_routes. Keep it out of `bindings`,
+        # whose entries use the grouped (path, handler, methods) shape above.
+        routes.extend(ai_agent_routes(context))
+    return routes
 
 
 def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/') -> list[tuple[str, str, Handler]]:
