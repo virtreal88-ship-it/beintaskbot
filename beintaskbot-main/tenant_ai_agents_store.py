@@ -84,7 +84,7 @@ def read_settings(profile):
             tenant, _ = _authorize(cur, profile)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at
+            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at
               FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid''', (tenant,))
             result = _row(cur.fetchone())
         conn.commit()
@@ -109,19 +109,26 @@ def save_settings(profile, data):
                     raise TenantLinearError('Əvvəlcə mövcud Chat AI ayarlarını və razılığı tamamlayın.', 409)
             cur.execute('''INSERT INTO saas_ai_agent_settings(tenant_id) VALUES(%s::uuid)
               ON CONFLICT(tenant_id) DO NOTHING''', (tenant,))
-            cur.execute('''SELECT company_instructions,enabled,auto_send_enabled,crm_actions_enabled,max_replies_per_chat FROM saas_ai_agent_settings
+            cur.execute('''SELECT company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat FROM saas_ai_agent_settings
               WHERE tenant_id=%s::uuid FOR UPDATE''', (tenant,))
             previous = cur.fetchone() or {}
             values = {'company_instructions': str(previous.get('company_instructions') or ''),
                       **{key: bool(previous.get(key, False)) for key in ('enabled','auto_send_enabled','crm_actions_enabled')},
+                      'operating_mode': str(previous.get('operating_mode') or 'test'),
+                      'emergency_stop': bool(previous.get('emergency_stop',False)),
                       'max_replies_per_chat': int(previous.get('max_replies_per_chat') or 20)}
             values.update(patch)
-            cur.execute('''UPDATE saas_ai_agent_settings SET company_instructions=%s,enabled=%s,auto_send_enabled=%s,
-              crm_actions_enabled=%s,max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
-              RETURNING company_instructions,enabled,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at''',
-              (values['company_instructions'], values['enabled'], values['auto_send_enabled'], values['crm_actions_enabled'],
+            cur.execute('''UPDATE saas_ai_agent_settings SET company_instructions=%s,enabled=%s,operating_mode=%s,emergency_stop=%s,
+              auto_send_enabled=%s,crm_actions_enabled=%s,max_replies_per_chat=%s,updated_by=%s,updated_at=now() WHERE tenant_id=%s::uuid
+              RETURNING company_instructions,enabled,operating_mode,emergency_stop,auto_send_enabled,crm_actions_enabled,max_replies_per_chat,updated_at''',
+              (values['company_instructions'], values['enabled'], values['operating_mode'], values['emergency_stop'], values['auto_send_enabled'], values['crm_actions_enabled'],
                values['max_replies_per_chat'], actor, tenant))
             result = _row(cur.fetchone())
+            # A company-wide stop is deliberately stronger than the per-test
+            # stop: it revokes work already admitted by either operating mode.
+            if values['emergency_stop'] or not values['enabled']:
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='ai_emergency_stop' WHERE tenant_id=%s::uuid AND state IN ('queued','processing') AND fingerprint IN (SELECT event_fingerprint FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND state IN ('queued','processing'))", (tenant, tenant))
+                cur.execute("UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,lease_token=NULL,lease_until=NULL,error_code='ai_emergency_stop',updated_at=now() WHERE tenant_id=%s::uuid AND state IN ('queued','processing')", (tenant,))
             _audit(cur, tenant, actor, 'ai_agents_settings_updated', 'ai_agents', '', {'enabled': values['enabled']})
         conn.commit()
     return result
@@ -344,7 +351,9 @@ def list_drafts(profile, *, limit=50):
               d.source_message_id,d.draft,d.source_ids,d.state,d.created_at
               FROM saas_ai_agent_drafts d JOIN saas_ai_agents a
                 ON a.tenant_id=d.tenant_id AND a.id=d.agent_id
-              WHERE d.tenant_id=%s::uuid AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+              WHERE d.tenant_id=%s::uuid AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s
+                WHERE s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (
+                  s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                 WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=(
@@ -352,8 +361,8 @@ def list_drafts(profile, *, limit=50):
                     WHERE e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint)
                   AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id
                   AND b.channel_id=(SELECT j.channel_id FROM saas_ai_agent_jobs j
-                    WHERE j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id))
-              AND a.enabled=TRUE AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s WHERE s.tenant_id=d.tenant_id AND s.enabled=TRUE)
+                    WHERE j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id))))
+              AND a.enabled=TRUE
               ORDER BY d.created_at DESC,d.id LIMIT %s''',
               (tenant, max(1, min(int(limit), 100))))
             rows = cur.fetchall()
@@ -488,6 +497,41 @@ def read_conversation_state(profile,conversation_id):
     return item
 
 
+def read_conversation_for_lead(profile, lead_id):
+    """Resolve one AI-owned Kommo conversation for the open tenant-scoped lead.
+
+    This intentionally returns nothing until the queue has associated an
+    enabled agent with the conversation.  The browser never supplies a chat
+    id, so it cannot pause another company's or another lead's dialogue.
+    """
+    try:
+        lead = int(lead_id)
+    except (TypeError, ValueError):
+        raise TenantLinearError('Sövdələşmə identifikatoru düzgün deyil.') from None
+    if lead <= 0:
+        raise TenantLinearError('Sövdələşmə identifikatoru düzgün deyil.')
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, _ = _authorize(cur, profile)
+            cur.execute('''SELECT j.conversation_id,cs.state,cs.reason,cs.revision
+              FROM saas_ai_agent_jobs j
+              JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE
+              JOIN saas_ai_agent_settings s ON s.tenant_id=j.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
+              LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider
+                AND cs.conversation_id=j.conversation_id
+              WHERE j.tenant_id=%s::uuid AND j.provider='kommo' AND j.lead_id=%s
+                AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+                  WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                    AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id))
+              ORDER BY j.updated_at DESC LIMIT 1''', (tenant, lead))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {'conversation_id': str(row['conversation_id']), 'state': row.get('state') or 'active',
+            'reason': row.get('reason') or '', 'revision': int(row.get('revision') or 0)}
+
+
 def review_draft(profile,draft_id,state):
     draft=identifier(draft_id)
     if state not in {'approved','rejected'}:raise TenantLinearError('Draft status düzgün deyil.')
@@ -496,10 +540,11 @@ def review_draft(profile,draft_id,state):
         with conn.cursor() as cur:
             tenant,actor=_authorize(cur,profile)
             cur.execute('''UPDATE saas_ai_agent_drafts d SET state=%s WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
-              AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
+              AND EXISTS (SELECT 1 FROM saas_ai_agent_settings s WHERE s.tenant_id=d.tenant_id
+                AND s.enabled=TRUE AND s.emergency_stop=FALSE AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
                 ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                 WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
-                  AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id)
+                  AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id))
               RETURNING id,lead_id,chat_id''',(state,tenant,draft))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Draft tapılmadı və ya artıq nəzərdən keçirilib.',409)
@@ -518,18 +563,18 @@ def reserve_draft_send(profile,draft_id):
               FROM saas_ai_conversation_state cs,saas_ai_agents a,saas_ai_agent_settings s,saas_tenants t
               WHERE d.tenant_id=%s::uuid AND d.id=%s::uuid AND d.state='pending'
                 AND a.tenant_id=d.tenant_id AND a.id=d.agent_id AND a.enabled=TRUE
-                AND s.tenant_id=d.tenant_id AND s.enabled=TRUE AND t.id=d.tenant_id AND t.status='active'
+                AND s.tenant_id=d.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE AND t.id=d.tenant_id AND t.status='active'
                 AND cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=d.chat_id
                 AND cs.state='active' AND cs.last_inbound_message_id=d.source_message_id
-                AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+                AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                   JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                   JOIN saas_tenant_webhook_events e ON e.tenant_id=d.tenant_id AND e.fingerprint=d.source_fingerprint
                   JOIN saas_ai_agent_jobs j ON j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id
                   WHERE b.tenant_id=d.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                     AND b.account_domain=i.account_domain AND b.lead_id=d.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
-                    AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id AND b.channel_id=j.channel_id)
+                    AND b.talk_id=d.talk_id AND b.chat_id=d.chat_id AND b.channel_id=j.channel_id))
               RETURNING d.id,d.agent_id,d.lead_id,d.draft,d.talk_id,d.chat_id,d.source_message_id,
-                (SELECT b.channel_id FROM saas_ai_agent_test_mode b WHERE b.tenant_id=d.tenant_id) AS channel_id''',(tenant,draft))
+                (SELECT j.channel_id FROM saas_ai_agent_jobs j WHERE j.tenant_id=d.tenant_id AND j.agent_id=d.agent_id AND j.conversation_id=d.chat_id ORDER BY j.updated_at DESC LIMIT 1) AS channel_id''',(tenant,draft))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Qaralama köhnəlib, menecerə verilib və ya artıq nəzərdən keçirilib.',409)
             _audit(cur,tenant,actor,'ai_agent_draft_send_reserved','ai_agent_draft',draft,{'lead_id':row['lead_id']})
@@ -564,16 +609,19 @@ def list_handoffs(profile,limit=50):
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant,_=_authorize(cur,profile)
-            cur.execute('''SELECT cs.conversation_id,cs.reason,cs.updated_at,a.name AS agent_name,b.lead_id,b.talk_id
+            cur.execute('''SELECT cs.conversation_id,cs.reason,cs.updated_at,a.name AS agent_name,
+                COALESCE(b.lead_id,j.lead_id) AS lead_id,COALESCE(b.talk_id,j.talk_id) AS talk_id
               FROM saas_ai_conversation_state cs
-              JOIN saas_ai_agent_test_mode b ON b.tenant_id=cs.tenant_id AND b.chat_id=cs.conversation_id
-              JOIN saas_tenant_integrations i ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
+              JOIN saas_ai_agent_settings s ON s.tenant_id=cs.tenant_id AND s.enabled=TRUE AND s.emergency_stop=FALSE
+              LEFT JOIN saas_ai_agent_test_mode b ON b.tenant_id=cs.tenant_id AND b.chat_id=cs.conversation_id
               LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
+              LEFT JOIN LATERAL (SELECT lead_id,talk_id FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=cs.tenant_id
+                AND j0.provider=cs.provider AND j0.conversation_id=cs.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
               WHERE cs.tenant_id=%s::uuid AND cs.provider='kommo' AND cs.state IN ('human','paused')
-                AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
-                AND b.account_domain=i.account_domain
-                AND EXISTS (SELECT 1 FROM saas_ai_agent_jobs j WHERE j.tenant_id=cs.tenant_id
-                  AND j.provider=cs.provider AND j.conversation_id=cs.conversation_id)
+                AND (s.operating_mode='active' OR (b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
+                  AND EXISTS (SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=b.tenant_id AND i.provider='kommo'
+                    AND i.status='connected' AND i.account_domain=b.account_domain)))
+                AND j.lead_id IS NOT NULL
               ORDER BY cs.updated_at DESC LIMIT %s''',(tenant,max(1,min(int(limit),100))))
             rows=cur.fetchall()
     result=[]

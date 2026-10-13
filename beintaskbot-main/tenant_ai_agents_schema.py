@@ -20,6 +20,8 @@ def ensure_schema(conn):
               tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
               company_instructions TEXT NOT NULL DEFAULT '',
               enabled BOOLEAN NOT NULL DEFAULT FALSE,
+              operating_mode TEXT NOT NULL DEFAULT 'test' CHECK(operating_mode IN ('test','active')),
+              emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
               auto_send_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(auto_send_enabled=FALSE),
               crm_actions_enabled BOOLEAN NOT NULL DEFAULT FALSE CHECK(crm_actions_enabled=FALSE),
               updated_by BIGINT NULL,
@@ -51,6 +53,10 @@ def ensure_schema(conn):
               (verified AND company_phone_attested AND account_domain<>'' AND company_phone<>'' AND client_phone<>''
                 AND channel_id<>'' AND lead_id IS NOT NULL AND contact_id IS NOT NULL AND talk_id<>'' AND chat_id<>''))''')
             cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS company_instructions TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS operating_mode TEXT NOT NULL DEFAULT 'test'")
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS emergency_stop BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_operating_mode_check')
+            cur.execute("ALTER TABLE saas_ai_agent_settings ADD CONSTRAINT saas_ai_agent_settings_operating_mode_check CHECK(operating_mode IN ('test','active'))")
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_auto_send_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings DROP CONSTRAINT IF EXISTS saas_ai_agent_settings_crm_actions_enabled_check')
             cur.execute('ALTER TABLE saas_ai_agent_settings ADD COLUMN IF NOT EXISTS max_replies_per_chat INTEGER NOT NULL DEFAULT 20')

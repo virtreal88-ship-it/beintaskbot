@@ -108,7 +108,7 @@ def agent(data, *, creating=False):
 
 
 def company_settings(data):
-    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','max_replies_per_chat'}:
+    if not isinstance(data, dict) or set(data) - {'company_instructions', 'enabled', 'auto_send_enabled', 'crm_actions_enabled','max_replies_per_chat','operating_mode','emergency_stop'}:
         raise TenantLinearError('AI Agents ayarları düzgün deyil.')
     result = {}
     if 'company_instructions' in data:
@@ -118,6 +118,14 @@ def company_settings(data):
             if not isinstance(data[key], bool):
                 raise TenantLinearError('AI Agents ayarları düzgün deyil.')
             result[key] = data[key]
+    if 'operating_mode' in data:
+        if data['operating_mode'] not in {'test','active'}:
+            raise TenantLinearError('AI Agents iş rejimi düzgün deyil.')
+        result['operating_mode'] = data['operating_mode']
+    if 'emergency_stop' in data:
+        if not isinstance(data['emergency_stop'], bool):
+            raise TenantLinearError('AI Agents ayarları düzgün deyil.')
+        result['emergency_stop'] = data['emergency_stop']
     if 'max_replies_per_chat' in data:
         limit = data['max_replies_per_chat']
         if type(limit) is not int or limit not in {20,60,300,500}:

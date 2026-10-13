@@ -41,16 +41,16 @@ def claim_next():
                 WHERE j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint AND j.state='unknown')''')
             cur.execute('''SELECT j.* FROM saas_ai_agent_jobs j
               JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE
-              JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE
+              JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id AND t.status='active'
               WHERE j.state='queued' AND j.due_at<=now()
-              AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+              AND (cfg.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations ki ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
                 WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                   AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.talk_id=j.talk_id
                   AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id
-                  AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END)
+                  AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END))
               ORDER BY j.due_at,j.updated_at LIMIT 1 FOR UPDATE OF j SKIP LOCKED''')
             row = cur.fetchone()
             if not row:
@@ -103,7 +103,7 @@ def load_agent_config(job, *, with_block_reason=False):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.schedule,a.mode,
-              s.enabled AS settings_enabled,s.crm_actions_enabled,i.metadata,t.status AS tenant_status,cs.state AS conversation_state,
+              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,t.status AS tenant_status,cs.state AS conversation_state,
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
@@ -131,7 +131,9 @@ def load_agent_config(job, *, with_block_reason=False):
         reason = 'company_ai_disabled'
     elif row.get('conversation_state') in {'human', 'paused'}:
         reason = 'conversation_paused_or_human'
-    elif row.get('test_mode_allowed') is not True:
+    elif row.get('emergency_stop') is True:
+        reason = 'emergency_stopped'
+    elif row.get('operating_mode') != 'active' and row.get('test_mode_allowed') is not True:
         reason = 'test_binding_mismatch'
     if reason:
         return (None, reason) if with_block_reason else None
@@ -203,7 +205,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             tenant = str(job['tenant_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('tenant-chat-ai:' + tenant,))
             cur.execute('''SELECT j.*,a.name,a.instructions,a.enabled AS agent_enabled,a.mode,a.version AS agent_version,a.scopes,a.language,a.style,
-              a.model AS configured_model,s.company_instructions,s.enabled AS settings_enabled,
+              a.model AS configured_model,s.company_instructions,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,
               s.auto_send_enabled,s.crm_actions_enabled,s.max_replies_per_chat,s.updated_at AS settings_version,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
               i.secrets,i.metadata,i.updated_at AS config_version,t.status AS tenant_status
@@ -219,7 +221,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
             config = row['metadata'] if isinstance(row.get('metadata'), dict) else {}
-            if (row['tenant_status']!='active' or row['settings_enabled'] is not True or row['agent_enabled'] is not True
+            if (row['tenant_status']!='active' or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
                     or row['conversation_state'] in {'human','paused'}
                     or config.get('enabled') is not True or config.get('consent') is not True or not row.get('secrets')):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
@@ -283,7 +285,7 @@ def complete_run(job, reservation, draft, source_ids):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.version AS agent_version,s.enabled AS settings_enabled,s.updated_at AS settings_version,
+            cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
@@ -308,7 +310,8 @@ def complete_run(job, reservation, draft, source_ids):
                     or str(current['settings_version'])!=reservation['settings_version']
                     or current['conversation_state'] in {'human','paused'}
                     or current['conversation_revision']!=reservation.get('conversation_revision')
-                    or current['tenant_status']!='active' or current.get('test_mode_allowed') is not True
+                    or current['tenant_status']!='active' or current.get('emergency_stop') is True
+                    or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
                     or str(current['config_version'])!=reservation['config_version']
                     or config.get('consent') is not True):
                 cur.execute("UPDATE saas_ai_agent_runs SET state='superseded',updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",

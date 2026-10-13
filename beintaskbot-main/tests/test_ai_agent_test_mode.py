@@ -73,7 +73,7 @@ class TestModeBindingTests(unittest.TestCase):
         conn=MagicMock(); conn.__enter__.return_value=conn
         cur=MagicMock(); cur.__enter__.return_value=cur; conn.cursor.return_value=cur
         cur.fetchone.side_effect=[{**BINDING,'tenant_id':TENANT,'connected_account_domain':BINDING['account_domain']},
-            {'account_domain':BINDING['account_domain']}, None]
+            {'account_domain':BINDING['account_domain']}, {}, None]
         with patch.object(test_mode,'_connect',return_value=conn),patch.object(test_mode,'ensure_schema'):
             with self.assertRaises(TenantLinearError): test_mode.assert_job_allowed(job)
 
@@ -93,6 +93,18 @@ class TestModeBindingTests(unittest.TestCase):
         incomplete={'entity_id':7001,'talk_id':'9001','chat_id':'chat-9001','id':'message-1'}
         with patch.object(queue,'_connect',side_effect=AssertionError('incomplete event must not touch DB')):
             self.assertEqual(queue.ingest_kommo_messages({'account':{'subdomain':'test-account'}},[incomplete]),0)
+
+    def test_active_mode_allows_only_the_connected_tenant_account(self):
+        cursor=MagicMock()
+        cursor.fetchone.side_effect=[{'operating_mode':'active','enabled':True,'emergency_stop':False,'status':'active'},{'ok':1}]
+        event={'lead_id':7002,'contact_id':8002,'talk_id':'9002','chat_id':'another-chat','channel':'whatsapp'}
+        self.assertTrue(test_mode.allowed_event(cursor,TENANT,BINDING['account_domain'],event))
+        self.assertEqual(cursor.execute.call_count,2)
+
+    def test_active_mode_emergency_stop_blocks_before_account_lookup(self):
+        cursor=MagicMock(); cursor.fetchone.return_value={'operating_mode':'active','enabled':True,'emergency_stop':True,'status':'active'}
+        self.assertFalse(test_mode.allowed_event(cursor,TENANT,BINDING['account_domain'],{'lead_id':1}))
+        self.assertEqual(cursor.execute.call_count,1)
 
 
 if __name__=='__main__': unittest.main()

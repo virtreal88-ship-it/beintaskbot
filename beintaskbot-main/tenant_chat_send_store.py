@@ -34,19 +34,21 @@ def agent_send_reservation_block_reason(current, job, route, integration, *, run
         return 'tenant_inactive'
     if current.get('conversation_state') in {'human', 'paused'}:
         return 'conversation_paused_for_manager'
-    if current.get('test_mode_allowed') is not True:
+    if current.get('emergency_stop') is True:
+        return 'emergency_stopped'
+    if current.get('operating_mode') != 'active' and current.get('test_mode_allowed') is not True:
         return 'test_mode_binding_mismatch'
     if current.get('conversation_revision') != route.get('conversation_revision'):
         return 'conversation_revision_changed'
     if not integration or integration.get('status') != 'connected':
         return 'kommo_disconnected'
     # The app has one explicitly linked legacy Kommo credential source. It is
-    # safe for an AI write only when the exact verified Test Mode binding is
-    # active; tenant OAuth continues to use encrypted per-tenant secrets.
+    # safe for an AI write only after Active Mode or the exact Test Mode route
+    # passed above; tenant OAuth continues to use encrypted per-tenant secrets.
     if (not integration.get('secrets') and not integration.get('credentials_available')):
         return 'kommo_credentials_missing'
     if (integration.get('credential_source') == 'legacy_environment'
-            and current.get('test_mode_allowed') is not True):
+            and current.get('operating_mode') != 'active' and current.get('test_mode_allowed') is not True):
         return 'legacy_credentials_test_mode_only'
     return ''
 
@@ -167,7 +169,7 @@ def reserve_agent(job, text, route):
                 integration = {**integration, 'credential_source': 'legacy_environment',
                                'credentials_available': True}
             cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled AS agent_enabled,a.mode,
-              s.enabled AS settings_enabled,s.auto_send_enabled,s.max_replies_per_chat,t.status AS tenant_status,
+              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.auto_send_enabled,s.max_replies_per_chat,t.status AS tenant_status,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
@@ -254,7 +256,7 @@ def mark_agent_sending(item):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled AS agent_enabled,a.mode,
-              s.enabled AS settings_enabled,s.auto_send_enabled,t.status AS tenant_status,
+              s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.auto_send_enabled,t.status AS tenant_status,
               cs.state AS conversation_state,cs.revision AS conversation_revision,
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
@@ -272,9 +274,9 @@ def mark_agent_sending(item):
                     or not current or current['state']!='processing' or current['revision']!=job['revision']
                     or current['lease_token']!=job['lease_token'] or current['agent_enabled'] is not True
                     or current['mode']!='automatic' or current['settings_enabled'] is not True
-                    or current['auto_send_enabled'] is not True or current['tenant_status']!='active'
+                    or current['auto_send_enabled'] is not True or current['tenant_status']!='active' or current.get('emergency_stop') is True
                     or current['conversation_state'] in {'human','paused'}
-                    or current.get('test_mode_allowed') is not True
+                    or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
                     or current['conversation_revision']!=item['route'].get('conversation_revision')):
                 raise TenantLinearError('Agent və ya avtomatik göndərmə icazəsi dəyişib.',409)
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=0 AND request_id=%s::uuid AND state='preparing' RETURNING request_id",(item['key'][0],item['key'][2]))

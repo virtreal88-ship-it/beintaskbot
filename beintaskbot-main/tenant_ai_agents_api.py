@@ -3,7 +3,7 @@ import asyncio
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
     list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings,
-    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, review_draft, list_handoffs,
+    list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, review_draft, list_handoffs,
     reserve_draft_send,finish_draft_send)
 from tenant_ai_knowledge_files import extract
 from tenant_linear_policy import TenantLinearError
@@ -51,6 +51,8 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     result = await asyncio.to_thread(list_triggers,profile,request.match_info['agent_id'])
                 elif resource == 'conversation_state':
                     result = await asyncio.to_thread(read_conversation_state,profile,request.match_info['conversation_id'])
+                elif resource == 'conversation_for_lead':
+                    result = await asyncio.to_thread(read_conversation_for_lead,profile,request.match_info['lead_id'])
                 else:
                     result = await asyncio.to_thread(list_knowledge, profile, request.query.get('id'))
                 return web.json_response({'success': True, 'result': result}, headers=headers)

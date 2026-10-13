@@ -33,7 +33,7 @@ def _reserve_action(job,key,action_type,payload):
         ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('''SELECT j.state,j.revision,j.lease_token,a.enabled,a.mode,s.enabled AS agents_enabled,
-              s.crm_actions_enabled,cs.state AS conversation_state,t.status AS tenant_status,
+              s.crm_actions_enabled,s.operating_mode,s.emergency_stop,cs.state AS conversation_state,t.status AS tenant_status,
               EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
@@ -50,8 +50,8 @@ def _reserve_action(job,key,action_type,payload):
                     or current['lease_token']!=job['lease_token'] or current['enabled'] is not True
                     or current['mode']!='automatic' or current['agents_enabled'] is not True
                     or current['crm_actions_enabled'] is not True or current['conversation_state'] in {'human','paused'}
-                    or current['tenant_status']!='active'
-                    or current.get('test_mode_allowed') is not True
+                    or current['tenant_status']!='active' or current.get('emergency_stop') is True
+                    or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
                     or not runtime_flag('AI_AGENTS_CRM_ENABLED')):
                 raise TenantLinearError('Agent CRM əməliyyatı üçün icazə yoxdur.',409)
             action_id=uuid.uuid4()
@@ -86,14 +86,14 @@ def _action_still_allowed(job):
               LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=j.tenant_id AND cs.provider=j.provider AND cs.conversation_id=j.conversation_id
               WHERE j.tenant_id=%s::uuid AND j.agent_id=%s::uuid AND j.provider=%s AND j.conversation_id=%s
                 AND j.state='processing' AND j.revision=%s AND j.lease_token=%s AND a.enabled=TRUE AND a.mode='automatic'
-                AND s.enabled=TRUE AND s.crm_actions_enabled=TRUE AND t.status='active'
+                AND s.enabled=TRUE AND s.crm_actions_enabled=TRUE AND s.emergency_stop=FALSE AND t.status='active'
                 AND COALESCE(cs.state,'active') NOT IN ('human','paused')
-                AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
+                AND (s.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                   ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                   JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
                   WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
                     AND b.account_domain=ki.account_domain AND b.lead_id=j.lead_id AND b.contact_id=CASE WHEN e.payload->>'contact_id' ~ '^[0-9]{1,18}$' THEN (e.payload->>'contact_id')::bigint END
-                    AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id)''',
+                    AND b.talk_id=j.talk_id AND b.chat_id=j.chat_id AND b.channel_id=j.channel_id))''',
                 (job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['revision'],job['lease_token']))
             return bool(cur.fetchone())
 

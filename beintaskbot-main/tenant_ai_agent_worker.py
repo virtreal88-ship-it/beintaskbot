@@ -362,9 +362,12 @@ async def process_one(job, kommo_request, wait_slot, logger):
             live=await kommo_request(tenant,'GET',f'leads/{lead_id}')
             pipeline_id,stage_id=str(live.get('pipeline_id') or ''),str(live.get('status_id') or '')
             if not _scope_matches(model_config['scopes'],pipeline_id,stage_id,channel):
-                await asyncio.to_thread(handoff,job,'stage_changed_outside_agent_scope')
-                _test_diag(logger, job, 'job_handed_off', 'stage_changed_outside_agent_scope')
-                return
+                # The configured CRM transition itself was allowed and already
+                # verified by Kommo.  It must not discard the reply or hand a
+                # customer off unexpectedly.  Future messages are evaluated
+                # against the new scope; an admin can include the target stage
+                # when that conversation should remain automated.
+                _test_diag(logger, job, 'scope_changed', 'stage_outside_future_scope')
         if any(item.get('state')=='accepted' for item in action_result.get('actions',[])):
             # A manager might intervene while Kommo accepts the CRM mutations.
             latest_current = [_history_row(row,channel) for row in await read_messages(tenant,talk,kommo_request)]
