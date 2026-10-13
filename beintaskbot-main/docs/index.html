@@ -771,6 +771,8 @@
         #mobile-more-button { display:none; width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; align-items:center; justify-content:center; flex:none; }
         #mobile-more-button.on { background:rgba(219,234,254,.22); color:#bfdbfe; }
         #mobile-more-button svg { width:19px; height:19px; }
+        #mobile-ai-agents-link { width:36px; height:36px; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.10); color:#fff; display:inline-flex; align-items:center; justify-content:center; flex:none; text-decoration:none; font-size:20px; line-height:1; }
+        #mobile-ai-agents-link:focus-visible { outline:2px solid #bfdbfe; outline-offset:2px; }
         #tab-more-sheet { position:fixed; inset:0; z-index:11070; }
         #tab-more-sheet[hidden] { display:none !important; }
         #tab-more-sheet .tab-more-dim { position:absolute; inset:0; background:rgba(15,23,42,.35); }
@@ -1108,6 +1110,9 @@
         <button id="side-tab-chats" class="sidebar-item" style="display:none;" onclick="switchTab('tab-chats')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 7 3 9H3c0-2 3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></span><span class="sidebar-item-label">Müştərilər</span><span id="sidebar-chats-badge" class="sidebar-badge" style="display:none;"></span>
         </button>
+        <a id="side-ai-agents-link" class="sidebar-item" href="/app?view=ai_agents" title="AI Agents" aria-label="AI Agents">
+            <span class="sidebar-icon" aria-hidden="true">✦</span><span class="sidebar-item-label">AI Agents</span>
+        </a>
         <button id="side-tab-settings" class="sidebar-item" style="display:none;" onclick="switchTab('tab-settings')">
             <span class="sidebar-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="sidebar-item-label">Ayarlar</span>
         </button>
@@ -1126,9 +1131,12 @@
         </div>
     </div>
     <div class="text-right flex flex-col items-end gap-1">
-        <button id="mobile-more-button" type="button" onclick="toggleMobileMoreMenu()" aria-label="Daha">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-        </button>
+        <div style="display:flex;align-items:center;gap:8px">
+            <a id="mobile-ai-agents-link" href="/app?view=ai_agents" title="AI Agents" aria-label="AI Agents">✦</a>
+            <button id="mobile-more-button" type="button" onclick="toggleMobileMoreMenu()" aria-label="Daha">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+        </div>
         <div class="text-[11px] font-medium text-gray-300" id="user-display-area"></div>
         <div id="sync-indicator" style="display:none;" class="flex items-center justify-center mt-1">
             <span class="sync-meter"><span class="sync-spinner"></span><span class="sync-pct">0%</span></span>
