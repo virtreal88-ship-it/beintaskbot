@@ -568,7 +568,7 @@ def list_handoffs(profile,limit=50):
               (SELECT j.lead_id FROM saas_ai_agent_jobs j WHERE j.tenant_id=cs.tenant_id AND j.provider=cs.provider
                 AND j.conversation_id=cs.conversation_id ORDER BY j.updated_at DESC LIMIT 1) AS lead_id
               FROM saas_ai_conversation_state cs LEFT JOIN saas_ai_agents a ON a.tenant_id=cs.tenant_id AND a.id=cs.agent_id
-              WHERE cs.tenant_id=%s::uuid AND cs.provider='kommo' AND cs.state='human'
+              WHERE cs.tenant_id=%s::uuid AND cs.provider='kommo' AND cs.state IN ('human','paused')
                 AND EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations i
                   ON i.tenant_id=b.tenant_id AND i.provider='kommo' AND i.status='connected'
                   WHERE b.tenant_id=cs.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
