@@ -12,8 +12,8 @@ import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+
+import requests
 
 from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS, _slug, _tenant_payload
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
@@ -122,9 +122,10 @@ def _send_mail(destination: str, subject: str, body: str) -> None:
         try:
             _send_via_resend_api(sender=sender, destination=destination, subject=subject, body=body, api_key=password)
             return
-        except HTTPError as api_exc:
-            _LOG.warning('Email delivery failed via Resend HTTPS API (HTTP %s)', api_exc.code)
-            raise TenantPlatformError(f'Poçt provayderi məktubu rədd etdi (Resend HTTP {api_exc.code}).') from api_exc
+        except requests.HTTPError as api_exc:
+            status = getattr(getattr(api_exc, 'response', None), 'status_code', 'unknown')
+            _LOG.warning('Email delivery failed via Resend HTTPS API (HTTP %s)', status)
+            raise TenantPlatformError(f'Poçt provayderi məktubu rədd etdi (Resend HTTP {status}).') from api_exc
         except Exception as api_exc:
             _LOG.warning('Email delivery failed via Resend HTTPS API (%s)', type(api_exc).__name__)
             raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from api_exc
@@ -132,14 +133,12 @@ def _send_mail(destination: str, subject: str, body: str) -> None:
 
 def _send_via_resend_api(*, sender: str, destination: str, subject: str, body: str, api_key: str) -> None:
     """Send through Resend HTTPS when its SMTP relay is unreachable."""
-    payload = _json({'from': sender, 'to': [destination], 'subject': subject, 'text': body}).encode('utf-8')
-    request = Request(
-        'https://api.resend.com/emails', data=payload, method='POST',
-        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+    response = requests.post(
+        'https://api.resend.com/emails',
+        json={'from': sender, 'to': [destination], 'subject': subject, 'text': body},
+        headers={'Authorization': f'Bearer {api_key}'}, timeout=15,
     )
-    with urlopen(request, timeout=15) as response:
-        if not 200 <= int(getattr(response, 'status', response.getcode())) < 300:
-            raise OSError('Resend rejected the message')
+    response.raise_for_status()
 
 
 def _issue_token(cur, user_id: uuid.UUID, purpose: str, request_ip: str) -> str:
