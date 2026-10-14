@@ -54,15 +54,16 @@ chosen.
    same logical deal unless explicit mapping exists.
 
 `tenant_bein_crm.py` provides the safe integration-token transport and resource
-mapping. An owner activates it from the integration marketplace with the
-production API host, integration token and branch.
+mapping. An owner can save an integration token before the public API host is
+available; URL and branch are optional until the provider publishes them.
 ## BeinSystems ERP connection
 
 The application now has a tenant-owned BeinSystems connector in the integration
-marketplace. The company owner supplies the production API host, branch UUID and
-an integration token. The server verifies the token against the pipeline catalog
-before it stores anything. The token is encrypted at rest, bound to the tenant,
-never returned to the browser and removed when the integration is disconnected.
+marketplace. The company owner can save the integration token now; production API
+host and branch UUID become optional configuration once they are published. A
+catalog verification is available only after a host exists. The token is encrypted
+at rest, bound to the tenant, never returned to the browser and removed when the
+integration is disconnected.
 
 Supported by the public BeinSystems API adapter: deals, tasks, customers,
 pipelines and stages. Chats, message history and notes remain capability-gated
