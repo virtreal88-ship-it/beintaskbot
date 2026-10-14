@@ -30,6 +30,7 @@ class AuthApiContext:
     cookie_ttl: int
     base_dir: str
     logger: object
+    email_auth: object | None = None
 
 
 def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int) -> None:
@@ -54,6 +55,101 @@ def _page(context: AuthApiContext, filename: str, missing: str) -> web.Response:
 
 
 def handlers(context: AuthApiContext) -> dict[str, Callable]:
+    def request_ip(request: web.Request) -> str:
+        # Railway terminates TLS; trust only the first forwarded address and
+        # keep it solely for bounded abuse protection, never for identity.
+        return str(request.headers.get('X-Forwarded-For') or request.remote or '').split(',',1)[0].strip()[:80]
+
+    async def email_register(request: web.Request) -> web.Response:
+        if context.email_auth is None:
+            return web.json_response({'success': False, 'error': 'Email girişi hələ quraşdırılmayıb.'}, status=503)
+        try:
+            data = await request.json()
+            result = await asyncio.to_thread(context.email_auth.request_registration,
+                name=(data or {}).get('name'), company_name=(data or {}).get('company_name'),
+                phone=(data or {}).get('phone'), email=(data or {}).get('email'), request_ip=request_ip(request))
+            return web.json_response({'success': True, **result})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+        except Exception:
+            context.logger.exception('Email registration failed')
+            return web.json_response({'success': False, 'error': 'Qeydiyyat zamanı xəta baş verdi.'}, status=500)
+
+    async def email_confirm(request: web.Request) -> web.Response:
+        if context.email_auth is None: return web.json_response({'success': False}, status=503)
+        try:
+            data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_confirmation, token=(data or {}).get('token'), password=(data or {}).get('password'))
+            response = web.json_response({'success': True, 'redirect': '/app'})
+            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            return response
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+
+    async def email_login(request: web.Request) -> web.Response:
+        if context.email_auth is None: return web.json_response({'success': False}, status=503)
+        try:
+            data = await request.json(); result = await asyncio.to_thread(context.email_auth.login, email=(data or {}).get('email'), password=(data or {}).get('password'), request_ip=request_ip(request))
+            if not result: return web.json_response({'success': False, 'error': 'Email və ya parol düzgün deyil.'}, status=401)
+            response = web.json_response({'success': True, 'redirect': '/app'})
+            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            return response
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+
+    async def password_reset(request: web.Request) -> web.Response:
+        if context.email_auth is None: return web.json_response({'success': True})
+        try:
+            data = await request.json(); await asyncio.to_thread(context.email_auth.request_password_reset, email=(data or {}).get('email'), request_ip=request_ip(request))
+        except context.platform_error:
+            # Keep this intentionally generic so an attacker cannot enumerate
+            # customer addresses through the reset endpoint.
+            pass
+        except Exception:
+            context.logger.exception('Password reset request failed')
+        return web.json_response({'success': True, 'message': 'Bu email qeydiyyatdadırsa, bərpa keçidi göndərildi.'})
+
+    async def password_reset_confirm(request: web.Request) -> web.Response:
+        if context.email_auth is None: return web.json_response({'success': False}, status=503)
+        try:
+            data = await request.json(); await asyncio.to_thread(context.email_auth.complete_password_reset, token=(data or {}).get('token'), password=(data or {}).get('password'))
+            return web.json_response({'success': True})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+
+    async def email_link_request(request: web.Request) -> web.Response:
+        if context.email_auth is None:
+            return web.json_response({'success': False}, status=503)
+        if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        profile = context.member(request)
+        if not profile:
+            return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
+        try:
+            data = await request.json()
+            result = await asyncio.to_thread(
+                context.email_auth.request_email_link,
+                tenant_id=str(profile['tenant_id']), actor_id=int(profile['telegram_id']),
+                display_name=profile.get('display_name') or 'İstifadəçi',
+                email=(data or {}).get('email'), request_ip=request_ip(request),
+            )
+            return web.json_response({'success': True, **result})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+        except Exception:
+            context.logger.exception('Email link request failed')
+            return web.json_response({'success': False, 'error': 'Email bağlantısı alınmadı.'}, status=500)
+
+    async def email_link_confirm(request: web.Request) -> web.Response:
+        if context.email_auth is None: return web.json_response({'success': False}, status=503)
+        try:
+            data = await request.json()
+            result = await asyncio.to_thread(context.email_auth.complete_email_link,
+                token=(data or {}).get('token'), password=(data or {}).get('password'))
+            response = web.json_response({'success': True, 'redirect': '/app'})
+            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            return response
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
     async def register(request: web.Request) -> web.Response:
         try:
             data = await request.json()
@@ -156,6 +252,12 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
 
     return {
         "register": register, "me": me, "login": login, "logout": logout,
+        'email_register': email_register, 'email_confirm': email_confirm,
+        'email_login': email_login, 'password_reset': password_reset,
+        'password_reset_confirm': password_reset_confirm,
+        'email_link_request': email_link_request, 'email_link_confirm': email_link_confirm,
         "onboarding_page": lambda request: _page(context, "onboarding.html", "Platform onboarding page not found"),
+        'auth_page': lambda request: _page(context, 'auth.html', 'Platform authentication page not found'),
+        'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }

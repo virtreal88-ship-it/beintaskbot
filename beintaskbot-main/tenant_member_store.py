@@ -36,10 +36,11 @@ def member(tenant_id: str, telegram_id: int) -> dict | None:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT m.*, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status,
+                SELECT m.*, au.email, t.name AS tenant_name, t.slug AS tenant_slug, t.status AS tenant_status,
                        t.modules, t.notification_rules, t.onboarding, t.industry
                 FROM saas_tenant_members m
                 JOIN saas_tenants t ON t.id = m.tenant_id
+                LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
                 WHERE m.tenant_id = %s::uuid AND m.telegram_id = %s AND m.active = TRUE
             """, (tenant_id, int(telegram_id)))
             row = cur.fetchone()
@@ -94,10 +95,12 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT tenant_id, telegram_id, display_name, role, permissions, active, created_at, updated_at
-                FROM saas_tenant_members
-                WHERE tenant_id = %s::uuid
-                ORDER BY CASE WHEN role = 'owner' THEN 0 ELSE 1 END, display_name, telegram_id
+                SELECT m.tenant_id, m.telegram_id, m.display_name, m.role, m.permissions, m.active,
+                       m.created_at, m.updated_at, au.email
+                FROM saas_tenant_members m
+                LEFT JOIN saas_auth_users au ON au.actor_id = m.telegram_id
+                WHERE m.tenant_id = %s::uuid
+                ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
             """, (tenant_id,))
             rows = cur.fetchall()
     return [_member_payload(row) for row in rows]
@@ -205,10 +208,7 @@ def finalize_onboarding(*, tenant_id: str, owner_id: int) -> dict:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE saas_tenants t SET status = CASE
-                    WHEN t.status IN ('onboarding', 'ready_for_integration') THEN
-                        CASE WHEN EXISTS (SELECT 1 FROM saas_tenant_integrations i
-                            WHERE i.tenant_id=t.id AND i.provider='kommo' AND i.status='connected')
-                        THEN 'active' ELSE 'ready_for_integration' END
+                    WHEN t.status IN ('onboarding', 'ready_for_integration') THEN 'active'
                     ELSE t.status END, updated_at = now()
                 WHERE t.id = %s::uuid RETURNING t.*
             """, (tenant_id,))

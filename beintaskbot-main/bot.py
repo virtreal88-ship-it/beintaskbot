@@ -56,6 +56,7 @@ from tenant_browser_session import TenantBrowserSession, COOKIE_NAME, TTL_SECOND
 from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
+import tenant_email_auth
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
 from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
@@ -18517,9 +18518,17 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         origin=CANONICAL_WEB_ORIGIN, cookie_name=_TENANT_SESSION_COOKIE,
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
         base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
+        email_auth=tenant_email_auth,
     ))
     app_web.router.add_post("/api/platform/register", auth_api["register"])
     app_web.router.add_post("/api/platform/login", auth_api["login"])
+    app_web.router.add_post('/api/platform/auth/email/register', auth_api['email_register'])
+    app_web.router.add_post('/api/platform/auth/email/login', auth_api['email_login'])
+    app_web.router.add_post('/api/platform/auth/email/confirm', auth_api['email_confirm'])
+    app_web.router.add_post('/api/platform/auth/password/reset', auth_api['password_reset'])
+    app_web.router.add_post('/api/platform/auth/password/reset/confirm', auth_api['password_reset_confirm'])
+    app_web.router.add_post('/api/platform/auth/email/link/request', auth_api['email_link_request'])
+    app_web.router.add_post('/api/platform/auth/email/link/confirm', auth_api['email_link_confirm'])
     app_web.router.add_post("/api/platform/logout", auth_api["logout"])
     app_web.router.add_get("/api/platform/me", auth_api["me"])
     task_api = tenant_task_handlers(TaskApiContext(
@@ -18648,8 +18657,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/deal/tags', deal_tags_api)
     app_web.router.add_get("/api/platform/crm/tasks/options", task_api["options"])
     app_web.router.add_post("/api/platform/crm/tasks", task_api["create"])
-    app_web.router.add_get("/register", auth_api["onboarding_page"])
-    app_web.router.add_get("/login", auth_api["onboarding_page"])
+    app_web.router.add_get("/register", auth_api['auth_page'])
+    app_web.router.add_get("/login", auth_api['auth_page'])
+    app_web.router.add_get('/auth/confirm', auth_api['confirm_page'])
+    app_web.router.add_get('/auth/reset', auth_api['confirm_page'])
+    app_web.router.add_get('/auth/link', auth_api['confirm_page'])
+    app_web.router.add_get('/login/telegram', auth_api['onboarding_page'])
     app_web.router.add_get("/setup", auth_api["onboarding_page"])
     # Also accept /invite?token=…; some mobile Telegram clients rewrite a
     # path-only link when opening it in the in-app browser.
