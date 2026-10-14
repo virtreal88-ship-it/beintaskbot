@@ -90,7 +90,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/test-mode/verify', ai_agents_handler(member, origin, logger, 'test_mode_verify', context.crm_request), ('POST',)),
         ('agents/test-mode/discover', ai_agents_handler(member, origin, logger, 'test_mode_discover', context.crm_request), ('POST',)),
         ('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST')),
-        ('agents/options', ai_agents_handler(member, origin, logger, 'options'), ('GET',)),
+        ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('agents/drafts', ai_agents_handler(member, origin, logger, 'drafts'), ('GET',)),
         ('agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
         ('agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),

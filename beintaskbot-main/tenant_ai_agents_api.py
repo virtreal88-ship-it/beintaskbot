@@ -2,7 +2,7 @@
 import asyncio
 from aiohttp import web
 from tenant_ai_agents_store import (delete_agent, delete_knowledge, list_agents,
-    list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options,
+    list_drafts, list_knowledge, read_settings, save_agent, save_knowledge, save_settings, configuration_options, refresh_configuration_catalog,
     list_triggers, save_trigger, delete_trigger, set_conversation_state, read_conversation_state, read_conversation_for_lead, review_draft, list_handoffs,
     reserve_draft_send,finish_draft_send)
 from tenant_ai_knowledge_files import extract
@@ -46,7 +46,17 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 elif resource == 'agents':
                     result = await asyncio.to_thread(list_agents, profile)
                 elif resource == 'options':
-                    result = await asyncio.to_thread(configuration_options, profile)
+                    # Use the tenant's existing Kommo adapter, not a browser
+                    # supplied account.  This keeps the pick-list current and
+                    # prevents saved agent scopes from narrowing it.
+                    if request_provider is not None:
+                        remote = await request_provider(profile['tenant_id'], 'GET', 'leads/pipelines')
+                        result = await asyncio.to_thread(
+                            refresh_configuration_catalog, profile,
+                            ((remote.get('_embedded') or {}).get('pipelines') or []),
+                        )
+                    else:
+                        result = await asyncio.to_thread(configuration_options, profile)
                 elif resource == 'drafts':
                     result = await asyncio.to_thread(list_drafts, profile, limit=request.query.get('limit', 50))
                 elif resource == 'triggers':

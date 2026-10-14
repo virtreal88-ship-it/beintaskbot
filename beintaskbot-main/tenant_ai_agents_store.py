@@ -172,6 +172,47 @@ def configuration_options(profile):
             'models':models if chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True else []}
 
 
+def refresh_configuration_catalog(profile, remote_pipelines):
+    """Mirror the tenant's complete live Kommo catalogue for agent scope picks.
+
+    The previous editor read only the workflow selections, so an agent's
+    already-saved scope could accidentally become the only visible catalogue.
+    A live Kommo read is the source of truth; it never changes any agent scope.
+    """
+    normalized = []
+    for pipeline in remote_pipelines if isinstance(remote_pipelines, list) else []:
+        pipeline_id = str((pipeline or {}).get('id') or '').strip()
+        if not pipeline_id:
+            continue
+        statuses = ((pipeline or {}).get('_embedded') or {}).get('statuses') or []
+        normalized.append((pipeline_id, str((pipeline or {}).get('name') or pipeline_id)[:180], statuses))
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, _ = _authorize(cur, profile)
+            current_ids = set()
+            for pipeline_id, name, statuses in normalized:
+                current_ids.add(pipeline_id)
+                cur.execute('''INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name,active,settings)
+                  VALUES(%s::uuid,%s,%s,TRUE,'{}'::jsonb)
+                  ON CONFLICT(tenant_id,pipeline_id) DO UPDATE SET name=EXCLUDED.name,active=TRUE,updated_at=now()''',
+                            (tenant, pipeline_id, name))
+                for position, stage in enumerate(statuses):
+                    stage_id = str((stage or {}).get('id') or '').strip()
+                    if not stage_id:
+                        continue
+                    cur.execute('''INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name,sort_order,stage_type,settings)
+                      VALUES(%s::uuid,%s,%s,%s,%s,%s,'{}'::jsonb)
+                      ON CONFLICT(tenant_id,pipeline_id,stage_id) DO UPDATE SET name=EXCLUDED.name,sort_order=EXCLUDED.sort_order,updated_at=now()''',
+                                (tenant, pipeline_id, stage_id, str((stage or {}).get('name') or stage_id)[:180],
+                                 int((stage or {}).get('sort') or position), str((stage or {}).get('type') or 'open')[:40]))
+            if current_ids:
+                cur.execute('UPDATE saas_tenant_pipelines SET active=FALSE,updated_at=now() WHERE tenant_id=%s::uuid AND NOT (pipeline_id=ANY(%s))',
+                            (tenant, list(current_ids)))
+        conn.commit()
+    return configuration_options(profile)
+
+
 def save_agent(profile, data, *, agent_id=None):
     creating = agent_id is None
     clean_data = {key: value for key, value in data.items() if key != 'expected_version'} if isinstance(data, dict) else data
