@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock
 
 from tenant_crm_identity import crm_identity
 from tenant_crm_provider_store import ProviderSnapshotStore
+from tenant_crm_queries import public_crm_row
 
 
 class ProviderIdentityTests(unittest.TestCase):
@@ -18,6 +19,10 @@ class ProviderIdentityTests(unittest.TestCase):
                 crm_identity(value, "deals", "1")
         with self.assertRaises(ValueError):
             crm_identity("kommo", "deals", "")
+
+    def test_legacy_row_exposes_provider_neutral_identity(self):
+        self.assertEqual(public_crm_row({"kommo_lead_id": 42})["provider"], "kommo")
+        self.assertEqual(public_crm_row({"kommo_lead_id": 42})["external_id"], "42")
 
 
 class ProviderSnapshotStoreTests(unittest.TestCase):

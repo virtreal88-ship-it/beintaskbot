@@ -21,6 +21,12 @@ def public_crm_row(row: dict) -> dict:
             result[key] = result[key].isoformat()
     if not isinstance(result.get('raw'), dict):
         result['raw'] = {}
+    # Existing Kommo tables keep their legacy numeric columns while new
+    # provider-neutral code relies on this stable identity contract.
+    result['provider'] = str(result.get('provider') or 'kommo')
+    if not result.get('external_id'):
+        legacy_id = result.get('kommo_lead_id') or result.get('kommo_task_id') or ''
+        result['external_id'] = str(legacy_id) if legacy_id else ''
     return result
 
 

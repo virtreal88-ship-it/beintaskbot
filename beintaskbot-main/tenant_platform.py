@@ -30,7 +30,8 @@ from tenant_workflow_store import (
 from tenant_crm_store import (
     _public_crm_row, append_audit_event, get_crm_deal, get_crm_task,
     list_crm_deals, list_crm_messages, list_crm_tasks, upsert_crm_deals,
-    upsert_crm_messages, upsert_crm_tasks,
+    upsert_crm_messages, upsert_crm_tasks, get_provider_crm_entity,
+    list_provider_crm_entities, upsert_provider_crm_entities,
 )
 from tenant_member_store import (
     _member_payload, create_tenant, deactivate_member, finalize_onboarding,

@@ -63,6 +63,31 @@ def list_crm_messages(*, tenant_id: str, kommo_lead_id: int, limit: int = 120) -
         tenant_id=tenant_id, kommo_lead_id=kommo_lead_id, limit=limit)
 
 
+def upsert_provider_crm_entities(*, tenant_id: str, provider: str, entity_type: str,
+                                 entities: list[dict]) -> int:
+    """Persist generic CRM snapshots without assuming numeric Kommo IDs."""
+    from tenant_crm_provider_store import ProviderSnapshotStore
+    return ProviderSnapshotStore(_connect, _ensure_schema, serialize=_json).upsert(
+        tenant_id=tenant_id, provider=provider, entity_type=entity_type, entities=entities)
+
+
+def list_provider_crm_entities(*, tenant_id: str, provider: str, entity_type: str,
+                               parent_entity_type: str = '', parent_external_id: str = '',
+                               limit: int = 100, offset: int = 0) -> list[dict]:
+    from tenant_crm_provider_store import ProviderSnapshotStore
+    return ProviderSnapshotStore(_connect, _ensure_schema, payload=_public_crm_row).list(
+        tenant_id=tenant_id, provider=provider, entity_type=entity_type,
+        parent_entity_type=parent_entity_type, parent_external_id=parent_external_id,
+        limit=limit, offset=offset)
+
+
+def get_provider_crm_entity(*, tenant_id: str, provider: str, entity_type: str,
+                            external_id: str) -> dict | None:
+    from tenant_crm_provider_store import ProviderSnapshotStore
+    return ProviderSnapshotStore(_connect, _ensure_schema, payload=_public_crm_row).get(
+        tenant_id=tenant_id, provider=provider, entity_type=entity_type, external_id=external_id)
+
+
 def append_audit_event(*, tenant_id: str, action: str, actor_telegram_id: int | None = None,
                        entity_type: str = "", entity_id: str = "", payload: dict | None = None) -> None:
     """Keep an append-only tenant audit trail for security-relevant actions."""
