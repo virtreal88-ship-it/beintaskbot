@@ -52,13 +52,16 @@
       button.innerHTML = busy ? `<span class="spinner" aria-hidden="true"></span>${waitingText}` : button.dataset.label;
     };
     const notice = (text, good = false) => { $('notice').style.color = good ? '#087956' : '#9b3b21'; $('notice').textContent = text; };
-    let login = false;
+    // `/login` is a first-class sign-in page.  Registration keeps the same
+    // shared page at `/register`, while existing Telegram access remains below.
+    let login = location.pathname === '/login';
     function view() {
       $('register').hidden = login; $('login').hidden = !login;
       $('toggle').textContent = login ? 'Создать новый аккаунт' : 'У меня уже есть аккаунт';
       $('subtitle').textContent = login ? 'Войдите в кабинет компании.' : 'Создайте рабочее пространство компании.';
       $('notice').textContent = '';
     }
+    view();
     $('toggle').onclick = () => { login = !login; view(); };
     $('register').onsubmit = async event => {
       event.preventDefault(); const button = $('register-submit');
