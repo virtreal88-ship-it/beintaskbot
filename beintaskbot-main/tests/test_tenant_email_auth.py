@@ -50,7 +50,7 @@ class EmailAuthValidationTests(unittest.TestCase):
              patch('tenant_email_auth.requests.post', return_value=Response()) as request:
             _send_mail('owner@example.com', 'Confirm', 'Body')
         self.assertEqual(request.call_count, 1)
-        self.assertEqual(request.call_args.args[0][0], 'https://api.resend.com/emails')
+        self.assertEqual(request.call_args.args[0], 'https://api.resend.com/emails')
 
     def test_resend_rejection_has_safe_status(self):
         settings = {
