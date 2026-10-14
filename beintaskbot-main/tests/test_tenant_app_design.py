@@ -22,6 +22,13 @@ class AppDesignTests(unittest.TestCase):
         self.assertNotIn('app-shell', legacy)
         self.assertNotIn('tenant-chakra-ui.js', legacy)
 
+    def test_app_applies_critical_theme_before_the_module_bundle(self):
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        self.assertIn('id="app-design-critical"', app)
+        self.assertIn("localStorage.getItem('tenant-app-theme')", app)
+        self.assertLess(app.index('id="app-design-critical"'), app.index('tenant-chakra-ui.js'))
+        self.assertIn('background:var(--app-bg)!important', app)
+
     def test_theme_and_responsive_preferences_are_presentation_only(self):
         shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
         css = (ROOT / 'ui/src/app-theme.css').read_text(encoding='utf-8')
