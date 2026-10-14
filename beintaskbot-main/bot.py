@@ -117,6 +117,9 @@ from legacy_action_task_sessions import TaskSessionContext, handle_task_session_
 from legacy_action_finance import PayoutContext, handle_payout
 from legacy_action_task_updates import TaskUpdateContext, handle_task_update_action
 from legacy_action_deal_routing import DealRoutingContext, handle_deal_edit
+from legacy_task_completion_notifications import (
+    TaskCompletionNotificationContext, notify_legacy_task_completion,
+)
 from legacy_task_presenter import (
     TASK_TYPE_NAMES as NOTIFICATION_TASK_TYPE_NAMES,
     assignee_from_marker,
@@ -6883,160 +6886,6 @@ async def _handle_legacy_update_task(data: dict, chat_id: int, phone: str) -> we
         return web.json_response({"success": False, "error": "Yenil\u0259m\u0259 u\u011fursuz oldu."})
 
 
-def _notify_legacy_task_completion(
-    *,
-    chat_id: int,
-    task_id: int,
-    task_data: dict,
-    task_type_id: int,
-    task_deadline_ts: int,
-    kpi_result: dict | None,
-    delay_reason: str,
-    lead_id: int | None,
-    contact_name: str,
-    phone: str,
-    note_text: str,
-    task_result_text: str,
-    link: str,
-    _task_creator_is_rufat: bool,
-) -> None:
-    """Send completion approval and creator notifications for a legacy task."""
-    try:
-      logger.info("complete_task: ENTERING notification block")
-      task_text_full = task_data.get("text", "").strip()
-      task_desc_display = re.sub(r"^\[[^\]]+\]\s*", "", task_text_full)
-      task_type_name = TASK_TYPE_NAMES.get(task_type_id, f"Tip {task_type_id}")
-      completion_sender = get_employee_name_by_chat_id(
-          chat_id,
-          KOMMO_USERS.get(get_kommo_user_id_for_chat(chat_id), "Əməkdaş"),
-      )
-      # Queue piecework earnings for Admin confirmation and persist the
-      # task context needed by the redesigned balance history.
-      try:
-          # Price can be in [Price] or [Name:Price] format
-          price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]\s*(.*)", task_text_full)
-          if get_employee_type(chat_id) == "piecework" and price_match and price_match.group(1):
-              amount = float(price_match.group(1))
-              if amount > 0:
-                  add_balance_transaction(
-                      chat_id,
-                      int(task_id),
-                      amount,
-                      price_match.group(2) or task_text_full,
-                      executor_name=completion_sender,
-                      client=contact_name or "—",
-                      phone=phone or "—",
-                      task_type=task_type_name,
-                      result_text=note_text or task_result_text,
-                      kpi=0,
-                      status="pending",
-                  )
-      except Exception as balance_error:
-          logger.error(f"Pending balance transaction error: {balance_error}")
-
-      admin_chat = get_chat_id_for_kommo_user(10932455) or 1628569350
-      logger.info(f"complete_task notify: admin_chat={admin_chat}, contact={contact_name}, creator_is_samil={_task_creator_is_rufat}")
-
-      # Completion review is an explicit per-employee setting. No
-      # stage change ever creates an Admin confirmation.
-      if admin_chat and employee_requires_completion_approval(chat_id):
-          deadline_display = (
-              datetime.fromtimestamp(task_deadline_ts, tz=BAKU_TZ).strftime("%d.%m.%Y %H:%M")
-              if task_deadline_ts else "—"
-          )
-          kpi_info = ""
-          if kpi_result:
-              timing_label = "vaxtında" if kpi_result["completed_before_deadline"] else "gecikib"
-              kpi_info = f"\n📊 KPI: {kpi_result['kpi_score']}/100 ({timing_label})"
-              if delay_reason:
-                  kpi_info += f"\n⚠️ Səbəb: {delay_reason}"
-
-          # Get current deal stage
-          current_stage_name = "—"
-          if lead_id:
-              try:
-                  lead_detail = get_lead_details(int(lead_id))
-                  if lead_detail:
-                      current_status_id = lead_detail.get("status_id")
-                      current_stage_name = STAGE_NAMES.get(current_status_id, f"ID:{current_status_id}")
-              except Exception:
-                  pass
-          completion_message = (
-              f"✅ {completion_sender} tapşırığı tamamladı:\n\n"
-              f"👤 {contact_name or '—'}\n"
-              f"📝 {task_desc_display or '—'}\n"
-              f"📞 {phone or '—'}\n"
-              f"⏰ {deadline_display}\n"
-              f"📋 {task_type_name}\n"
-              f"📌 Mərhələ: {current_stage_name}"
-          )
-          if note_text:
-              completion_message += f"\n💬 İcraçı qeydi: {note_text}"
-          completion_message += kpi_info
-          if link:
-              completion_message += f"\n🔗 {link}"
-
-          raw_task_text = task_data.get("text", "").strip()
-          task_price_match = re.match(r"^\[(?:[^:\]]*:)?(\d+(?:\.\d+)?)\]", raw_task_text)
-          try:
-              if notification_channel_enabled(admin_chat, "approval", "telegram"):
-                  _http.post(
-                      f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                      json={
-                          "chat_id": admin_chat,
-                          "text": completion_message + "\n\nTəsdiq səhifəsində yoxlayın.",
-                          "disable_web_page_preview": True,
-                      },
-                      timeout=8
-                  )
-              save_pending_action("change_stage", {
-                  "contact_name": contact_name or "—",
-                  "phone": phone or "—",
-                  "lead_id": lead_id,
-                  "task_id": int(task_id),
-                  "sender_name": completion_sender,
-                  "sender_chat_id": int(chat_id),
-                  "task_text": re.sub(r"^\[[^\]]+\]\s*", "", raw_task_text) or "—",
-                  "task_price": task_price_match.group(1) if task_price_match else "",
-                  "note": note_text or "",
-                  "completion_kind": "employee_review",
-                  "stage_name": current_stage_name,
-                  "description": "Əməkdaş işi tamamladı. Admin təsdiqi gözlənilir.",
-                  "link": link,
-              }, ["Təsdiq et", "Rədd et"])
-              send_push_to_admin(
-                  f"{completion_sender}: {contact_name or '—'}",
-                  title="✅ Sifariş tamamlandı — təsdiq gözləyir",
-                  url="#pending",
-                  event="approval",
-              )
-          except Exception as notify_error:
-              logger.error(f"Completion notification error: {notify_error}")
-
-      # Notify the task creator independently of the Admin confirmation
-      # flow. In particular, Rüfət receives his own tasks' completion
-      # notice, even though Nizami receives no confirmation request.
-      try:
-          _creators_data = read_json(_TASK_CREATORS_FILE) or {}
-          _creator_name = _creators_data.get(str(task_id), "")
-          _creator_chat = RUFAT_CHAT_ID if _task_creator_is_rufat else (NAME_TO_CHAT.get(_creator_name) if _creator_name else None)
-          if _creator_chat and int(_creator_chat) != int(chat_id):
-              _c_cn = contact_name or "—"
-              _c_td = task_desc_display or "—"
-              _c_ph = phone or "—"
-              _creator_msg = (f"✅ Sizin yaratdığınız tapşırıq tamamlandı:\n\n"
-                  f"👤 {_c_cn}\n"
-                  f"📝 {_c_td}\n"
-                  f"👷 İcraçı: {completion_sender}\n"
-                  f"📞 {_c_ph}")
-              if link: _creator_msg += f"\n🔗 {link}"
-              _http.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                  json={"chat_id": int(_creator_chat), "text": _creator_msg, "disable_web_page_preview": True}, timeout=8)
-      except Exception as _cav_err:
-          logger.warning(f"Cavabdeh notification error: {_cav_err}")
-    except Exception as notif_block_err:
-      logger.error(f"complete_task notification block error: {notif_block_err}\n{traceback.format_exc()}")
-
 async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> web.Response:
     try:
         task_id = int(data.get("task_id"))
@@ -7210,7 +7059,30 @@ async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> 
     # A task created by Rüfət is handled by his admin account; do not
     # send its completion to Nizami for confirmation.
     if not is_admin(chat_id):
-        _notify_legacy_task_completion(
+        notify_legacy_task_completion(
+            TaskCompletionNotificationContext(
+                logger=logger,
+                timezone=BAKU_TZ,
+                task_type_names=TASK_TYPE_NAMES,
+                kommo_users=KOMMO_USERS,
+                stage_names=STAGE_NAMES,
+                telegram_token=TELEGRAM_TOKEN,
+                task_creators_file=_TASK_CREATORS_FILE,
+                rufat_chat_id=RUFAT_CHAT_ID,
+                name_to_chat=NAME_TO_CHAT,
+                http_post=_http.post,
+                get_employee_name=get_employee_name_by_chat_id,
+                get_kommo_user_id=get_kommo_user_id_for_chat,
+                get_employee_type=get_employee_type,
+                add_balance_transaction=add_balance_transaction,
+                get_admin_chat=get_chat_id_for_kommo_user,
+                requires_approval=employee_requires_completion_approval,
+                get_lead_details=get_lead_details,
+                notification_enabled=notification_channel_enabled,
+                save_pending_action=save_pending_action,
+                send_push_to_admin=send_push_to_admin,
+                read_json=read_json,
+            ),
             chat_id=chat_id,
             task_id=int(task_id),
             task_data=task_data,
@@ -7224,7 +7096,7 @@ async def _handle_legacy_complete_task(data: dict, chat_id: int, phone: str) -> 
             note_text=note_text,
             task_result_text=task_result_text,
             link=link,
-            _task_creator_is_rufat=_task_creator_is_rufat,
+            task_creator_is_rufat=_task_creator_is_rufat,
         )
     msg = f"\u2705 Tap\u015f\u0131r\u0131q tamamland\u0131!{stage_msg}"
     return web.json_response({"success": True, "message": msg, "link": link, "clear_timer": True})
