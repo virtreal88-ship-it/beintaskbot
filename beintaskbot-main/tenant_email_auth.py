@@ -12,6 +12,8 @@ import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS, _slug, _tenant_payload
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
@@ -107,12 +109,34 @@ def _send_mail(destination: str, subject: str, body: str) -> None:
                 smtp.starttls(context=ssl.create_default_context())
                 if username: smtp.login(username, password)
                 smtp.send_message(message)
-    except Exception as exc:
-        # Keep credentials, recipient and mail body out of logs.  The exception
-        # type is sufficient to distinguish DNS/TLS/authentication failures in
-        # Railway's protected service logs.
-        _LOG.warning('Email delivery failed via SMTP (%s)', type(exc).__name__)
-        raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from exc
+        return
+    except Exception as smtp_exc:
+        # Railway environments can block outbound SMTP ports.  Resend supports
+        # the same sending key over HTTPS, which keeps confirmation mail working
+        # without weakening the primary SMTP configuration.  This fallback is
+        # deliberately limited to Resend's host; no arbitrary SMTP secret is
+        # sent to another provider.
+        _LOG.warning('Email delivery failed via SMTP (%s)', type(smtp_exc).__name__)
+        if host.casefold() != 'smtp.resend.com' or not password:
+            raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from smtp_exc
+        try:
+            _send_via_resend_api(sender=sender, destination=destination, subject=subject, body=body, api_key=password)
+            return
+        except (OSError, URLError, ValueError) as api_exc:
+            _LOG.warning('Email delivery failed via Resend HTTPS API (%s)', type(api_exc).__name__)
+            raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from api_exc
+
+
+def _send_via_resend_api(*, sender: str, destination: str, subject: str, body: str, api_key: str) -> None:
+    """Send through Resend HTTPS when its SMTP relay is unreachable."""
+    payload = _json({'from': sender, 'to': [destination], 'subject': subject, 'text': body}).encode('utf-8')
+    request = Request(
+        'https://api.resend.com/emails', data=payload, method='POST',
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+    )
+    with urlopen(request, timeout=15) as response:
+        if not 200 <= int(getattr(response, 'status', response.getcode())) < 300:
+            raise OSError('Resend rejected the message')
 
 
 def _issue_token(cur, user_id: uuid.UUID, purpose: str, request_ip: str) -> str:

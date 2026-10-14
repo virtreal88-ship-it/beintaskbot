@@ -1,6 +1,8 @@
+import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 if 'psycopg' not in sys.modules:
     psycopg = types.ModuleType('psycopg')
@@ -10,7 +12,7 @@ if 'psycopg' not in sys.modules:
     rows.dict_row = object()
     sys.modules['psycopg.rows'] = rows
 
-from tenant_email_auth import _email, _hash_password, _password_matches, _phone
+from tenant_email_auth import _email, _hash_password, _password_matches, _phone, _send_mail
 from tenant_platform_core import TenantPlatformError
 
 
@@ -31,6 +33,25 @@ class EmailAuthValidationTests(unittest.TestCase):
             _email('not-an-email')
         with self.assertRaises(TenantPlatformError):
             _phone('123')
+
+    def test_resend_https_fallback_after_smtp_failure(self):
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def getcode(self): return 200
+
+        settings = {
+            'SMTP_HOST': 'smtp.resend.com', 'SMTP_PORT': '465', 'SMTP_SSL': 'true',
+            'SMTP_USERNAME': 'resend', 'SMTP_PASSWORD': 're_test_key',
+            'SMTP_FROM': 'Beintaskbot <no-reply@crm.pro.az>',
+        }
+        with patch.dict(os.environ, settings, clear=False), \
+             patch('tenant_email_auth.smtplib.SMTP_SSL', side_effect=OSError('blocked')), \
+             patch('tenant_email_auth.urlopen', return_value=Response()) as request:
+            _send_mail('owner@example.com', 'Confirm', 'Body')
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.args[0].full_url, 'https://api.resend.com/emails')
 
 
 if __name__ == '__main__':
