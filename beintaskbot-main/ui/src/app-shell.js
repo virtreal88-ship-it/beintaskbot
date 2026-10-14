@@ -151,4 +151,5 @@ if (document.body.dataset.appUi === 'kwid') {
     event.preventDefault();tabs[next].click();tabs[next].focus()
   })
   decorate()
+  body.dataset.appShellReady='true'
 }

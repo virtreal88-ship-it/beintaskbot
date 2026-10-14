@@ -24,10 +24,14 @@ class AppDesignTests(unittest.TestCase):
 
     def test_app_applies_critical_theme_before_the_module_bundle(self):
         app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
         self.assertIn('id="app-design-critical"', app)
         self.assertIn("localStorage.getItem('tenant-app-theme')", app)
         self.assertLess(app.index('id="app-design-critical"'), app.index('tenant-chakra-ui.js'))
         self.assertIn('background:var(--app-bg)!important', app)
+        self.assertIn('data-app-shell-ready', app)
+        self.assertIn('class="app-boot"', app)
+        self.assertIn("body.dataset.appShellReady='true'", shell)
 
     def test_theme_and_responsive_preferences_are_presentation_only(self):
         shell = (ROOT / 'ui/src/app-shell.js').read_text(encoding='utf-8')
