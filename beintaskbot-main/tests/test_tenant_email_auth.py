@@ -2,9 +2,9 @@ import os
 import sys
 import types
 import unittest
-from io import BytesIO
 from unittest.mock import patch
-from urllib.error import HTTPError
+
+import requests
 
 if 'psycopg' not in sys.modules:
     psycopg = types.ModuleType('psycopg')
@@ -38,10 +38,7 @@ class EmailAuthValidationTests(unittest.TestCase):
 
     def test_resend_https_fallback_after_smtp_failure(self):
         class Response:
-            status = 200
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def getcode(self): return 200
+            def raise_for_status(self): return None
 
         settings = {
             'SMTP_HOST': 'smtp.resend.com', 'SMTP_PORT': '465', 'SMTP_SSL': 'true',
@@ -50,10 +47,10 @@ class EmailAuthValidationTests(unittest.TestCase):
         }
         with patch.dict(os.environ, settings, clear=False), \
              patch('tenant_email_auth.smtplib.SMTP_SSL', side_effect=OSError('blocked')), \
-             patch('tenant_email_auth.urlopen', return_value=Response()) as request:
+             patch('tenant_email_auth.requests.post', return_value=Response()) as request:
             _send_mail('owner@example.com', 'Confirm', 'Body')
         self.assertEqual(request.call_count, 1)
-        self.assertEqual(request.call_args.args[0].full_url, 'https://api.resend.com/emails')
+        self.assertEqual(request.call_args.args[0][0], 'https://api.resend.com/emails')
 
     def test_resend_rejection_has_safe_status(self):
         settings = {
@@ -61,10 +58,11 @@ class EmailAuthValidationTests(unittest.TestCase):
             'SMTP_USERNAME': 'resend', 'SMTP_PASSWORD': 're_test_key',
             'SMTP_FROM': 'Beintaskbot <no-reply@crm.pro.az>',
         }
-        rejection = HTTPError('https://api.resend.com/emails', 403, 'Forbidden', {}, BytesIO())
+        response = requests.Response(); response.status_code = 403
+        rejection = requests.HTTPError(response=response)
         with patch.dict(os.environ, settings, clear=False), \
              patch('tenant_email_auth.smtplib.SMTP_SSL', side_effect=OSError('blocked')), \
-             patch('tenant_email_auth.urlopen', side_effect=rejection), \
+             patch('tenant_email_auth.requests.post', side_effect=rejection), \
              self.assertRaises(TenantPlatformError) as raised:
             _send_mail('owner@example.com', 'Confirm', 'Body')
         self.assertIn('Resend HTTP 403', str(raised.exception))
