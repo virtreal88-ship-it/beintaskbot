@@ -1,6 +1,50 @@
 """Additive PostgreSQL migration slice; executed inside the shared transaction."""
 
 def migrate_identity_schema(cur) -> None:
+    # Email identities are separate from provider identities.  The existing
+    # integer member key remains in place so Telegram-only accounts and every
+    # tenant-scoped API continue to work unchanged.
+    cur.execute("CREATE SEQUENCE IF NOT EXISTS saas_auth_actor_seq AS BIGINT START WITH 1000000000000")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_auth_users (
+            id UUID PRIMARY KEY,
+            actor_id BIGINT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            phone TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL DEFAULT '',
+            company_name TEXT NOT NULL DEFAULT '',
+            password_hash TEXT NOT NULL DEFAULT '',
+            tenant_id UUID NULL,
+            verified_at TIMESTAMPTZ NULL,
+            disabled_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_auth_tokens (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES saas_auth_users(id) ON DELETE CASCADE,
+            purpose TEXT NOT NULL CHECK(purpose IN ('confirm','reset','link_email')),
+            token_hash TEXT NOT NULL UNIQUE,
+            request_ip TEXT NOT NULL DEFAULT '',
+            expires_at TIMESTAMPTZ NOT NULL,
+            used_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_tokens_rate_idx ON saas_auth_tokens(request_ip,created_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_tokens_user_idx ON saas_auth_tokens(user_id,purpose,created_at DESC)")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_auth_login_attempts (
+            id UUID PRIMARY KEY,
+            email TEXT NOT NULL,
+            request_ip TEXT NOT NULL DEFAULT '',
+            succeeded BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_login_rate_idx ON saas_auth_login_attempts(email,request_ip,created_at DESC)")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_tenants (
             id UUID PRIMARY KEY,
