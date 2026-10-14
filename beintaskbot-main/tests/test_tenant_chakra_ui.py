@@ -20,7 +20,10 @@ class TenantChakraUiTests(unittest.TestCase):
 
     def test_market_is_separate_navigation_surface_with_expected_catalog(self):
         page = (ROOT / "docs" / "tenant-app.html").read_text(encoding="utf-8")
-        source = (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
+        source = (
+            (ROOT / "ui" / "src" / "main.jsx").read_text(encoding="utf-8")
+            + (ROOT / "ui" / "src" / "tenant-ui-shared.jsx").read_text(encoding="utf-8")
+        )
         self.assertIn('data-view="integrations"', page)
         self.assertIn('id="view-integrations"', page)
         for provider in ("Kommo", "Linear", "OpenAI", "Telegram", "Wappi", "BeinSystems ERP"):

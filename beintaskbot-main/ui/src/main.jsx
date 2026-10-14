@@ -2,6 +2,14 @@ import React, { useEffect, useMemo, useState } from "react"
 import { createRoot } from "react-dom/client"
 import "./app-shell.js"
 import {
+  api as tenantApi, integrationCatalog as sharedIntegrationCatalog,
+  permissionLabels as sharedPermissionLabels, roles as sharedRoles,
+} from "./tenant-ui-shared.jsx"
+import {
+  DealsView as WorkspaceDealsView,
+  TasksTable as WorkspaceTasksTable,
+} from "./tenant-deal-components.jsx"
+import {
   Badge, Box, Button, Card, ChakraProvider, Checkbox, Dialog, Flex, Grid,
   Heading, Input, Portal, Spinner, Stack, Table, Text, createSystem,
   defaultConfig, defineConfig,
@@ -35,16 +43,9 @@ const brandConfig = defineConfig({
 })
 const system = createSystem(defaultConfig, brandConfig)
 const roots = new Map()
-const roles = { owner: "Şirkət sahibi", admin: "Administrator", manager: "Vərəq istifadəçisi", worker: "İcraçı", master: "Usta" }
-const permissionLabels = { deals:"Sövdələşmələr",tasks:"Tapşırıqlar",customers:"Müştərilər",hot_orders:"İsti sifarişlər",finance:"Maliyyə",linear:"Linear",settings:"Tənzimləmələr",employees:"Əməkdaşlar",integrations:"İnteqrasiyalar" }
-const integrationCatalog = [
-  { id:"kommo", name:"Kommo", category:"CRM", mark:"K", color:"#635BFF", description:"Sövdələşmələri, müştəriləri, tapşırıqları və mesaj tarixçəsini sinxronlaşdırır.", features:["Sövdələşmə və mərhələlər", "Tapşırıqlar", "Mesaj kanalları"], action:"setup" },
-  { id:"linear", name:"Linear", category:"İş idarəetməsi", mark:"L", color:"#5E6AD2", description:"Məhsul tapşırıqlarını, təsdiq axınını və yeniliklərin hazırlanmasını idarə edir.", features:["Kanban və statuslar", "Tapşırıq bildirişləri", "Yenilik axını"], section:"integrations" },
-  { id:"openai", name:"OpenAI", category:"Süni intellekt", mark:"AI", color:"#111827", description:"Chat cavabları, xülasə, transkripsiya və mətn redaktəsi üçün şirkət AI bağlantısıdır.", features:["Cavab qaralaması", "Səs transkripsiyası", "Xülasə və redaktə"], section:"ai" },
-  { id:"telegram", name:"Telegram", category:"Rabitə", mark:"T", color:"#229ED9", description:"Əməkdaş girişləri, bildirişlər və təsdiqlənmiş yeniliklərin paylaşılması üçün istifadə olunur.", features:["Təhlükəsiz giriş", "Şəxsi bildirişlər", "Kanal nəşrləri"], section:"notifications" },
-  { id:"wappi", name:"Wappi", category:"Rabitə", mark:"W", color:"#25D366", description:"WhatsApp kanalları üçün planlaşdırılan əlavə bağlantı.", features:["WhatsApp mesajları", "Kanal uyğunlaşdırması"], pending:true },
-  { id:"beinsystems", name:"BeinSystems ERP", category:"CRM / ERP", mark:"B", color:"#0A926E", description:"BEIN ERP daxilində sövdələşmə, müştəri, tapşırıq, vərəq və mərhələ məlumatlarını şirkət üzrə qoşur.", features:["Sövdələşmə və müştərilər", "Tapşırıqlar", "Vərəq və mərhələlər"] },
-]
+const roles = sharedRoles
+const permissionLabels = sharedPermissionLabels
+const integrationCatalog = sharedIntegrationCatalog
 
 function mount(id, node) {
   const host = document.getElementById(id)
@@ -54,18 +55,7 @@ function mount(id, node) {
   roots.get(id).render(<ChakraProvider value={system}>{node}</ChakraProvider>)
   return true
 }
-const formatDate = value => {
-  if (!value) return "Tarix yoxdur"
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? "Tarix yoxdur" : date.toLocaleString("en-GB", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" }).replace(",", "")
-}
-const api = async (url, options={}) => {
-  const response = await fetch(url, { credentials:"same-origin", cache:"no-store", ...options,
-    headers:{ "Content-Type":"application/json", ...(options.headers || {}) } })
-  const result = await response.json().catch(() => ({ success:false, error:"Server cavabı oxunmadı." }))
-  if (!response.ok || !result.success) throw new Error(result.error || "Sorğu alınmadı.")
-  return result
-}
+const api = tenantApi
 
 function Empty({ children }) {
   return <Box py="14" px="5" textAlign="center" color="app.muted" bg="app.surface" borderWidth="1px" borderColor="app.line" borderRadius="xl">{children}</Box>
@@ -330,8 +320,8 @@ function SettingsHub() {
 }
 
 window.tenantChakraCRM = {
-  renderTasks: rows => mount("tasksList", <TasksTable rows={rows}/>),
-  renderDeals: (target, rows, customer, onOpen) => mount(target, <DealsView rows={rows} customer={customer} onOpen={onOpen}/>),
+  renderTasks: rows => mount("tasksList", <WorkspaceTasksTable rows={rows}/>),
+  renderDeals: (target, rows, customer, onOpen) => mount(target, <WorkspaceDealsView rows={rows} customer={customer} onOpen={onOpen}/>),
 }
 mount("chakra-settings-root", <SettingsHub/>)
 mount("chakra-integrations-root", <IntegrationMarketplace/>)
