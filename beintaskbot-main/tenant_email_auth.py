@@ -75,6 +75,13 @@ def _origin() -> str:
     return str(os.environ.get('CANONICAL_WEB_ORIGIN') or '').rstrip('/')
 
 
+def _assert_mail_ready() -> None:
+    if not str(os.environ.get('SMTP_HOST') or '').strip() or not str(os.environ.get('SMTP_FROM') or '').strip():
+        raise TenantPlatformError('Email göndərişi hələ quraşdırılmayıb.')
+    if not _origin():
+        raise TenantPlatformError('Sayt ünvanı email təsdiqi üçün quraşdırılmayıb.')
+
+
 def _send_mail(destination: str, subject: str, body: str) -> None:
     host = str(os.environ.get('SMTP_HOST') or '').strip()
     sender = str(os.environ.get('SMTP_FROM') or '').strip()
@@ -125,6 +132,7 @@ def _email_link(token: str, purpose: str = 'confirm') -> str:
 
 def request_registration(*, name: object, company_name: object, phone: object, email: object, request_ip: str) -> dict:
     display_name, company, mobile, address = _name(name, 'Adınızı'), _name(company_name, 'Şirkət adını'), _phone(phone), _email(email)
+    _assert_mail_ready()
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -191,6 +199,7 @@ def login(*, email: object, password: object, request_ip: str) -> dict | None:
 
 def request_password_reset(*, email: object, request_ip: str) -> dict:
     address = _email(email)
+    _assert_mail_ready()
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -226,6 +235,7 @@ def request_email_link(*, tenant_id: str, actor_id: int, display_name: object,
     identity may never claim an address already linked to another actor.
     """
     address = _email(email)
+    _assert_mail_ready()
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
