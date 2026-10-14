@@ -12,7 +12,6 @@ import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _ROLE_PERMISSIONS, _slug, _tenant_payload
@@ -122,7 +121,7 @@ def _send_mail(destination: str, subject: str, body: str) -> None:
         try:
             _send_via_resend_api(sender=sender, destination=destination, subject=subject, body=body, api_key=password)
             return
-        except (OSError, URLError, ValueError) as api_exc:
+        except Exception as api_exc:
             _LOG.warning('Email delivery failed via Resend HTTPS API (%s)', type(api_exc).__name__)
             raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from api_exc
 
