@@ -1,5 +1,21 @@
 # Disposable PostgreSQL check for AI Agents
 
+## Provider-neutral CRM checks
+
+The provider data-plane test has the same safety boundary: it accepts only a
+loopback disposable database named `crm_provider_test_*`. It replays the
+migration, creates two independent companies, checks cross-tenant identity
+isolation, simulates an interrupted transaction, then runs concurrent batched
+writes.
+
+```powershell
+$env:CRM_PROVIDER_TEST_DATABASE_URL = "postgresql://crm_provider_test:$($env:AI_AGENTS_TEST_PG_PASSWORD)@127.0.0.1:55432/crm_provider_test_local"
+python tests/postgres/verify_crm_provider.py
+Remove-Item Env:CRM_PROVIDER_TEST_DATABASE_URL
+```
+
+Never point this command at Railway or another customer database.
+
 This uses a fresh, temporary PostgreSQL 16 database and only accepts PostgreSQL URLs on loopback whose database name starts with ai_agents_test_. It never reads credentials from .env and must not be pointed at production.
 
 From the repository root in Linux, WSL, or a machine with Docker Compose, generate a disposable password in the shell environment and run:
