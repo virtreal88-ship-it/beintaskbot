@@ -4,9 +4,11 @@
 
 CRM Smart Assistant supports a secure tenant-owned BEIN ERP connection as a
 second CRM provider. Tenant roles, permissions, workflow policy, notifications,
-encrypted credentials and the provider transport are ready. Kommo-specific
-snapshot identifiers and chat delivery remain isolated until the generic data
-identity migration described below is complete.
+encrypted credentials and the provider transport are ready. The platform now
+also has a provider-neutral snapshot plane keyed by
+`(tenant, provider, entity type, external ID)`. It accepts both Kommo numeric
+IDs and UUIDs from other CRM systems. The existing Kommo snapshot tables and
+chat delivery remain in place during the staged migration.
 
 ## Confirmed BEIN ERP mapping
 
@@ -29,18 +31,26 @@ chat history or chat-send endpoints. Those capabilities remain disabled until
 the provider publishes a contract or a separate approved storage strategy is
 chosen.
 
+## Completed data-plane foundation
+
+- `saas_crm_provider_entities` stores provider-neutral CRM records with text
+  external IDs, optional parent links and source timestamps;
+- the migration safely seeds existing Kommo deal and task snapshots into the
+  shared plane and never overwrites newer records;
+- `tenant_crm_provider_store.py` provides bounded, tenant-scoped reads and
+  idempotent batch writes for adapters;
+- chats, notes and Talk delivery are deliberately not copied because the
+  published BEIN ERP contract does not expose those capabilities.
+
 ## Remaining data-plane migration
 
-1. Replace `kommo_lead_id` and `kommo_task_id` as domain identities with
-   `(provider, external_id text)` while retaining compatibility columns during
-   migration.
-2. Move Kommo HAL parsing (`_embedded`, numeric IDs, Unix timestamps) behind a
+1. Move Kommo HAL parsing (`_embedded`, numeric IDs, Unix timestamps) behind a
    Kommo adapter; add a BEIN ERP adapter for UUIDs and envelope pagination.
-3. Route deals, tasks, pipelines, stages and customers through the selected
+2. Route deals, tasks, pipelines, stages and customers through the selected
    provider. Keep Kommo Talk/chat features capability-gated.
-4. Add webhooks or bounded incremental polling for BEIN ERP once the event
+3. Add webhooks or bounded incremental polling for BEIN ERP once the event
    contract is available.
-5. Backfill one tenant at a time and prohibit two providers from writing the
+4. Backfill one tenant at a time and prohibit two providers from writing the
    same logical deal unless explicit mapping exists.
 
 `tenant_bein_crm.py` provides the safe integration-token transport and resource

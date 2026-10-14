@@ -3,6 +3,45 @@
 from tenant_crm_deletion_schema import migrate_crm_deletions
 
 def migrate_crm_schema(cur) -> None:
+    # New provider-neutral snapshot plane.  It intentionally coexists with
+    # the numeric Kommo snapshot tables while existing chat/Talk views still
+    # depend on Kommo lead IDs.  UUID based providers can start storing CRM
+    # data immediately without a destructive primary-key migration.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_crm_provider_entities (
+            tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+            provider TEXT NOT NULL CHECK (provider ~ '^[a-z][a-z0-9_-]{0,63}$'),
+            entity_type TEXT NOT NULL CHECK (entity_type ~ '^[a-z][a-z0-9_-]{0,63}$'),
+            external_id TEXT NOT NULL CHECK (length(external_id) BETWEEN 1 AND 180),
+            parent_entity_type TEXT NOT NULL DEFAULT '',
+            parent_external_id TEXT NOT NULL DEFAULT '',
+            source_updated_at TIMESTAMPTZ NULL,
+            data JSONB NOT NULL DEFAULT '{}'::jsonb,
+            synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (tenant_id, provider, entity_type, external_id),
+            CHECK ((parent_entity_type = '') = (parent_external_id = ''))
+        )
+    """)
+    # Seed the common plane from the existing Kommo snapshots.  The operation
+    # is idempotent and never overwrites a newer provider-neutral record.
+    cur.execute("""
+        INSERT INTO saas_crm_provider_entities
+        (tenant_id, provider, entity_type, external_id, source_updated_at, data, synced_at)
+        SELECT tenant_id, 'kommo', 'deals', kommo_lead_id::text, source_updated_at, raw, synced_at
+        FROM saas_crm_deals
+        ON CONFLICT (tenant_id, provider, entity_type, external_id) DO NOTHING
+    """)
+    cur.execute("""
+        INSERT INTO saas_crm_provider_entities
+        (tenant_id, provider, entity_type, external_id, parent_entity_type,
+         parent_external_id, source_updated_at, data, synced_at)
+        SELECT tenant_id, 'kommo', 'tasks', kommo_task_id::text,
+               CASE WHEN kommo_lead_id > 0 THEN 'deals' ELSE '' END,
+               CASE WHEN kommo_lead_id > 0 THEN kommo_lead_id::text ELSE '' END,
+               NULL, raw, synced_at
+        FROM saas_crm_tasks
+        ON CONFLICT (tenant_id, provider, entity_type, external_id) DO NOTHING
+    """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,
@@ -54,6 +93,8 @@ def migrate_crm_schema(cur) -> None:
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_deals_list_idx ON saas_crm_deals(tenant_id, pipeline_id, status_id, last_message_at DESC NULLS LAST, synced_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_provider_entities_list_idx ON saas_crm_provider_entities(tenant_id, provider, entity_type, source_updated_at DESC NULLS LAST, synced_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_provider_entities_parent_idx ON saas_crm_provider_entities(tenant_id, provider, parent_entity_type, parent_external_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_tasks_list_idx ON saas_crm_tasks(tenant_id, responsible_id, completed, due_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_crm_messages_list_idx ON saas_crm_messages(tenant_id, kommo_lead_id, happened_at DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_notifications_list_idx ON saas_tenant_notifications(tenant_id, telegram_id, read_at, created_at DESC)")

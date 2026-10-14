@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 DOMAIN_MODULES = (
     "tenant_crm_store.py",
+    "tenant_crm_provider_store.py",
     "tenant_integration_store.py",
     "tenant_invite_store.py",
     "tenant_linear_account_store.py",
