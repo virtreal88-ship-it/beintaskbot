@@ -31,6 +31,7 @@ class AuthApiContext:
     base_dir: str
     logger: object
     email_auth: object | None = None
+    sso: object | None = None
 
 
 def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int) -> None:
@@ -59,6 +60,39 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         # Railway terminates TLS; trust only the first forwarded address and
         # keep it solely for bounded abuse protection, never for identity.
         return str(request.headers.get('X-Forwarded-For') or request.remote or '').split(',',1)[0].strip()[:80]
+
+    async def sso_authorize(request: web.Request) -> web.Response:
+        """Issue a one-time code only for the already authenticated company."""
+        if context.sso is None:
+            return web.json_response({'error': 'sso_unavailable'}, status=503)
+        profile = context.member(request)
+        if not profile:
+            return web.json_response({'error': 'login_required'}, status=401)
+        client_id = str(request.query.get('client_id') or '')
+        redirect_uri = str(request.query.get('redirect_uri') or '')
+        challenge = str(request.query.get('code_challenge') or '')
+        state = str(request.query.get('state') or '')
+        if not state or len(state) > 512:
+            return web.json_response({'error': 'invalid_request'}, status=400)
+        try:
+            code = await asyncio.to_thread(context.sso.issue_code, tenant_id=str(profile['tenant_id']),
+                actor_id=int(profile['telegram_id']), client_id=client_id, redirect_uri=redirect_uri, code_challenge=challenge)
+        except context.platform_error as exc:
+            return web.json_response({'error': 'access_denied', 'message': str(exc)}, status=403)
+        separator = '&' if '?' in redirect_uri else '?'
+        raise web.HTTPFound(f'{redirect_uri}{separator}code={code}&state={state}')
+
+    async def sso_token(request: web.Request) -> web.Response:
+        if context.sso is None:
+            return web.json_response({'error': 'sso_unavailable'}, status=503)
+        try:
+            data = await request.json()
+            result = await asyncio.to_thread(context.sso.exchange_code, code=str((data or {}).get('code') or ''),
+                verifier=str((data or {}).get('code_verifier') or ''), client_id=str((data or {}).get('client_id') or ''),
+                redirect_uri=str((data or {}).get('redirect_uri') or ''), client_secret=str((data or {}).get('client_secret') or ''))
+            return web.json_response(result, headers={'Cache-Control': 'no-store'})
+        except context.platform_error as exc:
+            return web.json_response({'error': 'invalid_grant', 'message': str(exc)}, status=400)
 
     async def email_register(request: web.Request) -> web.Response:
         if context.email_auth is None:
@@ -252,6 +286,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
 
     return {
         "register": register, "me": me, "login": login, "logout": logout,
+        'sso_authorize': sso_authorize, 'sso_token': sso_token,
         'email_register': email_register, 'email_confirm': email_confirm,
         'email_login': email_login, 'password_reset': password_reset,
         'password_reset_confirm': password_reset_confirm,
