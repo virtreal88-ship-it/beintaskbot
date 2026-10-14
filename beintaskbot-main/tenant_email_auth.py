@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ from tenant_platform_common import _DEFAULT_MODULES, _DEFAULT_NOTIFICATIONS, _RO
 from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, _json
 
 _EMAIL = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$")
+_LOG = logging.getLogger(__name__)
 
 
 def _email(value: object) -> str:
@@ -106,6 +108,10 @@ def _send_mail(destination: str, subject: str, body: str) -> None:
                 if username: smtp.login(username, password)
                 smtp.send_message(message)
     except Exception as exc:
+        # Keep credentials, recipient and mail body out of logs.  The exception
+        # type is sufficient to distinguish DNS/TLS/authentication failures in
+        # Railway's protected service logs.
+        _LOG.warning('Email delivery failed via SMTP (%s)', type(exc).__name__)
         raise TenantPlatformError('Təsdiq məktubu göndərilmədi. Bir az sonra yenidən cəhd edin.') from exc
 
 
