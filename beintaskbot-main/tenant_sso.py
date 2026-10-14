@@ -35,6 +35,18 @@ def _client_secret() -> str:
     return value
 
 
+def _redirect_uri() -> str:
+    """Return the one callback registered for the Connect client.
+
+    A prefix check here would let a hostile site receive a valid authorization
+    code.  Connect is a first-party client, so it has exactly one callback.
+    """
+    value = str(os.environ.get("CONNECT_SSO_REDIRECT_URI") or "").rstrip("/")
+    if not value.startswith("https://"):
+        raise TenantPlatformError("Connect SSO callback konfiqurasiya edilməyib.")
+    return value
+
+
 def ensure_schema(cur) -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_product_entitlements (
         tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -67,14 +79,40 @@ def _access(cur, tenant_id: str, actor_id: int) -> str | None:
     return str(row['role']) if row else None
 
 
+def _bootstrap_owner_access(cur, tenant_id: str, actor_id: int) -> str | None:
+    """Enable the product for the first owner in an MVP installation.
+
+    This creates an explicit administrative entitlement, not a paid
+    subscription.  It never grants access to a non-owner and never changes an
+    existing entitlement, so billing can later replace this state safely.
+    """
+    cur.execute("""SELECT role FROM saas_tenant_members
+      WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE FOR UPDATE""",
+      (tenant_id, actor_id))
+    member = cur.fetchone()
+    if not member or str(member['role']) != 'owner':
+        return None
+    cur.execute("""SELECT 1 FROM saas_product_entitlements
+      WHERE tenant_id=%s::uuid AND product=%s""", (tenant_id, CONNECT_PRODUCT))
+    if cur.fetchone():
+        return None
+    cur.execute("""INSERT INTO saas_product_entitlements(tenant_id,product,status)
+      VALUES(%s::uuid,%s,'admin')""", (tenant_id, CONNECT_PRODUCT))
+    cur.execute("""INSERT INTO saas_product_members(tenant_id,actor_id,product,role)
+      VALUES(%s::uuid,%s,%s,'owner')""", (tenant_id, actor_id, CONNECT_PRODUCT))
+    return 'owner'
+
+
 def issue_code(*, tenant_id: str, actor_id: int, client_id: str, redirect_uri: str, code_challenge: str) -> str:
-    if client_id != CONNECT_CLIENT_ID or not redirect_uri.startswith("https://") or len(code_challenge) < 43:
+    if client_id != CONNECT_CLIENT_ID or redirect_uri.rstrip("/") != _redirect_uri() or len(code_challenge) < 43:
         raise TenantPlatformError("SSO sorğusu etibarlı deyil.")
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             ensure_schema(cur)
             role = _access(cur, tenant_id, actor_id)
+            if not role:
+                role = _bootstrap_owner_access(cur, tenant_id, actor_id)
             if not role:
                 raise TenantPlatformError("Bu şirkət üçün Connect girişi aktiv deyil.")
             code = secrets.token_urlsafe(32)
