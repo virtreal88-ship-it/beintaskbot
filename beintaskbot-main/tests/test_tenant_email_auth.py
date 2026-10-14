@@ -2,7 +2,9 @@ import os
 import sys
 import types
 import unittest
+from io import BytesIO
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 if 'psycopg' not in sys.modules:
     psycopg = types.ModuleType('psycopg')
@@ -52,6 +54,20 @@ class EmailAuthValidationTests(unittest.TestCase):
             _send_mail('owner@example.com', 'Confirm', 'Body')
         self.assertEqual(request.call_count, 1)
         self.assertEqual(request.call_args.args[0].full_url, 'https://api.resend.com/emails')
+
+    def test_resend_rejection_has_safe_status(self):
+        settings = {
+            'SMTP_HOST': 'smtp.resend.com', 'SMTP_PORT': '465', 'SMTP_SSL': 'true',
+            'SMTP_USERNAME': 'resend', 'SMTP_PASSWORD': 're_test_key',
+            'SMTP_FROM': 'Beintaskbot <no-reply@crm.pro.az>',
+        }
+        rejection = HTTPError('https://api.resend.com/emails', 403, 'Forbidden', {}, BytesIO())
+        with patch.dict(os.environ, settings, clear=False), \
+             patch('tenant_email_auth.smtplib.SMTP_SSL', side_effect=OSError('blocked')), \
+             patch('tenant_email_auth.urlopen', side_effect=rejection), \
+             self.assertRaises(TenantPlatformError) as raised:
+            _send_mail('owner@example.com', 'Confirm', 'Body')
+        self.assertIn('Resend HTTP 403', str(raised.exception))
 
 
 if __name__ == '__main__':
