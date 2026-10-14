@@ -57,6 +57,7 @@ from tenant_onboarding_api import handlers as tenant_onboarding_handlers
 from tenant_members_api import MemberApiContext, handlers as tenant_member_handlers
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
 import tenant_email_auth
+import tenant_sso
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
 from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
@@ -18518,7 +18519,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         origin=CANONICAL_WEB_ORIGIN, cookie_name=_TENANT_SESSION_COOKIE,
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
         base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
-        email_auth=tenant_email_auth,
+        email_auth=tenant_email_auth, sso=tenant_sso,
     ))
     app_web.router.add_post("/api/platform/register", auth_api["register"])
     app_web.router.add_post("/api/platform/login", auth_api["login"])
@@ -18529,6 +18530,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/auth/password/reset/confirm', auth_api['password_reset_confirm'])
     app_web.router.add_post('/api/platform/auth/email/link/request', auth_api['email_link_request'])
     app_web.router.add_post('/api/platform/auth/email/link/confirm', auth_api['email_link_confirm'])
+    app_web.router.add_get('/api/platform/sso/authorize', auth_api['sso_authorize'])
+    app_web.router.add_post('/api/platform/sso/token', auth_api['sso_token'])
     app_web.router.add_post("/api/platform/logout", auth_api["logout"])
     app_web.router.add_get("/api/platform/me", auth_api["me"])
     task_api = tenant_task_handlers(TaskApiContext(
