@@ -11,7 +11,7 @@ def handler(member_from_request, origin: str, logger):
     async def handle(request: web.Request) -> web.Response:
         try:
             profile = member_from_request(request)
-            if not profile or profile.get('role') != 'owner':
+            if not profile or profile.get('role') not in {'owner', 'admin'}:
                 return web.json_response({'success': False, 'error': 'Şirkət sahibi girişi tələb olunur.'}, status=403)
             if request.method == 'GET':
                 result = {'companies': await asyncio.to_thread(list_owned, profile)}

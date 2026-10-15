@@ -51,8 +51,8 @@ def list_owned(profile: dict) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute('''SELECT t.id,t.name,t.created_at,m.role
               FROM saas_tenants t JOIN saas_tenant_members m ON m.tenant_id=t.id
-              WHERE m.telegram_id=%s AND m.active=TRUE AND m.role='owner'
-              ORDER BY t.created_at,t.id''', (actor,))
+              WHERE m.telegram_id=%s AND m.active=TRUE AND (m.role='owner' OR t.owner_telegram_id=%s)
+              ORDER BY t.created_at,t.id''', (actor, actor))
             rows = list(cur.fetchall())
             primary_id = str(rows[0]['id']) if rows else ''
             result = []
@@ -78,7 +78,8 @@ def manage(profile: dict, payload: dict) -> dict:
         with conn.cursor() as cur:
             cur.execute('''SELECT t.id,t.name,t.created_at FROM saas_tenants t
               JOIN saas_tenant_members m ON m.tenant_id=t.id
-              WHERE t.id=%s::uuid AND m.telegram_id=%s AND m.active=TRUE AND m.role='owner' FOR UPDATE OF t''', (target, actor))
+              WHERE t.id=%s::uuid AND m.telegram_id=%s AND m.active=TRUE
+                AND (m.role='owner' OR t.owner_telegram_id=%s) FOR UPDATE OF t''', (target, actor, actor))
             row = cur.fetchone()
             if not row:
                 raise TenantPlatformError('Bu şirkəti idarə etmək üçün sahib icazəsi yoxdur.')
@@ -99,7 +100,8 @@ def manage(profile: dict, payload: dict) -> dict:
                 if str(payload.get('confirm_name') or '') != name or str(payload.get('confirm_tenant_id') or '') != target:
                     raise TenantPlatformError('Təsdiq üçün şirkət adını və tenant_id dəyərini dəqiq daxil edin.')
                 cur.execute('''SELECT t.id FROM saas_tenants t JOIN saas_tenant_members m ON m.tenant_id=t.id
-                  WHERE m.telegram_id=%s AND m.active=TRUE AND m.role='owner' ORDER BY t.created_at,t.id LIMIT 1''', (actor,))
+                  WHERE m.telegram_id=%s AND m.active=TRUE AND (m.role='owner' OR t.owner_telegram_id=%s)
+                  ORDER BY t.created_at,t.id LIMIT 1''', (actor, actor))
                 primary = cur.fetchone()
                 if primary and str(primary['id']) == target:
                     raise TenantPlatformError('Əsas şirkəti silmək olmaz. Bu məhdudiyyət əsas hesabı və SSO girişini qoruyur.')

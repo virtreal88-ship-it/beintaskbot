@@ -69,7 +69,7 @@
     }
   };
   const settings = $('view-settings');
-  const groups = [['employees','Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],['workflow','İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],['advanced','Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.']];
+  const groups = [['employees','Əməkdaşlar','Dəvətlər, giriş sorğuları və komandanız.'],['integrations','İnteqrasiyalar','Connect WhatsApp kanallarını və digər şirkət bağlantılarını idarə edin.'],['companies','Şirkətlər','Şirkətlərin adını və girişini idarə edin.'],['workflow','İş qaydaları','Vərəqlər, mərhələlər, əməkdaş hüquqları və təsdiq qaydaları.'],['advanced','Diaqnostika','Sistem vəziyyəti və texniki yoxlamalar.']];
   let section = 'employees';
   const sections = document.createElement('div'); sections.className = 'settings-sections'; sections.setAttribute('role','tablist');
   sections.innerHTML = groups.map(([key,label]) => `<button type="button" role="tab" data-settings-tab="${key}">${label}</button>`).join('');
@@ -80,6 +80,8 @@
   settingsAnchor.after(advancedTitle,sections,help);
   function classify(panel) {
     if (panel.id === 'chakra-settings-root') return 'employees';
+    if (panel.id === 'connectWhatsAppSettings') return 'integrations';
+    if (panel.id === 'companyManagement') return 'companies';
     if (['tenantLinearPanel','tcAiPanel','tnAiPanel','tnChannelPanel'].includes(panel.id)) return 'external-integration';
     if (panel.id === 'workflowPanel') return 'workflow';
     if (panel.querySelector('#inviteName,#members,#accessRequests')) return 'employees';
@@ -112,7 +114,7 @@
   };
   const observer = new MutationObserver(showSettings);
   observer.observe(settings,{childList:true}); observer.observe(settings.querySelector('.grid'),{childList:true});
-  document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];updateIcons();showSettings();refresh();});
+  document.addEventListener('tenant-profile', e => {catalog=e.detail.capabilities?.deal_board || [];if(['owner','admin'].includes(e.detail.member?.role)&&section==='employees')section='integrations';updateIcons();showSettings();refresh();});
   const integrationRepository = document.createElement('div');
   integrationRepository.id = 'integrationSettingsRepository';
   integrationRepository.hidden = true;
