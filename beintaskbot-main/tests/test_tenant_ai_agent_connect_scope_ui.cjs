@@ -1,0 +1,66 @@
+// Regression test for selecting, saving, and reloading Connect agent scopes.
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+
+const root = path.resolve(__dirname, '..');
+const source = fs.readFileSync(path.join(root, 'docs/tenant-ai-agents.js'), 'utf8');
+const start = source.indexOf('function renderScopeOptions(agent)');
+const end = source.indexOf('function editAgent(agent', start);
+assert(start >= 0 && end > start, 'AI Agent scope editor must exist');
+const renderer = source.slice(start, end).trim();
+const serializerStart = source.indexOf('function serializeAgentScopes(');
+const serializerEnd = source.indexOf('\n', serializerStart);
+assert(serializerStart >= 0 && serializerEnd > serializerStart, 'Agent scope serializer must exist');
+const serializer = source.slice(serializerStart, serializerEnd);
+
+function editor(savedAgent) {
+  const elements = new Map();
+  const ids = ['aiAgentProvider', 'aiKommoScope', 'aiKommoStages', 'aiPipelineId',
+    'aiStageId', 'aiChannelId', 'aiPipelineSelected', 'aiStageSelected',
+    'aiChannelSelected', 'aiAgentModel'];
+  for (const id of ids) elements.set(id, { id, value: '', options: [], dataset: {}, classList: { toggle() {} } });
+  const context = {
+    agentOptions: { pipelines: [], stages: [], channels: [],
+      connect_channels: [{ id: 'wa-channel-42', name: 'WhatsApp 42' }], models: ['test-model'] },
+    document: { getElementById: id => elements.get(id) },
+    $: id => elements.get(id),
+    selectValues: id => elements.get(id).options.filter(option => option.selected).map(option => option.value),
+    setOptions: (id, rows, selected) => {
+      const element = elements.get(id), values = new Set((selected || []).map(String));
+      element.options = rows.map(row => ({ value: String(row.value), label: row.label, selected: values.has(String(row.value)) }));
+    },
+    renderSelected() {},
+  };
+  for (const id of ['aiPipelineId', 'aiStageId', 'aiChannelId']) {
+    Object.defineProperty(elements.get(id), 'selectedOptions', { get() { return this.options.filter(option => option.selected); } });
+  }
+  const run = vm.runInNewContext(`${renderer}; renderScopeOptions`, context);
+  const serialize = vm.runInNewContext(`${serializer}; serializeAgentScopes`, context);
+  run(savedAgent);
+  return { elements, context, serialize };
+}
+
+// Start from the existing Kommo scope, switch provider and select a Connect channel.
+const first = editor({ scopes: [{ provider: 'kommo', pipeline_id: '1', stage_id: '2', channel_id: 'kommo-wa' }] });
+const provider = first.elements.get('aiAgentProvider');
+provider.value = 'connect';
+provider.onchange();
+const channel = first.elements.get('aiChannelId');
+channel.options[0].selected = true;
+channel.onchange();
+const submittedScopes = JSON.parse(JSON.stringify(first.serialize(provider.value, first.context.selectValues('aiChannelId'), [],
+  [{ provider: 'kommo', pipeline_id: '1', stage_id: '2', channel_id: 'kommo-wa' }])));
+assert.deepEqual(submittedScopes, [
+  { provider: 'kommo', pipeline_id: '1', stage_id: '2', channel_id: 'kommo-wa' },
+  { provider: 'connect', pipeline_id: '', stage_id: '', channel_id: 'wa-channel-42', instructions: '' },
+]);
+
+// Simulate API/database persistence and a fresh GET /agents response.
+const databaseRow = JSON.parse(JSON.stringify({ scopes: submittedScopes }));
+const reloaded = editor(databaseRow);
+assert.equal(reloaded.elements.get('aiAgentProvider').value, 'connect');
+assert.deepEqual(JSON.parse(JSON.stringify(reloaded.context.selectValues('aiChannelId'))), ['wa-channel-42']);
+
+console.log('PASS: Connect provider and selected WhatsApp channel survive editor save/reload flow.');
