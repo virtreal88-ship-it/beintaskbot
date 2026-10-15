@@ -18636,6 +18636,10 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get('/api/platform/integrations/connect', connect_settings_api)
     app_web.router.add_post('/api/platform/integrations/connect', connect_settings_api)
     app_web.router.add_post('/api/platform/connect/webhook', tenant_connect_webhook_handler(logger))
+    from tenant_company_admin_api import handler as tenant_company_admin_handler
+    company_admin_api = tenant_company_admin_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
+    app_web.router.add_get('/api/platform/companies/manage', company_admin_api)
+    app_web.router.add_post('/api/platform/companies/manage', company_admin_api)
     app_web.router.add_get('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/tasks/complete', task_api["complete"])
