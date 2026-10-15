@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Beintaskbot — вход</title>
+    <title>Beintaskbot — вход</title>
   <style>
     body{margin:0;background:#f5f8f7;color:#14241f;font:15px system-ui;display:grid;min-height:100vh;place-items:center}
     .card{width:min(440px,calc(100% - 32px));background:#fff;border:1px solid #dce7e2;border-radius:18px;padding:28px;box-sizing:border-box;box-shadow:0 14px 42px #10322912}
@@ -18,7 +18,7 @@
 </head>
 <body>
   <main class="card">
-    <h1>Beintaskbot</h1>
+    <h1 id="brand">Beintaskbot</h1>
     <p id="subtitle">Создайте рабочее пространство компании.</p>
     <form id="register">
       <label>Ваше имя<input name="name" required maxlength="120" autocomplete="name"></label>
@@ -35,7 +35,7 @@
     </form>
     <p class="notice" id="notice" role="status" aria-live="polite"></p>
     <button type="button" class="link" id="toggle">У меня уже есть аккаунт</button>
-    <p class="muted"><a class="muted" href="/login/telegram">Войти через Telegram</a></p>
+    <p class="muted" id="telegram-link"><a class="muted" href="/login/telegram">Войти через Telegram</a></p>
   </main>
   <script>
     const $ = id => document.getElementById(id);
@@ -54,11 +54,17 @@
     const notice = (text, good = false) => { $('notice').style.color = good ? '#087956' : '#9b3b21'; $('notice').textContent = text; };
     // `/login` is a first-class sign-in page.  Registration keeps the same
     // shared page at `/register`, while existing Telegram access remains below.
-    let login = location.pathname === '/login';
+    const connectorLogin = location.pathname === '/connector/login';
+    const next = new URLSearchParams(location.search).get('next') || '';
+    const safeNext = next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '';
+    let login = location.pathname === '/login' || connectorLogin;
     function view() {
       $('register').hidden = login; $('login').hidden = !login;
+      $('toggle').hidden = connectorLogin;
+      $('telegram-link').hidden = connectorLogin;
+      $('brand').textContent = connectorLogin ? 'Beintaskbot Connect' : 'Beintaskbot';
       $('toggle').textContent = login ? 'Создать новый аккаунт' : 'У меня уже есть аккаунт';
-      $('subtitle').textContent = login ? 'Войдите в кабинет компании.' : 'Создайте рабочее пространство компании.';
+      $('subtitle').textContent = connectorLogin ? 'Войдите в аккаунт Beintaskbot, чтобы продолжить в Connect.' : login ? 'Войдите в кабинет компании.' : 'Создайте рабочее пространство компании.';
       $('notice').textContent = '';
     }
     view();
@@ -74,7 +80,7 @@
     $('login').onsubmit = async event => {
       event.preventDefault(); const button = $('login-submit');
       setBusy(button, true, 'Входим…');
-      try { const result = await call('/api/platform/auth/email/login', Object.fromEntries(new FormData(event.target))); location.href = result.redirect || '/app'; }
+      try { const result = await call('/api/platform/auth/email/login', Object.fromEntries(new FormData(event.target))); location.href = safeNext || result.redirect || '/app'; }
       catch (error) { notice(error.message); } finally { setBusy(button, false); }
     };
     $('forgot').onclick = async () => {

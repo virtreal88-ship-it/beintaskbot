@@ -3,6 +3,7 @@ import asyncio
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from urllib.parse import quote, urlsplit
 
 from aiohttp import web
 
@@ -68,7 +69,12 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'error': 'sso_unavailable'}, status=503)
         profile = context.member(request)
         if not profile:
-            return web.json_response({'error': 'login_required'}, status=401)
+            # Continue the same authorization request after the user signs in.
+            # The destination is always a local, fixed route; the caller cannot
+            # supply an arbitrary redirect URL here.
+            query = request.query_string
+            continuation = '/api/platform/sso/authorize' + (f'?{query}' if query else '')
+            raise web.HTTPFound('/connector/login?next=' + quote(continuation, safe=''))
         client_id = str(request.query.get('client_id') or '')
         redirect_uri = str(request.query.get('redirect_uri') or '')
         challenge = str(request.query.get('code_challenge') or '')
@@ -82,6 +88,14 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'error': 'access_denied', 'message': str(exc)}, status=403)
         separator = '&' if '?' in redirect_uri else '?'
         raise web.HTTPFound(f'{redirect_uri}{separator}code={code}&state={state}')
+
+    async def connector_page(request: web.Request) -> web.Response:
+        """Send the public Beintaskbot connector entry URL to Connect login."""
+        callback = str(os.environ.get('CONNECT_SSO_REDIRECT_URI') or '').rstrip('/')
+        target = urlsplit(callback)
+        if target.scheme != 'https' or not target.hostname or target.username or target.password:
+            return web.Response(status=503, text='Вход в Connect временно недоступен. Попробуйте позже.')
+        raise web.HTTPFound(f'{target.scheme}://{target.netloc}/login')
 
     async def sso_token(request: web.Request) -> web.Response:
         if context.sso is None:
@@ -327,5 +341,6 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'auth_page': lambda request: _page(context, 'auth.html', 'Platform authentication page not found'),
         'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),
         'legacy_link_page': lambda request: _page(context, 'legacy-email-link.html', 'Legacy email link page not found'),
+        'connector_page': connector_page,
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }
