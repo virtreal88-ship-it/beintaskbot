@@ -6,6 +6,7 @@ from tenant_chat_send_schema import ensure_schema
 from tenant_chat_send_policy import fingerprint
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
+from tenant_connect_transport import connect_route
 
 
 def authority(cur, session, lead_id):
@@ -20,10 +21,13 @@ def authority(cur, session, lead_id):
     cur.execute('SELECT * FROM saas_crm_deals WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL FOR SHARE', (tenant, lead_id))
     if not policy.allows('deals') or not policy.can_access_deal(cur.fetchone()):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
+    connect = connect_route(cur, tenant, lead_id)
+    if connect:
+        return profile, ['connect', connect['channel_id'], connect['conversation_id']], {'provider': 'connect', 'route': connect}
     cur.execute("SELECT account_domain,connected_at,status,secrets FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='kommo' FOR SHARE", (tenant,))
     integration = cur.fetchone()
     if not integration or integration['status'] != 'connected' or not integration['secrets']:
-        raise TenantLinearError('Kommo bağlantısını yoxlayın.', 409)
+        raise TenantLinearError('Bu çat üçün Connect və ya Kommo bağlantısını yoxlayın.', 409)
     return profile, [integration['account_domain'], str(integration['connected_at'])], integration
 
 
@@ -64,10 +68,13 @@ def mark_sending(item, route):
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
-            tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
-            if not isinstance(tokens, dict) or not tokens.get('access_token'):
-                raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
-            credentials = {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
+            if integration.get('provider') == 'connect':
+                credentials = integration['route']
+            else:
+                tokens = json.loads(_fernet().decrypt(bytes(integration['secrets'])).decode('utf-8'))
+                if not isinstance(tokens, dict) or not tokens.get('access_token'):
+                    raise TenantLinearError('Kommo bağlantısını yeniləyin.', 409)
+                credentials = {'account_domain': integration['account_domain'], 'access_token': tokens['access_token']}
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',route=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='preparing' RETURNING request_id", (json.dumps(route), *item['key']))
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə artıq işlənir.', 409)

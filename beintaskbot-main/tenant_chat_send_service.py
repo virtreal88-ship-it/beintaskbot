@@ -5,6 +5,7 @@ from tenant_chat_send_store import reserve, mark_sending, finish
 from tenant_chat_send_provider import send
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
+from tenant_connect_transport import send as send_connect, record_outbound as record_connect_outbound
 
 
 async def run(session, data, request, wait_slot, logger):
@@ -15,15 +16,22 @@ async def run(session, data, request, wait_slot, logger):
     try:
         tenant, _, _ = item['key']
         lead_id = item['command']['lead_id']
-        async with asyncio.timeout(45):
-            route = await resolve_route(tenant, lead_id, request)
-            live = await request(tenant, 'GET', f'leads/{lead_id}')
-        profile, credentials = await asyncio.to_thread(mark_sending, item, route)
-        if int(live.get('id') or 0) != lead_id or not TenantPolicy(profile).can_access_deal({
-            **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
-            raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
+        is_connect = item['connection'][0] == 'connect'
+        if is_connect:
+            route = {'origin': 'connect'}
+            profile, credentials = await asyncio.to_thread(mark_sending, item, route)
+        else:
+            async with asyncio.timeout(45):
+                route = await resolve_route(tenant, lead_id, request)
+                live = await request(tenant, 'GET', f'leads/{lead_id}')
+            profile, credentials = await asyncio.to_thread(mark_sending, item, route)
+            if int(live.get('id') or 0) != lead_id or not TenantPolicy(profile).can_access_deal({
+                **live, 'tenant_id': tenant, 'kommo_lead_id': lead_id}):
+                raise TenantLinearError('Sövdələşmənin icraçısı və ya mərhələsi dəyişib.', 403)
         external_started = True
-        message_id = await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
+        message_id = await asyncio.to_thread(send_connect, credentials, item['command']['text'], item['command']['request_id']) if is_connect else await asyncio.to_thread(send, credentials, route, item['command']['text'], wait_slot)
+        if is_connect:
+            await asyncio.to_thread(record_connect_outbound, tenant, lead_id, credentials, item['command']['text'], message_id)
         await asyncio.to_thread(finish, item, 'accepted', message_id)
         return {'state': 'accepted', 'message_id': message_id, 'origin': route['origin']}
     except TenantLinearError:

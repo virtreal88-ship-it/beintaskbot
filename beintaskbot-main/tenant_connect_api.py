@@ -1,0 +1,56 @@
+"""HTTP boundary for tenant-owned Connect channel configuration and webhooks."""
+from __future__ import annotations
+
+import asyncio
+import json
+from aiohttp import web
+
+from tenant_connect_transport import channels, configure, disconnect, ingest, status
+from tenant_platform import TenantPlatformError
+from tenant_request_origin import require_json_post
+
+
+def settings_handler(member_from_request, origin: str, logger):
+    async def handle(request: web.Request) -> web.Response:
+        try:
+            profile = member_from_request(request)
+            if not profile:
+                raise TenantPlatformError('İcazə yoxdur.')
+            if request.method == 'GET':
+                result = await asyncio.to_thread(status, profile)
+            else:
+                require_json_post(request, origin)
+                data = await request.json()
+                if not isinstance(data, dict):
+                    raise TenantPlatformError('Sorğu düzgün deyil.')
+                if data.get('action') == 'disconnect':
+                    result = await asyncio.to_thread(disconnect, profile)
+                elif data.get('action') == 'channels':
+                    result = {'channels': await asyncio.to_thread(channels, profile, str(data.get('api_key') or ''))}
+                else:
+                    result = await asyncio.to_thread(configure, profile, data, origin.rstrip('/') + '/api/platform/connect/webhook')
+            return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
+        except TenantPlatformError as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=403, headers={'Cache-Control': 'no-store'})
+        except Exception:
+            logger.exception('Connect settings request failed')
+            return web.json_response({'success': False, 'error': 'Connect ayarları saxlanmadı.'}, status=503, headers={'Cache-Control': 'no-store'})
+    return handle
+
+
+def webhook_handler(logger):
+    async def handle(request: web.Request) -> web.Response:
+        raw = await request.read()
+        signature = str(request.headers.get('x-connect-signature-256') or '')
+        try:
+            data = json.loads(raw.decode('utf-8'))
+            if not isinstance(data, dict):
+                raise TenantPlatformError('Connect webhook formatı düzgün deyil.')
+            accepted = await asyncio.to_thread(ingest, raw, signature, data)
+            return web.json_response({'accepted': accepted})
+        except TenantPlatformError as exc:
+            return web.json_response({'error': str(exc)}, status=401)
+        except Exception:
+            logger.exception('Connect webhook failed')
+            return web.json_response({'error': 'webhook_failed'}, status=500)
+    return handle
