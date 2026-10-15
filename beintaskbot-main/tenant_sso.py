@@ -51,9 +51,16 @@ def ensure_schema(cur) -> None:
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_product_entitlements (
         tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
         product TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'inactive'
-          CHECK (status IN ('inactive','trial','active','suspended','admin')),
+          CHECK (status IN ('inactive','trial','active','suspended')),
+        admin_access BOOLEAN NOT NULL DEFAULT FALSE,
         trial_ends_at TIMESTAMPTZ NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (tenant_id, product))""")
+    # Access control and billing are separate dimensions. Migrate the former
+    # legacy `admin` status without revoking existing explicitly granted access.
+    cur.execute("ALTER TABLE saas_product_entitlements ADD COLUMN IF NOT EXISTS admin_access BOOLEAN NOT NULL DEFAULT FALSE")
+    cur.execute("UPDATE saas_product_entitlements SET status='inactive', admin_access=TRUE WHERE status='admin'")
+    cur.execute("ALTER TABLE saas_product_entitlements DROP CONSTRAINT IF EXISTS saas_product_entitlements_status_check")
+    cur.execute("ALTER TABLE saas_product_entitlements ADD CONSTRAINT saas_product_entitlements_status_check CHECK (status IN ('inactive','trial','active','suspended'))")
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_product_members (
         tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
         actor_id BIGINT NOT NULL, product TEXT NOT NULL,
@@ -73,7 +80,7 @@ def _access(cur, tenant_id: str, actor_id: int) -> str | None:
       JOIN saas_product_entitlements e ON e.tenant_id=m.tenant_id AND e.product=m.product
       JOIN saas_tenant_members tm ON tm.tenant_id=m.tenant_id AND tm.telegram_id=m.actor_id AND tm.active=TRUE
       WHERE m.tenant_id=%s::uuid AND m.actor_id=%s AND m.product=%s AND m.active=TRUE
-        AND (e.status IN ('trial','active','admin') OR (e.status='suspended' AND FALSE))""",
+        AND (e.admin_access=TRUE OR e.status='active' OR (e.status='trial' AND e.trial_ends_at>now()))""",
       (tenant_id, actor_id, CONNECT_PRODUCT))
     row = cur.fetchone()
     return str(row['role']) if row else None
@@ -96,8 +103,8 @@ def _bootstrap_owner_access(cur, tenant_id: str, actor_id: int) -> str | None:
       WHERE tenant_id=%s::uuid AND product=%s""", (tenant_id, CONNECT_PRODUCT))
     if cur.fetchone():
         return None
-    cur.execute("""INSERT INTO saas_product_entitlements(tenant_id,product,status)
-      VALUES(%s::uuid,%s,'admin')""", (tenant_id, CONNECT_PRODUCT))
+    cur.execute("""INSERT INTO saas_product_entitlements(tenant_id,product,status,admin_access)
+      VALUES(%s::uuid,%s,'inactive',TRUE)""", (tenant_id, CONNECT_PRODUCT))
     cur.execute("""INSERT INTO saas_product_members(tenant_id,actor_id,product,role)
       VALUES(%s::uuid,%s,%s,'owner')""", (tenant_id, actor_id, CONNECT_PRODUCT))
     return 'owner'

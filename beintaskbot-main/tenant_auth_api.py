@@ -57,11 +57,28 @@ def _page(context: AuthApiContext, filename: str, missing: str) -> web.Response:
     return response
 
 
+def _product_destination(product: object) -> str:
+    """Return only the configured first-party Connect continuation."""
+    if str(product or '').casefold() != 'connect':
+        return '/app'
+    callback = str(os.environ.get('CONNECT_SSO_REDIRECT_URI') or '').rstrip('/')
+    target = urlsplit(callback)
+    if target.scheme == 'https' and target.hostname == 'connect.crm.pro.az' and target.path == '/admin' and not target.username and not target.password:
+        return 'https://connect.crm.pro.az/login?autostart=1'
+    return '/connector/login'
+
+
 def handlers(context: AuthApiContext) -> dict[str, Callable]:
     def request_ip(request: web.Request) -> str:
         # Railway terminates TLS; trust only the first forwarded address and
         # keep it solely for bounded abuse protection, never for identity.
         return str(request.headers.get('X-Forwarded-For') or request.remote or '').split(',',1)[0].strip()[:80]
+
+    async def auth_page(request: web.Request) -> web.Response:
+        product = str(request.query.get('product') or '')
+        if (request.path == '/connector/login' or product == 'connect') and context.member(request):
+            raise web.HTTPFound(_product_destination('connect'))
+        return _page(context, 'auth.html', 'Platform authentication page not found')
 
     async def sso_authorize(request: web.Request) -> web.Response:
         """Issue a one-time code only for the already authenticated company."""
@@ -85,17 +102,20 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             code = await asyncio.to_thread(context.sso.issue_code, tenant_id=str(profile['tenant_id']),
                 actor_id=int(profile['telegram_id']), client_id=client_id, redirect_uri=redirect_uri, code_challenge=challenge)
         except context.platform_error as exc:
-            return web.json_response({'error': 'access_denied', 'message': str(exc)}, status=403)
+            context.logger.info('Connect access denied for actor %s: %s', profile.get('telegram_id'), str(exc)[:120])
+            raise web.HTTPFound('/connector/access')
         separator = '&' if '?' in redirect_uri else '?'
         raise web.HTTPFound(f'{redirect_uri}{separator}code={code}&state={state}')
 
     async def connector_page(request: web.Request) -> web.Response:
-        """Send the public Beintaskbot connector entry URL to Connect login."""
-        callback = str(os.environ.get('CONNECT_SSO_REDIRECT_URI') or '').rstrip('/')
-        target = urlsplit(callback)
-        if target.scheme != 'https' or not target.hostname or target.username or target.password:
-            return web.Response(status=503, text='Вход в Connect временно недоступен. Попробуйте позже.')
-        raise web.HTTPFound(f'{target.scheme}://{target.netloc}/login')
+        """Serve the independent Connect landing page on the CRM domain."""
+        return _page(context, 'connector-landing.html', 'Страница Beintaskbot Connect не найдена.')
+
+    async def connector_access_page(request: web.Request) -> web.Response:
+        return _page(context, 'connector-access.html', 'Страница доступа Connect не найдена.')
+
+    async def connector_logout_page(request: web.Request) -> web.Response:
+        return _page(context, 'connector-logout.html', 'Страница выхода Connect не найдена.')
 
     async def sso_token(request: web.Request) -> web.Response:
         if context.sso is None:
@@ -116,7 +136,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             data = await request.json()
             result = await asyncio.to_thread(context.email_auth.request_registration,
                 name=(data or {}).get('name'), company_name=(data or {}).get('company_name'),
-                phone=(data or {}).get('phone'), email=(data or {}).get('email'), request_ip=request_ip(request))
+                phone=(data or {}).get('phone'), email=(data or {}).get('email'), request_ip=request_ip(request),
+                destination_product=(data or {}).get('destination_product'))
             return web.json_response({'success': True, **result})
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -128,7 +149,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if context.email_auth is None: return web.json_response({'success': False}, status=503)
         try:
             data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_confirmation, token=(data or {}).get('token'), password=(data or {}).get('password'))
-            response = web.json_response({'success': True, 'redirect': '/app'})
+            response = web.json_response({'success': True, 'redirect': _product_destination(result.get('destination_product'))})
             _set_session(response, context, result['tenant_id'], result['actor_id'])
             return response
         except context.platform_error as exc:
@@ -137,10 +158,21 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
     async def email_login(request: web.Request) -> web.Response:
         if context.email_auth is None: return web.json_response({'success': False}, status=503)
         try:
-            data = await request.json(); result = await asyncio.to_thread(context.email_auth.login, email=(data or {}).get('email'), password=(data or {}).get('password'), request_ip=request_ip(request))
+            data = await request.json(); data = data if isinstance(data, dict) else {}
+            result = await asyncio.to_thread(context.email_auth.login, email=data.get('email'), password=data.get('password'), request_ip=request_ip(request))
             if not result: return web.json_response({'success': False, 'error': 'Email və ya parol düzgün deyil.'}, status=401)
+            companies = await asyncio.to_thread(context.tenants_for_user, int(result['actor_id']))
+            requested_tenant = str(data.get('tenant_id') or '').strip()
+            if requested_tenant:
+                tenant = next((item for item in companies if str(item.get('id')) == requested_tenant), None)
+                if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
+            elif len(companies) > 1:
+                return web.json_response({'success': True, 'select_company': True,
+                    'companies': [{'id': item['id'], 'name': item['name']} for item in companies]})
+            else:
+                tenant = companies[0] if companies else {'id': result['tenant_id']}
             response = web.json_response({'success': True, 'redirect': '/app'})
-            _set_session(response, context, result['tenant_id'], result['actor_id'])
+            _set_session(response, context, str(tenant['id']), result['actor_id'])
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -148,7 +180,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
     async def password_reset(request: web.Request) -> web.Response:
         if context.email_auth is None: return web.json_response({'success': True})
         try:
-            data = await request.json(); await asyncio.to_thread(context.email_auth.request_password_reset, email=(data or {}).get('email'), request_ip=request_ip(request))
+            data = await request.json(); data = data if isinstance(data, dict) else {}
+            await asyncio.to_thread(context.email_auth.request_password_reset, email=data.get('email'), request_ip=request_ip(request), destination_product=data.get('destination_product'))
         except context.platform_error:
             # Keep this intentionally generic so an attacker cannot enumerate
             # customer addresses through the reset endpoint.
@@ -160,8 +193,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
     async def password_reset_confirm(request: web.Request) -> web.Response:
         if context.email_auth is None: return web.json_response({'success': False}, status=503)
         try:
-            data = await request.json(); await asyncio.to_thread(context.email_auth.complete_password_reset, token=(data or {}).get('token'), password=(data or {}).get('password'))
-            return web.json_response({'success': True})
+            data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_password_reset, token=(data or {}).get('token'), password=(data or {}).get('password'))
+            return web.json_response({'success': True, 'redirect': _product_destination(result.get('destination_product'))})
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
 
@@ -338,9 +371,11 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'email_link_request': email_link_request, 'email_link_confirm': email_link_confirm,
         'legacy_email_link_request': legacy_email_link_request,
         "onboarding_page": lambda request: _page(context, "onboarding.html", "Platform onboarding page not found"),
-        'auth_page': lambda request: _page(context, 'auth.html', 'Platform authentication page not found'),
+        'auth_page': auth_page,
         'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),
         'legacy_link_page': lambda request: _page(context, 'legacy-email-link.html', 'Legacy email link page not found'),
         'connector_page': connector_page,
+        'connector_access_page': connector_access_page,
+        'connector_logout_page': connector_logout_page,
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }

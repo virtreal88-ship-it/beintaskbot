@@ -30,6 +30,7 @@
     <form id="login" hidden>
       <label>Email<input name="email" required type="email" autocomplete="email"></label>
       <label>Пароль<input name="password" required type="password" autocomplete="current-password"></label>
+      <label id="company-picker" hidden>Компания<select name="tenant_id" id="tenant_id"></select></label>
       <button id="login-submit" type="submit">Войти</button>
       <button type="button" class="link" id="forgot">Восстановить пароль</button>
     </form>
@@ -55,19 +56,23 @@
     // `/login` is a first-class sign-in page.  Registration keeps the same
     // shared page at `/register`, while existing Telegram access remains below.
     const connectorLogin = location.pathname === '/connector/login';
-    const next = new URLSearchParams(location.search).get('next') || '';
-    const safeNext = next.startsWith('/') && !next.startsWith('//') && !next.includes('\\') ? next : '';
+    const params = new URLSearchParams(location.search);
+    const connectProduct = connectorLogin || params.get('product') === 'connect';
+    const next = params.get('next') || '';
+    const safeNext = next.startsWith('/api/platform/sso/authorize?') && !next.includes('\\') ? next : (connectProduct ? 'https://connect.crm.pro.az/login?autostart=1' : '');
     let login = location.pathname === '/login' || connectorLogin;
     function view() {
       $('register').hidden = login; $('login').hidden = !login;
       $('toggle').hidden = connectorLogin;
       $('telegram-link').hidden = connectorLogin;
-      $('brand').textContent = connectorLogin ? 'Beintaskbot Connect' : 'Beintaskbot';
+      $('brand').textContent = connectProduct ? 'Beintaskbot Connect' : 'Beintaskbot';
       $('toggle').textContent = login ? 'Создать новый аккаунт' : 'У меня уже есть аккаунт';
-      $('subtitle').textContent = connectorLogin ? 'Войдите в аккаунт Beintaskbot, чтобы продолжить в Connect.' : login ? 'Войдите в кабинет компании.' : 'Создайте рабочее пространство компании.';
+      $('subtitle').textContent = connectProduct ? (login ? 'Войдите в Beintaskbot, чтобы продолжить в Connect.' : 'Создайте аккаунт для Beintaskbot Connect.') : login ? 'Войдите в кабинет компании.' : 'Создайте рабочее пространство компании.';
       $('notice').textContent = '';
     }
     view();
+    const destination = connectProduct ? 'connect' : 'beintaskbot';
+    const destinationField = document.createElement('input'); destinationField.type='hidden'; destinationField.name='destination_product'; destinationField.value=destination; $('register').append(destinationField);
     $('toggle').onclick = () => { login = !login; view(); };
     $('register').onsubmit = async event => {
       event.preventDefault(); const button = $('register-submit');
@@ -80,13 +85,13 @@
     $('login').onsubmit = async event => {
       event.preventDefault(); const button = $('login-submit');
       setBusy(button, true, 'Входим…');
-      try { const result = await call('/api/platform/auth/email/login', Object.fromEntries(new FormData(event.target))); location.href = safeNext || result.redirect || '/app'; }
+      try { const form = Object.fromEntries(new FormData(event.target)); const result = await call('/api/platform/auth/email/login', form); if(result.select_company){const picker=$('company-picker'),select=$('tenant_id');select.replaceChildren(...result.companies.map(c=>{const option=document.createElement('option');option.value=c.id;option.textContent=c.name;return option}));picker.hidden=false;notice('Выберите компанию и нажмите «Войти» ещё раз.',true);return} location.href = safeNext || result.redirect || '/app'; }
       catch (error) { notice(error.message); } finally { setBusy(button, false); }
     };
     $('forgot').onclick = async () => {
       const button = $('forgot'); const email = $('login').email.value;
       setBusy(button, true, 'Отправляем письмо…');
-      try { await call('/api/platform/auth/password/reset', {email}); notice('Если этот email зарегистрирован, ссылка для восстановления отправлена.', true); }
+      try { await call('/api/platform/auth/password/reset', {email, destination_product: destination}); notice('Если этот email зарегистрирован, ссылка для восстановления отправлена.', true); }
       catch (error) { notice(error.message); } finally { setBusy(button, false); }
     };
   </script>
