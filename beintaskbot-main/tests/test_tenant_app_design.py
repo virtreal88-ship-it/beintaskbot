@@ -42,6 +42,20 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn('onClick={()=>setTab("settings")}', source)
         self.assertIn("panel.id === 'chakra-settings-root'", workspace)
 
+    def test_ai_agents_is_a_transport_independent_app_module(self):
+        app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
+        routes = (ROOT / 'tenant_web_routes.py').read_text(encoding='utf-8')
+        assets = (ROOT / 'tenant_web_assets.py').read_text(encoding='utf-8')
+        self.assertIn('id="aiAgentsNav" data-view="ai_agents"', app)
+        self.assertIn('id="view-ai_agents"', app)
+        self.assertIn('/assets/tenant-ai-agents.js', app)
+        self.assertIn("('agents', ai_agents_handler(member, origin, logger, 'agents'), ('GET', 'POST'))", routes)
+        self.assertIn('routes.extend(ai_agent_routes(context))', routes)
+        self.assertIn("('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js'", assets)
+        script = (ROOT / 'docs/tenant-ai-agents.js').read_text(encoding='utf-8')
+        self.assertNotIn("if (nav) { nav.hidden = true", script)
+        self.assertIn("(existing?.scopes||[])", script)
+
 
 if __name__ == '__main__':
     unittest.main()
