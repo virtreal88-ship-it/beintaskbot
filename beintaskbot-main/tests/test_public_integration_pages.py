@@ -18,6 +18,20 @@ def public_request(language=None):
 
 
 class PublicIntegrationPagesTests(unittest.TestCase):
+    def test_primary_product_landings_link_each_other_and_offer_three_languages(self):
+        crm = (ROOT / "docs" / "landing.html").read_text(encoding="utf-8")
+        connector = (ROOT / "docs" / "connector-landing.html").read_text(encoding="utf-8")
+        english = (ROOT / "docs" / "integration-en.html").read_text(encoding="utf-8")
+        russian = (ROOT / "docs" / "integration-ru.html").read_text(encoding="utf-8")
+
+        for language in ("az", "ru", "en"):
+            self.assertIn(f'data-language="{language}"', connector)
+        self.assertIn('/connector/?lang=az', crm)
+        self.assertIn('/connector/?lang=en', english)
+        self.assertIn('/connector/?lang=ru', russian)
+        self.assertIn('href="#support">Support</a>', english)
+        self.assertIn('data-i18n="crmFooter"', connector)
+
     def test_explicit_languages_map_to_existing_pages(self):
         for kind, language, filename in (
             ("site", "en", "integration-en.html"),
