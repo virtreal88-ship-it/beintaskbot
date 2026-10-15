@@ -32,6 +32,7 @@ class AuthApiContext:
     logger: object
     email_auth: object | None = None
     sso: object | None = None
+    legacy_member: Callable[..., dict | None] | None = None
 
 
 def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int) -> None:
@@ -173,6 +174,36 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             context.logger.exception('Email link request failed')
             return web.json_response({'success': False, 'error': 'Email bağlantısı alınmadı.'}, status=500)
 
+    async def legacy_email_link_request(request: web.Request) -> web.Response:
+        """Let an authenticated legacy owner attach an email login once.
+
+        This is intentionally outside `/api/platform/`: the legacy Web App
+        middleware validates the signed Telegram/browser session first.  It
+        cannot create a tenant or grant a new role; it only binds an email to
+        the actor already authenticated in that session.
+        """
+        if context.email_auth is None or context.legacy_member is None:
+            return web.json_response({'success': False}, status=503)
+        if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
+            return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
+        profile = context.legacy_member(request)
+        if not profile or profile.get('role') != 'owner':
+            return web.json_response({'success': False, 'error': 'Şirkət sahibinin təsdiqi tələb olunur.'}, status=403)
+        try:
+            data = await request.json()
+            result = await asyncio.to_thread(
+                context.email_auth.request_email_link,
+                tenant_id=str(profile['tenant_id']), actor_id=int(profile['telegram_id']),
+                display_name=profile.get('display_name') or 'İstifadəçi',
+                email=(data or {}).get('email'), request_ip=request_ip(request),
+            )
+            return web.json_response({'success': True, **result})
+        except context.platform_error as exc:
+            return web.json_response({'success': False, 'error': str(exc)}, status=400)
+        except Exception:
+            context.logger.exception('Legacy email link request failed')
+            return web.json_response({'success': False, 'error': 'Email bağlantısı alınmadı.'}, status=500)
+
     async def email_link_confirm(request: web.Request) -> web.Response:
         if context.email_auth is None: return web.json_response({'success': False}, status=503)
         try:
@@ -291,8 +322,10 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'email_login': email_login, 'password_reset': password_reset,
         'password_reset_confirm': password_reset_confirm,
         'email_link_request': email_link_request, 'email_link_confirm': email_link_confirm,
+        'legacy_email_link_request': legacy_email_link_request,
         "onboarding_page": lambda request: _page(context, "onboarding.html", "Platform onboarding page not found"),
         'auth_page': lambda request: _page(context, 'auth.html', 'Platform authentication page not found'),
         'confirm_page': lambda request: _page(context, 'auth-confirm.html', 'Platform confirmation page not found'),
+        'legacy_link_page': lambda request: _page(context, 'legacy-email-link.html', 'Legacy email link page not found'),
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }
