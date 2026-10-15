@@ -17453,6 +17453,11 @@ async def serve_deal_tags_script(request: web.Request) -> web.Response:
                             headers={'Cache-Control': 'no-cache'})
 
 
+async def serve_landing_language_script(request: web.Request) -> web.Response:
+    return web.FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'landing-language.js'),
+                            headers={'Cache-Control': 'no-cache'})
+
+
 async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
     from kommo_phone_duplicates_api import handler
     return await handler(_deal_request_user, _authorized_deal_lead, _user_can_view_personal_lead,
@@ -18651,6 +18656,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get('/api/platform/hot-orders', hot_order_api)
     app_web.router.add_post('/api/platform/hot-orders', hot_order_api)
     app_web.router.add_get('/assets/deal-tags.js', serve_deal_tags_script)
+    app_web.router.add_get('/assets/landing-language.js', serve_landing_language_script)
     app_web.router.add_get('/assets/deal-phone-duplicates.js', lambda request: web.FileResponse(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'docs', 'deal-phone-duplicates.js'), headers={'Cache-Control': 'no-cache'}))
     app_web.router.add_get('/api/deal/duplicates', handle_api_deal_duplicates)
