@@ -10,6 +10,10 @@ MAX_BYTES = 20 * 1024 * 1024
 FORMATS = {'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav',
            'audio/x-wav': 'wav', 'audio/mp4': 'm4a', 'audio/webm': 'webm', 'video/mp4': 'mp4',
            'audio/flac': 'flac', 'audio/x-flac': 'flac', 'application/ogg': 'ogg'}
+AUDIO_TYPES = frozenset(FORMATS)
+IMAGE_FORMATS = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif'}
+IMAGE_TYPES = frozenset(IMAGE_FORMATS)
+SUPPORTED_TYPES = {**FORMATS, **IMAGE_FORMATS}
 
 
 def public_addresses(host):
@@ -41,13 +45,13 @@ def download(url, hosts):
         path = parsed.path or '/'
         if parsed.query:
             path += '?' + parsed.query
-        connection.request('GET', path, headers={'Accept': 'audio/*,video/mp4', 'Accept-Encoding': 'identity'})
+        connection.request('GET', path, headers={'Accept': 'audio/*,video/mp4,image/jpeg,image/png,image/webp,image/gif', 'Accept-Encoding': 'identity'})
         response = connection.getresponse()
         if response.status != 200 or response.getheader('Content-Encoding', 'identity') != 'identity':
             raise ValueError('Media unavailable')
         content_type = response.getheader('Content-Type', '').split(';')[0].lower().strip()
-        if content_type not in FORMATS:
-            raise ValueError('Unsupported audio format')
+        if content_type not in SUPPORTED_TYPES:
+            raise ValueError('Unsupported media format')
         size = response.getheader('Content-Length')
         if size and (int(size) <= 0 or int(size) > MAX_BYTES):
             raise ValueError('Audio too large')
@@ -65,6 +69,6 @@ def download(url, hosts):
         content = b''.join(chunks)
         if not content or len(content) > MAX_BYTES:
             raise ValueError('Audio too large')
-        return content, FORMATS[content_type], content_type
+        return content, SUPPORTED_TYPES[content_type], content_type
     finally:
         connection.close()
