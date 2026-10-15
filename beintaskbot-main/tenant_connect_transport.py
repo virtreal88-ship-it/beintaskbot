@@ -188,26 +188,49 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
             if not cur.fetchone():
                 return False
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
-            if not cur.fetchone():
-                conn.commit(); return False
-            phone = conversation.split('@', 1)[0]
-            cur.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,contact_name,phone,last_message_at)
+            inserted_event = bool(cur.fetchone())
+            # A previous delivery may have committed the durable CRM copy just
+            # before a transient queue failure.  Do not lose the AI job merely
+            # because Connect retries the same signed event: enqueue() itself
+            # is idempotent on the message fingerprint.
+            if not inserted_event:
+                cur.execute('''SELECT lead_id FROM saas_connect_conversations
+                  WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s''',
+                            (tenant, channel_id, conversation))
+                previous = cur.fetchone()
+                conn.commit()
+                if not previous:
+                    return False
+                accepted = True
+                queued_payload = (tenant, channel_id, conversation, int(previous['lead_id']),
+                                  str(data.get('id') or event_id), event_id,
+                                  str(data.get('text') or ''), str(data.get('type') or 'text'))
+                # Exit the cursor block; the common, idempotent enqueue below
+                # restores a missing job without duplicating CRM history.
+                continue_processing = False
+            else:
+                continue_processing = True
+            if not continue_processing:
+                pass
+            else:
+                phone = conversation.split('@', 1)[0]
+                cur.execute('''INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,contact_name,phone,last_message_at)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s,now()) ON CONFLICT(tenant_id,connect_channel_id,conversation_id) DO UPDATE
               SET last_message_at=now(),updated_at=now() RETURNING lead_id''', (tenant,channel_id,conversation,phone,phone))
-            lead_id = int(cur.fetchone()['lead_id'])
-            occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
-            cur.execute('''INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,name,contact_name,phone,channel,last_message,last_message_at,source_updated_at,raw)
+                lead_id = int(cur.fetchone()['lead_id'])
+                occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
+                cur.execute('''INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,name,contact_name,phone,channel,last_message,last_message_at,source_updated_at,raw)
               VALUES(%s::uuid,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s::timestamptz,%s::jsonb)
               ON CONFLICT(tenant_id,kommo_lead_id) DO UPDATE SET contact_name=EXCLUDED.contact_name,phone=EXCLUDED.phone,channel=EXCLUDED.channel,last_message=EXCLUDED.last_message,last_message_at=EXCLUDED.last_message_at,source_updated_at=EXCLUDED.source_updated_at,raw=EXCLUDED.raw,synced_at=now()''',
-                        (tenant,lead_id,phone,phone,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation})))
-            external = 'connect:' + str(data.get('id') or event_id)
-            cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
+                            (tenant,lead_id,phone,phone,phone,'connect:'+channel_id,str(data.get('text') or ''),occurred,occurred,_json({'source':'connect','channel_id':channel_id,'conversation_id':conversation})))
+                external = 'connect:' + str(data.get('id') or event_id)
+                cur.execute('''INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,raw)
               VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
-                        (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),' ',occurred,_json(data)))
-        conn.commit()
-        accepted = True
-        queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
-                          str(data.get('text') or ''), str(data.get('type') or 'text'))
+                            (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),' ',occurred,_json(data)))
+                conn.commit()
+                accepted = True
+                queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
+                                  str(data.get('text') or ''), str(data.get('type') or 'text'))
     # Queue only after the incoming event and CRM copy are committed.  A queue
     # outage is retried by Connect without creating a duplicate CRM message.
     if accepted and queued_payload:

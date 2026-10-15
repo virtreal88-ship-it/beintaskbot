@@ -285,12 +285,21 @@ def read_test_mode(profile):
                 ON i.tenant_id=b.tenant_id AND i.provider='kommo'
               WHERE b.tenant_id=%s::uuid''', (tenant,))
             row = cur.fetchone()
+            cur.execute('''SELECT enabled,emergency_stop,channel_id,conversation_id,verified,verified_at,updated_at
+              FROM saas_ai_agent_connect_test_mode WHERE tenant_id=%s::uuid''', (tenant,))
+            connect_row = cur.fetchone()
         conn.commit()
+    connect = dict(connect_row) if connect_row else {'enabled': False, 'emergency_stop': False,
+        'channel_id': '', 'conversation_id': '', 'verified': False, 'verified_at': None}
+    for key in ('verified_at', 'updated_at'):
+        if connect.get(key):
+            connect[key] = connect[key].isoformat()
     if not row:
         return {'enabled': False, 'emergency_stop': False, 'verified': False,
             'protection_state': 'blocked_unbound', 'account_domain': '', 'connected_account_domain': '',
             'company_phone': COMPANY_PHONE, 'client_phone': CLIENT_PHONE, 'channel_id': '',
-            'lead_id': None, 'contact_id': None, 'talk_id': '', 'chat_id': '', 'verified_at': None}
+            'lead_id': None, 'contact_id': None, 'talk_id': '', 'chat_id': '', 'verified_at': None,
+            'connect': connect}
     result = dict(row)
     for key in ('tenant_id', 'updated_by'):
         result.pop(key, None)
@@ -303,6 +312,7 @@ def read_test_mode(profile):
     result['protection_state'] = ('emergency_stopped' if result.get('emergency_stop') else
         'active_exact_binding' if result.get('enabled') and result.get('verified') else
         'blocked_unverified' if any(result.get(k) for k in ('lead_id','talk_id','chat_id')) else 'blocked_unbound')
+    result['connect'] = connect
     return result
 
 

@@ -149,8 +149,13 @@ def list_agents(profile):
 
 def configuration_options(profile):
     """Tenant-scoped labels for the agent editor; never trusts browser IDs."""
+    # Connect was introduced after the AI editor.  Ensure its additive tables
+    # exist even for tenants that have never opened Connect, so the editor
+    # remains available without a Kommo integration.
+    from tenant_connect_transport import _schema as ensure_connect_schema
     with _connect() as conn:
         ensure_schema(conn)
+        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, _ = _authorize(cur, profile)
             cur.execute("SELECT pipeline_id,name FROM saas_tenant_pipelines WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name,pipeline_id",(tenant,))
@@ -241,12 +246,17 @@ def save_agent(profile, data, *, agent_id=None):
                         or patch['model'] not in allowed_models):
                     raise TenantLinearError('Model yalnız aktiv mövcud Chat AI provayderindən seçilə bilər.', 409)
             for scope in patch.get('scopes', []):
-                cur.execute('''SELECT 1 FROM saas_tenant_pipelines p
-                  JOIN saas_tenant_pipeline_stages s ON s.tenant_id=p.tenant_id AND s.pipeline_id=p.pipeline_id
-                  WHERE p.tenant_id=%s::uuid AND p.pipeline_id=%s AND s.stage_id=%s
-                    AND p.active=TRUE''', (tenant, scope['pipeline_id'], scope['stage_id']))
+                if scope.get('provider', 'kommo') == 'connect':
+                    cur.execute('''SELECT 1 FROM saas_connect_channels
+                      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active=TRUE''',
+                                (tenant, scope['channel_id']))
+                else:
+                    cur.execute('''SELECT 1 FROM saas_tenant_pipelines p
+                      JOIN saas_tenant_pipeline_stages s ON s.tenant_id=p.tenant_id AND s.pipeline_id=p.pipeline_id
+                      WHERE p.tenant_id=%s::uuid AND p.pipeline_id=%s AND s.stage_id=%s
+                        AND p.active=TRUE''', (tenant, scope['pipeline_id'], scope['stage_id']))
                 if not cur.fetchone():
-                    raise TenantLinearError('Vərəq və mərhələ bu şirkətdə aktiv deyil.')
+                    raise TenantLinearError('Seçilmiş mənbə və ya kanal bu şirkətdə aktiv deyil.')
             if creating:
                 cur.execute('SELECT count(*) AS total FROM saas_ai_agents WHERE tenant_id=%s::uuid', (tenant,))
                 if int((cur.fetchone() or {}).get('total') or 0) >= MAX_AGENTS:
