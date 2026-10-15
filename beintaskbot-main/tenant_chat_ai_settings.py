@@ -3,6 +3,7 @@ import json
 from tenant_platform import _connect, _fernet
 from tenant_chat_ai_schema import ensure_schema
 from tenant_chat_ai_policy import configuration
+from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError, identifier
 
 
@@ -19,8 +20,10 @@ def authorize(cur, session):
       JOIN saas_tenants t ON t.id=m.tenant_id
       WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant, user))
     person = cur.fetchone()
-    if not person or person.get('active') is not True or person.get('status') != 'active':
+    if not person or person.get('active') is not True:
         raise TenantLinearError('Bu şirkətdə aktiv üzvlük tələb olunur.', 403)
+    if not tenant_status_allows_management(person.get('status')):
+        raise TenantLinearError('Bu şirkətdə Chat AI ayarlarını idarə etmək mümkün deyil.', 403)
     if person.get('role') not in {'owner', 'admin'}:
         raise TenantLinearError('Chat AI ayarlarını yalnız şirkət sahibi və ya admin dəyişə bilər.', 403)
     return tenant, user

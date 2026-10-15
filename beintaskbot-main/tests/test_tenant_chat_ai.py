@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, MagicMock, patch
 import test_tenant_hot_orders as loaders
 from tenant_chat_ai_policy import configuration, command, history, media_address, media_identity, fingerprint
+from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_chat_media import public_addresses, download
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy, validate_workflow_patch
@@ -46,20 +47,23 @@ class SettingsAuthorization(unittest.TestCase):
     def setUpClass(cls):
         tree=ast.parse((Path(__file__).resolve().parents[1]/'tenant_chat_ai_settings.py').read_text(encoding='utf-8-sig'))
         node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='authorize')
-        namespace={'TenantLinearError':TenantLinearError,'identifier':lambda value:value}
+        namespace={'TenantLinearError':TenantLinearError,'identifier':lambda value:value,
+                   'tenant_status_allows_management':tenant_status_allows_management}
         exec(compile(ast.Module(body=[node],type_ignores=[]),'chat-ai-authorize','exec'),namespace)
         cls.authorize=staticmethod(namespace['authorize'])
 
     def test_owner_and_admin_can_manage_chat_ai_settings(self):
         for role in ('owner','admin'):
-            cur=Mock();cur.fetchone.return_value={'role':role,'active':True,'status':'active'}
-            self.assertEqual(self.authorize(cur,SESSION),(TENANT,20))
+            for status in ('active','onboarding','ready_for_integration'):
+                cur=Mock();cur.fetchone.return_value={'role':role,'active':True,'status':status}
+                self.assertEqual(self.authorize(cur,SESSION),(TENANT,20))
 
     def test_other_roles_inactive_members_and_suspended_tenants_are_denied(self):
         for person in (
             {'role':'manager','active':True,'status':'active'},
             {'role':'admin','active':False,'status':'active'},
             {'role':'admin','active':True,'status':'suspended'},
+            {'role':'admin','active':True,'status':'archived'},
             None,
         ):
             cur=Mock();cur.fetchone.return_value=person
