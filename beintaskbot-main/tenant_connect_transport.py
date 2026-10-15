@@ -45,7 +45,16 @@ def _owner(profile: dict) -> None:
         raise TenantPlatformError('Connect bağlantısını yalnız administrator idarə edə bilər.')
 
 
+def _public_channel(row: dict) -> dict:
+    """Return JSON-safe channel metadata from a PostgreSQL row."""
+    return {**row, 'connect_channel_id': str(row['connect_channel_id'])}
+
+
 def _request(key: str, method: str, path: str, payload: dict | None = None) -> dict:
+    # HTTP header values must be Latin-1 encodable. Connect-generated API keys
+    # are ASCII; fail clearly if a copied key contains a look-alike character.
+    if not key or not key.isascii() or any(ord(char) < 33 or ord(char) == 127 for char in key):
+        raise TenantPlatformError('Connect API açarı düzgün deyil. Açarı Connect panelindən yenidən kopyalayın.')
     try:
         response = requests.request(method, CONNECT_URL + path, headers={'x-api-key': key, 'Accept': 'application/json'},
                                     json=payload, timeout=(5, 20), allow_redirects=False)
@@ -70,7 +79,7 @@ def status(profile: dict) -> dict:
             cur.execute("SELECT status,metadata,updated_at FROM saas_tenant_integrations WHERE tenant_id=%s::uuid AND provider='connect'", (tenant,))
             row = cur.fetchone()
             cur.execute("SELECT connect_channel_id,name,status,active FROM saas_connect_channels WHERE tenant_id=%s::uuid ORDER BY name", (tenant,))
-            channels = list(cur.fetchall())
+            channels = [_public_channel(channel) for channel in cur.fetchall()]
     return {'connected': bool(row and row['status'] == 'connected'), 'channels': channels,
             'updated_at': row['updated_at'].isoformat() if row and row.get('updated_at') else None,
             'metadata': (row or {}).get('metadata') or {}}

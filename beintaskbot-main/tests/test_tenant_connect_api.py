@@ -1,5 +1,7 @@
 import ast
+import json
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +29,20 @@ class Api(unittest.TestCase):
         self.assertEqual(response['status'], 403)
         self.assertEqual(response['body']['error'], 'Sorğunun mənbəyi düzgün deyil.')
         self.assertEqual(response['headers']['Cache-Control'], 'no-store')
+
+    def test_channel_rows_are_json_safe(self):
+        tree = ast.parse((ROOT / 'tenant_connect_transport.py').read_text(encoding='utf-8-sig'))
+        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == '_public_channel')
+        namespace = {}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'tenant_connect_transport.py', 'exec'), namespace)
+        channel_id = uuid.uuid4()
+
+        result = namespace['_public_channel']({
+            'connect_channel_id': channel_id, 'name': 'WhatsApp', 'status': 'connected', 'active': True,
+        })
+
+        self.assertEqual(result['connect_channel_id'], str(channel_id))
+        self.assertEqual(json.loads(json.dumps(result))['name'], 'WhatsApp')
 
 
 if __name__ == '__main__':
