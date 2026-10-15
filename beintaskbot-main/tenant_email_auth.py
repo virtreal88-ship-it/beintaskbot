@@ -274,7 +274,20 @@ def request_email_link(*, tenant_id: str, actor_id: int, display_name: object,
             cur.execute('SELECT * FROM saas_auth_users WHERE email=%s FOR UPDATE', (address,))
             user = cur.fetchone()
             if user and int(user['actor_id']) != int(actor_id):
-                raise TenantPlatformError('Bu email artıq başqa hesabla bağlıdır.')
+                # A stale, unverified signup has not established an account
+                # or a tenant yet.  The current signed CRM owner can safely
+                # finish that signup for their own address; confirmation is
+                # still sent to the mailbox before any password is created.
+                # Never transfer an account that has been verified or tied to
+                # a tenant: that would allow one CRM session to take over a
+                # real, independent identity.
+                if user.get('verified_at') or user.get('tenant_id'):
+                    raise TenantPlatformError('Bu email artıq başqa hesabla bağlıdır.')
+                cur.execute('''UPDATE saas_auth_users
+                    SET actor_id=%s, tenant_id=%s::uuid, display_name=%s,
+                        updated_at=now()
+                    WHERE id=%s''',
+                    (int(actor_id), tenant_id, _name(display_name, 'Adınızı'), user['id']))
             if not user:
                 user_id = uuid.uuid4()
                 cur.execute('''INSERT INTO saas_auth_users(id,actor_id,email,display_name,tenant_id)
