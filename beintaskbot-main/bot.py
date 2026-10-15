@@ -18520,6 +18520,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         cookie_ttl=_TENANT_SESSION_TTL_SEC,
         base_dir=os.path.dirname(os.path.abspath(__file__)), logger=logger,
         email_auth=tenant_email_auth, sso=tenant_sso,
+        legacy_member=_webapp_ai_member_from_request,
     ))
     app_web.router.add_post("/api/platform/register", auth_api["register"])
     app_web.router.add_post("/api/platform/login", auth_api["login"])
@@ -18529,6 +18530,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_post('/api/platform/auth/password/reset', auth_api['password_reset'])
     app_web.router.add_post('/api/platform/auth/password/reset/confirm', auth_api['password_reset_confirm'])
     app_web.router.add_post('/api/platform/auth/email/link/request', auth_api['email_link_request'])
+    app_web.router.add_post('/api/legacy-auth/email/link/request', auth_api['legacy_email_link_request'])
     app_web.router.add_post('/api/platform/auth/email/link/confirm', auth_api['email_link_confirm'])
     app_web.router.add_get('/api/platform/sso/authorize', auth_api['sso_authorize'])
     app_web.router.add_post('/api/platform/sso/token', auth_api['sso_token'])
@@ -18665,6 +18667,7 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get('/auth/confirm', auth_api['confirm_page'])
     app_web.router.add_get('/auth/reset', auth_api['confirm_page'])
     app_web.router.add_get('/auth/link', auth_api['confirm_page'])
+    app_web.router.add_get('/auth/link-legacy', auth_api['legacy_link_page'])
     app_web.router.add_get('/login/telegram', auth_api['onboarding_page'])
     app_web.router.add_get("/setup", auth_api["onboarding_page"])
     # Also accept /invite?token=…; some mobile Telegram clients rewrite a
