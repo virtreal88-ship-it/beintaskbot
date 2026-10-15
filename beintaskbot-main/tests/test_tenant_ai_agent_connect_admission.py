@@ -67,6 +67,20 @@ class ConnectAdmissionTests(unittest.TestCase):
                     'conversation_id': 'test-conversation',
                 }))
 
+    def test_setup_stage_tenants_can_use_connect_but_not_archived_tenants(self):
+        for status in ('onboarding', 'ready_for_integration', 'active'):
+            cursor = Cursor({'enabled': True, 'emergency_stop': False,
+                             'operating_mode': 'active', 'status': status})
+            with self.subTest(status=status), \
+                 patch.object(connect_ai, '_connect', return_value=Connection(cursor)), \
+                 patch.object(connect_ai, 'ensure_schema'), \
+                 patch.object(connect_ai, 'runtime_flag', return_value=True):
+                self.assertTrue(connect_ai.allowed({
+                    'provider': 'connect', 'tenant_id': '00000000-0000-0000-0000-000000000001',
+                    'channel_id': '00000000-0000-0000-0000-000000000002',
+                    'conversation_id': 'test-conversation',
+                }))
+
     def test_server_ai_agents_flag_blocks_connect_queue_admission(self):
         with patch.object(connect_ai, 'runtime_flag', return_value=False), \
              patch.object(connect_ai, '_connect') as database:

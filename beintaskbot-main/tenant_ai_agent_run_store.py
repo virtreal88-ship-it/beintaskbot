@@ -3,6 +3,7 @@ import json
 import uuid
 
 from tenant_ai_agents_schema import ensure_schema
+from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _fernet, _json
 
@@ -45,8 +46,9 @@ def claim_next():
             cur.execute('''SELECT j.* FROM saas_ai_agent_jobs j
               JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id AND a.enabled=TRUE
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
-              JOIN saas_tenants t ON t.id=j.tenant_id AND t.status='active'
+              JOIN saas_tenants t ON t.id=j.tenant_id
               WHERE j.state='queued' AND j.due_at<=now()
+              AND (t.status='active' OR (j.provider='connect' AND t.status IN ('onboarding','ready_for_integration')))
               AND (cfg.operating_mode='active' OR (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
                 JOIN saas_tenant_webhook_events ce ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint
                 WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
@@ -132,7 +134,7 @@ def load_agent_config(job, *, with_block_reason=False):
     reason = None
     if not row:
         reason = 'config_row_missing'
-    elif row['tenant_status'] != 'active':
+    elif not tenant_status_allows_ai(row['tenant_status'], job.get('provider')):
         reason = 'tenant_inactive'
     elif row['agent_enabled'] is not True:
         reason = 'agent_disabled'
@@ -230,7 +232,7 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if not row:
                 raise TenantLinearError('Agent işi yenilənib.', 409)
             config = row['metadata'] if isinstance(row.get('metadata'), dict) else {}
-            if (row['tenant_status']!='active' or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
+            if (not tenant_status_allows_ai(row['tenant_status'],job.get('provider')) or row['settings_enabled'] is not True or row.get('emergency_stop') is True or row['agent_enabled'] is not True
                     or row['conversation_state'] in {'human','paused'}
                     or config.get('enabled') is not True or config.get('consent') is not True or not row.get('secrets')):
                 raise TenantLinearError('AI Agents və mövcud Chat AI ayarları aktiv deyil.', 409)
@@ -328,7 +330,7 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
                     or str(current['settings_version'])!=reservation['settings_version']
                     or current['conversation_state'] in {'human','paused'}
                     or current['conversation_revision']!=reservation.get('conversation_revision')
-                    or current['tenant_status']!='active' or current.get('emergency_stop') is True
+                    or not tenant_status_allows_ai(current['tenant_status'],job.get('provider')) or current.get('emergency_stop') is True
                     or (current.get('operating_mode')!='active' and current.get('test_mode_allowed') is not True)
                     or str(current['config_version'])!=reservation['config_version']
                     or config.get('consent') is not True):

@@ -6,6 +6,7 @@ from tenant_ai_agents_policy import (MAX_AGENTS, MAX_SOURCES, agent as validate_
     company_settings, knowledge as validate_knowledge, chunk_text, trigger as validate_trigger, safety_policy)
 from tenant_ai_agents_schema import ensure_schema
 from tenant_linear_policy import TenantLinearError, identifier
+from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_platform import _connect, _json
 
 
@@ -21,8 +22,12 @@ def _authorize(cur, profile):
       FROM saas_tenant_members m JOIN saas_tenants t ON t.id=m.tenant_id
       WHERE m.tenant_id=%s::uuid AND m.telegram_id=%s FOR SHARE OF m,t''', (tenant_id, actor))
     row = cur.fetchone()
-    if not row or not row.get('active') or row.get('status') != 'active':
-        raise TenantLinearError('İcazə yoxdur.', 403)
+    if not row:
+        raise TenantLinearError('Bu hesabın seçilmiş şirkətdə aktiv üzvlüyü yoxdur. Şirkəti dəyişin və ya yenidən daxil olun.', 403)
+    if not row.get('active'):
+        raise TenantLinearError('Bu şirkətdəki üzvlüyünüz deaktiv edilib. Şirkət sahibindən girişinizi yoxlamağı xahiş edin.', 403)
+    if not tenant_status_allows_management(row.get('status')):
+        raise TenantLinearError('Bu şirkət arxivdədir və ya dayandırılıb. AI Agents yalnız aktiv şirkətdə idarə oluna bilər.', 403)
     if row.get('role') == 'owner':
         return tenant_id, actor
     if row.get('role') != 'admin':

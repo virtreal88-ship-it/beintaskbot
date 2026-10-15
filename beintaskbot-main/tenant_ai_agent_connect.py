@@ -10,6 +10,7 @@ import hashlib
 
 from tenant_ai_agents_schema import ensure_schema
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+from tenant_ai_agent_access import tenant_status_allows_ai
 from tenant_platform import _connect, _json
 
 
@@ -56,7 +57,7 @@ def allowed(job: dict) -> bool:
               WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected' FOR SHARE OF i,c''',
                         (channel, tenant))
             connected = bool(cur.fetchone())
-            tenant_active = str(settings.get('status') or '') == 'active'
+            tenant_active = tenant_status_allows_ai(settings.get('status'), 'connect')
             if settings.get('operating_mode') == 'active':
                 result = bool(tenant_active and connected and settings.get('enabled') is True
                               and settings.get('emergency_stop') is not True)
