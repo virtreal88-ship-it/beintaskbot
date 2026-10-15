@@ -11,6 +11,17 @@ For reply, greet the client only if there is no earlier SALES MANAGER message. N
 When audio is missing, clearly disclose that part of the conversation was not analyzed. Never send messages or perform actions.'''
 
 
+class ChatAIProviderError(RuntimeError):
+    """Safe provider failure detail for logs and diagnostics.
+
+    The provider body can contain account and request information, so retain
+    only its HTTP status.  Never include an API key, prompt or model response.
+    """
+    def __init__(self, status_code):
+        self.status_code = int(status_code)
+        super().__init__('Chat AI provider returned HTTP ' + str(self.status_code))
+
+
 def generate(key, model, mode, lines, draft, *, instructions=None, extra_context=None, images=None):
     """Generate one draft for both the Chat AI and the existing AI Agents.
 
@@ -37,7 +48,7 @@ def generate(key, model, mode, lines, draft, *, instructions=None, extra_context
               'input': request_input},
         timeout=(5, 60), allow_redirects=False)
     if response.status_code != 200:
-        raise ValueError('Chat AI unavailable')
+        raise ChatAIProviderError(response.status_code)
     payload = response.json()
     if payload.get('status') != 'completed':
         raise ValueError('Incomplete chat AI response')

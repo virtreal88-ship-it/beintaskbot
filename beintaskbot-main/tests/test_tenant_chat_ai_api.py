@@ -100,6 +100,16 @@ class Provider(unittest.TestCase):
         self.assertEqual(content[1]['type'],'input_image')
         self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
 
+    def test_provider_failure_keeps_response_private_but_records_http_status(self):
+        from unittest.mock import patch
+        from tenant_chat_ai_provider import ChatAIProviderError
+        response=Mock(status_code=401);response.text='private provider response'
+        with patch('tenant_chat_ai_provider.requests.post',return_value=response):
+            with self.assertRaises(ChatAIProviderError) as caught:
+                self.generate('company-key','text-model','reply',[],'')
+        self.assertEqual(caught.exception.status_code,401)
+        self.assertNotIn('private provider response',str(caught.exception))
+
     def test_audio_uploaded_as_bytes_without_remote_media_url(self):
         from unittest.mock import patch
         response=Mock(status_code=200);response.json.return_value={'text':'transcript'}
