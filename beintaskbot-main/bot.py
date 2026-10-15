@@ -58,6 +58,7 @@ from tenant_members_api import MemberApiContext, handlers as tenant_member_handl
 from tenant_auth_api import AuthApiContext, handlers as tenant_auth_handlers, telegram_display_name
 import tenant_email_auth
 import tenant_sso
+from tenant_connect_access_api import ConnectAccessContext, handler as tenant_connect_access_handler
 from tenant_task_api import TaskApiContext, handlers as tenant_task_handlers
 from tenant_deal_api import DealApiContext, handlers as tenant_deal_handlers
 from tenant_workflow_api import WorkflowApiContext, handlers as tenant_workflow_handlers
@@ -18620,6 +18621,13 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     ))
     app_web.router.add_get("/api/platform/members", member_api["members"])
     app_web.router.add_post("/api/platform/members", member_api["members"])
+    connect_access_api = tenant_connect_access_handler(ConnectAccessContext(
+        member=_tenant_member_from_request, access=tenant_sso.connect_access,
+        update_entitlement=tenant_sso.update_connect_entitlement, set_member=tenant_sso.set_connect_member,
+        platform_error=TenantPlatformError,
+    ))
+    app_web.router.add_get('/api/platform/connect/access', connect_access_api)
+    app_web.router.add_post('/api/platform/connect/access', connect_access_api)
     app_web.router.add_get('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/task-approvals', task_api["approvals"])
     app_web.router.add_post('/api/platform/crm/tasks/complete', task_api["complete"])

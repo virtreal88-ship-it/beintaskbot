@@ -18,6 +18,7 @@ from tenant_platform_core import TenantPlatformError, _connect, _ensure_schema, 
 
 CONNECT_CLIENT_ID = "beintaskbot-connect"
 CONNECT_PRODUCT = "connect"
+PRODUCT_ROLES = {'owner', 'admin', 'viewer'}
 
 
 def _hash(value: str) -> str:
@@ -153,3 +154,67 @@ def exchange_code(*, code: str, verifier: str, client_id: str, redirect_uri: str
     return {'actor_id': int(row['actor_id']), 'tenant_id': str(row['tenant_id']), 'role': str(row['role']),
             'email': str(auth_user['email']).strip().lower() if auth_user and auth_user.get('email') else None,
             'expires_in': 300, 'product': CONNECT_PRODUCT}
+
+
+def connect_access(*, tenant_id: str, owner_id: int) -> dict:
+    """Return only one tenant's Connect entitlement and active employees."""
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            ensure_schema(cur)
+            cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE", (tenant_id, owner_id))
+            if not (row := cur.fetchone()) or str(row['role']) != 'owner':
+                raise TenantPlatformError('Yalnız şirkət sahibi Connect girişlərini idarə edə bilər.')
+            cur.execute("SELECT status,admin_access,trial_ends_at,updated_at FROM saas_product_entitlements WHERE tenant_id=%s::uuid AND product=%s", (tenant_id, CONNECT_PRODUCT))
+            entitlement = cur.fetchone() or {'status': 'inactive', 'admin_access': False, 'trial_ends_at': None, 'updated_at': None}
+            cur.execute("""SELECT tm.telegram_id,tm.display_name,tm.role AS crm_role,pm.role AS connect_role,pm.active AS connect_active
+              FROM saas_tenant_members tm LEFT JOIN saas_product_members pm
+                ON pm.tenant_id=tm.tenant_id AND pm.actor_id=tm.telegram_id AND pm.product=%s
+              WHERE tm.tenant_id=%s::uuid AND tm.active=TRUE ORDER BY tm.role='owner' DESC,tm.display_name""", (CONNECT_PRODUCT, tenant_id))
+            members = cur.fetchall()
+        conn.commit()
+    return {'entitlement': entitlement, 'members': members}
+
+
+def update_connect_entitlement(*, tenant_id: str, owner_id: int, status: str, admin_access: bool) -> dict:
+    if status not in {'inactive', 'trial', 'active', 'suspended'}:
+        raise TenantPlatformError('Connect statusu etibarlı deyil.')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            ensure_schema(cur)
+            cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE FOR UPDATE", (tenant_id, owner_id))
+            if not (row := cur.fetchone()) or str(row['role']) != 'owner':
+                raise TenantPlatformError('Yalnız şirkət sahibi Connect məhsulunu dəyişə bilər.')
+            cur.execute("""INSERT INTO saas_product_entitlements(tenant_id,product,status,admin_access)
+              VALUES(%s::uuid,%s,%s,%s) ON CONFLICT(tenant_id,product) DO UPDATE
+              SET status=EXCLUDED.status,admin_access=EXCLUDED.admin_access,updated_at=now()
+              RETURNING status,admin_access,trial_ends_at,updated_at""", (tenant_id, CONNECT_PRODUCT, status, bool(admin_access)))
+            result = cur.fetchone()
+        conn.commit()
+    return result
+
+
+def set_connect_member(*, tenant_id: str, owner_id: int, actor_id: int, role: str | None, active: bool = True) -> None:
+    if role is not None and role not in PRODUCT_ROLES:
+        raise TenantPlatformError('Connect rolu etibarlı deyil.')
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            ensure_schema(cur)
+            cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE FOR UPDATE", (tenant_id, owner_id))
+            if not (owner := cur.fetchone()) or str(owner['role']) != 'owner':
+                raise TenantPlatformError('Yalnız şirkət sahibi Connect girişlərini dəyişə bilər.')
+            cur.execute("SELECT role FROM saas_tenant_members WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE", (tenant_id, actor_id))
+            member = cur.fetchone()
+            if not member:
+                raise TenantPlatformError('Əməkdaş bu şirkətin aktiv üzvü deyil.')
+            if int(actor_id) == int(owner_id) and (not active or role != 'owner'):
+                raise TenantPlatformError('Şirkət sahibinin Connect girişi silinə bilməz.')
+            if role is None:
+                cur.execute("DELETE FROM saas_product_members WHERE tenant_id=%s::uuid AND actor_id=%s AND product=%s", (tenant_id, actor_id, CONNECT_PRODUCT))
+            else:
+                cur.execute("""INSERT INTO saas_product_members(tenant_id,actor_id,product,role,active)
+                  VALUES(%s::uuid,%s,%s,%s,%s) ON CONFLICT(tenant_id,actor_id,product) DO UPDATE
+                  SET role=EXCLUDED.role,active=EXCLUDED.active,updated_at=now()""", (tenant_id, actor_id, CONNECT_PRODUCT, role, bool(active)))
+        conn.commit()
