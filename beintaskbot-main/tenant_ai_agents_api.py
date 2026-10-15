@@ -65,6 +65,12 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                 if resource == 'settings':
                     result = await asyncio.to_thread(read_settings, profile)
                     result = _attach_runtime_status(result)
+                elif resource == 'diagnostics':
+                    # Keep diagnostics in the GET dispatch.  The generic GET
+                    # fallback below returns the knowledge list, which used
+                    # to look like a successful but empty diagnostics result
+                    # to the browser (false flags, no tenant, zero channels).
+                    result = await asyncio.to_thread(list_connect_diagnostics, profile, request.query.get('limit', 50))
                 elif resource == 'test_mode':
                     result = await asyncio.to_thread(read_test_mode, profile)
                 elif resource == 'agents':
@@ -193,8 +199,6 @@ def handler(member_from_request, canonical_origin, logger, resource, request_pro
                     await asyncio.to_thread(finish_draft_send,reserved['tenant_id'],reserved['id'],'accepted')
                 elif resource == 'handoffs':
                     result = await asyncio.to_thread(list_handoffs,profile,request.query.get('limit',50))
-                elif resource == 'diagnostics':
-                    result = await asyncio.to_thread(list_connect_diagnostics,profile,request.query.get('limit',50))
                 elif resource in {'handoff','resume'} and method == 'POST':
                     result = await asyncio.to_thread(set_conversation_state,profile,request.match_info['conversation_id'],
                         'human' if resource=='handoff' else 'active',str(payload.get('reason') or ('manual_handoff' if resource=='handoff' else 'manager_resume')))

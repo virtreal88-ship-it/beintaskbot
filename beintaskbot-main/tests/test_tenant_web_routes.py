@@ -16,7 +16,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('agents/test-mode/verify', ('POST',)), ('agents/test-mode/discover', ('POST',)),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)), ('agents/drafts', ('GET',)),
     ('agents/drafts/{draft_id}/review', ('POST',)), ('agents/drafts/{draft_id}/send', ('POST',)),
-    ('handoffs', ('GET',)), ('agents/{agent_id}', ('PATCH','DELETE')),
+    ('handoffs', ('GET',)), ('diagnostics', ('GET',)), ('agents/{agent_id}', ('PATCH','DELETE')),
     ('agents/{agent_id}/triggers', ('GET','POST')),
     ('agents/{agent_id}/triggers/{trigger_id}', ('PATCH','DELETE')),
     ('conversations/{conversation_id}/state', ('GET',)),
