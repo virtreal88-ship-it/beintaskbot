@@ -213,6 +213,19 @@ def ensure_schema(conn):
               last_agent_message_id TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,
               updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,provider,conversation_id),
               FOREIGN KEY(tenant_id,agent_id) REFERENCES saas_ai_agents(tenant_id,id) ON DELETE CASCADE)''')
+            # Connect Test Mode is deliberately separate from the historical
+            # Kommo binding.  It has no deal, pipeline or contact dependency:
+            # the signed Connect webhook and tenant-owned channel are the
+            # authority.  Test runs always create drafts, never send WhatsApp.
+            cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_connect_test_mode(
+              tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
+              enabled BOOLEAN NOT NULL DEFAULT FALSE,
+              emergency_stop BOOLEAN NOT NULL DEFAULT FALSE,
+              channel_id TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '',
+              verified BOOLEAN NOT NULL DEFAULT FALSE, verified_at TIMESTAMPTZ NULL,
+              updated_by BIGINT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+              FOREIGN KEY(tenant_id,updated_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+              CHECK(NOT enabled OR (verified AND channel_id<>'' AND conversation_id<>'')))''')
             cur.execute("ALTER TABLE saas_ai_conversation_state ADD COLUMN IF NOT EXISTS first_inbound_message_id TEXT NOT NULL DEFAULT ''")
             cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_agent_action_runs(
               tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

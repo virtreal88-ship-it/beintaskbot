@@ -167,6 +167,8 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
     channel_id, conversation = str(data.get('channelId') or ''), str(data.get('conversationId') or '')
     if not channel_id or not conversation:
         raise TenantPlatformError('Connect webhook kanal məlumatı yoxdur.')
+    accepted = False
+    queued_payload = None
     with _connect() as conn:
         _schema(conn)
         with conn.cursor() as cur:
@@ -203,7 +205,17 @@ def ingest(raw: bytes, signature: str, event: dict) -> bool:
               VALUES(%s,%s::uuid,%s,%s,'incoming',%s,%s,%s,%s,%s,%s::timestamptz,%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,phone,str(data.get('text') or ''),str(data.get('type') or 'text'),' ',occurred,_json(data)))
         conn.commit()
-    return True
+        accepted = True
+        queued_payload = (tenant, channel_id, conversation, lead_id, str(data.get('id') or event_id), event_id,
+                          str(data.get('text') or ''), str(data.get('type') or 'text'))
+    # Queue only after the incoming event and CRM copy are committed.  A queue
+    # outage is retried by Connect without creating a duplicate CRM message.
+    if accepted and queued_payload:
+        from tenant_ai_agent_connect import enqueue
+        enqueue(queued_payload[0], channel_id=queued_payload[1], conversation_id=queued_payload[2],
+                lead_id=queued_payload[3], message_id=queued_payload[4], event_id=queued_payload[5],
+                text=queued_payload[6], message_type=queued_payload[7])
+    return accepted
 
 
 def connect_route(cur, tenant: str, lead_id: int) -> dict | None:
@@ -232,4 +244,7 @@ def record_outbound(tenant: str, lead_id: int, route: dict, text: str, external_
               VALUES(%s,%s::uuid,%s,%s,'outgoing',%s,%s,%s,'text','',now(),%s::jsonb) ON CONFLICT(tenant_id,external_id) DO NOTHING''',
                         (uuid.uuid4(),tenant,lead_id,'connect:'+external_id,'connect:'+route['channel_id'],author,text,_json({'source':'connect','status':'pending'})))
         conn.commit()
+    if author != 'AI Agent':
+        from tenant_ai_agent_connect import mark_operator_reply
+        mark_operator_reply(tenant, lead_id, str(route['channel_id']), str(route['conversation_id']))
 

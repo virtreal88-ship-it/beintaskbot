@@ -158,6 +158,11 @@ def conversation_allowed(cur, tenant_id, chat_id):
 
 
 def allowed_job(job):
+    # Connect carries a signed, tenant-owned channel identity and has its own
+    # test binding.  It must never be forced through a Kommo account lookup.
+    if str(job.get('provider') or '') == 'connect':
+        from tenant_ai_agent_connect import allowed as connect_allowed
+        return connect_allowed(job)
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -301,7 +306,41 @@ def read_test_mode(profile):
     return result
 
 
+def save_connect_test_mode(profile, data):
+    """Bind draft-only Test Mode to an already received Connect conversation."""
+    from tenant_ai_agents_store import _authorize, _audit
+    if not isinstance(data, dict) or set(data) - {'provider','channel_id','conversation_id','enabled','emergency_stop'}:
+        raise TenantLinearError('Connect Test Mode settings are invalid.')
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor = _authorize(cur, profile)
+            channel, conversation = str(data.get('channel_id') or '').strip(), str(data.get('conversation_id') or '').strip()
+            cur.execute('''SELECT 1 FROM saas_connect_conversations c JOIN saas_connect_channels ch
+              ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id AND ch.active=TRUE
+              WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.conversation_id=%s''',
+                        (tenant, channel, conversation))
+            verified = bool(cur.fetchone())
+            enabled, emergency = bool(data.get('enabled')), bool(data.get('emergency_stop'))
+            if enabled and not verified:
+                raise TenantLinearError('Əvvəlcə bu Connect dialoqundan imzalanmış giriş mesajı alın.', 409)
+            cur.execute('''INSERT INTO saas_ai_agent_connect_test_mode
+              (tenant_id,enabled,emergency_stop,channel_id,conversation_id,verified,verified_at,updated_by)
+              VALUES(%s::uuid,%s,%s,%s,%s,%s,CASE WHEN %s THEN now() ELSE NULL END,%s)
+              ON CONFLICT(tenant_id) DO UPDATE SET enabled=EXCLUDED.enabled,emergency_stop=EXCLUDED.emergency_stop,
+                channel_id=EXCLUDED.channel_id,conversation_id=EXCLUDED.conversation_id,verified=EXCLUDED.verified,
+                verified_at=EXCLUDED.verified_at,updated_by=EXCLUDED.updated_by,updated_at=now()''',
+                        (tenant, enabled, emergency, channel, conversation, verified, verified, actor))
+            _audit(cur, tenant, actor, 'ai_connect_test_mode_updated', 'ai_connect_test_binding', tenant,
+                   {'enabled':enabled,'emergency_stop':emergency,'verified':verified})
+        conn.commit()
+    return {'provider':'connect','enabled':enabled,'emergency_stop':emergency,'channel_id':channel,
+            'conversation_id':conversation,'verified':verified,'draft_only':True}
+
+
 def save_test_mode(profile, data):
+    if isinstance(data, dict) and data.get('provider') == 'connect':
+        return save_connect_test_mode(profile, data)
     from tenant_ai_agents_store import _authorize, _audit
     if not isinstance(data, dict) or set(data) - {'company_phone','company_phone_attested','client_phone','channel_id','lead_id','contact_id','talk_id','chat_id','enabled','emergency_stop'}:
         raise TenantLinearError('Test Mode settings are invalid.')

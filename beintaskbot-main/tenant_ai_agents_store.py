@@ -61,7 +61,8 @@ def _scopes_overlap(left, right):
         for b in right if isinstance(right, list) else []:
             if not isinstance(a,dict) or not isinstance(b,dict):
                 continue
-            if (str(a.get('pipeline_id'))==str(b.get('pipeline_id'))
+            if (str(a.get('provider') or 'kommo')==str(b.get('provider') or 'kommo')
+                    and str(a.get('pipeline_id'))==str(b.get('pipeline_id'))
                     and str(a.get('stage_id'))==str(b.get('stage_id'))):
                 channel_a=str(a.get('channel_id') or '').casefold()
                 channel_b=str(b.get('channel_id') or '').casefold()
@@ -164,11 +165,14 @@ def configuration_options(profile):
               FROM saas_ai_agent_jobs WHERE tenant_id=%s::uuid AND channel_id<>''
               ORDER BY channel_id''', (tenant,))
             channels=[dict(row) for row in cur.fetchall()]
+            cur.execute('''SELECT connect_channel_id AS id,name FROM saas_connect_channels
+              WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY name,connect_channel_id''', (tenant,))
+            connect_channels=[{'id':str(row['id']),'name':str(row.get('name') or row['id'])} for row in cur.fetchall()]
     configured=str(meta.get('model') or '').strip()
     models=meta.get('models') if isinstance(meta.get('models'),list) else []
     models=[str(x).strip() for x in models if isinstance(x,str) and x.strip()]
     if configured and configured not in models: models.insert(0,configured)
-    return {'pipelines':pipelines,'stages':stages,'channels':channels,
+    return {'pipelines':pipelines,'stages':stages,'channels':channels,'connect_channels':connect_channels,
             'models':models if chat.get('secrets') and meta.get('enabled') is True and meta.get('consent') is True else []}
 
 

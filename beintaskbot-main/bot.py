@@ -18727,6 +18727,12 @@ async def start_webhook_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
     await site.start()
+    # The durable AI queue is shared by Kommo and Connect.  It runs in the
+    # existing Railway worker process, so no additional service is needed.
+    from tenant_ai_agent_startup import start_worker
+    from tenant_ai_agent_worker import run_worker as tenant_ai_agent_worker
+    await start_worker(app_web, tenant_ai_agent_worker, _tenant_kommo_request, logger,
+                       _wait_for_tenant_kommo_slot, prepare_database_first=True)
     logger.info(f"Webhook server started on port {WEBHOOK_PORT}")
 
 

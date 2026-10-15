@@ -44,7 +44,10 @@ def claim_next():
               JOIN saas_ai_agent_settings cfg ON cfg.tenant_id=j.tenant_id AND cfg.enabled=TRUE AND cfg.emergency_stop=FALSE
               JOIN saas_tenants t ON t.id=j.tenant_id AND t.status='active'
               WHERE j.state='queued' AND j.due_at<=now()
-              AND (cfg.operating_mode='active' OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
+              AND (cfg.operating_mode='active' OR (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb
+                JOIN saas_tenant_webhook_events ce ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint
+                WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE AND cb.verified=TRUE AND cb.emergency_stop=FALSE
+                  AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b
                 JOIN saas_tenant_integrations ki ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
                 WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
@@ -104,7 +107,10 @@ def load_agent_config(job, *, with_block_reason=False):
         with conn.cursor() as cur:
             cur.execute('''SELECT a.enabled AS agent_enabled,a.scopes,a.model AS agent_model,a.safety,a.schedule,a.mode,
               s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.crm_actions_enabled,i.metadata,t.status AS tenant_status,cs.state AS conversation_state,
-              EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
+              (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
+                ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
+                AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
+                AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
                 WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
@@ -232,9 +238,11 @@ def reserve_run(job, *, pipeline_id, stage_id, model):
             if str(model) not in allowed_models or (row.get('configured_model') and row['configured_model'] != model):
                 raise TenantLinearError('Agent modeli Chat AI ayarları ilə uyğun deyil.', 409)
             scopes = row['scopes'] if isinstance(row['scopes'], list) else []
+            provider = str(job.get('provider') or 'kommo')
             scope = next((item for item in scopes if isinstance(item, dict)
-                and str(item.get('pipeline_id')) == str(pipeline_id)
-                and str(item.get('stage_id')) == str(stage_id)
+                and str(item.get('provider') or 'kommo') == provider
+                and (provider == 'connect' or (str(item.get('pipeline_id')) == str(pipeline_id)
+                    and str(item.get('stage_id')) == str(stage_id)))
                 and (not item.get('channel_id') or str(item['channel_id']).casefold()==str(job.get('channel_id') or '').casefold())), None)
             if not scope:
                 raise TenantLinearError('Deal artıq agentin əhatə dairəsində deyil.', 409)
@@ -291,7 +299,10 @@ def complete_run(job, reservation, draft, source_ids, *, stop_after_reply=False)
         with conn.cursor() as cur:
             cur.execute('''SELECT j.revision,j.lease_token,j.state,a.enabled AS agent_enabled,a.version AS agent_version,s.enabled AS settings_enabled,s.operating_mode,s.emergency_stop,s.updated_at AS settings_version,
               i.updated_at AS config_version,i.metadata,t.status AS tenant_status,
-              EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
+              (j.provider='connect' AND EXISTS (SELECT 1 FROM saas_ai_agent_connect_test_mode cb JOIN saas_tenant_webhook_events ce
+                ON ce.tenant_id=j.tenant_id AND ce.fingerprint=j.event_fingerprint WHERE cb.tenant_id=j.tenant_id AND cb.enabled=TRUE
+                AND cb.verified=TRUE AND cb.emergency_stop=FALSE AND cb.channel_id=j.channel_id AND cb.conversation_id=j.conversation_id
+                AND ce.payload->>'test_mode'='true')) OR EXISTS (SELECT 1 FROM saas_ai_agent_test_mode b JOIN saas_tenant_integrations ki
                 ON ki.tenant_id=b.tenant_id AND ki.provider='kommo' AND ki.status='connected'
                 JOIN saas_tenant_webhook_events e ON e.tenant_id=j.tenant_id AND e.fingerprint=j.event_fingerprint
                 WHERE b.tenant_id=j.tenant_id AND b.enabled=TRUE AND b.verified=TRUE AND b.emergency_stop=FALSE
@@ -367,3 +378,18 @@ def finish_superseded(job,reservation,error_code='conversation_changed'):
               (error_code,job['tenant_id'],job['agent_id'],job['provider'],job['conversation_id'],job['lease_token'],job['revision']))
             cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',error_code=%s,completed_at=now() WHERE tenant_id=%s::uuid AND fingerprint=%s",(error_code,job['tenant_id'],job['event_fingerprint']))
         conn.commit()
+
+
+def finish_sent(job, reservation, message_id: str) -> bool:
+    """Atomically close the AI run only after Connect accepted the message."""
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE saas_ai_agent_runs SET state='completed',result=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND state='generating'",
+                        (_json({'send_state':'accepted','message_id':str(message_id)}),job['tenant_id'],reservation['run_id']))
+            cur.execute("UPDATE saas_ai_agent_jobs SET state='sent',lease_token=NULL,lease_until=NULL,error_code='',updated_at=now() WHERE tenant_id=%s::uuid AND agent_id=%s::uuid AND provider='connect' AND conversation_id=%s AND lease_token=%s AND revision=%s",
+                        (job['tenant_id'],job['agent_id'],job['conversation_id'],job['lease_token'],job['revision']))
+            cur.execute("UPDATE saas_tenant_webhook_events SET state='completed',completed_at=now(),error_code='' WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                        (job['tenant_id'],job['event_fingerprint']))
+        conn.commit()
+    return True

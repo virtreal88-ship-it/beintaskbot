@@ -10,13 +10,12 @@ from tenant_ai_agent_queue import _scope_matches
 from tenant_ai_agent_actions import should_handoff, enabled_triggers, matching_triggers, handoff
 from tenant_ai_agent_crm_actions import execute_matching_actions
 from tenant_ai_agent_run_store import (claim_next, complete_run, defer_job,
-    finish_unknown, finish_superseded, knowledge_context, reserve_run, retry_or_fail, skip_job)
+    finish_unknown, finish_superseded, finish_sent, knowledge_context, reserve_run, retry_or_fail, skip_job)
 from tenant_chat_ai_policy import history
 from tenant_chat_ai_provider import INSTRUCTIONS, generate, transcribe
 from tenant_chat_ai_policy import audio as is_audio
 from tenant_chat_media import AUDIO_TYPES, IMAGE_TYPES, download
 from tenant_chat_reader import read_messages, read_talks
-from tenant_chat_send_service import run_agent as send_agent
 from tenant_linear_policy import TenantLinearError
 from tenant_ai_agent_test_mode import assert_job_allowed, assert_live_job_allowed
 from tenant_ai_agent_runtime_flags import enabled as runtime_flag
@@ -187,6 +186,9 @@ def _test_diag(logger, job, stage, code=''):
 
 
 async def process_one(job, kommo_request, wait_slot, logger):
+    if str(job.get('provider') or '') == 'connect':
+        await process_connect_one(job, logger)
+        return
     reservation = None
     phase = 'binding_check'
     diagnostic_allowed = False
@@ -440,6 +442,112 @@ async def process_one(job, kommo_request, wait_slot, logger):
         logger.warning('AI agent job failed: tenant=%s agent=%s',job.get('tenant_id'),job.get('agent_id'))
         if diagnostic_allowed:
             _test_diag(logger, job, 'job_failed', phase)
+
+
+async def process_connect_one(job, logger):
+    """Run the existing agent model/draft lifecycle against tenant-local history.
+
+    Connect does not have Kommo Talk or pipeline identities, so this branch
+    intentionally skips CRM actions and only admits explicit Connect scopes.
+    """
+    reservation = None
+    phase = 'connect_admission'
+    try:
+        from tenant_ai_agent_connect import history as connect_history, scope_matches
+        from tenant_ai_agent_run_store import load_agent_config
+        from tenant_ai_agent_safety import server_instructions, sanitize_draft
+        from tenant_connect_transport import connect_route, send as send_connect, record_outbound
+        from tenant_platform import _connect
+        tenant = str(job['tenant_id'])
+        assert_job_allowed(job)
+        rows = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))
+        source_id = str((job.get('payload') or {}).get('message_id') or '')
+        source = next((row for row in rows if row['external_id'] == source_id and row['direction'] == 'incoming'), None)
+        if not source:
+            await asyncio.to_thread(skip_job, job, 'connect_source_not_found')
+            return
+        if any(row['external_id'] != source_id and row['direction'] == 'incoming' and row['happened_at'] >= source['happened_at'] for row in rows):
+            await asyncio.to_thread(skip_job, job, 'newer_connect_message')
+            return
+        loaded = await asyncio.to_thread(load_agent_config, job, with_block_reason=True)
+        config, reason = loaded if isinstance(loaded, tuple) else (loaded, None)
+        if not config or not scope_matches(config.get('scopes'), str(job['channel_id'])):
+            await asyncio.to_thread(skip_job, job, reason or 'connect_channel_outside_agent_scope')
+            return
+        open_at = _next_open(config.get('schedule') or {})
+        if open_at:
+            await asyncio.to_thread(defer_job, job, open_at)
+            return
+        triggers = await asyncio.to_thread(enabled_triggers, tenant, job['agent_id'])
+        matched = matching_triggers(triggers, source['body'])
+        if should_handoff(source['body']) or any('handoff' in (trigger.get('actions') or []) for trigger in matched):
+            await asyncio.to_thread(handoff, job, 'customer_requested_manager')
+            return
+        model = str(config.get('agent_model') or config['chat_model'])
+        phase = 'connect_reserve'
+        reservation = await asyncio.to_thread(reserve_run, job, pipeline_id='', stage_id='', model=model)
+        lines, missing = history(rows[-30:], {})
+        query = str(source.get('body') or '')[:6000]
+        knowledge = await asyncio.to_thread(knowledge_context, tenant, query)
+        rules = '\n'.join((str(reservation.get('company_instructions') or ''),
+                           str(reservation.get('agent_instructions') or ''),
+                           str(reservation.get('scope_instructions') or ''))).strip()
+        prompt = INSTRUCTIONS + ('\n\nBusiness instructions:\n' + rules if rules else '')
+        prompt += ('\n\n' + server_instructions() + '\nReply to the latest customer message. '
+                   'Do not claim a message was sent unless the system confirms it.')
+        phase = 'connect_generation'
+        draft = await asyncio.to_thread(generate, reservation['api_key'], model, 'reply', lines, '',
+                                        instructions=prompt,
+                                        extra_context={'language':reservation['agent_language'], 'style':reservation['agent_style'],
+                                                       'knowledge':knowledge, 'latest_client_message_id':source_id,
+                                                       'latest_client_message':query, 'unprocessed_media_count':missing}, images=[])
+        draft = sanitize_draft(str(draft), reservation['agent_language'])
+        # A manual reply or a newer inbound message invalidates this run.
+        current = await asyncio.to_thread(connect_history, tenant, int(job['lead_id']), str(job['channel_id']))
+        if any(row['external_id'] != source_id and row['happened_at'] >= source['happened_at'] for row in current):
+            await asyncio.to_thread(finish_superseded, job, reservation, 'connect_conversation_advanced')
+            return
+        auto = (reservation['mode'] == 'automatic' and reservation['auto_send_enabled'] is True
+                and runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED')
+                and str(config.get('operating_mode') or 'active') == 'active')
+        # Test Mode is always draft-only; it cannot send a WhatsApp message.
+        if auto and (job.get('payload') or {}).get('test_mode') is not True:
+            phase = 'connect_send'
+            def route_and_send():
+                with _connect() as conn:
+                    with conn.cursor() as cur:
+                        route = connect_route(cur, tenant, int(job['lead_id']))
+                if not route:
+                    raise TenantLinearError('Connect route is no longer active.', 409)
+                message_id = send_connect(route, draft[:8000], 'ai-' + str(reservation['run_id']))
+                record_outbound(tenant, int(job['lead_id']), route, draft[:8000], message_id, author='AI Agent')
+                return message_id
+            message_id = await asyncio.to_thread(route_and_send)
+            await asyncio.to_thread(finish_sent, job, reservation, message_id)
+            return
+        await asyncio.to_thread(complete_run, job, reservation, draft[:16000],
+                                [item['source_id'] for item in knowledge],
+                                stop_after_reply=any('handoff_after_reply' in (trigger.get('actions') or []) for trigger in matched))
+    except asyncio.CancelledError:
+        if reservation:
+            await asyncio.to_thread(finish_unknown, job, reservation, 'worker_stopped')
+        else:
+            await asyncio.to_thread(retry_or_fail, job, 'worker_stopped')
+        raise
+    except TenantLinearError as error:
+        if reservation:
+            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_send_or_generation_unknown')
+        elif getattr(error, 'status', 500) >= 500:
+            await asyncio.to_thread(retry_or_fail, job, 'connect_configuration_unavailable')
+        else:
+            await asyncio.to_thread(skip_job, job, 'connect_policy_blocked')
+        logger.warning('Connect AI job stopped safely: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
+    except Exception:
+        if reservation:
+            await asyncio.to_thread(finish_unknown, job, reservation, 'connect_result_unknown')
+        else:
+            await asyncio.to_thread(retry_or_fail, job, 'connect_worker_failed')
+        logger.exception('Connect AI job failed: tenant=%s agent=%s phase=%s', job.get('tenant_id'), job.get('agent_id'), phase)
 
 
 async def run_worker(kommo_request, logger, wait_slot):

@@ -105,14 +105,20 @@ def agent(data, *, creating=False):
         normalized = []
         seen = set()
         for scope in scopes:
-            if not isinstance(scope, dict) or set(scope) - {'pipeline_id', 'stage_id', 'channel_id', 'instructions'}:
+            if not isinstance(scope, dict) or set(scope) - {'provider', 'pipeline_id', 'stage_id', 'channel_id', 'instructions'}:
                 raise TenantLinearError('Agent əhatə dairəsi düzgün deyil.')
+            provider = _text(scope.get('provider', 'kommo'), 'provider', 20) or 'kommo'
+            if provider not in {'kommo', 'connect'}:
+                raise TenantLinearError('Mesaj mənbəyi düzgün deyil.')
             row = {key: _text(scope.get(key, ''), key, 120)
                    for key in ('pipeline_id', 'stage_id', 'channel_id')}
+            row['provider'] = provider
             row['instructions'] = _text(scope.get('instructions', ''), 'Mərhələ təlimatı', 5000)
-            if not row['pipeline_id'] or not row['stage_id']:
+            if provider == 'kommo' and (not row['pipeline_id'] or not row['stage_id']):
                 raise TenantLinearError('Vərəq və mərhələ seçilməlidir.')
-            identity = tuple(row[key] for key in ('pipeline_id', 'stage_id', 'channel_id'))
+            if provider == 'connect' and not row['channel_id']:
+                raise TenantLinearError('Connect üçün WhatsApp kanalı seçilməlidir.')
+            identity = tuple(row[key] for key in ('provider', 'pipeline_id', 'stage_id', 'channel_id'))
             if identity not in seen:
                 seen.add(identity)
                 normalized.append(row)
