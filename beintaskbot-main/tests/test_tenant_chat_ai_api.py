@@ -87,6 +87,19 @@ class Provider(unittest.TestCase):
         body=post.call_args.kwargs['json'];self.assertIs(body['store'],False);self.assertNotIn('tools',body)
         self.assertIs(post.call_args.kwargs['allow_redirects'],False)
 
+    def test_agent_generation_accepts_tenant_instructions_and_verified_images(self):
+        from unittest.mock import patch
+        response=Mock(status_code=200);response.json.return_value={'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'draft'}]}]}
+        with patch('tenant_chat_ai_provider.requests.post',return_value=response) as post:
+            result=self.generate('company-key','text-model','reply',[{'speaker':'CLIENT','text':'source'}],'',
+                instructions='Tenant instructions',extra_context={'language':'az'},
+                images=[{'content':b'png-bytes','content_type':'image/png'}])
+        self.assertEqual(result,'draft')
+        body=post.call_args.kwargs['json'];self.assertEqual(body['instructions'],'Tenant instructions')
+        content=body['input'][0]['content'];self.assertIn('extra_context',content[0]['text'])
+        self.assertEqual(content[1]['type'],'input_image')
+        self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
+
     def test_audio_uploaded_as_bytes_without_remote_media_url(self):
         from unittest.mock import patch
         response=Mock(status_code=200);response.json.return_value={'text':'transcript'}
