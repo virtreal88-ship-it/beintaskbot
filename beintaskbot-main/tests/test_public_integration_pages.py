@@ -31,6 +31,19 @@ class PublicIntegrationPagesTests(unittest.TestCase):
         self.assertIn('/connector/?lang=ru', russian)
         self.assertIn('href="#support">Support</a>', english)
         self.assertIn('data-i18n="crmFooter"', connector)
+        self.assertIn('href="/?lang=en" data-copy="support">Support</a>', crm)
+        self.assertIn('data-site-language="en"', crm)
+        self.assertIn('data-site-language="az"', crm)
+        self.assertIn('data-site-language="ru"', crm)
+        self.assertIn('/assets/landing-language.js', crm)
+        self.assertIn("link.href='/?site_lang='+lang", connector)
+
+    def test_crm_landing_language_script_defaults_to_english_and_persists_choice(self):
+        script = (ROOT / "docs" / "landing-language.js").read_text(encoding="utf-8")
+        self.assertIn("|| 'en'", script)
+        self.assertIn("crm.site.language", script)
+        self.assertIn("site_language=${language}", script)
+        self.assertIn("const languages = ['en', 'az', 'ru']", script)
 
     def test_explicit_languages_map_to_existing_pages(self):
         for kind, language, filename in (
