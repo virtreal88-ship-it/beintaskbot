@@ -141,7 +141,12 @@ def _send_via_resend_api(*, sender: str, destination: str, subject: str, body: s
     response.raise_for_status()
 
 
-def _issue_token(cur, user_id: uuid.UUID, purpose: str, request_ip: str) -> str:
+def _product(value: object) -> str:
+    """Accept a destination hint, never a URL or authorization decision."""
+    return 'connect' if str(value or '').strip().casefold() == 'connect' else 'beintaskbot'
+
+
+def _issue_token(cur, user_id: uuid.UUID, purpose: str, request_ip: str, destination_product: str = 'beintaskbot') -> str:
     cur.execute("SELECT count(*) AS total FROM saas_auth_tokens WHERE user_id=%s AND purpose=%s AND created_at>now()-interval '1 hour'", (user_id, purpose))
     if int((cur.fetchone() or {}).get('total') or 0) >= 5:
         raise TenantPlatformError('Bu ünvan üçün çox sorğu var. Bir az sonra yenidən cəhd edin.')
@@ -150,19 +155,19 @@ def _issue_token(cur, user_id: uuid.UUID, purpose: str, request_ip: str) -> str:
         raise TenantPlatformError('Çox sorğu göndərildi. Bir az sonra yenidən cəhd edin.')
     token = secrets.token_urlsafe(32)
     cur.execute("UPDATE saas_auth_tokens SET used_at=now() WHERE user_id=%s AND purpose=%s AND used_at IS NULL", (user_id, purpose))
-    cur.execute("INSERT INTO saas_auth_tokens(id,user_id,purpose,token_hash,request_ip,expires_at) VALUES(%s,%s,%s,%s,%s,now()+interval '30 minutes')", (uuid.uuid4(), user_id, purpose, _token_hash(token), request_ip[:80]))
+    cur.execute("INSERT INTO saas_auth_tokens(id,user_id,purpose,token_hash,request_ip,expires_at,destination_product) VALUES(%s,%s,%s,%s,%s,now()+interval '30 minutes',%s)", (uuid.uuid4(), user_id, purpose, _token_hash(token), request_ip[:80], _product(destination_product)))
     return token
 
 
-def _email_link(token: str, purpose: str = 'confirm') -> str:
+def _email_link(token: str, purpose: str = 'confirm', destination_product: str = 'beintaskbot') -> str:
     origin = _origin()
     if not origin:
         raise TenantPlatformError('Sayt ünvanı email təsdiqi üçün quraşdırılmayıb.')
     path = {'reset': '/auth/reset', 'link_email': '/auth/link'}.get(purpose, '/auth/confirm')
-    return f'{origin}{path}?token={token}'
+    return f'{origin}{path}?token={token}&product={_product(destination_product)}'
 
 
-def request_registration(*, name: object, company_name: object, phone: object, email: object, request_ip: str) -> dict:
+def request_registration(*, name: object, company_name: object, phone: object, email: object, request_ip: str, destination_product: object = 'beintaskbot') -> dict:
     display_name, company, mobile, address = _name(name, 'Adınızı'), _name(company_name, 'Şirkət adını'), _phone(phone), _email(email)
     _assert_mail_ready()
     with _connect() as conn:
@@ -181,9 +186,10 @@ def request_registration(*, name: object, company_name: object, phone: object, e
             else:
                 user_id = user['id']
                 cur.execute('''UPDATE saas_auth_users SET phone=%s,display_name=%s,company_name=%s,updated_at=now() WHERE id=%s''', (mobile, display_name, company, user_id))
-            token = _issue_token(cur, user_id, 'confirm', request_ip)
+            product = _product(destination_product)
+            token = _issue_token(cur, user_id, 'confirm', request_ip, product)
         conn.commit()
-    _send_mail(address, 'Beintaskbot: подтверждение email', f'Подтвердите email и создайте пароль: {_email_link(token)}\n\nСсылка действует 30 минут и используется один раз.')
+    _send_mail(address, 'Beintaskbot: подтверждение email', f'Подтвердите email и создайте пароль: {_email_link(token, destination_product=product)}\n\nСсылка действует 30 минут и используется один раз.')
     return {'accepted': True, 'existing': False}
 
 
@@ -192,11 +198,12 @@ def complete_confirmation(*, token: object, password: object) -> dict:
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT t.id AS token_id,u.* FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
+            cur.execute('''SELECT t.id AS token_id,t.destination_product,u.* FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
                 WHERE t.token_hash=%s AND t.purpose='confirm' AND t.used_at IS NULL AND t.expires_at>now() FOR UPDATE OF t,u''', (_token_hash(raw_token),))
             user = cur.fetchone()
             if not user:
                 raise TenantPlatformError('Təsdiq keçidi etibarsızdır və ya müddəti bitib.')
+            destination_product = _product(user.get('destination_product'))
             tenant_id = user.get('tenant_id')
             if not tenant_id:
                 tenant_id = uuid.uuid4()
@@ -209,7 +216,7 @@ def complete_confirmation(*, token: object, password: object) -> dict:
             cur.execute('''UPDATE saas_auth_users SET password_hash=%s,verified_at=COALESCE(verified_at,now()),tenant_id=%s,updated_at=now() WHERE id=%s''', (_hash_password(plain), tenant_id, user['id']))
             cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (user['token_id'],))
         conn.commit()
-    return {'tenant_id': str(tenant_id), 'actor_id': int(user['actor_id'])}
+    return {'tenant_id': str(tenant_id), 'actor_id': int(user['actor_id']), 'destination_product': destination_product}
 
 
 def login(*, email: object, password: object, request_ip: str) -> dict | None:
@@ -229,7 +236,7 @@ def login(*, email: object, password: object, request_ip: str) -> dict | None:
     return {'tenant_id': str(user['tenant_id']), 'actor_id': int(user['actor_id'])}
 
 
-def request_password_reset(*, email: object, request_ip: str) -> dict:
+def request_password_reset(*, email: object, request_ip: str, destination_product: object = 'beintaskbot') -> dict:
     address = _email(email)
     _assert_mail_ready()
     with _connect() as conn:
@@ -237,26 +244,27 @@ def request_password_reset(*, email: object, request_ip: str) -> dict:
         with conn.cursor() as cur:
             cur.execute('SELECT id FROM saas_auth_users WHERE email=%s AND verified_at IS NOT NULL AND disabled_at IS NULL FOR UPDATE', (address,))
             user = cur.fetchone()
-            token = _issue_token(cur, user['id'], 'reset', request_ip) if user else ''
+            product = _product(destination_product)
+            token = _issue_token(cur, user['id'], 'reset', request_ip, product) if user else ''
         conn.commit()
     if token:
-        _send_mail(address, 'Beintaskbot: восстановление пароля', f'Создайте новый пароль: {_email_link(token, "reset")}\n\nСсылка действует 30 минут и используется один раз.')
+        _send_mail(address, 'Beintaskbot: восстановление пароля', f'Создайте новый пароль: {_email_link(token, "reset", product)}\n\nСсылка действует 30 минут и используется один раз.')
     return {'accepted': True}
 
 
-def complete_password_reset(*, token: object, password: object) -> bool:
+def complete_password_reset(*, token: object, password: object) -> dict:
     raw_token, plain = str(token or ''), _password(password)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute('''SELECT t.id AS token_id,u.id AS user_id FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
+            cur.execute('''SELECT t.id AS token_id,t.destination_product,u.id AS user_id FROM saas_auth_tokens t JOIN saas_auth_users u ON u.id=t.user_id
               WHERE t.token_hash=%s AND t.purpose='reset' AND t.used_at IS NULL AND t.expires_at>now() FOR UPDATE OF t,u''', (_token_hash(raw_token),))
             row = cur.fetchone()
             if not row: raise TenantPlatformError('Parol keçidi etibarsızdır və ya müddəti bitib.')
             cur.execute('UPDATE saas_auth_users SET password_hash=%s,updated_at=now() WHERE id=%s', (_hash_password(plain), row['user_id']))
             cur.execute('UPDATE saas_auth_tokens SET used_at=now() WHERE id=%s', (row['token_id'],))
         conn.commit()
-    return True
+    return {'destination_product': _product(row.get('destination_product'))}
 
 
 def request_email_link(*, tenant_id: str, actor_id: int, display_name: object,

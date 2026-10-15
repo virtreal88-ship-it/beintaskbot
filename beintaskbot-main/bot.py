@@ -18666,6 +18666,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/login", auth_api['auth_page'])
     app_web.router.add_get("/connector/", auth_api['connector_page'])
     app_web.router.add_get("/connector", auth_api['connector_page'])
+    app_web.router.add_get("/connector/access", auth_api['connector_access_page'])
+    app_web.router.add_get("/connector/logout", auth_api['connector_logout_page'])
     app_web.router.add_get("/connector/login", auth_api['auth_page'])
     app_web.router.add_get('/auth/confirm', auth_api['confirm_page'])
     app_web.router.add_get('/auth/reset', auth_api['confirm_page'])

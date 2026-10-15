@@ -34,6 +34,9 @@ def migrate_identity_schema(cur) -> None:
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_tokens_rate_idx ON saas_auth_tokens(request_ip,created_at DESC)")
+    # Product is presentation/continuation context only; it never grants an
+    # entitlement. Existing tokens remain valid and default to Beintaskbot.
+    cur.execute("ALTER TABLE saas_auth_tokens ADD COLUMN IF NOT EXISTS destination_product TEXT NOT NULL DEFAULT 'beintaskbot'")
     cur.execute("CREATE INDEX IF NOT EXISTS saas_auth_tokens_user_idx ON saas_auth_tokens(user_id,purpose,created_at DESC)")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_auth_login_attempts (
