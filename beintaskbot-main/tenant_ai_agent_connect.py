@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 
 from tenant_ai_agents_schema import ensure_schema
+from tenant_ai_agent_runtime_flags import enabled as runtime_flag
 from tenant_platform import _connect, _json
 
 
@@ -38,6 +39,8 @@ def test_allowed(cur, tenant: str, channel_id: str, conversation_id: str) -> boo
 def allowed(job: dict) -> bool:
     if str(job.get('provider') or '') != 'connect':
         return False
+    if not runtime_flag('AI_AGENTS_ENABLED'):
+        return False
     tenant = str(job.get('tenant_id') or '')
     channel = str(job.get('channel_id') or '')
     conversation = str(job.get('conversation_id') or '')
@@ -53,11 +56,12 @@ def allowed(job: dict) -> bool:
               WHERE i.tenant_id=%s::uuid AND i.provider='connect' AND i.status='connected' FOR SHARE OF i,c''',
                         (channel, tenant))
             connected = bool(cur.fetchone())
+            tenant_active = str(settings.get('status') or '') == 'active'
             if settings.get('operating_mode') == 'active':
-                result = bool(connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
-                              and str(settings.get('status') or '') == 'active')
+                result = bool(tenant_active and connected and settings.get('enabled') is True
+                              and settings.get('emergency_stop') is not True)
             else:
-                result = bool(connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
+                result = bool(tenant_active and connected and settings.get('enabled') is True and settings.get('emergency_stop') is not True
                               and test_allowed(cur, tenant, channel, conversation))
         conn.commit()
     return result
@@ -75,8 +79,6 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id}):
-                return 0
             cur.execute('SELECT operating_mode FROM saas_ai_agent_settings WHERE tenant_id=%s::uuid', (tenant,))
             test_mode = str((cur.fetchone() or {}).get('operating_mode') or 'test') != 'active'
             payload = {'message_id': str(message_id or event_id), 'channel_id': str(channel_id),
@@ -90,14 +92,23 @@ def enqueue(tenant: str, *, channel_id: str, conversation_id: str, lead_id: int,
             if not cur.fetchone():
                 conn.commit()
                 return 0
+            if not allowed({'provider':'connect','tenant_id':tenant,'channel_id':channel_id,'conversation_id':conversation_id}):
+                reason = 'ai_agents_server_disabled' if not runtime_flag('AI_AGENTS_ENABLED') else 'connect_admission_blocked'
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s",
+                            (reason, tenant, fingerprint))
+                conn.commit()
+                return 0
             cur.execute('''UPDATE saas_tenant_webhook_events SET state='superseded',completed_at=now(),error_code='newer_inbound'
               WHERE tenant_id=%s::uuid AND provider='connect' AND state IN ('queued','processing')
                 AND payload->>'conversation_id'=%s AND fingerprint<>%s''', (tenant, conversation_id, fingerprint))
-            cur.execute('''SELECT id,scopes,delay_seconds FROM saas_ai_agents
-              WHERE tenant_id=%s::uuid AND enabled=TRUE ORDER BY created_at,id''', (tenant,))
-            agents = [row for row in cur.fetchall() if scope_matches(row.get('scopes'), channel_id)]
+            cur.execute('''SELECT id,scopes,delay_seconds,enabled FROM saas_ai_agents
+              WHERE tenant_id=%s::uuid ORDER BY created_at,id''', (tenant,))
+            tenant_agents = cur.fetchall()
+            enabled_agents = [row for row in tenant_agents if row.get('enabled') is True]
+            agents = [row for row in enabled_agents if scope_matches(row.get('scopes'), channel_id)]
             if not agents:
-                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code='no_connect_scope' WHERE tenant_id=%s::uuid AND fingerprint=%s", (tenant, fingerprint))
+                reason = 'agent_not_found' if not tenant_agents else 'agent_disabled' if not enabled_agents else 'no_connect_scope'
+                cur.execute("UPDATE saas_tenant_webhook_events SET state='skipped',completed_at=now(),error_code=%s WHERE tenant_id=%s::uuid AND fingerprint=%s", (reason, tenant, fingerprint))
             for agent in agents:
                 delay = max(0, min(int(agent.get('delay_seconds') or 0), 300))
                 cur.execute('''INSERT INTO saas_ai_conversation_state

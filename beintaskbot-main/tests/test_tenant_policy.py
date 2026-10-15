@@ -44,6 +44,21 @@ class TenantPolicyTests(unittest.TestCase):
         self.assertFalse(policy.allows('tasks'))
         self.assertFalse(TenantPolicy(profile('worker')).allows('customers'))
 
+    def test_ai_agents_is_independent_of_crm_modules_for_company_owner(self):
+        person=profile('owner')
+        person['modules']={}
+        person['workflow']={}
+        capabilities=TenantPolicy(person).public_capabilities()['modules']
+        self.assertTrue(capabilities['ai_agents'])
+
+    def test_ai_agents_admin_access_requires_explicit_manage_grant(self):
+        person=profile('admin')
+        self.assertFalse(TenantPolicy(person).public_capabilities()['modules']['ai_agents'])
+        person['workflow']={'policies':[{'policy_key':'members','value':{'20':{'ai_agents_manage':True}}}]}
+        self.assertTrue(TenantPolicy(person).public_capabilities()['modules']['ai_agents'])
+        person['workflow']['policies'][0]['value']['20']['ai_agents_manage']=False
+        self.assertFalse(TenantPolicy(person).public_capabilities()['modules']['ai_agents'])
+
     def test_no_assignment_and_all_hidden_stages_fail_closed(self):
         self.assertEqual(TenantPolicy(profile(telegram_id=99)).pipeline_scope(),[])
         person=profile();person['workflow']['stages'][0]['settings']['visible']=False

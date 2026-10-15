@@ -8,6 +8,9 @@ from tenant_platform import _connect, _fernet, _json
 
 
 def claim_next():
+    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+    if not runtime_flag('AI_AGENTS_ENABLED'):
+        return None
     conn = _connect()
     try:
         ensure_schema(conn)

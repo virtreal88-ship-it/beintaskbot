@@ -7,7 +7,7 @@
  function installOverview(){
   const page=$('view-ai_agents'),noticeEl=$('aiAgentsNotice');if(!page||!noticeEl||$('aiAgentsOverview'))return;
   const card=document.createElement('article');card.id='aiAgentsOverview';
-  card.innerHTML=`<header class="ai-overview-header"><div><h1>AI Agents</h1><p>Агенты и ручные черновики для клиентских диалогов</p></div><div class="ai-overview-actions"><button type="button" class="outline" data-ai-overview-back hidden>Профиль</button><button type="button" id="aiOverviewStatus" data-state="locked" role="status" aria-live="polite" aria-label="Открыть Test Mode">Загрузка…</button><button type="button" class="outline" data-ai-overview-settings>Настройки</button><div data-ai-overview-refresh></div></div></header>
+  card.innerHTML=`<header class="ai-overview-header"><div><h1>AI Agents</h1><p>Агенты и ручные черновики для клиентских диалогов</p></div><div class="ai-overview-actions"><button type="button" class="outline" data-ai-overview-back hidden>Профиль</button><button type="button" id="aiOverviewStatus" data-state="locked" role="status" aria-live="polite" aria-label="Открыть Test Mode">Загрузка…</button><button type="button" class="outline" data-ai-overview-diagnostics>Проверить Connect</button><button type="button" class="outline" data-ai-overview-settings>Настройки</button><div data-ai-overview-refresh></div></div></header>
    <div class="ai-overview-agent"><div class="ai-overview-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="13" rx="4"/><path d="M12 3v4M8 12h.01M16 12h.01M9 16h6"/><path d="M2 11v4M22 11v4"/></svg></div><div class="ai-overview-agent-copy"><strong id="aiOverviewAgentName">Агент ещё не создан</strong><span id="aiOverviewAgentSummary">Создайте агента в режиме Manual — ответы останутся черновиками.</span></div></div>
    <div class="ai-overview-facts"><div><span>Автоматические ответы</span><b id="aiOverviewAutoReplies">Выключены</b></div><div><span>Рабочие воронки</span><b id="aiOverviewPipelines">Не заданы</b></div><div><span>Режим</span><b id="aiOverviewMode">Manual</b></div></div>
    <div class="ai-overview-tiles"><button type="button" data-ai-overview-section="aiKnowledgeTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 5.5v13A2.5 2.5 0 0 1 6.5 16H20"/></svg><strong>База знаний</strong><small>Товары, цены, FAQ</small></button>
@@ -85,6 +85,22 @@
  const chatObserver=new MutationObserver(()=>syncChatAgentControl());chatObserver.observe(document.body,{childList:true,subtree:true});
  window.addEventListener('popstate',()=>syncChatAgentControl(true));
  installOverview();
+ document.querySelector('[data-ai-overview-diagnostics]')?.addEventListener('click',async event=>{
+  const button=event.currentTarget;button.disabled=true;button.textContent='Проверяю…';
+  try{
+   const result=await api('diagnostics?limit=10'),latest=result.events?.[0];
+   if(!latest){const state=result.system||{},flags=result.server_flags||{};notice(`Входящих событий Connect в Beintaskbot нет. Сервер AI: ${flags.ai_agents_enabled?'включён':'выключен'}; AI компании: ${state.company_ai_enabled?'включён':'выключен'}; режим: ${state.operating_mode||'не настроен'}; аварийная остановка: ${state.emergency_stop?'включена':'нет'}; автоотправка компании/сервера: ${state.auto_send_enabled?'разрешена':'запрещена'}/${flags.auto_send_enabled?'разрешена':'запрещена'}; активных Connect-каналов: ${state.active_connect_channels||0}. Проверьте входящий webhook.`);return;}
+   const details=[`Последнее событие: ${latest.received_at||'время неизвестно'}`,`состояние webhook: ${latest.event_state||'неизвестно'}`];
+   if(latest.event_error)details.push(`webhook: ${latest.event_error}`);
+   details.push(`агент: ${latest.agent_name||'не выбран'}`);
+   if(latest.job_state)details.push(`AI-задача: ${latest.job_state}`);
+   if(latest.job_error)details.push(`причина: ${latest.job_error}`);
+   if(latest.run_state)details.push(`модель: ${latest.run_state}`);
+   if(latest.auto_send_block_reason)details.push(`отправка: ${latest.auto_send_block_reason}`);
+   notice(details.join(' · '));
+  }catch(error){notice(`Не удалось прочитать диагностику: ${error.message}`)}
+  finally{button.disabled=false;button.textContent='Проверить Connect'}
+ });
  document.addEventListener('tenant-profile',event=>{profile=event.detail.member;load()});
  fetch(uiConfig.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(response=>response.ok?response.json():null).then(data=>{if(!profile&&data?.member){profile=data.member;load()}}).catch(()=>{});
 })();

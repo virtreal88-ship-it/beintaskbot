@@ -714,3 +714,63 @@ def list_handoffs(profile,limit=50):
         if item.get('updated_at'):item['updated_at']=item['updated_at'].isoformat()
         result.append(item)
     return result
+
+
+def list_connect_diagnostics(profile, limit=50):
+    """Return tenant-local Connect processing checkpoints, without message text."""
+    from tenant_ai_agent_runtime_flags import enabled as runtime_flag
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, _ = _authorize(cur, profile)
+            cur.execute('''SELECT t.status AS tenant_status,COALESCE(s.enabled,FALSE) AS company_ai_enabled,
+                COALESCE(s.operating_mode,'test') AS operating_mode,COALESCE(s.emergency_stop,FALSE) AS emergency_stop,
+                COALESCE(s.auto_send_enabled,FALSE) AS auto_send_enabled,
+                (SELECT count(*) FROM saas_tenant_integrations i WHERE i.tenant_id=t.id
+                  AND i.provider='connect' AND i.status='connected') AS connected_connect_accounts,
+                (SELECT count(*) FROM saas_connect_channels c WHERE c.tenant_id=t.id AND c.active=TRUE) AS active_connect_channels
+              FROM saas_tenants t LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=t.id
+              WHERE t.id=%s::uuid''', (tenant,))
+            system = dict(cur.fetchone() or {})
+            cur.execute('''SELECT COALESCE(e.received_at,m.happened_at) AS received_at,
+                CASE WHEN e.fingerprint IS NULL THEN 'stored_not_queued' ELSE e.state END AS event_state,
+                e.error_code AS event_error,SUBSTRING(m.channel FROM 9) AS channel_id,
+                a.name AS agent_name,a.enabled AS agent_enabled,a.mode AS agent_mode,
+                s.operating_mode,s.enabled AS company_ai_enabled,s.auto_send_enabled,
+                j.state AS job_state,j.error_code AS job_error,j.attempts,
+                r.state AS run_state,r.updated_at AS run_updated_at
+              FROM saas_crm_messages m
+              LEFT JOIN saas_tenant_webhook_events e ON e.tenant_id=m.tenant_id AND e.provider='connect'
+                AND e.external_id=SUBSTRING(m.external_id FROM 9)
+              LEFT JOIN saas_ai_agent_jobs j ON j.tenant_id=e.tenant_id AND j.event_fingerprint=e.fingerprint
+              LEFT JOIN saas_ai_agents a ON a.tenant_id=j.tenant_id AND a.id=j.agent_id
+              LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=m.tenant_id
+              LEFT JOIN LATERAL (SELECT state,updated_at FROM saas_ai_agent_runs r0
+                WHERE r0.tenant_id=e.tenant_id AND r0.agent_id=j.agent_id
+                  AND r0.event_fingerprint=e.fingerprint ORDER BY r0.revision DESC LIMIT 1) r ON TRUE
+              WHERE m.tenant_id=%s::uuid AND m.direction='incoming' AND m.channel LIKE 'connect:%%'
+              ORDER BY m.happened_at DESC LIMIT %s''',
+                         (tenant, max(1, min(int(limit), 100))))
+            rows = cur.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        for key in ('received_at', 'run_updated_at'):
+            if item.get(key):
+                item[key] = item[key].isoformat()
+        item['attempts'] = int(item.get('attempts') or 0)
+        item['auto_send_block_reason'] = ''
+        if item.get('job_state') in {'drafted', 'sent'}:
+            if item.get('agent_mode') != 'automatic':
+                item['auto_send_block_reason'] = 'manual_mode'
+            elif item.get('operating_mode') != 'active':
+                item['auto_send_block_reason'] = 'test_mode_draft_only'
+            elif item.get('auto_send_enabled') is not True:
+                item['auto_send_block_reason'] = 'company_auto_send_disabled'
+            elif not runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'):
+                item['auto_send_block_reason'] = 'server_auto_send_flag_disabled'
+        result.append(item)
+    return {'system': system, 'server_flags': {
+        'ai_agents_enabled': runtime_flag('AI_AGENTS_ENABLED'),
+        'auto_send_enabled': runtime_flag('AI_AGENTS_AUTO_SEND_ENABLED'),
+    }, 'events': result, 'latest_event_found': bool(result)}

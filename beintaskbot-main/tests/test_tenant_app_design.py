@@ -54,7 +54,7 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn("('/assets/tenant-ai-agents.js', 'tenant-ai-agents.js'", assets)
         script = (ROOT / 'docs/tenant-ai-agents.js').read_text(encoding='utf-8')
         self.assertNotIn("if (nav) { nav.hidden = true", script)
-        self.assertIn("(existing?.scopes||[])", script)
+        self.assertIn("existing?.scopes||[]", script)
 
 
 if __name__ == '__main__':

@@ -5,8 +5,8 @@ from tenant_hot_order_policy import HotOrderPolicy, validate_hot_order_settings
 
 
 ROLE_PERMISSIONS = {
-    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear'],
-    'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear'],
+    'owner': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents'],
+    'admin': ['deals', 'tasks', 'customers', 'employees', 'integrations', 'finance', 'settings', 'hot_orders', 'linear', 'ai_agents'],
     'manager': ['deals', 'tasks', 'customers'],
     'worker': ['tasks'],
     'master': ['hot_orders'],
@@ -55,6 +55,11 @@ class TenantPolicy:
             return False
         if self.profile.get('role') == 'owner':
             return True
+        # AI Agents is a first-party product module, not a Kommo capability
+        # or an onboarding module toggle. Owners always have it; admins only
+        # see it after the owner explicitly grants the existing manage flag.
+        if module == 'ai_agents':
+            return self.profile.get('role') == 'admin' and self.member_settings.get('ai_agents_manage') is True
         if self.profile.get('role') == 'master' and module != 'hot_orders':
             return False
         if self.profile.get('role') == 'worker' and module in {'deals', 'customers'}:

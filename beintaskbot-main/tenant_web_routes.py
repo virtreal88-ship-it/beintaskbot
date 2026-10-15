@@ -81,6 +81,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/drafts/{draft_id}/review', ai_agents_handler(member, origin, logger, 'draft_review'), ('POST',)),
         ('agents/drafts/{draft_id}/send', ai_agents_handler(member, origin, logger, 'draft_send', context.crm_request, context.wait_slot), ('POST',)),
         ('handoffs', ai_agents_handler(member, origin, logger, 'handoffs'), ('GET',)),
+        ('diagnostics', ai_agents_handler(member, origin, logger, 'diagnostics'), ('GET',)),
         ('agents/{agent_id}', ai_agents_handler(member, origin, logger, 'agent'), ('PATCH', 'DELETE')),
         ('agents/{agent_id}/triggers', ai_agents_handler(member, origin, logger, 'triggers'), ('GET', 'POST')),
         ('agents/{agent_id}/triggers/{trigger_id}', ai_agents_handler(member, origin, logger, 'trigger'), ('PATCH', 'DELETE')),
